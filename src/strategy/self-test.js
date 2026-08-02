@@ -35,8 +35,10 @@ const {
   contactEntryRiskCore,
   contactEntrySyntheticBulletCore,
   pickSafeClosingDodgeCore,
+  safeRetreatInterceptCandidateCore,
   selectCombatMovementArbitrationCore
 } = require('./combat-movement');
+const { runCombatHpLossAttributionSelfTest } = require('./combat-hp-loss-attribution');
 const { recordActionSwitchDiagnosticsCore } = require('./action-switch-diagnostics');
 const { attackWorthTakingCore } = require('./attack-worth');
 const {
@@ -211,6 +213,14 @@ const {
 
 function runStrategyModuleSelfTests() {
   const results = [];
+
+  const hpAttributionSelfTest = runCombatHpLossAttributionSelfTest();
+  results.push({
+    name: 'combat-hp-loss-attribution-bounded-realtime-evidence',
+    passed: hpAttributionSelfTest.ok === true,
+    cases: hpAttributionSelfTest.cases,
+    error: hpAttributionSelfTest.error || ''
+  });
 
   const dynamicSelf = (hp, maxHp = 100, stamina5s = 10000) => ({
     hp,
@@ -930,6 +940,49 @@ function runStrategyModuleSelfTests() {
       && safeClosingDodge?.dy === 1
       && safeClosingDodge?.directHits === 0
       && safeClosingDodge?.targetDistanceChange < 0
+  });
+  const retreatInterceptInput = {
+    self: { x: 0, y: 0 },
+    target: { x: 6000, y: 0, vx: 20, vy: 0, active: true, authority: 'realtime' },
+    opponentBehavior: { mode: 'retreat-kite', confidence: 0.9 },
+    threatField: [{ dx: 1, dy: 0, directHits: 0, unavoidableHits: 0, worstCaseCpaCm: 500 }],
+    selfSpeedPerTick: 100,
+    minimumCpaCm: 200
+  };
+  const retreatInterceptShadow = safeRetreatInterceptCandidateCore(
+    retreatInterceptInput.self,
+    retreatInterceptInput.target,
+    retreatInterceptInput
+  );
+  const retreatInterceptSnapshot = safeRetreatInterceptCandidateCore(
+    retreatInterceptInput.self,
+    { ...retreatInterceptInput.target, authority: 'snapshot' },
+    retreatInterceptInput
+  );
+  const retreatInterceptZigzag = safeRetreatInterceptCandidateCore(
+    retreatInterceptInput.self,
+    retreatInterceptInput.target,
+    { ...retreatInterceptInput, opponentBehavior: { mode: 'zigzag-strafe', confidence: 0.95 } }
+  );
+  const retreatInterceptDamaged = safeRetreatInterceptCandidateCore(
+    retreatInterceptInput.self,
+    retreatInterceptInput.target,
+    { ...retreatInterceptInput, selfHpLossObserved: true }
+  );
+  const retreatInterceptDanger = safeRetreatInterceptCandidateCore(
+    retreatInterceptInput.self,
+    retreatInterceptInput.target,
+    { ...retreatInterceptInput, threatField: [{ dx: 1, dy: 0, directHits: 1, unavoidableHits: 0, worstCaseCpaCm: 50 }] }
+  );
+  results.push({
+    name: 'safe-retreat-intercept-is-realtime-shadow-only-and-collision-first',
+    passed: retreatInterceptShadow.eligible === true
+      && retreatInterceptShadow.shadow === true
+      && retreatInterceptShadow.applied === false
+      && retreatInterceptSnapshot.reason === 'target-not-realtime-visible'
+      && retreatInterceptZigzag.reason === 'retreat-kite-not-confirmed'
+      && retreatInterceptDamaged.reason === 'recent-self-damage'
+      && retreatInterceptDanger.reason === 'collision-pressure-present'
   });
   const dodgeBeforeSpacing = applyCombatMovementModifiers(
     { dx: 0, dy: 0 },
@@ -5833,6 +5886,54 @@ function runStrategyModuleSelfTests() {
     lastSwitch: { fromTargetId: '8', toTargetId: '9', at: 1100 },
     nowMs: 1450
   }, null);
+  const urgentReversalBlocked = applyCombatTargetSwitchHysteresisCore({
+    currentTargetId: '9',
+    currentVisibleTarget: candidateTarget,
+    proposedTarget: currentTarget,
+    urgentSafety: true,
+    currentThreat: {
+      targetId: '9', bulletCount: 1, urgentBulletCount: 1, urgent: true,
+      riskLevel: 2, minTimeToImpactMs: 500, minDistanceCm: 5000
+    },
+    proposedThreat: {
+      targetId: '8', bulletCount: 1, urgentBulletCount: 1, urgent: true,
+      riskLevel: 2, minTimeToImpactMs: 200, minDistanceCm: 5000
+    },
+    lastSwitch: { fromTargetId: '8', toTargetId: '9', at: 1100 },
+    nowMs: 1450
+  }, null, { urgentReversalGuardEnabled: true });
+  const urgentReversalShadow = applyCombatTargetSwitchHysteresisCore({
+    currentTargetId: '9',
+    currentVisibleTarget: candidateTarget,
+    proposedTarget: currentTarget,
+    urgentSafety: true,
+    currentThreat: {
+      targetId: '9', bulletCount: 1, urgentBulletCount: 1, urgent: true,
+      riskLevel: 2, minTimeToImpactMs: 500, minDistanceCm: 5000
+    },
+    proposedThreat: {
+      targetId: '8', bulletCount: 1, urgentBulletCount: 1, urgent: true,
+      riskLevel: 2, minTimeToImpactMs: 200, minDistanceCm: 5000
+    },
+    lastSwitch: { fromTargetId: '8', toTargetId: '9', at: 1100 },
+    nowMs: 1450
+  }, null, { urgentConfirmTicks: 1 });
+  const urgentReversalAllowed = applyCombatTargetSwitchHysteresisCore({
+    currentTargetId: '9',
+    currentVisibleTarget: candidateTarget,
+    proposedTarget: currentTarget,
+    urgentSafety: true,
+    currentThreat: {
+      targetId: '9', bulletCount: 1, urgentBulletCount: 1, urgent: true,
+      riskLevel: 2, minTimeToImpactMs: 900, minDistanceCm: 6000
+    },
+    proposedThreat: {
+      targetId: '8', bulletCount: 1, urgentBulletCount: 1, urgent: true,
+      riskLevel: 2, minTimeToImpactMs: 200, minDistanceCm: 3000
+    },
+    lastSwitch: { fromTargetId: '8', toTargetId: '9', at: 1100 },
+    nowMs: 1450
+  }, null, { urgentConfirmTicks: 1 });
   const invalidCurrent = applyCombatTargetSwitchHysteresisCore({
     currentTargetId: '8', currentVisibleTarget: null, proposedTarget: candidateTarget,
     currentInvalid: true, nowMs: 1500
@@ -5874,6 +5975,13 @@ function runStrategyModuleSelfTests() {
       && missingProposal.gate === null
       && reversalBlocked.target.user_id === 9
       && reversalBlocked.diagnostic.reason === 'oscillating-reversal-blocked'
+      && urgentReversalBlocked.target.user_id === 9
+      && urgentReversalBlocked.diagnostic.reason === 'urgent-oscillating-reversal-blocked'
+      && urgentReversalShadow.target.user_id === 8
+      && urgentReversalShadow.diagnostic.urgentReversalWouldBlock === true
+      && urgentReversalShadow.diagnostic.urgentReversalGuardEnabled === false
+      && urgentReversalAllowed.target.user_id === 8
+      && urgentReversalAllowed.diagnostic.urgentReversalAdvantage === true
       && invalidCurrent.target.user_id === 9
       && invalidCurrent.diagnostic.reason === 'current-target-invalid'
       && threatEvidence.bulletCount === 1

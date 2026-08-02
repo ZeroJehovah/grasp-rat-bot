@@ -1011,6 +1011,167 @@ function pickSafeClosingDodgeCore(threatField = [], options = {}) {
       || Number(b.minCPA || 0) - Number(a.minCPA || 0))[0] || null;
 }
 
+function safeRetreatInterceptCandidateCore(self, target, context = {}) {
+  const behavior = context.opponentBehavior && typeof context.opponentBehavior === 'object'
+    ? context.opponentBehavior
+    : {};
+  const mode = String(behavior.mode || '');
+  const confidence = Number(behavior.confidence || 0);
+  const base = {
+    name: 'safe-retreat-intercept',
+    shadow: true,
+    enabled: context.enabled === true,
+    applied: false,
+    eligible: false,
+    direction: { dx: 0, dy: 0 },
+    interceptPoint: null,
+    approachCm: null,
+    boundaryMarginCm: null,
+    reason: ''
+  };
+  if (!self || !target) return { ...base, reason: 'missing-realtime-subject' };
+  if (String(target.authority || 'realtime') !== 'realtime') {
+    return { ...base, reason: 'target-not-realtime-visible' };
+  }
+  if (target.active !== true) return { ...base, reason: 'target-not-active' };
+  if (mode !== 'retreat-kite' || confidence < Number(context.minimumConfidence ?? 0.65)) {
+    return { ...base, reason: 'retreat-kite-not-confirmed' };
+  }
+  if (['zigzag-strafe', 'charge-close'].includes(String(behavior.mode || ''))
+    || behavior.movementIntent === 'zigzag'
+    || behavior.movementIntent === 'charge') {
+    return { ...base, reason: 'high-entropy-or-closing-behavior' };
+  }
+  if (Number(context.recentIncomingDamage || 0) > 0 || context.selfHpLossObserved === true) {
+    return { ...base, reason: 'recent-self-damage' };
+  }
+  if (Number(context.otherAttackerCount || 0) > 0) {
+    return { ...base, reason: 'multiple-attackers' };
+  }
+
+  const threatField = Array.isArray(context.threatField) ? context.threatField : [];
+  const minimumCpaCm = Math.max(1, Number(context.minimumCpaCm ?? 200));
+  const danger = threatField.some(item => Number(item?.directHits || 0) > 0
+    || Number(item?.unavoidableHits || 0) > 0);
+  if (danger) return { ...base, reason: 'collision-pressure-present' };
+  const safeDirections = threatField.filter(item => (
+    Number(item?.directHits || 0) === 0
+      && Number(item?.unavoidableHits || 0) === 0
+      && Number(item?.worstCaseCpaCm ?? item?.minCPA ?? 0) >= minimumCpaCm
+  ));
+  if (threatField.length > 0 && safeDirections.length === 0) {
+    return { ...base, reason: 'no-zero-risk-dodge-direction' };
+  }
+  const boundary = context.boundary && typeof context.boundary === 'object'
+    ? context.boundary
+    : null;
+  const boundaryMarginRequired = Math.max(0, Number(context.boundaryMarginCm ?? 1000));
+  const inBoundary = point => {
+    if (!boundary) return true;
+    const minX = Number(boundary.minX);
+    const maxX = Number(boundary.maxX);
+    const minY = Number(boundary.minY);
+    const maxY = Number(boundary.maxY);
+    if (![minX, maxX, minY, maxY].every(Number.isFinite)) return false;
+    return point.x >= minX + boundaryMarginRequired
+      && point.x <= maxX - boundaryMarginRequired
+      && point.y >= minY + boundaryMarginRequired
+      && point.y <= maxY - boundaryMarginRequired;
+  };
+  const selfX = Number(self.x);
+  const selfY = Number(self.y);
+  const targetX = Number(target.x);
+  const targetY = Number(target.y);
+  if (![selfX, selfY, targetX, targetY].every(Number.isFinite)) {
+    return { ...base, reason: 'missing-intercept-geometry' };
+  }
+  const selfSpeed = Math.max(1, Number(context.selfSpeedPerTick ?? 50));
+  const targetVx = Number(target.vx || 0);
+  const targetVy = Number(target.vy || 0);
+  const relativeX = targetX - selfX;
+  const relativeY = targetY - selfY;
+  const a = targetVx * targetVx + targetVy * targetVy - selfSpeed * selfSpeed;
+  const b = 2 * (relativeX * targetVx + relativeY * targetVy);
+  const c = relativeX * relativeX + relativeY * relativeY;
+  const roots = [];
+  if (Math.abs(a) < 1e-6) {
+    if (Math.abs(b) > 1e-6) roots.push(-c / b);
+  } else {
+    const discriminant = b * b - 4 * a * c;
+    if (discriminant >= 0) {
+      const root = Math.sqrt(discriminant);
+      roots.push((-b - root) / (2 * a), (-b + root) / (2 * a));
+    }
+  }
+  const maxInterceptTicks = Math.max(1, Number(context.maxInterceptTicks ?? 60));
+  const interceptTicks = roots
+    .filter(value => Number.isFinite(value) && value > 0 && value <= maxInterceptTicks)
+    .sort((left, right) => left - right)[0]
+    ?? Math.min(maxInterceptTicks, Math.max(1, Math.hypot(relativeX, relativeY) / selfSpeed));
+  const interceptPoint = {
+    x: targetX + targetVx * interceptTicks,
+    y: targetY + targetVy * interceptTicks
+  };
+  if (!inBoundary(interceptPoint)) return { ...base, reason: 'intercept-boundary-margin-insufficient' };
+  const direction = normalizedDirection({
+    dx: interceptPoint.x - selfX,
+    dy: interceptPoint.y - selfY
+  });
+  const candidateThreat = threatField.find(item => (
+    Number(item?.dx) === direction.dx && Number(item?.dy) === direction.dy
+  )) || null;
+  if (candidateThreat && (
+    Number(candidateThreat.directHits || 0) > 0
+      || Number(candidateThreat.unavoidableHits || 0) > 0
+      || Number(candidateThreat.worstCaseCpaCm ?? candidateThreat.minCPA ?? 0) < minimumCpaCm
+  )) {
+    return { ...base, direction, interceptPoint, reason: 'intercept-direction-not-collision-safe' };
+  }
+  const currentDistance = Math.hypot(relativeX, relativeY);
+  const nextSelf = {
+    x: selfX + direction.dx * selfSpeed,
+    y: selfY + direction.dy * selfSpeed
+  };
+  const nextTarget = {
+    x: targetX + targetVx,
+    y: targetY + targetVy
+  };
+  const nextDistance = Math.hypot(nextTarget.x - nextSelf.x, nextTarget.y - nextSelf.y);
+  const approachCm = currentDistance - nextDistance;
+  if (!(approachCm > Number(context.minimumApproachCm ?? 10))) {
+    return { ...base, direction, interceptPoint, approachCm, reason: 'intercept-no-positive-approach' };
+  }
+  const boundaryMarginCm = boundary
+    ? Math.min(
+        interceptPoint.x - Number(boundary.minX),
+        Number(boundary.maxX) - interceptPoint.x,
+        interceptPoint.y - Number(boundary.minY),
+        Number(boundary.maxY) - interceptPoint.y
+      )
+    : null;
+  return {
+    ...base,
+    eligible: true,
+    direction,
+    interceptPoint: {
+      x: Math.round(interceptPoint.x),
+      y: Math.round(interceptPoint.y)
+    },
+    interceptTicks: Number(interceptTicks.toFixed(2)),
+    approachCm: Number(approachCm.toFixed(2)),
+    boundaryMarginCm: boundaryMarginCm === null ? null : Number(boundaryMarginCm.toFixed(2)),
+    candidateThreat: candidateThreat ? {
+      directHits: Number(candidateThreat.directHits || 0),
+      unavoidableHits: Number(candidateThreat.unavoidableHits || 0),
+      minCPA: Number.isFinite(Number(candidateThreat.minCPA)) ? Number(candidateThreat.minCPA) : null,
+      worstCaseCpaCm: Number.isFinite(Number(candidateThreat.worstCaseCpaCm))
+        ? Number(candidateThreat.worstCaseCpaCm)
+        : null
+    } : null,
+    reason: 'safe-retreat-intercept-shadow'
+  };
+}
+
 /**
  * Apply combat movement modifiers
  *
@@ -1106,6 +1267,7 @@ module.exports = {
   contactEntryRiskCore,
   contactEntrySyntheticBulletCore,
   pickSafeClosingDodgeCore,
+  safeRetreatInterceptCandidateCore,
   applyCombatMovementModifiers,
   isRecoverableOutOfRangeTarget
 };

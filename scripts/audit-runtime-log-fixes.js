@@ -8,10 +8,14 @@ const zlib = require('zlib');
 const {
   createBattleExitTail,
   observeBattleExitTail,
-  summarizeBattleExitTail
+  summarizeBattleExitTail,
+  createPhysicalSegmentLedger,
+  observePhysicalSegmentFrame,
+  physicalSegmentSummary,
+  recordPhysicalExecution
 } = require('../src/node/browserless/combat-battle-log');
 
-const DEFAULT_DAY_DIR = '/var/log/grasp-rat-browserless/2026-07-30';
+const DEFAULT_DAY_DIR = '/var/log/grasp-rat-browserless/2026-08-02';
 const P1_INDEX_LINES = [16, 25, 119, 155, 176];
 const P2_INDEX_LINES = [21, 31, 41, 42, 53, 55, 69, 82, 84, 97, 113, 115, 122, 141, 147, 158, 171, 174];
 const P3_REPLAY_LINES = [86, 170];
@@ -68,10 +72,27 @@ async function inspectBattle(dayDir, index) {
   let stopAtMs = null;
   let stopObservedAtMs = null;
   let stopReason = '';
+  let physicalLedger = createPhysicalSegmentLedger();
+  const physicalExecutionEvents = [];
   const input = fs.createReadStream(file).pipe(zlib.createGunzip());
   await readJsonLines(file, row => {
     const atMs = Date.parse(row.at);
     const detail = row.detail || {};
+    if (row.type === 'shoot-execution') {
+      physicalLedger = recordPhysicalExecution(physicalLedger, detail);
+      physicalExecutionEvents.push({
+        type: String(detail.type || ''),
+        requestId: detail.requestId ?? detail.commandId ?? null,
+        sequence: numberOrNull(detail.sequence),
+        engagementGeneration: String(detail.engagementGeneration || ''),
+        controlGeneration: String(detail.controlGeneration || ''),
+        originSegmentId: detail.originSegmentId ?? null,
+        originFile: detail.originFile ?? null,
+        originStatus: String(detail.originStatus || '')
+      });
+    } else if (row.type === 'combat-live' || row.type === 'combat-dry-run') {
+      physicalLedger = observePhysicalSegmentFrame(physicalLedger, detail);
+    }
     if (detail.metrics && typeof detail.metrics === 'object') {
       if (!firstMetrics) {
         firstMetrics = detail.metrics;
@@ -120,6 +141,14 @@ async function inspectBattle(dayDir, index) {
     correctedAccepted,
     Math.max(0, Number(lastMetrics?.confirmedHits || 0) - firstConfirmedHits)
   );
+  const physical = physicalSegmentSummary(physicalLedger, {
+    requestedShots: index.segmentRequestedShots,
+    acceptedShots: index.segmentAcceptedShots,
+    confirmedHits: index.segmentConfirmedHits,
+    targetDamage: index.segmentTargetDamage,
+    selfDamage: index.segmentSelfDamage,
+    incomingHits: index.segmentIncomingHits
+  });
   return {
     index,
     file,
@@ -143,6 +172,8 @@ async function inspectBattle(dayDir, index) {
     correctedNoProgressMax,
     oldSharedBudgetMax,
     correctedSharedBudgetMax,
+    physical,
+    physicalExecutionEvents,
     stopAtMs,
     stopObservedAtMs,
     stopReason,
@@ -252,6 +283,213 @@ function sum(rows, field) {
   return rows.reduce((total, row) => total + Number(row[field] || 0), 0);
 }
 
+function valuesDiffer(left, right) {
+  const a = numberOrNull(left);
+  const b = numberOrNull(right);
+  if (a === null || b === null) return a !== b;
+  return Math.abs(a - b) > 0.01;
+}
+
+function physicalSummaryAudit(battles, executionOwnership) {
+  const fields = [
+    {
+      key: 'requestedShots',
+      indexField: 'segmentRequestedShots',
+      source: 'physical-execution-events'
+    },
+    {
+      key: 'acceptedShots',
+      indexField: 'segmentAcceptedShots',
+      source: 'physical-execution-events'
+    },
+    {
+      key: 'targetDamage',
+      indexField: 'segmentTargetDamage',
+      source: 'adjacent-realtime-target-hp'
+    },
+    {
+      key: 'selfDamage',
+      indexField: 'segmentSelfDamage',
+      source: 'adjacent-realtime-self-hp'
+    },
+    {
+      key: 'incomingHits',
+      indexField: 'segmentIncomingHits',
+      source: 'adjacent-realtime-self-hp-events'
+    }
+  ];
+  const differences = [];
+  const correctedRows = [];
+  for (const battle of battles) {
+    const physicalValues = {
+      ...battle.physical.values,
+      requestedShots: executionOwnership.dispatchCountByBattle.get(battle)
+        ?? battle.physical.values.requestedShots,
+      acceptedShots: executionOwnership.acceptedCountByBattle.get(battle)
+        ?? battle.physical.values.acceptedShots
+    };
+    const corrected = {
+      indexLine: battle.index.line,
+      file: battle.index.file,
+      segmentId: battle.index.segmentId || `${battle.index.engagementId || ''}#${battle.index.segmentOrdinal || 1}`,
+      segmentMetricSource: battle.physical.source,
+      segmentMetricSourceFields: battle.physical.sourceFields,
+      physical: {
+        requestedShots: physicalValues.requestedShots,
+        acceptedShots: physicalValues.acceptedShots,
+        confirmedHits: physicalValues.confirmedHits,
+        targetDamage: physicalValues.targetDamage,
+        selfDamage: physicalValues.selfDamage,
+        incomingHits: physicalValues.incomingHits,
+        targetDamageEvents: battle.physical.raw.targetDamageEvents,
+        selfDamageEvents: battle.physical.raw.selfDamageEvents
+      },
+      old: {},
+      changes: [],
+      invariant: {
+        acceptedNotOverRequested: battle.physical.invariant.acceptedNotOverRequested,
+        selfDamageMatchesAdjacentHp: battle.physical.invariant.selfDamageMatchesAdjacentHp,
+        targetDamageMatchesAdjacentHp: battle.physical.invariant.targetDamageMatchesAdjacentHp
+      }
+    };
+    for (const field of fields) {
+      const oldValue = numberOrNull(battle.index[field.indexField]);
+      const physicalValue = numberOrNull(physicalValues[field.key]);
+      corrected.old[field.key] = oldValue;
+      if (!valuesDiffer(oldValue, physicalValue)) continue;
+      const sourceField = String(battle.physical.sourceFields[field.key] || field.source);
+      const unresolved = sourceField.startsWith('unresolved-');
+      const reason = unresolved
+        ? 'summary-accounting-failure-physical-evidence-unresolved'
+        : `summary-accounting-failure-${sourceField}`;
+      const change = {
+        field: field.indexField,
+        old: oldValue,
+        corrected: physicalValue,
+        source: sourceField,
+        reason
+      };
+      corrected.changes.push(change);
+      differences.push({
+        indexLine: battle.index.line,
+        file: battle.index.file,
+        segmentId: corrected.segmentId,
+        ...change
+      });
+    }
+    correctedRows.push(corrected);
+  }
+  return {
+    comparedFieldCount: battles.length * fields.length,
+    differenceCount: differences.length,
+    differences,
+    correctedRows,
+    allCorrectedInvariantsOk: correctedRows.every(row => (
+      row.invariant.acceptedNotOverRequested
+        && row.invariant.selfDamageMatchesAdjacentHp
+        && row.invariant.targetDamageMatchesAdjacentHp
+    ))
+  };
+}
+
+function physicalExecutionOwnershipAudit(battles) {
+  const dispatches = new Map();
+  const accepted = [];
+  const dispatchCountByBattle = new Map();
+  const acceptedCountByBattle = new Map();
+  const originMissing = [];
+  const originMismatches = [];
+  let dispatchCount = 0;
+  let acceptedCount = 0;
+  let skipCount = 0;
+  for (const battle of battles) {
+    for (const event of battle.physicalExecutionEvents) {
+      const type = String(event.type || '');
+      const requestId = event.requestId === null || event.requestId === undefined
+        ? ''
+        : String(event.requestId);
+      if (type === 'shoot-dispatch') {
+        dispatchCount += 1;
+        dispatchCountByBattle.set(battle, Number(dispatchCountByBattle.get(battle) || 0) + 1);
+        if (!dispatches.has(requestId)) dispatches.set(requestId, []);
+        dispatches.get(requestId).push({ battle, event });
+      } else if (type === 'shoot-ack-accepted') {
+        acceptedCount += 1;
+        accepted.push({ battle, event });
+      } else if (type === 'shoot-skip') {
+        skipCount += 1;
+      }
+      if (!event.originSegmentId || !event.originFile || !event.originStatus) {
+        originMissing.push({
+          indexLine: battle.index.line,
+          file: battle.index.file,
+          type,
+          requestId
+        });
+      } else if (String(event.originSegmentId) !== String(battle.index.segmentId || '')) {
+        originMismatches.push({
+          indexLine: battle.index.line,
+          file: battle.index.file,
+          type,
+          requestId,
+          originSegmentId: event.originSegmentId,
+          currentSegmentId: battle.index.segmentId || ''
+        });
+      }
+    }
+  }
+  const duplicateDispatches = [...dispatches.entries()]
+    .filter(([, rows]) => rows.length > 1)
+    .map(([requestId, rows]) => ({ requestId, count: rows.length }));
+  const acceptedByRequest = new Map();
+  const unmatchedAccepted = [];
+  for (const item of accepted) {
+    const requestId = item.event.requestId === null || item.event.requestId === undefined
+      ? ''
+      : String(item.event.requestId);
+    if (!requestId || !dispatches.has(requestId)) {
+      unmatchedAccepted.push({
+        indexLine: item.battle.index.line,
+        file: item.battle.index.file,
+        requestId
+      });
+      continue;
+    }
+    acceptedByRequest.set(requestId, Number(acceptedByRequest.get(requestId) || 0) + 1);
+    const owners = dispatches.get(requestId);
+    if (owners.length === 1) {
+      const ownerBattle = owners[0].battle;
+      acceptedCountByBattle.set(ownerBattle, Number(acceptedCountByBattle.get(ownerBattle) || 0) + 1);
+    }
+  }
+  const duplicateAccepted = [...acceptedByRequest.entries()]
+    .filter(([, count]) => count > 1)
+    .map(([requestId, count]) => ({ requestId, count }));
+  const executionOwnershipFailureCount = duplicateDispatches.length
+    + unmatchedAccepted.length
+    + duplicateAccepted.length
+    + originMismatches.length;
+  const result = {
+    dispatchCount,
+    acceptedCount,
+    skipCount,
+    uniqueDispatchRequestCount: dispatches.size,
+    duplicateDispatches,
+    duplicateAccepted,
+    unmatchedAccepted,
+    originMissingCount: originMissing.length,
+    originMismatches,
+    executionOwnershipFailureCount,
+    executionOwnershipOk: executionOwnershipFailureCount === 0,
+    originEvidence: originMissing.length === 0 ? 'complete' : 'legacy-or-partial-origin-fields'
+  };
+  Object.defineProperties(result, {
+    dispatchCountByBattle: { value: dispatchCountByBattle },
+    acceptedCountByBattle: { value: acceptedCountByBattle }
+  });
+  return result;
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const indexes = readIndex(options.dayDir);
@@ -260,11 +498,19 @@ async function main() {
   await correctSafetyStopTimes(options.dayDir, battles);
   const requests = await readWireRequests(options.dayDir, battles);
   const ackAudit = await readAndMatchAcks(options.dayDir, requests, battles);
+  const executionOwnership = physicalExecutionOwnershipAudit(battles);
+  const physicalSummary = physicalSummaryAudit(battles, executionOwnership);
   const activeBattles = battles.filter(battle => battle.index.targetActiveObserved === true
     || battle.index.opponentFireObserved === true);
-  const p1Battles = P1_INDEX_LINES.map(line => battles.find(battle => battle.index.line === line));
-  const p2Battles = P2_INDEX_LINES.map(line => battles.find(battle => battle.index.line === line));
-  const p3Battles = P3_REPLAY_LINES.map(line => battles.find(battle => battle.index.line === line));
+  const p1Battles = P1_INDEX_LINES
+    .map(line => battles.find(battle => battle.index.line === line))
+    .filter(Boolean);
+  const p2Battles = P2_INDEX_LINES
+    .map(line => battles.find(battle => battle.index.line === line))
+    .filter(Boolean);
+  const p3Battles = P3_REPLAY_LINES
+    .map(line => battles.find(battle => battle.index.line === line))
+    .filter(Boolean);
   const p1 = p1Battles.map(battle => ({
     indexLine: battle.index.line,
     file: battle.index.file,
@@ -324,6 +570,15 @@ async function main() {
     dayDir: options.dayDir,
     battleCount: battles.length,
     activeBattleCount: activeBattles.length,
+    physicalAudit: {
+      executionOwnership,
+      summaryAccounting: physicalSummary,
+      interpretation: {
+        executionOwnershipFailure: 'request/ACK/origin ownership cannot be inferred from accepted > requested alone; inspect physical event joins',
+        summaryAccountingFailure: 'index segment fields differ from the corrected physical gzip ledger',
+        confirmedHits: 'runtime metric retained as a diagnostic because adjacent HP changes do not uniquely identify per-shot hit count'
+      }
+    },
     p1: {
       samples: p1,
       allSamplesInvariantOk: p1.every(row => row.corrected.invariantOk),

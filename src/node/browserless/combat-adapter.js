@@ -22,6 +22,7 @@ const {
   contactEntryRiskCore,
   contactEntrySyntheticBulletCore,
   selectCombatMovementArbitrationCore,
+  safeRetreatInterceptCandidateCore,
   stabilizeCombatMovementDirectionCore,
   shouldBackAwayFromTarget
 } = require('../../strategy/combat-movement');
@@ -63,6 +64,11 @@ const {
 const {
   updateCombatResponsePolicyShadowCore
 } = require('../../strategy/combat-response-policy-shadow');
+const {
+  createCombatObservationBuffer,
+  observeCombatFrameCore,
+  completeCombatHpLossAttributionCore
+} = require('../../strategy/combat-hp-loss-attribution');
 const {
   targetIsWhitelisted,
   targetWhitelistNameSet,
@@ -1881,6 +1887,21 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     currentTick: options.currentTick,
     reactionSafetyMarginMs: options.combatReactionSafetyMarginMs ?? 100
   });
+  const incomingOwners = new Set((bullets || [])
+    .filter(bullet => bullet?.incoming === true && bullet?.ownerId !== null && bullet?.ownerId !== undefined)
+    .map(bullet => String(bullet.ownerId)));
+  const safeRetreatIntercept = safeRetreatInterceptCandidateCore(self, target, {
+    opponentBehavior,
+    threatField: dodge?.threatField || [],
+    recentIncomingDamage: combatTargetState?.lastSelfDamage || 0,
+    selfHpLossObserved: combatTargetState?.selfHpLossObserved === true,
+    otherAttackerCount: Math.max(0, incomingOwners.size - (incomingOwners.has(String(target.user_id)) ? 1 : 0)),
+    boundary: options.combatBoundary || options.boundary,
+    selfSpeedPerTick: options.combatMoveSpeedPerTick || 50,
+    minimumCpaCm: Math.max(1, Number(options.combatMovementSafeCpaCm || 0),
+      Number(options.combatBulletHitRadiusCm || COMBAT_CONSTANTS.BULLET_HIT_RADIUS_CM) + 110),
+    enabled: options.combatSafeRetreatInterceptEnabled === true
+  });
   const behaviorSamples = Array.isArray(opponentBehavior?.samples) ? opponentBehavior.samples : [];
   const shootingPhase = opponentBehavior?.dimensions?.shootingPhase || null;
   const lastObservedShot = behaviorSamples.slice().reverse().find(sample => Number(sample.newBulletCount || 0) > 0) || null;
@@ -2041,7 +2062,11 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     ? awayFromTarget
     : (strafe?.active
         ? { dx: strafe.dx, dy: strafe.dy }
-        : (closeIn ? towardTarget : null));
+        : (options.combatSafeRetreatInterceptEnabled === true
+            && safeRetreatIntercept.eligible
+            && !preDodge
+            ? safeRetreatIntercept.direction
+            : (closeIn ? towardTarget : null)));
   const pendingCommands = (options.pendingVelocityCommands || [])
     .filter(command => command && Number.isFinite(Number(command.effectiveAfterTicks)))
     .slice()
@@ -2120,6 +2145,17 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
             : (escapeDecision?.confirmed
                 ? 'combat-escape-confirmed-hold'
                 : (outOfRange ? 'combat-out-of-range-hold' : 'hold-spacing'))));
+  const safeRetreatInterceptApplied = Boolean(
+    options.combatSafeRetreatInterceptEnabled === true
+      && safeRetreatIntercept.eligible
+      && !preDodge
+      && movementArbitration?.source === 'strategic-safe'
+      && Number(movement.dx) === Number(safeRetreatIntercept.direction.dx)
+      && Number(movement.dy) === Number(safeRetreatIntercept.direction.dy)
+  );
+  if (safeRetreatInterceptApplied) {
+    movement.modifiers = Array.from(new Set([...(movement.modifiers || []), 'safe-retreat-intercept']));
+  }
   return {
     dx: Number(movement.dx || 0),
     dy: Number(movement.dy || 0),
@@ -2133,6 +2169,10 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       threatField: summarizeDodgeThreatField(dodge.threatField)
     } : null,
     modifiers: movement.modifiers || [],
+    safeRetreatIntercept: {
+      ...safeRetreatIntercept,
+      applied: safeRetreatInterceptApplied
+    },
     closePressure: closePressureActive ? {
       ...closePressureState,
       range: closePressureState?.range ? { ...closePressureState.range } : null,
@@ -2269,6 +2309,31 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   const currentSelfY = numberOrNull(self?.y);
   const selfDamaged = previousSelfHp !== null && currentSelfHp !== null && currentSelfHp < previousSelfHp - 0.01;
   const selfHealed = previousSelfHp !== null && currentSelfHp !== null && currentSelfHp > previousSelfHp + 0.01;
+  const observationTargetId = String(stateful.combatHpObservationTargetId || '');
+  const observationBuffer = observationTargetId === String(id)
+    && stateful.combatHpObservationBuffer
+    ? stateful.combatHpObservationBuffer
+    : createCombatObservationBuffer({
+        bufferMs: options.combatHpAttributionBufferMs ?? 2000,
+        maxObservations: options.combatHpAttributionMaxObservations ?? 40,
+        maxBulletsPerObservation: options.combatHpAttributionMaxBullets ?? 12
+      });
+  const observedFrame = observeCombatFrameCore(observationBuffer, {
+    atMs: nowMs,
+    tick: options.currentTick,
+    self,
+    bullets: options.bullets,
+    selectedDirection: stateful.combatMetrics?.lastSelectedDodgeDirection,
+    visibleDirection: self,
+    pendingMovement: Array.isArray(options.pendingVelocityCommands)
+      ? options.pendingVelocityCommands.at(-1)
+      : null
+  }, options);
+  stateful.combatHpObservationTargetId = String(id);
+  stateful.combatHpObservationBuffer = observedFrame.state;
+  stateful.combatHpLossAttributionPending = observedFrame.hpLoss
+    ? { hpLoss: observedFrame.hpLoss, observations: observedFrame.state.observations.slice() }
+    : null;
   const baselineExit = evaluateCombatHpExitCore({ self, target }, options);
   const disadvantaged = baselineExit?.rule === 'clear-hp-gap';
   const disadvantageSinceAt = disadvantaged
@@ -2467,6 +2532,8 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
       ? Number(previousMetrics.acceptedShots || 0)
       : (same ? Number(previous.acceptedShotsAtLastDamage || 0) : 0),
     lastSelfDamageAt: selfDamaged ? nowMs : (same ? Number(previous.lastSelfDamageAt || 0) : 0),
+    lastSelfDamage: selfDamaged ? Math.max(0, previousSelfHp - currentSelfHp) : 0,
+    selfHpLossObserved: selfDamaged,
     hasDamagedSelf: Boolean((same && previous.hasDamagedSelf) || attributableSelfDamage),
     lastThreatAt: attributableSelfDamage || targetBulletIds.length || targetOwnsRealBullet
       ? nowMs
@@ -2599,7 +2666,8 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     totalStaminaSpent,
     shootingStaminaSpent,
     movementStaminaSpent,
-    lastDodgeThreatField: null
+    lastDodgeThreatField: previousMetrics.lastDodgeThreatField || null,
+    combatHpLossAttribution: null
   };
   const damageProgressAt = damaged
     ? nowMs
@@ -2843,6 +2911,9 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   const proposedTargetId = combatTargetId(proposedNormalTarget);
   const currentThreat = combatTargetIncomingThreatEvidenceCore(bullets, currentTargetId, options);
   const proposedThreat = combatTargetIncomingThreatEvidenceCore(bullets, proposedTargetId, options);
+  const defensiveThreatBullet = (bullets || [])
+    .filter(bullet => bullet?.incoming === true && incomingBulletHasCollisionRiskCore(bullet, options))
+    .sort((left, right) => Number(left.timeToImpact ?? Infinity) - Number(right.timeToImpact ?? Infinity))[0] || null;
   const switchDecision = applyCombatTargetSwitchHysteresisCore({
     currentTargetId,
     currentVisibleTarget,
@@ -2851,6 +2922,9 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     urgentSafety,
     currentThreat,
     proposedThreat,
+    defensiveThreatOwnerId: defensiveThreatBullet?.ownerId ?? null,
+    currentTargetFinishable: stateful?.combatTarget?.finishability,
+    proposedThreatDamageProgress: Boolean(stateful?.combatTarget?.proposedThreatDamageProgress),
     currentStickAgeMs: Math.max(0, Number(options.nowMs || Date.now()) - Number(stateful?.combatTarget?.at || options.nowMs || Date.now())),
     lastSwitch: stateful?.combatTargetSwitchHistory || null,
     nowMs: options.nowMs
@@ -2859,7 +2933,10 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     urgentConfirmTicks: options.combatTargetSwitchUrgentConfirmTicks ?? 3,
     oscillationWindowMs: options.combatTargetSwitchOscillationWindowMs ?? 10000,
     threatTtiAdvantageMs: options.combatTargetSwitchThreatTtiAdvantageMs ?? 250,
-    threatDistanceAdvantageCm: options.combatTargetSwitchThreatDistanceAdvantageCm ?? 1500
+    threatDistanceAdvantageCm: options.combatTargetSwitchThreatDistanceAdvantageCm ?? 1500,
+    urgentReversalTtiAdvantageMs: options.combatTargetSwitchUrgentReversalTtiAdvantageMs ?? 500,
+    urgentReversalDistanceAdvantageCm: options.combatTargetSwitchUrgentReversalDistanceAdvantageCm ?? 2500,
+    urgentReversalGuardEnabled: options.combatTargetSwitchUrgentReversalGuardEnabled === true
   });
   if (stateful && typeof stateful === 'object') {
     stateful.combatTargetSwitchGate = switchDecision.gate;
@@ -2890,6 +2967,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     bullets,
     currentTick: realtime.tick,
     commandShooting: state?.command?.shooting || null,
+    pendingVelocityCommands: state?.command?.movement?.pendingVelocityCommands || options.pendingVelocityCommands,
     executionTiming: state?.command?.shooting?.timing || options.executionTiming,
     movementExecutionTiming: state?.command?.movement?.timing || options.movementExecutionTiming,
     reason: liveCombatEnabled ? 'combat-live-realtime' : (options.controlMode === 'combat-dry-run' ? 'combat-dry-run-realtime' : 'realtime-visible-threat')
@@ -3383,6 +3461,32 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       latestPendingVelocity?.directionGeneration ?? latestVelocityTransition?.directionGeneration
     )
   };
+  if (stateful?.combatMetrics) {
+    const hpLossPending = stateful.combatHpLossAttributionPending;
+    if (hpLossPending) {
+      stateful.combatMetrics.combatHpLossAttribution = completeCombatHpLossAttributionCore(
+        hpLossPending,
+        {
+          selectedDirection: movement?.dodge
+            ? { dx: movement.dodge.dx, dy: movement.dodge.dy }
+            : { dx: self?.vx, dy: self?.vy },
+          threatField: movement?.dodge?.threatField || [],
+          commandVisibilityDelayMs: movement.commandLatency.velocitySendToVisibleWallMs,
+          movementGeneration: movement.commandLatency.directionGeneration
+        },
+        options
+      );
+      stateful.combatHpLossAttributionPending = null;
+    } else {
+      stateful.combatMetrics.combatHpLossAttribution = null;
+    }
+    stateful.combatMetrics.lastDodgeThreatField = summarizeDodgeThreatField(
+      movement?.dodge?.threatField || []
+    );
+    stateful.combatMetrics.lastSelectedDodgeDirection = movement?.dodge
+      ? { dx: Number(movement.dodge.dx || 0), dy: Number(movement.dodge.dy || 0) }
+      : { dx: Number(self?.vx || 0), dy: Number(self?.vy || 0) };
+  }
   const closePressureActive = combatTargetState?.combatPhase === 'close-pressure';
   const pressureAttackActive = Boolean(
     closePressureActive

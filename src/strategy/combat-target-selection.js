@@ -677,6 +677,8 @@ function applyCombatTargetSwitchHysteresisCore(input = {}, previousGate = null, 
     };
   }
   const urgentRequested = input.urgentSafety === true;
+  const requiredTtiAdvantageMs = Math.max(0, Number(options.threatTtiAdvantageMs ?? 250));
+  const requiredDistanceAdvantageCm = Math.max(0, Number(options.threatDistanceAdvantageCm ?? 1500));
   const threatAdvantage = combatTargetThreatAdvantageCore(
     input.currentThreat || {},
     input.proposedThreat || {},
@@ -707,7 +709,32 @@ function applyCombatTargetSwitchHysteresisCore(input = {}, previousGate = null, 
       && String(lastSwitch.toTargetId || '') === currentId
       && nowMs - Number(lastSwitch.at || 0) <= oscillationWindowMs
   );
-  if (reversalBlocked && !urgentRequested) {
+  const urgentReversalTtiAdvantageMs = Math.max(
+    requiredTtiAdvantageMs,
+    Number(options.urgentReversalTtiAdvantageMs ?? 500)
+  );
+  const urgentReversalDistanceAdvantageCm = Math.max(
+    requiredDistanceAdvantageCm,
+    Number(options.urgentReversalDistanceAdvantageCm ?? 2500)
+  );
+  const urgentReversalAdvantage = Boolean(
+    urgentRequested
+      && input.proposedThreat?.urgent === true
+      && (
+        threatAdvantage.riskLevelDifference > 0
+          || (threatAdvantage.timeToImpactAdvantageMs !== null
+            && threatAdvantage.timeToImpactAdvantageMs >= urgentReversalTtiAdvantageMs)
+          || (threatAdvantage.distanceAdvantageCm !== null
+            && threatAdvantage.distanceAdvantageCm >= urgentReversalDistanceAdvantageCm)
+          || Number(input.proposedThreat?.urgentBulletCount || 0)
+            >= Number(input.currentThreat?.urgentBulletCount || 0) + 2
+          || (input.currentTargetFinishable === false && input.proposedThreatDamageProgress === true)
+      )
+  );
+  const urgentReversalGuardEnabled = options.urgentReversalGuardEnabled === true;
+  const urgentReversalWouldBlock = reversalBlocked && urgentRequested && !urgentReversalAdvantage;
+  const ordinaryReversalWouldBlock = reversalBlocked && !urgentRequested;
+  if (ordinaryReversalWouldBlock || (urgentReversalGuardEnabled && urgentReversalWouldBlock)) {
     return {
       target: input.currentVisibleTarget || null,
       gate: null,
@@ -715,11 +742,20 @@ function applyCombatTargetSwitchHysteresisCore(input = {}, previousGate = null, 
         fromTargetId: currentId,
         toTargetId: proposedId,
         allowed: false,
-        reason: 'oscillating-reversal-blocked',
-        confirmationTicks: ordinaryRequiredTicks,
+        reason: urgentRequested
+          ? 'urgent-oscillating-reversal-blocked'
+          : 'oscillating-reversal-blocked',
+        confirmationTicks: urgentRequested ? urgentRequiredTicks : ordinaryRequiredTicks,
         observedTicks: 0,
         holdRemainingMs: Math.max(0, oscillationWindowMs - (nowMs - Number(lastSwitch.at || 0))),
         reversalRemainingMs: Math.max(0, oscillationWindowMs - (nowMs - Number(lastSwitch.at || 0))),
+        urgentReversalAdvantage,
+        urgentReversalGuardEnabled,
+        urgentReversalWouldBlock,
+        urgentReversalTtiAdvantageMs,
+        urgentReversalDistanceAdvantageCm,
+        defensiveThreatOwnerId: input.defensiveThreatOwnerId ?? null,
+        attackFocusTargetId: currentId,
         stickAgeMs: Math.max(0, Number(input.currentStickAgeMs || 0))
       }
     };
@@ -753,6 +789,11 @@ function applyCombatTargetSwitchHysteresisCore(input = {}, previousGate = null, 
       currentThreat: input.currentThreat || null,
       proposedThreat: input.proposedThreat || null,
       threatDifference: threatAdvantage,
+      urgentReversalAdvantage,
+      urgentReversalGuardEnabled,
+      urgentReversalWouldBlock,
+      defensiveThreatOwnerId: input.defensiveThreatOwnerId ?? null,
+      attackFocusTargetId: allowed ? proposedId : currentId,
       stickAgeMs: Math.max(0, Number(input.currentStickAgeMs || 0)),
       reversalRemainingMs: reversalBlocked
         ? Math.max(0, oscillationWindowMs - (nowMs - Number(lastSwitch.at || 0)))

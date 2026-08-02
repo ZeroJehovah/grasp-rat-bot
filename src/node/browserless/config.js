@@ -85,6 +85,8 @@ const DEFAULTS = {
   combatRobustDodgeEnabled: true,
   combatCloseBandReserveEnabled: true,
   combatMovementStabilityEnabled: false,
+  combatSafeRetreatInterceptEnabled: false,
+  combatTargetSwitchUrgentReversalGuardEnabled: false,
   combatShootMinIntervalMs: 160,
   combatControlIntervalMs: 50,
   combatClosePressureMinRangeCm: 4500,
@@ -259,6 +261,14 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     combatRobustDodgeEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_ROBUST_DODGE_ENABLED, DEFAULTS.combatRobustDodgeEnabled),
     combatCloseBandReserveEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_BAND_RESERVE_ENABLED, DEFAULTS.combatCloseBandReserveEnabled),
     combatMovementStabilityEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_MOVEMENT_STABILITY_ENABLED, DEFAULTS.combatMovementStabilityEnabled),
+    combatSafeRetreatInterceptEnabled: boolEnv(
+      env.GRASP_RAT_BROWSERLESS_COMBAT_SAFE_RETREAT_INTERCEPT_ENABLED,
+      DEFAULTS.combatSafeRetreatInterceptEnabled
+    ),
+    combatTargetSwitchUrgentReversalGuardEnabled: boolEnv(
+      env.GRASP_RAT_BROWSERLESS_COMBAT_TARGET_SWITCH_URGENT_REVERSAL_GUARD_ENABLED,
+      DEFAULTS.combatTargetSwitchUrgentReversalGuardEnabled
+    ),
     combatShootMinIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_SHOOT_MIN_INTERVAL_MS, DEFAULTS.combatShootMinIntervalMs),
     combatControlIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CONTROL_INTERVAL_MS, DEFAULTS.combatControlIntervalMs),
     combatClosePressureMinRangeCm: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_MIN_RANGE_CM, DEFAULTS.combatClosePressureMinRangeCm),
@@ -480,6 +490,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.combatMovementStabilityEnabled = true;
     } else if (arg === '--no-combat-movement-stability') {
       config.combatMovementStabilityEnabled = false;
+    } else if (arg === '--combat-safe-retreat-intercept') {
+      config.combatSafeRetreatInterceptEnabled = true;
+    } else if (arg === '--no-combat-safe-retreat-intercept') {
+      config.combatSafeRetreatInterceptEnabled = false;
     } else if (arg === '--combat-control-interval-ms') {
       config.combatControlIntervalMs = numberEnv(argv[++i], config.combatControlIntervalMs);
     } else if (arg === '--combat-close-pressure-min-range-cm') {
