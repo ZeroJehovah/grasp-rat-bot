@@ -169,8 +169,7 @@ function isPlainObject(value) {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
-function shouldReplaceStateObject(pathParts) {
-  const pathKey = pathParts.join('.');
+function shouldReplaceStatePath(pathKey) {
   return pathKey === 'runner.currentAction'
     || pathKey === 'runner.lastRun'
     || pathKey === 'runner.pendingExit'
@@ -185,6 +184,15 @@ function shouldReplaceStateObject(pathParts) {
     || pathKey === 'network.transportHealth'
     || pathKey === 'lastKnown.self'
     || pathKey === 'lastKnown.stamina';
+}
+
+function shouldReplaceStateObject(pathParts) {
+  return shouldReplaceStatePath(pathParts.join('.'));
+}
+
+function shouldReplaceLiveStatePath(pathKey) {
+  return shouldReplaceStatePath(pathKey)
+    || pathKey === 'current.combatSummary';
 }
 
 function mergeState(base, patch, pathParts = []) {
@@ -202,11 +210,13 @@ function mergeState(base, patch, pathParts = []) {
   return output;
 }
 
-function mergeLiveState(base, patch, pathParts = []) {
+function mergeLiveState(base, patch, pathKey = '') {
   const output = isPlainObject(base) ? { ...base } : {};
-  for (const [key, value] of Object.entries(patch || {})) {
-    const nextPath = [...pathParts, key];
-    if (shouldReplaceStateObject(nextPath)) {
+  for (const key in (patch || {})) {
+    if (!Object.prototype.hasOwnProperty.call(patch, key)) continue;
+    const value = patch[key];
+    const nextPath = pathKey ? `${pathKey}.${key}` : key;
+    if (shouldReplaceLiveStatePath(nextPath)) {
       output[key] = value;
     } else if (isPlainObject(value) && isPlainObject(output[key])) {
       output[key] = mergeLiveState(output[key], value, nextPath);
@@ -215,6 +225,28 @@ function mergeLiveState(base, patch, pathParts = []) {
     }
   }
   return output;
+}
+
+function mergeLiveActionState(base, actionSnapshot, options = {}) {
+  const currentBase = isPlainObject(base) ? base : {};
+  const runnerBase = isPlainObject(currentBase.runner) ? currentBase.runner : {};
+  const actionBase = isPlainObject(currentBase.current) ? currentBase.current : {};
+  const current = {
+    ...actionBase,
+    action: actionSnapshot
+  };
+  if (Object.prototype.hasOwnProperty.call(options, 'battlePresentation')) {
+    current.battlePresentation = options.battlePresentation;
+  }
+  return {
+    ...currentBase,
+    updatedAt: options.updatedAt || new Date().toISOString(),
+    runner: {
+      ...runnerBase,
+      currentAction: actionSnapshot
+    },
+    current
+  };
 }
 
 function stateFilePath(config) {
@@ -691,6 +723,29 @@ function normalizeBrowserlessStats(stats, rawStats = stats) {
   return normalized;
 }
 
+function browserlessStatsReadyForLiveUpdate(stats) {
+  return Boolean(
+    stats
+      && Number(stats.killAccountingVersion) === KILL_ACCOUNTING_VERSION
+      && Number(stats.coinAccountingVersion) === COIN_ACCOUNTING_VERSION
+      && isPlainObject(stats.currentSession)
+      && isPlainObject(stats.today)
+      && isPlainObject(stats.lastExit)
+      && Array.isArray(stats.currentSession.killBaselineKeys)
+      && Array.isArray(stats.currentSession.killKeys)
+      && Array.isArray(stats.currentSession.coinPickupKeys)
+  );
+}
+
+function cloneBrowserlessStatsForLiveUpdate(stats) {
+  return {
+    ...stats,
+    currentSession: { ...stats.currentSession },
+    today: { ...stats.today },
+    lastExit: { ...stats.lastExit }
+  };
+}
+
 function resetBrowserlessTodayStats(day) {
   return {
     ...defaultBrowserlessStats().today,
@@ -804,7 +859,9 @@ function statsDecisionTick(decision) {
 }
 
 function statsKillEvidenceFromDecision(decision) {
-  return (Array.isArray(decision?.input?.selfKillEvidence) ? decision.input.selfKillEvidence : [])
+  const evidence = Array.isArray(decision?.input?.selfKillEvidence) ? decision.input.selfKillEvidence : [];
+  if (!evidence.length) return [];
+  return evidence
     .map(item => ({
       key: statsKillKey(item),
       tick: statsKillTick(item)
@@ -813,7 +870,9 @@ function statsKillEvidenceFromDecision(decision) {
 }
 
 function statsCoinPickupEvidenceFromDecision(decision, nowMs = Date.now()) {
-  return (Array.isArray(decision?.input?.coinPickups) ? decision.input.coinPickups : [])
+  const evidence = Array.isArray(decision?.input?.coinPickups) ? decision.input.coinPickups : [];
+  if (!evidence.length) return [];
+  return evidence
     .map(item => ({
       key: compactString(item?.key, 160),
       amount: Math.max(0, Math.round(Number(item?.amount || 0) || 0)),
@@ -945,17 +1004,30 @@ function sessionCoinUpperBound(session) {
 function updateBrowserlessStatsSessionCoinPickups(session, decision, nowMs, previousCoinsGained = null, dropTransition = {}) {
   const memoryMs = 60000;
   const duplicateWindowMs = 5000;
-  const pickupKeys = normalizeSessionCoinPickupKeys(session.coinPickupKeys)
-    .filter(item => nowMs - Number(item.at || 0) <= memoryMs);
+  const rawPickupEvidence = Array.isArray(decision?.input?.coinPickups) ? decision.input.coinPickups : [];
+  const existingPickupKeys = Array.isArray(session.coinPickupKeys) ? session.coinPickupKeys : [];
+  let expiredPickupKey = false;
+  for (const item of existingPickupKeys) {
+    if (nowMs - Number(item?.at || 0) <= memoryMs) continue;
+    expiredPickupKey = true;
+    break;
+  }
+  const pickupKeys = rawPickupEvidence.length || expiredPickupKey
+    ? normalizeSessionCoinPickupKeys(existingPickupKeys)
+      .filter(item => nowMs - Number(item.at || 0) <= memoryMs)
+    : existingPickupKeys;
   let added = 0;
-  for (const pickup of statsCoinPickupEvidenceFromDecision(decision, nowMs)) {
+  const pickupEvidence = rawPickupEvidence.length
+    ? statsCoinPickupEvidenceFromDecision(decision, nowMs)
+    : [];
+  for (const pickup of pickupEvidence) {
     const duplicate = pickupKeys.some(item => item.key === pickup.key
       && Math.abs(Number(item.at || 0) - pickup.at) <= duplicateWindowMs);
     if (duplicate) continue;
     pickupKeys.push(pickup);
     added += pickup.amount;
   }
-  session.coinPickupKeys = pickupKeys.slice(-300);
+  session.coinPickupKeys = pickupKeys.length > 300 ? pickupKeys.slice(-300) : pickupKeys;
   const dropCalibrationAdded = Math.max(0, Math.round(Number(dropTransition.added || 0) || 0));
   const previousDropCalibratedCoins = Math.max(
     0,
@@ -1088,6 +1160,10 @@ function updateBrowserlessStatsSession(stats, session, decision, self, stamina, 
   });
   updateBrowserlessStatsSessionStamina(stats, session, stamina, self, nowMs);
   const evidence = ensureSessionKillBaseline(session, decision);
+  if (!evidence.length && session.killBaselineInitialized && Array.isArray(session.killKeys)) {
+    session.kills = session.killKeys.length;
+    return;
+  }
   const baselineKeys = new Set(Array.isArray(session.killBaselineKeys) ? session.killBaselineKeys : []);
   const killKeys = new Set(normalizeSessionKillKeys(session.killKeys, session));
   const enteredTick = compactNumber(session.enteredTick);
@@ -1108,7 +1184,11 @@ function updateBrowserlessStatsSession(stats, session, decision, self, stamina, 
 }
 
 function browserlessStatsForDecision(state, decision, options = {}) {
-  const stats = normalizeBrowserlessStats(state?.stats);
+  const liveUpdate = options.assumeNormalized === true
+    && browserlessStatsReadyForLiveUpdate(state?.stats);
+  const stats = liveUpdate
+    ? cloneBrowserlessStatsForLiveUpdate(state.stats)
+    : normalizeBrowserlessStats(state?.stats);
   const nowMs = eventTimeMs(decision?.at, options.nowMs);
   ensureBrowserlessStatsDay(stats, nowMs);
   const self = decision?.input?.self || null;
@@ -1132,7 +1212,7 @@ function browserlessStatsForDecision(state, decision, options = {}) {
     Number(stats.today.coinsGained || 0)
       + todayDropTransition.addedCoins
   ));
-  return normalizeBrowserlessStats(stats);
+  return liveUpdate ? stats : normalizeBrowserlessStats(stats);
 }
 
 function browserlessStatsForKillEvidence(state, evidence = [], options = {}) {
@@ -3221,6 +3301,7 @@ module.exports = {
   compactSourceIpPreflight,
   defaultBrowserlessState,
   loginPointFromAnyState,
+  mergeLiveActionState,
   mergeLiveState,
   mergeState,
   reconcileBrowserlessExitKillEvidence,

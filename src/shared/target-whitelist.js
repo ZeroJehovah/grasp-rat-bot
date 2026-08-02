@@ -80,11 +80,20 @@ function targetIsWhitelisted(target, whitelist = null) {
   if (whitelist instanceof Set) return whitelist.has(name);
   if (Array.isArray(whitelist)) return targetWhitelistNameSet(whitelist).has(name);
   if (whitelist && typeof whitelist === 'object') {
-    if (userId && whitelist.userIdSet instanceof Set
-      && (whitelist.userIdSet.has(userId) || whitelist.userIdSet.has(Number(userId)))) return true;
-    if (userId && Array.isArray(whitelist.userIds) && targetWhitelistUserIdSet(whitelist.userIds).has(userId)) return true;
-    if (name && whitelist.nameSet instanceof Set && whitelist.nameSet.has(name)) return true;
-    if (name && Array.isArray(whitelist.names) && targetWhitelistNameSet(whitelist.names).has(name)) return true;
+    if (userId) {
+      if (whitelist.userIdSet instanceof Set) {
+        if (whitelist.userIdSet.has(userId) || whitelist.userIdSet.has(Number(userId))) return true;
+      } else if (Array.isArray(whitelist.userIds) && targetWhitelistUserIdSet(whitelist.userIds).has(userId)) {
+        return true;
+      }
+    }
+    if (name) {
+      if (whitelist.nameSet instanceof Set) {
+        if (whitelist.nameSet.has(name)) return true;
+      } else if (Array.isArray(whitelist.names) && targetWhitelistNameSet(whitelist.names).has(name)) {
+        return true;
+      }
+    }
   }
   return false;
 }

@@ -782,13 +782,27 @@ function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bu
   const incoming = Object.prototype.hasOwnProperty.call(options, 'incomingBullet')
     ? options.incomingBullet
     : (Array.isArray(bullets) ? bullets.find(bullet => bullet?.incoming) : null);
-  const context = {
-    ...options,
-    bullets,
-    incomingBullet: incoming || null,
-    incomingBulletOwnerId: incoming?.ownerId,
-    unknownIncoming: Boolean(incoming && (incoming.ownerId === null || incoming.ownerId === undefined))
-  };
+  const contextIncomingBullet = incoming || null;
+  const contextIncomingBulletOwnerId = incoming?.ownerId;
+  const contextUnknownIncoming = Boolean(
+    incoming && (incoming.ownerId === null || incoming.ownerId === undefined)
+  );
+  // Browserless combat already installs these four frame-local fields on its
+  // mutable option object before entering this shared selector. Reuse that
+  // object in the hot path; retain the original full-copy behavior for direct
+  // callers that have not supplied the frame context.
+  const context = options?.bullets === bullets
+    && options?.incomingBullet === contextIncomingBullet
+    && options?.incomingBulletOwnerId === contextIncomingBulletOwnerId
+    && options?.unknownIncoming === contextUnknownIncoming
+    ? options
+    : {
+        ...options,
+        bullets,
+        incomingBullet: contextIncomingBullet,
+        incomingBulletOwnerId: contextIncomingBulletOwnerId,
+        unknownIncoming: contextUnknownIncoming
+      };
   if (visibleTarget && dynamicWhitelistDistanceGuardBlocksCombatCore(visibleTarget, {
     incomingOverride: incomingOwnerMatchesTarget(visibleTarget, context),
     recentInjury: recentInjuryMatchesTarget(visibleTarget, context)

@@ -14,6 +14,7 @@ const DEFAULT_PLAYER_SPEED_CM_PER_TICK = 50;
 const DEFAULT_BULLET_HIT_RADIUS_CM = 90;
 const DEFAULT_REACTION_RANGE_MIN_CM = 4500;
 const DEFAULT_REACTION_RANGE_MAX_CM = 7000;
+const PRESSURE_RANGE_CACHE = new WeakMap();
 
 function numberOrNull(value) {
   if (value === null || value === undefined || value === '') return null;
@@ -106,7 +107,30 @@ function combatPressureTargetRangeCore(options = {}) {
     Number(options.combatNormalReactionMaxRangeCm ?? reactiveBoundaryCm + oneTickRangeCm * 2)
   );
   const flightMs = rangeCm / bulletSpeed * tickMs;
-  return {
+  const cached = options && typeof options === 'object' ? PRESSURE_RANGE_CACHE.get(options) : null;
+  if (cached
+    && cached.rangeCm === rangeCm
+    && cached.minRangeCm === minRangeCm
+    && cached.maxRangeCm === maxRangeCm
+    && cached.reactiveBoundaryCm === reactiveBoundaryCm
+    && cached.normalMinRangeCm === normalMinRangeCm
+    && cached.normalMaxRangeCm === normalMaxRangeCm
+    && cached.unconstrainedRangeCm === unconstrainedRangeCm
+    && cached.flightMs === flightMs
+    && cached.responseBudgetMs === responseBudgetMs
+    && cached.tickMs === tickMs
+    && cached.bulletSpeed === bulletSpeed
+    && cached.controlIntervalMs === controlIntervalMs
+    && cached.p90Ticks === p90Ticks
+    && cached.playerSpeed === playerSpeed
+    && cached.hitRadius === hitRadius
+    && cached.clearanceTicks === clearanceTicks
+    && cached.clearanceMs === clearanceMs
+    && cached.frameJitterMs === frameJitterMs
+    && cached.reactionSafetyMarginMs === reactionSafetyMarginMs) {
+    return cached.value;
+  }
+  const value = {
     rangeCm: Math.round(rangeCm),
     minRangeCm: Math.round(minRangeCm),
     maxRangeCm: Math.round(maxRangeCm),
@@ -128,6 +152,31 @@ function combatPressureTargetRangeCore(options = {}) {
     reactionSafetyMarginMs: Math.round(reactionSafetyMarginMs),
     ballisticConstraintSatisfied: flightMs <= responseBudgetMs
   };
+  if (options && typeof options === 'object') {
+    PRESSURE_RANGE_CACHE.set(options, {
+      rangeCm,
+      minRangeCm,
+      maxRangeCm,
+      reactiveBoundaryCm,
+      normalMinRangeCm,
+      normalMaxRangeCm,
+      unconstrainedRangeCm,
+      flightMs,
+      responseBudgetMs,
+      tickMs,
+      bulletSpeed,
+      controlIntervalMs,
+      p90Ticks,
+      playerSpeed,
+      hitRadius,
+      clearanceTicks,
+      clearanceMs,
+      frameJitterMs,
+      reactionSafetyMarginMs,
+      value
+    });
+  }
+  return value;
 }
 
 function ordinaryProfitEngagement(input = {}) {

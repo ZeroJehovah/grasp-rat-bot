@@ -213,6 +213,7 @@ function auditDeployment(options = {}, deps = {}) {
   addCheck(checks, 'source-ip-preflight-module', Boolean(workingDirectory && fs.existsSync(path.join(workingDirectory, 'src', 'node', 'browserless', 'source-ip-preflight.js'))), `module=${workingDirectory ? path.join(workingDirectory, 'src', 'node', 'browserless', 'source-ip-preflight.js') : 'missing'}`);
   addCheck(checks, 'environment-file-reference', environmentFile === envPath, `EnvironmentFile=${environmentFile || 'missing'}`);
   addCheck(checks, 'exec-start', execStart.includes('node scripts/browserless-runner.js'), `ExecStart=${execStart || 'missing'}`);
+  addCheck(checks, 'service-nice', unitValue(unit.text, 'Nice') === '-10', `Nice=${unitValue(unit.text, 'Nice') || 'missing'}`);
   addCheck(checks, 'restart-policy', unitValue(unit.text, 'Restart') === 'on-failure', `Restart=${unitValue(unit.text, 'Restart') || 'missing'}`);
   addCheck(checks, 'graceful-stop-timeout', unitValue(unit.text, 'TimeoutStopSec') === 'infinity', `TimeoutStopSec=${unitValue(unit.text, 'TimeoutStopSec') || 'missing'}`);
   addCheck(checks, 'read-write-paths', readWritePaths.includes(dataDir) && readWritePaths.includes(logDir), `ReadWritePaths=${readWritePaths || 'missing'}`);

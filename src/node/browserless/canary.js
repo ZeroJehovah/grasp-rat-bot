@@ -70,7 +70,248 @@ const DEFAULT_MAIN_THREAD_BUDGET_MS = 50;
 const DEFAULT_REALTIME_CONTROL_WARMUP_ITERATIONS = 6;
 const DEFAULT_LOGIN_POINT_SINGLE_BLOCKER_BYPASS_MS = 60 * 60 * 1000;
 const DEFAULT_LOGIN_POINT_FULL_HP = 100;
+const DEFAULT_ACTION_SKIP_PUBLICATION_WINDOW_MS = 500;
 const CREATOR_USER_ID = 28886;
+
+function actionPublicationValue(value) {
+  return value === null || value === undefined ? '' : String(value);
+}
+
+function actionPublicationTarget(action = {}) {
+  const target = action.target || action.opportunisticShot || {};
+  const id = target.userId
+    ?? target.user_id
+    ?? target.entityId
+    ?? target.entity_id
+    ?? target.key
+    ?? target.id
+    ?? target.dropId
+    ?? target.drop_id;
+  if (id !== null && id !== undefined && id !== '') {
+    return { mode: 'id', type: target.type || 'target', id };
+  }
+  const x = Number(target.x);
+  const y = Number(target.y);
+  if (Number.isFinite(x) && Number.isFinite(y)) {
+    return { mode: 'position', type: target.type || 'target', x: Math.round(x), y: Math.round(y) };
+  }
+  return { mode: 'empty' };
+}
+
+function actionPublicationValuesEqual(left, right) {
+  if (left === right) return true;
+  return actionPublicationValue(left) === actionPublicationValue(right);
+}
+
+function actionPublicationTargetMatches(action = {}, expected = null) {
+  if (!expected) return false;
+  const target = action.target || action.opportunisticShot || {};
+  const id = target.userId
+    ?? target.user_id
+    ?? target.entityId
+    ?? target.entity_id
+    ?? target.key
+    ?? target.id
+    ?? target.dropId
+    ?? target.drop_id;
+  if (id !== null && id !== undefined && id !== '') {
+    return expected.mode === 'id'
+      && actionPublicationValuesEqual(target.type || 'target', expected.type)
+      && actionPublicationValuesEqual(id, expected.id);
+  }
+  const x = Number(target.x);
+  const y = Number(target.y);
+  if (Number.isFinite(x) && Number.isFinite(y)) {
+    return expected.mode === 'position'
+      && actionPublicationValuesEqual(target.type || 'target', expected.type)
+      && Math.round(x) === expected.x
+      && Math.round(y) === expected.y;
+  }
+  return expected.mode === 'empty';
+}
+
+function actionPublicationCommand(command = null) {
+  if (!command || typeof command !== 'object') return null;
+  return {
+    id: command.id,
+    type: command.type,
+    dx: command.dx,
+    dy: command.dy,
+    reason: command.reason,
+    requestId: command.requestId,
+    directionGeneration: command.directionGeneration
+  };
+}
+
+function actionPublicationCommandMatches(command = null, expected = null) {
+  const present = Boolean(command && typeof command === 'object');
+  if (!present || !expected) return !present && !expected;
+  return actionPublicationValuesEqual(command.id, expected.id)
+    && actionPublicationValuesEqual(command.type, expected.type)
+    && actionPublicationValuesEqual(command.dx, expected.dx)
+    && actionPublicationValuesEqual(command.dy, expected.dy)
+    && actionPublicationValuesEqual(command.reason, expected.reason)
+    && actionPublicationValuesEqual(command.requestId, expected.requestId)
+    && actionPublicationValuesEqual(command.directionGeneration, expected.directionGeneration);
+}
+
+function actionPublicationComponentFailed(component = null) {
+  return Boolean(component && typeof component === 'object' && (
+    component.ok === false
+    || component.error
+    || component.transportClosed === true
+    || component.transportError
+  ));
+}
+
+function actionSkippedPublicationIsCoalescible(actionResult = null, context = {}) {
+  if (!actionResult || typeof actionResult !== 'object') return false;
+  const decisionAction = context.decision?.action
+    || context.summary?.action
+    || context.decision
+    || context.summary
+    || {};
+  const kind = String(actionResult.kind || decisionAction.kind || '');
+  const reason = String(actionResult.reason || decisionAction.reason || '');
+  const band = String(actionResult.band || decisionAction.band || context.decision?.band || context.summary?.band || '');
+  const handledBy = String(actionResult.handledBy || '');
+  if (actionResult.shouldLeave === true
+    || band === 'exit'
+    || band === 'safety'
+    || handledBy === 'safety-controller'
+    || handledBy === 'action-adapter-stop'
+    || /(^|-)(?:leave|exit|safety)(?:-|$)/.test(kind)) return false;
+  const command = actionResult.command || null;
+  if (command?.type === 'velocity' && Number(command.dx || 0) === 0 && Number(command.dy || 0) === 0) return false;
+  const movement = actionResult.movement && typeof actionResult.movement === 'object'
+    ? actionResult.movement
+    : null;
+  const shoot = actionResult.shoot && typeof actionResult.shoot === 'object'
+    ? actionResult.shoot
+    : null;
+  if (actionPublicationComponentFailed(actionResult)
+    || actionPublicationComponentFailed(movement)
+    || actionPublicationComponentFailed(shoot)) return false;
+  const resultHasSkip = Object.prototype.hasOwnProperty.call(actionResult, 'skipped');
+  const movementHasSkip = Boolean(movement && Object.prototype.hasOwnProperty.call(movement, 'skipped'));
+  const shootHasSkip = Boolean(shoot && Object.prototype.hasOwnProperty.call(shoot, 'skipped'));
+  if ((resultHasSkip && actionResult.skipped !== true)
+    || (movementHasSkip && movement.skipped !== true)
+    || (shootHasSkip && shoot.skipped !== true)) return false;
+  return resultHasSkip || movementHasSkip || shootHasSkip;
+}
+
+function captureActionSkippedPublication(actionResult = null, context = {}) {
+  const decisionAction = context.decision?.action
+    || context.summary?.action
+    || context.decision
+    || context.summary
+    || {};
+  return {
+    kind: String(actionResult.kind || decisionAction.kind || ''),
+    reason: String(actionResult.reason || decisionAction.reason || ''),
+    band: String(actionResult.band || decisionAction.band || context.decision?.band || context.summary?.band || ''),
+    handledBy: String(actionResult.handledBy || ''),
+    target: actionPublicationTarget(actionResult),
+    command: actionPublicationCommand(actionResult.command),
+    vectorDx: actionResult.vector?.dx,
+    vectorDy: actionResult.vector?.dy,
+    movementReason: actionResult.movement?.reason,
+    movementCommand: actionPublicationCommand(actionResult.movement?.command),
+    shootReason: actionResult.shoot?.reason,
+    shootCommand: actionPublicationCommand(actionResult.shoot?.command),
+    outstandingCommandId: actionResult.shoot?.outstanding?.commandId
+  };
+}
+
+function actionSkippedPublicationMatches(actionResult = null, context = {}, expected = null) {
+  if (!expected) return false;
+  const decisionAction = context.decision?.action
+    || context.summary?.action
+    || context.decision
+    || context.summary
+    || {};
+  return String(actionResult.kind || decisionAction.kind || '') === expected.kind
+    && String(actionResult.reason || decisionAction.reason || '') === expected.reason
+    && String(actionResult.band || decisionAction.band || context.decision?.band || context.summary?.band || '') === expected.band
+    && String(actionResult.handledBy || '') === expected.handledBy
+    && actionPublicationTargetMatches(actionResult, expected.target)
+    && actionPublicationCommandMatches(actionResult.command, expected.command)
+    && actionPublicationValuesEqual(actionResult.vector?.dx, expected.vectorDx)
+    && actionPublicationValuesEqual(actionResult.vector?.dy, expected.vectorDy)
+    && actionPublicationValuesEqual(actionResult.movement?.reason, expected.movementReason)
+    && actionPublicationCommandMatches(actionResult.movement?.command, expected.movementCommand)
+    && actionPublicationValuesEqual(actionResult.shoot?.reason, expected.shootReason)
+    && actionPublicationCommandMatches(actionResult.shoot?.command, expected.shootCommand)
+    && actionPublicationValuesEqual(actionResult.shoot?.outstanding?.commandId, expected.outstandingCommandId);
+}
+
+function createActionPublicationGate(options = {}) {
+  const configuredWindowMs = Number(options.windowMs ?? DEFAULT_ACTION_SKIP_PUBLICATION_WINDOW_MS);
+  const windowMs = Math.max(1, Number.isFinite(configuredWindowMs)
+    ? configuredWindowMs
+    : DEFAULT_ACTION_SKIP_PUBLICATION_WINDOW_MS);
+  let lastCoalescibleAction = null;
+  let lastPublishedAtMs = 0;
+  const publicationStatus = {
+    windowMs,
+    publishedCount: 0,
+    coalesciblePublishedCount: 0,
+    immediatePublishedCount: 0,
+    suppressedSkippedCount: 0,
+    pendingSuppressedSkippedCount: 0
+  };
+
+  function evaluate(actionResult, context = {}, atMs = Date.now()) {
+    const numericAtMs = Number(atMs);
+    const publishedAtMs = Number.isFinite(numericAtMs) ? numericAtMs : Date.now();
+    const coalescible = actionSkippedPublicationIsCoalescible(actionResult, context);
+    const matchesLast = coalescible
+      && actionSkippedPublicationMatches(actionResult, context, lastCoalescibleAction);
+    const elapsedMs = publishedAtMs - lastPublishedAtMs;
+    if (matchesLast
+      && elapsedMs >= 0
+      && elapsedMs < windowMs) {
+      publicationStatus.suppressedSkippedCount += 1;
+      publicationStatus.pendingSuppressedSkippedCount += 1;
+      return {
+        publish: false,
+        reason: 'duplicate-skipped-within-window',
+        windowMs,
+        coalescedSkippedCount: 0,
+        pendingSuppressedSkippedCount: publicationStatus.pendingSuppressedSkippedCount
+      };
+    }
+    const coalescedSkippedCount = publicationStatus.pendingSuppressedSkippedCount;
+    publicationStatus.pendingSuppressedSkippedCount = 0;
+    publicationStatus.publishedCount += 1;
+    let publicationReason = 'immediate';
+    if (coalescible) {
+      publicationReason = !lastCoalescibleAction
+        ? 'first-skipped'
+        : (matchesLast ? 'skipped-window-elapsed' : 'skipped-semantic-change');
+      if (!matchesLast) lastCoalescibleAction = captureActionSkippedPublication(actionResult, context);
+      publicationStatus.coalesciblePublishedCount += 1;
+    } else {
+      lastCoalescibleAction = null;
+      publicationStatus.immediatePublishedCount += 1;
+    }
+    lastPublishedAtMs = publishedAtMs;
+    return {
+      publish: true,
+      reason: publicationReason,
+      windowMs,
+      coalescedSkippedCount,
+      pendingSuppressedSkippedCount: 0
+    };
+  }
+
+  function status() {
+    return publicationStatus;
+  }
+
+  return { evaluate, status };
+}
 
 function nextCombatControlTickCore(currentTick, completeMs, options = {}) {
   if (currentTick === null || currentTick === undefined || currentTick === '') return null;
@@ -137,22 +378,36 @@ function recordMainThreadTask(stats, taskName, durationMs, stageDurations = {}, 
       taskAggregate.cpuOverBudgetCount = Math.max(0, Number(taskAggregate.cpuOverBudgetCount || 0)) + 1;
     }
   }
-  for (const [stage, value] of Object.entries(stageDurations || {})) {
-    recordTimingAggregate(stats.stages[stage] || (stats.stages[stage] = createTimingAggregate()), value);
+  for (const stage in (stageDurations || {})) {
+    if (!Object.prototype.hasOwnProperty.call(stageDurations, stage)) continue;
+    recordTimingAggregate(
+      stats.stages[stage] || (stats.stages[stage] = createTimingAggregate()),
+      stageDurations[stage]
+    );
   }
-  const entry = {
-    task: name,
-    durationMs: Math.round(duration * 1000) / 1000,
-    stages: Object.fromEntries(Object.entries(stageDurations || {}).map(([key, value]) => [key, Math.round(Number(value || 0) * 1000) / 1000])),
-    ...detail
-  };
-  if (!stats.maxTask || duration > Number(stats.maxTask.durationMs || 0)) stats.maxTask = entry;
-  if (duration >= stats.budgetMs) {
+  const overBudget = duration >= stats.budgetMs;
+  const newMaximum = !stats.maxTask || duration > Number(stats.maxTask.durationMs || 0);
+  let entry = null;
+  if (newMaximum || overBudget) {
+    const roundedStages = {};
+    for (const stage in (stageDurations || {})) {
+      if (!Object.prototype.hasOwnProperty.call(stageDurations, stage)) continue;
+      roundedStages[stage] = Math.round(Number(stageDurations[stage] || 0) * 1000) / 1000;
+    }
+    entry = {
+      task: name,
+      durationMs: Math.round(duration * 1000) / 1000,
+      stages: roundedStages,
+      ...detail
+    };
+    if (newMaximum) stats.maxTask = entry;
+  }
+  if (overBudget) {
     stats.accepted = false;
     stats.violationCount += 1;
     stats.lastViolation = entry;
   }
-  return entry;
+  return overBudget ? entry : null;
 }
 
 function createLatestFrameScheduler(options = {}) {
@@ -1315,7 +1570,11 @@ async function runReadOnlyCanary(config, options = {}) {
     combatControlIntervalMs,
     Number(config.combatControlStatusPublishMs || 500)
   );
-  const stateStore = options.stateStore || createBrowserlessStateStore({ userId: config.userId, now });
+  const stateStore = options.stateStore || createBrowserlessStateStore({
+    userId: config.userId,
+    now,
+    reuseRealtimeFrameObjects: true
+  });
   const runtimeDefaults = buildBrowserlessRuntimeDefaults(config);
   const genesisWhitelist = options.targetWhitelist || createBrowserlessTargetWhitelist({
     url: Object.prototype.hasOwnProperty.call(config, 'targetWhitelistUrl') ? config.targetWhitelistUrl : '',
@@ -1548,6 +1807,7 @@ async function runReadOnlyCanary(config, options = {}) {
       shootRepeatSentCount: 0,
       stopCount: 0,
       skippedCount: 0,
+      publication: null,
       last: null,
       settlement: null,
       movementStall: null,
@@ -1575,6 +1835,8 @@ async function runReadOnlyCanary(config, options = {}) {
     connectionFailure: null,
     error: ''
   };
+  const actionPublicationGate = createActionPublicationGate();
+  result.actions.publication = actionPublicationGate.status();
   let lastDecisionAtMs = 0;
   let lastCombatControlAtMs = 0;
   let lastCombatControlTick = null;
@@ -1769,7 +2031,13 @@ async function runReadOnlyCanary(config, options = {}) {
     return restored;
   };
   const logAction = detail => {
-    if (logStore) logStore.append('runner', 'movement-command', addRunMeta(detail));
+    if (!logStore) return;
+    detail.runId = runId;
+    detail.runtimeRevision = runtimeRevision;
+    detail.strategySchemaVersion = 2;
+    detail.canaryMode = controlMode;
+    detail.canaryStartedAt = result.startedAt;
+    logStore.append('runner', 'movement-command', detail);
   };
   const logCombat = detail => {
     const type = combatLiveEnabled ? 'combat-live' : 'combat-dry-run';
@@ -2049,7 +2317,23 @@ async function runReadOnlyCanary(config, options = {}) {
   log('canary-realtime-control-warmup', realtimeControlWarmup);
   const updateActionResult = (actionResult, context = {}) => {
     if (!actionResult) return;
-    const adapterState = actionAdapter?.getState?.() || {};
+    const actionStages = context.outerStages || null;
+    let actionStageStarted = performance.now();
+    const markActionStage = name => {
+      if (!actionStages) return;
+      const completedAt = performance.now();
+      actionStages[`realtime-action-${name}`] = completedAt - actionStageStarted;
+      actionStageStarted = completedAt;
+    };
+    const atMs = Number(context.atMs || 0) || now();
+    result.actions.last = actionResult;
+    const publication = actionPublicationGate.evaluate(actionResult, context, atMs);
+    markActionStage('publication-gate');
+    if (!publication.publish) return;
+    const adapterState = actionAdapter?.getPublicationState?.()
+      || actionAdapter?.getState?.()
+      || {};
+    markActionStage('state-snapshot');
     result.actions.sentCount = Number(adapterState.sentCount || 0);
     result.actions.velocitySentCount = Number(adapterState.velocitySentCount || 0);
     result.actions.velocityRepeatSentCount = Number(adapterState.velocityRepeatSentCount || 0);
@@ -2063,24 +2347,33 @@ async function runReadOnlyCanary(config, options = {}) {
     result.actions.shootRepeatSentCount = Number(adapterState.shootRepeatSentCount || 0);
     result.actions.stopCount = Number(adapterState.stopCount || 0);
     result.actions.skippedCount = Number(adapterState.skippedCount || 0);
-    result.actions.last = actionResult;
     result.actions.settlement = adapterState.lastSettlement || result.actions.settlement;
     result.actions.movementStall = adapterState.movementStall || result.actions.movementStall;
     result.actions.lastMovementStall = adapterState.lastMovementStall || result.actions.lastMovementStall;
     result.actions.lastShootAck = adapterState.lastShootAck || result.actions.lastShootAck;
-    logAction({ action: actionResult, state: adapterState });
+    const publicationSummary = {
+      reason: publication.reason,
+      windowMs: publication.windowMs,
+      coalescedSkippedCount: publication.coalescedSkippedCount,
+      suppressedSkippedCount: result.actions.publication.suppressedSkippedCount
+    };
+    markActionStage('result-summary');
+    logAction({ action: actionResult, state: adapterState, publication: publicationSummary });
+    markActionStage('log');
     if (typeof options.onAction === 'function') {
       try {
         options.onAction(actionResult, {
           actionState: adapterState,
           decision: context.decision || null,
           summary: context.summary || null,
-          atMs: Number(context.atMs || 0) || now()
+          atMs,
+          publication: publicationSummary
         });
       } catch (err) {
         log('canary-action-status-error', { error: err?.message || String(err) });
       }
     }
+    markActionStage('callback');
   };
   const compactLeavePendingCover = cover => {
     if (!cover) return null;
@@ -2492,6 +2785,14 @@ async function runReadOnlyCanary(config, options = {}) {
   };
   const applyDecisionAction = (currentState, summary, decision, atMs, detail = {}) => {
     if (!actionAdapter) return null;
+    const actionStages = detail.outerStages || null;
+    let actionStageStarted = performance.now();
+    const markActionStage = name => {
+      if (!actionStages) return;
+      const completedAt = performance.now();
+      actionStages[`realtime-action-${name}`] = completedAt - actionStageStarted;
+      actionStageStarted = completedAt;
+    };
     let actionResult;
     try {
       actionResult = actionAdapter.applyDecision(currentState, summary);
@@ -2505,7 +2806,9 @@ async function runReadOnlyCanary(config, options = {}) {
         transportClosed: /websocket is not open|not open|closed/i.test(message)
       };
     }
-    updateActionResult(actionResult, { decision, summary, atMs });
+    markActionStage('adapter');
+    updateActionResult(actionResult, { decision, summary, atMs, outerStages: actionStages });
+    actionStageStarted = performance.now();
     if (actionResult?.transportClosed) {
       recordSafetyEvent(createSafetyEvent('ws-closed', {
         source: 'action-send',
@@ -2521,6 +2824,7 @@ async function runReadOnlyCanary(config, options = {}) {
       return actionResult;
     }
     decisionAdapter.observeActionResult?.(actionResult, decision, { nowMs: atMs });
+    markActionStage('observe-result');
     if (detail.notifyDecisionWorker) {
       decisionWorker?.observeActionResult?.(actionResult, decision, { nowMs: atMs });
     }
@@ -2588,7 +2892,14 @@ async function runReadOnlyCanary(config, options = {}) {
       log('canary-combat-status-error', { error: errorMessage(err) });
     }
   };
-  const publishRealtimeControl = (control, currentState, atMs) => {
+  const publishRealtimeControl = (control, currentState, atMs, outerStages = null) => {
+    let publishStageStarted = performance.now();
+    const markPublishStage = name => {
+      if (!outerStages) return;
+      const completedAt = performance.now();
+      outerStages[`realtime-publish-${name}`] = completedAt - publishStageStarted;
+      publishStageStarted = completedAt;
+    };
     control = control || {};
     const action = control.action || null;
     if (!action) {
@@ -2612,9 +2923,16 @@ async function runReadOnlyCanary(config, options = {}) {
         input: control?.input || null
       };
       result.decisions.last = release;
+      markPublishStage('release-summary');
       observeDynamicWhitelistBattles(currentState, atMs);
+      markPublishStage('release-whitelist');
       publishCombatControlStatus(release, currentState, control, atMs, true);
-      applyDecisionAction(currentState, release, control, atMs, { errorReason: 'realtime-control-release-failed' });
+      markPublishStage('release-status');
+      applyDecisionAction(currentState, release, control, atMs, {
+        errorReason: 'realtime-control-release-failed',
+        outerStages
+      });
+      markPublishStage('release-action');
       return true;
     }
     control = applyRestartDrainDecisionGate(control);
@@ -2641,11 +2959,15 @@ async function runReadOnlyCanary(config, options = {}) {
       combat: combatSummary,
       input: control.input || null
     };
+    markPublishStage('summary');
     result.decisions.realtimeControlCount += 1;
     result.decisions.last = summary;
     scheduleCombatPersistence(atMs);
+    markPublishStage('persistence');
     observeDynamicWhitelistBattles(currentState, atMs);
+    markPublishStage('whitelist');
     logCombat(combatSummary);
+    markPublishStage('combat-log');
     const key = realtimeControlKey(summary);
     if (key !== lastRealtimeControlKey || atMs - lastRealtimeControlLogAtMs >= decisionIntervalMs) {
       logDecision(summary);
@@ -2653,14 +2975,22 @@ async function runReadOnlyCanary(config, options = {}) {
       lastRealtimeControlKey = key;
       lastRealtimeControlLogAtMs = atMs;
     }
+    markPublishStage('decision-log');
     publishCombatControlStatus(summary, currentState, control, atMs);
+    markPublishStage('status');
     const immediate = safetyController.evaluate(currentState, {
       startedAtMs: noSelfGuardStartedAtMs(atMs),
       decision: summary,
       nowMs: atMs
     });
+    markPublishStage('safety-evaluate');
     if (handleSafetyAssessment(immediate, { state: currentState, decision: summary, atMs })) return true;
-    applyDecisionAction(currentState, summary, control, atMs, { errorReason: 'realtime-control-apply-failed' });
+    markPublishStage('safety-handle');
+    applyDecisionAction(currentState, summary, control, atMs, {
+      errorReason: 'realtime-control-apply-failed',
+      outerStages
+    });
+    markPublishStage('action');
     return true;
   };
   const evaluateRealtimeControl = (currentState, atMs, force = false, outerStages = null) => {
@@ -2723,7 +3053,7 @@ async function runReadOnlyCanary(config, options = {}) {
     let handled = false;
     if (!(control?.action?.kind === 'wait' && !realtimeControlActive)) {
       const publishStarted = performance.now();
-      handled = publishRealtimeControl(control || {}, currentState, atMs);
+      handled = publishRealtimeControl(control || {}, currentState, atMs, outerStages);
       if (outerStages) outerStages['realtime-publish'] = performance.now() - publishStarted;
     }
     const completeMs = performance.now() - completeStarted;
@@ -3389,9 +3719,16 @@ async function runReadOnlyCanary(config, options = {}) {
             stageDurations['snapshot-observers'] = performance.now() - stageStarted;
             stageStarted = performance.now();
             stateStore.ingestFrame(frame.decodedJson, { receivedAtMs: atMs });
+            stageDurations['state-ingest'] = performance.now() - stageStarted;
+            stageStarted = performance.now();
             const currentState = stateStore.getDecisionState?.(atMs) || stateStore.getState(atMs);
+            stageDurations['state-decision-view'] = performance.now() - stageStarted;
+            stageStarted = performance.now();
             observeDynamicWhitelistBattles(currentState, atMs);
-            stageDurations['state-ingest-view'] = performance.now() - stageStarted;
+            stageDurations['dynamic-whitelist-observe'] = performance.now() - stageStarted;
+            stageDurations['state-ingest-view'] = stageDurations['state-ingest']
+              + stageDurations['state-decision-view']
+              + stageDurations['dynamic-whitelist-observe'];
             stageStarted = performance.now();
             const currentSelf = currentState?.realtime?.self || null;
             if (
@@ -3460,7 +3797,9 @@ async function runReadOnlyCanary(config, options = {}) {
             if (actionAdapter) {
               const settlement = actionAdapter.observeState(currentState);
               if (settlement) result.actions.settlement = settlement;
-              const adapterState = actionAdapter.getState?.() || {};
+              const adapterState = actionAdapter.getMovementStallState?.()
+                || actionAdapter.getState?.()
+                || {};
               result.actions.movementStall = adapterState.movementStall || result.actions.movementStall;
               result.actions.lastMovementStall = adapterState.lastMovementStall || result.actions.lastMovementStall;
             }
@@ -3711,10 +4050,14 @@ async function runReadOnlyCanary(config, options = {}) {
           movementSettlementMinDistanceCm: config.movementSettlementMinDistanceCm,
           combatShootMinIntervalMs: config.combatShootMinIntervalMs,
           controlGeneration,
+          shootRequestUsesCommandObject: true,
           getTransportHealth: () => result.transportHealth || transportHealthMonitor.snapshot(now()),
-          onVelocityRequest: request => stateStore.recordVelocityRequest(request),
-          onShootRequest: request => stateStore.recordShootRequest(request),
-          onShootExecution: event => stateStore.recordShootExecution?.(event) || event
+          onVelocityRequest: request => stateStore.recordVelocityRequest(request, { returnInternal: true }),
+          onShootRequest: request => stateStore.recordShootRequest(request, { returnInternal: true }),
+          onShootExecution: event => stateStore.recordShootExecution?.(event, {
+            returnInternal: true,
+            listenerUsesInternal: true
+          }) || event
         });
       }
       log('canary-ws-open', { durationMs });
@@ -4097,6 +4440,7 @@ async function runReadOnlyCanary(config, options = {}) {
     result.actions.lastMovementStall = adapterState.lastMovementStall || result.actions.lastMovementStall;
     result.actions.lastShootAck = adapterState.lastShootAck || result.actions.lastShootAck;
   }
+  result.actions.publication = actionPublicationGate.status();
   if (result.connectionFailure?.type === 'cloudflare-challenge') {
     result.connectionFailure = {
       ...result.connectionFailure,
@@ -4124,6 +4468,7 @@ async function runReadOnlyCanary(config, options = {}) {
 module.exports = {
   applySingleBlockerLoginBypass,
   attachConfirmedLeaveEvidence,
+  createActionPublicationGate,
   createLatestFrameScheduler,
   createCanaryRunId,
   frameDataToBuffer,

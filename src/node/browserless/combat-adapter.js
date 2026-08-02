@@ -79,25 +79,74 @@ const {
 
 const DEFAULT_STAMINA_FULL_RATIO = 0.98;
 const MISSING_OPTION_VALUE = Symbol('browserless-combat-missing-option-value');
+const NORMALIZED_COMBAT_INPUT = Symbol('browserless-normalized-combat-input');
+const NORMALIZED_COMBAT_BULLETS = Symbol('browserless-normalized-combat-bullets');
+const OPTION_OVERRIDE_STACKS = new WeakMap();
+const COMBAT_LEARNING_HIT_RATE_CACHES = new WeakMap();
 
 function cloneJson(value) {
   if (value === null || value === undefined) return value;
   return JSON.parse(JSON.stringify(value));
 }
 
+function appendUniqueStringsBounded(previous = [], additions = [], limit = 256) {
+  const base = Array.isArray(previous) ? previous : [];
+  let output = null;
+  for (const addition of additions || []) {
+    const value = String(addition ?? '');
+    if (!value) continue;
+    const source = output || base;
+    let present = false;
+    for (const existing of source) {
+      if (String(existing) === value) {
+        present = true;
+        break;
+      }
+    }
+    if (present) continue;
+    if (!output) output = base.map(String);
+    output.push(value);
+  }
+  if (!output) return base;
+  if (output.length > limit) output.splice(0, output.length - limit);
+  return output;
+}
+
+function combatBulletIdentity(bullet = {}) {
+  return String(
+    bullet?.bullet_id
+      ?? bullet?.bulletId
+      ?? `${bullet?.createdTick ?? ''}:${bullet?.startX ?? bullet?.x ?? ''}:${bullet?.startY ?? bullet?.y ?? ''}`
+  );
+}
+
 function withOptionOverrides(options, overrides, callback) {
   if (!options || !Object.isExtensible(options)) {
     return callback({ ...(options || {}), ...(overrides || {}) });
   }
-  const keys = Object.keys(overrides || {});
-  if (!keys.length) return callback(options);
-  const previous = new Array(keys.length);
-  for (let index = 0; index < keys.length; index += 1) {
-    const key = keys[index];
-    previous[index] = Object.prototype.hasOwnProperty.call(options, key)
+  let stack = OPTION_OVERRIDE_STACKS.get(options);
+  if (!stack) {
+    stack = { depth: 0, frames: [] };
+    OPTION_OVERRIDE_STACKS.set(options, stack);
+  }
+  const depth = stack.depth;
+  stack.depth += 1;
+  const frame = stack.frames[depth] || (stack.frames[depth] = { keys: [], previous: [] });
+  const keys = frame.keys;
+  const previous = frame.previous;
+  keys.length = 0;
+  previous.length = 0;
+  for (const key in (overrides || {})) {
+    if (!Object.prototype.hasOwnProperty.call(overrides, key)) continue;
+    keys.push(key);
+    previous.push(Object.prototype.hasOwnProperty.call(options, key)
       ? options[key]
-      : MISSING_OPTION_VALUE;
+      : MISSING_OPTION_VALUE);
     options[key] = overrides[key];
+  }
+  if (!keys.length) {
+    stack.depth -= 1;
+    return callback(options);
   }
   try {
     return callback(options);
@@ -107,6 +156,9 @@ function withOptionOverrides(options, overrides, callback) {
       if (previous[index] === MISSING_OPTION_VALUE) delete options[key];
       else options[key] = previous[index];
     }
+    keys.length = 0;
+    previous.length = 0;
+    stack.depth -= 1;
   }
 }
 
@@ -180,6 +232,36 @@ function ensureCombatLearningState(stateful = {}) {
     stateful.combatLearning.lastRouteObservationByTarget = {};
   }
   return stateful.combatLearning;
+}
+
+function combatLearningHitRateCache(learning) {
+  const cells = learning?.hitRateByModeDistance || {};
+  let cache = COMBAT_LEARNING_HIT_RATE_CACHES.get(learning);
+  if (!cache || cache.cells !== cells) {
+    cache = { cells, cellCount: null, byPrefix: new Map() };
+    COMBAT_LEARNING_HIT_RATE_CACHES.set(learning, cache);
+  }
+  return cache;
+}
+
+function invalidateCombatLearningHitRateCache(learning, cellAdded = false) {
+  if (!learning || typeof learning !== 'object') return;
+  const cache = combatLearningHitRateCache(learning);
+  cache.byPrefix.clear();
+  if (cellAdded && cache.cellCount !== null) cache.cellCount += 1;
+}
+
+function combatLearningCellCount(stateful = {}) {
+  const learning = stateful?.combatLearning || stateful;
+  if (!learning || typeof learning !== 'object' || Array.isArray(learning)) return 0;
+  const cache = combatLearningHitRateCache(learning);
+  if (cache.cellCount !== null) return cache.cellCount;
+  let count = 0;
+  for (const key in cache.cells) {
+    if (Object.prototype.hasOwnProperty.call(cache.cells, key)) count += 1;
+  }
+  cache.cellCount = count;
+  return count;
 }
 
 function routeFeedbackKey(contextKey, candidate) {
@@ -310,18 +392,27 @@ function learnedBehaviorHitRate(stateful, behavior, distance) {
   const learning = ensureCombatLearningState(stateful);
   const base = behaviorLearningBaseKey(behavior, distance);
   const prefix = `${base}|aim=`;
+  const cache = combatLearningHitRateCache(learning);
+  if (cache.byPrefix.has(prefix)) return cache.byPrefix.get(prefix);
   let cellCount = 0;
+  let totalCellCount = 0;
   let shots = 0;
   let hits = 0;
   for (const key in learning.hitRateByModeDistance) {
-    if (!Object.prototype.hasOwnProperty.call(learning.hitRateByModeDistance, key) || !key.startsWith(prefix)) continue;
+    if (!Object.prototype.hasOwnProperty.call(learning.hitRateByModeDistance, key)) continue;
+    totalCellCount += 1;
+    if (!key.startsWith(prefix)) continue;
     const cell = learning.hitRateByModeDistance[key];
     cellCount += 1;
     shots += Number(cell?.shots || 0);
     hits += Number(cell?.hits || 0);
   }
-  if (!cellCount) return null;
-  return Math.max(0.03, Math.min(0.95, (hits + 1) / (shots + 4)));
+  cache.cellCount = totalCellCount;
+  const value = cellCount
+    ? Math.max(0.03, Math.min(0.95, (hits + 1) / (shots + 4)))
+    : null;
+  cache.byPrefix.set(prefix, value);
+  return value;
 }
 
 function ensureOpponentBehaviorMap(stateful = {}) {
@@ -345,6 +436,7 @@ function recordCombatShotLearning(stateful, target, combat = {}, options = {}) {
   const routeCandidate = String(options.routeCandidate || selectedRoute?.hypothesis || hypothesis);
   const key = behaviorLearningKey(behavior || mode, distance, hypothesis);
   const learning = ensureCombatLearningState(stateful);
+  const cellAdded = !Object.prototype.hasOwnProperty.call(learning.hitRateByModeDistance, key);
   const previous = learning.hitRateByModeDistance[key] || { shots: 0, hits: 0 };
   const cell = {
     shots: Math.min(80, Number(previous.shots || 0) * 0.97 + 1),
@@ -352,6 +444,7 @@ function recordCombatShotLearning(stateful, target, combat = {}, options = {}) {
     updatedAt: nowMs
   };
   learning.hitRateByModeDistance[key] = cell;
+  invalidateCombatLearningHitRateCache(learning, cellAdded);
   const modeMetrics = combatModeMetricsCell(stateful, key);
   modeMetrics.shots += 1;
   modeMetrics.shootingStamina += Math.max(0, Number(options.shotStaminaCost ?? 500));
@@ -459,6 +552,7 @@ function creditCombatHitLearning(stateful, targetId, hitCount, nowMs, currentTic
     credited += 1;
     remaining -= 1;
   }
+  if (credited > 0) invalidateCombatLearningHitRateCache(learning);
   return credited;
 }
 
@@ -1620,7 +1714,7 @@ function passiveRunnerState(self, target, combatTargetState = {}, options = {}) 
   };
 }
 
-function buildCombatExitEvaluation(self, target, combatTargetState = {}, options = {}) {
+function buildCombatExitEvaluation(self, target, combatTargetState = {}, options = {}, combatMetrics = null) {
   if (!self || !target) {
     return { exit: null, baselineExit: null, disadvantageObservation: null };
   }
@@ -1637,35 +1731,56 @@ function buildCombatExitEvaluation(self, target, combatTargetState = {}, options
     combatStartedAt: combatTargetState?.firstSeenAt ?? combatTargetState?.at,
     sampleCount: combatTargetState?.disadvantageSamples,
     confirmedSelfDamage: Math.max(
-      Number(combatTargetState?.combatMetrics?.selfDamage || 0),
+      Number((combatMetrics || combatTargetState?.combatMetrics)?.selfDamage || 0),
       target.easyKillDamagedToday ? 1 : 0
     )
   }, options);
   const nowMs = Number(options.nowMs || Date.now());
   const samples = Array.isArray(combatTargetState?.motionSamples) ? combatTargetState.motionSamples : [];
-  const damageWindow = windowMs => {
-    const rows = samples.filter(sample => nowMs - Number(sample.at || 0) <= windowMs);
-    const first = rows[0] || null;
-    const last = rows[rows.length - 1] || null;
-    let damageObservations = 0;
-    for (let index = 1; index < rows.length; index += 1) {
-      if (Number(rows[index].selfHp) < Number(rows[index - 1].selfHp)
-        || Number(rows[index].targetHp) < Number(rows[index - 1].targetHp)) damageObservations += 1;
+  let shortFirst = null;
+  let shortLast = null;
+  let shortPrevious = null;
+  let shortDamageObservations = 0;
+  let longFirst = null;
+  let longLast = null;
+  let longPrevious = null;
+  let longDamageObservations = 0;
+  let recentThreatBulletCount = 0;
+  for (const sample of samples) {
+    const sampleAgeMs = nowMs - Number(sample.at || 0);
+    if (sampleAgeMs <= 45000) {
+      if (!longFirst) longFirst = sample;
+      if (longPrevious
+        && (Number(sample.selfHp) < Number(longPrevious.selfHp)
+          || Number(sample.targetHp) < Number(longPrevious.targetHp))) longDamageObservations += 1;
+      longPrevious = sample;
+      longLast = sample;
     }
-    return {
-      selfDamage: first && last ? Math.max(0, Number(first.selfHp || 0) - Number(last.selfHp || 0)) : 0,
-      targetDamage: first && last ? Math.max(0, Number(first.targetHp || 0) - Number(last.targetHp || 0)) : 0,
-      distanceProgressCm: first && last ? Number(first.distance || 0) - Number(last.distance || 0) : 0,
-      damageObservations
-    };
-  };
-  const short = damageWindow(10000);
-  const long = damageWindow(45000);
-  const recent = damageWindow(10000);
-  const recentThreatBulletCount = samples.filter(sample => (
-    nowMs - Number(sample.at || 0) <= 3000
-      && sample.realBulletPressure
-  )).length;
+    if (sampleAgeMs <= 10000) {
+      if (!shortFirst) shortFirst = sample;
+      if (shortPrevious
+        && (Number(sample.selfHp) < Number(shortPrevious.selfHp)
+          || Number(sample.targetHp) < Number(shortPrevious.targetHp))) shortDamageObservations += 1;
+      shortPrevious = sample;
+      shortLast = sample;
+    }
+    if (sampleAgeMs <= 3000 && sample.realBulletPressure) recentThreatBulletCount += 1;
+  }
+  const shortSelfDamage = shortFirst && shortLast
+    ? Math.max(0, Number(shortFirst.selfHp || 0) - Number(shortLast.selfHp || 0))
+    : 0;
+  const shortTargetDamage = shortFirst && shortLast
+    ? Math.max(0, Number(shortFirst.targetHp || 0) - Number(shortLast.targetHp || 0))
+    : 0;
+  const longSelfDamage = longFirst && longLast
+    ? Math.max(0, Number(longFirst.selfHp || 0) - Number(longLast.selfHp || 0))
+    : 0;
+  const longTargetDamage = longFirst && longLast
+    ? Math.max(0, Number(longFirst.targetHp || 0) - Number(longLast.targetHp || 0))
+    : 0;
+  const longDistanceProgressCm = longFirst && longLast
+    ? Number(longFirst.distance || 0) - Number(longLast.distance || 0)
+    : 0;
   const defensive = String(combatTargetState?.originIntent || combatTargetState?.intent || '') === 'defensive'
     || recentThreatBulletCount > 0
     || nowMs - Number(combatTargetState?.lastSelfDamageAt || 0) <= 10000;
@@ -1673,19 +1788,19 @@ function buildCombatExitEvaluation(self, target, combatTargetState = {}, options
   const exchangeStopLoss = evaluateCombatExchangeStopLossCore({
     nowMs,
     engagedMs: nowMs - Number(combatTargetState?.firstSeenAt || combatTargetState?.at || nowMs),
-    acceptedShots: Number(combatTargetState?.combatMetrics?.acceptedShots || 0),
-    damageObservations: Math.max(short.damageObservations, long.damageObservations),
+    acceptedShots: Number((combatMetrics || combatTargetState?.combatMetrics)?.acceptedShots || 0),
+    damageObservations: Math.max(shortDamageObservations, longDamageObservations),
     selfHp: hpValue(self),
     targetHp: hpValue(target),
     windowMs: 10000,
-    windowSelfDamage: short.selfDamage,
-    windowTargetDamage: short.targetDamage,
-    longWindowSelfDamage: long.selfDamage,
-    longWindowTargetDamage: long.targetDamage,
-    distanceProgressCm: long.distanceProgressCm,
-    recentTargetDamage: recent.targetDamage,
-    cumulativeSelfDamage: Number(combatTargetState?.combatMetrics?.selfDamage || 0),
-    cumulativeTargetDamage: Number(combatTargetState?.combatMetrics?.targetDamage || 0),
+    windowSelfDamage: shortSelfDamage,
+    windowTargetDamage: shortTargetDamage,
+    longWindowSelfDamage: longSelfDamage,
+    longWindowTargetDamage: longTargetDamage,
+    distanceProgressCm: longDistanceProgressCm,
+    recentTargetDamage: shortTargetDamage,
+    cumulativeSelfDamage: Number((combatMetrics || combatTargetState?.combatMetrics)?.selfDamage || 0),
+    cumulativeTargetDamage: Number((combatMetrics || combatTargetState?.combatMetrics)?.targetDamage || 0),
     distance: Number(target?.distance),
     recentThreatBulletCount,
     defensive,
@@ -2019,11 +2134,12 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     } : null,
     modifiers: movement.modifiers || [],
     closePressure: closePressureActive ? {
-      ...cloneJson(closePressureState),
+      ...closePressureState,
+      range: closePressureState?.range ? { ...closePressureState.range } : null,
       targetRangeCm: Math.round(closeRange),
       minimumRangeCm: Math.round(closePressureMinRange),
       tooClose: closePressureTooClose,
-      strafe: strafe ? cloneJson(strafe) : null
+      strafe: strafe ? { ...strafe } : null
     } : null,
     pressureClose: pressureClose ? { active: true, noDamageMs: Math.round(noDamageMs), closeRange } : null,
     passiveRunner: passiveRunner.active ? passiveRunner : null,
@@ -2069,16 +2185,21 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
 }
 
 function pickIncomingBullet(bullets = [], options = {}) {
-  return (bullets || [])
-    .filter(bullet => bullet?.incoming)
-    .filter(bullet => incomingBulletHasCollisionRiskCore(bullet, options))
-    .slice()
-    .sort((a, b) => {
-      const timeA = Number(a.timeToImpact ?? Infinity);
-      const timeB = Number(b.timeToImpact ?? Infinity);
-      if (timeA !== timeB) return timeA - timeB;
-      return Number(a.distance ?? Infinity) - Number(b.distance ?? Infinity);
-    })[0] || null;
+  let selected = null;
+  let selectedTimeToImpact = Infinity;
+  let selectedDistance = Infinity;
+  for (const bullet of bullets || []) {
+    if (!bullet?.incoming || !incomingBulletHasCollisionRiskCore(bullet, options)) continue;
+    const timeToImpact = Number(bullet.timeToImpact ?? Infinity);
+    const distance = Number(bullet.distance ?? Infinity);
+    if (selected
+      && (timeToImpact > selectedTimeToImpact
+        || (timeToImpact === selectedTimeToImpact && distance >= selectedDistance))) continue;
+    selected = bullet;
+    selectedTimeToImpact = timeToImpact;
+    selectedDistance = distance;
+  }
+  return selected;
 }
 
 function rememberBrowserlessCombatEngagement(stateful, self, target, options = {}) {
@@ -2183,11 +2304,25 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
       && incomingOwnerId !== undefined
       && String(incomingOwnerId) === String(id)
   );
-  const targetBullets = (options.bullets || [])
-    .filter(bullet => String(bullet?.ownerId ?? '') === String(id));
-  const targetBulletIds = targetBullets
-    .map(bullet => String(bullet?.bullet_id ?? bullet?.bulletId ?? `${bullet?.createdTick ?? ''}:${bullet?.startX ?? bullet?.x ?? ''}:${bullet?.startY ?? bullet?.y ?? ''}`))
-    .filter(Boolean);
+  const previousMetrics = same && stateful.combatMetrics?.targetId === String(id) ? stateful.combatMetrics : {};
+  const behaviorMap = ensureOpponentBehaviorMap(stateful);
+  const previousBehavior = behaviorMap[String(id)] || null;
+  const previousThreatBulletIds = previousMetrics.threatBulletIds || [];
+  const previousSeenShotEventIds = previousBehavior?.seenShotEventIds || [];
+  const targetBulletIds = [];
+  const newShotEvents = [];
+  let newBulletCount = 0;
+  for (const bullet of options.bullets || []) {
+    if (String(bullet?.ownerId ?? '') !== String(id)) continue;
+    const bulletId = combatBulletIdentity(bullet);
+    if (!bulletId) continue;
+    targetBulletIds.push(bulletId);
+    if (!previousThreatBulletIds.includes(bulletId)) newBulletCount += 1;
+    const createdTick = numberOrNull(bullet?.createdTick ?? bullet?.created_tick);
+    if (createdTick !== null && !previousSeenShotEventIds.includes(bulletId)) {
+      newShotEvents.push({ bulletId, createdTick });
+    }
+  }
   const lastIncomingBulletAt = targetBulletIds.length
     ? nowMs
     : (same ? Number(previous.lastIncomingBulletAt || 0) : 0);
@@ -2197,14 +2332,6 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
         || targetBulletIds.length
         || (same && nowMs - Number(previous.lastIncomingBulletAt || 0) <= 1000))
   );
-  const previousMetrics = same && stateful.combatMetrics?.targetId === String(id) ? stateful.combatMetrics : {};
-  const behaviorMap = ensureOpponentBehaviorMap(stateful);
-  const previousBehavior = behaviorMap[String(id)] || null;
-  const seenShotEventIds = new Set((previousBehavior?.seenShotEventIds || []).map(String));
-  const newShotEvents = targetBullets.map(bullet => ({
-    bulletId: String(bullet?.bullet_id ?? bullet?.bulletId ?? `${bullet?.createdTick ?? ''}:${bullet?.startX ?? bullet?.x ?? ''}:${bullet?.startY ?? bullet?.y ?? ''}`),
-    createdTick: numberOrNull(bullet?.createdTick ?? bullet?.created_tick)
-  })).filter(event => event.bulletId && event.createdTick !== null && !seenShotEventIds.has(event.bulletId));
   const creditedHits = damaged
     ? creditCombatHitLearning(
         stateful,
@@ -2216,11 +2343,23 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     : 0;
   const previousSamples = same && Array.isArray(previous.motionSamples) ? previous.motionSamples : [];
   const sampleWindowMs = Math.max(45000, Number(options.combatMotionHistoryWindowMs || 45000));
-  const motionSamples = [];
-  for (const sample of previousSamples) {
-    if (nowMs - Number(sample.at || 0) <= sampleWindowMs) motionSamples.push(sample);
+  const reuseMotionSamples = same && Array.isArray(previous.motionSamples) && Object.isExtensible(previous.motionSamples);
+  const motionSamples = reuseMotionSamples ? previousSamples : [];
+  if (reuseMotionSamples) {
+    let expiredCount = 0;
+    while (expiredCount < motionSamples.length
+      && nowMs - Number(motionSamples[expiredCount]?.at || 0) > sampleWindowMs) expiredCount += 1;
+    if (expiredCount > 0) motionSamples.splice(0, expiredCount);
+  } else {
+    for (const sample of previousSamples) {
+      if (nowMs - Number(sample.at || 0) <= sampleWindowMs) motionSamples.push(sample);
+    }
   }
   if (motionSamples.length >= 320) motionSamples.splice(0, motionSamples.length - 319);
+  const observedHitRate = learnedBehaviorHitRate(stateful, previousBehavior || { mode: 'mixed/unknown' }, distance)
+    ?? (Number(previousMetrics.acceptedShots || 0) >= 5
+      ? Number(previousMetrics.confirmedHits || 0) / Math.max(1, Number(previousMetrics.acceptedShots || 0))
+      : null);
   motionSamples.push({
     at: nowMs,
     tick: numberOrNull(options.currentTick),
@@ -2236,35 +2375,30 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     firing: Boolean(target.firing),
     realBulletPressure: Boolean(targetOwnsRealBullet || targetBulletIds.length),
     hasThreateningBullet: Boolean(targetOwnsRealBullet || targetBulletIds.length),
-    newBulletCount: Math.max(0, targetBulletIds.filter(id => !(previousMetrics.threatBulletIds || []).includes(id)).length),
+    newBulletCount: Math.max(0, newBulletCount),
     newShotEvents,
     currentTick: numberOrNull(options.currentTick),
     commandDelayP90Ticks: numberOrNull(options.executionTiming?.p90Ticks),
     targetStamina5s: numberOrNull(target.stamina_5s_remaining_milli ?? target.stamina5sRemainingMilli),
     selfHp: hpValue(self),
-    targetHp: hp
-  });
-  const observedHitRate = learnedBehaviorHitRate(stateful, previousBehavior || { mode: 'mixed/unknown' }, distance)
-    ?? (Number(previousMetrics.acceptedShots || 0) >= 5
-      ? Number(previousMetrics.confirmedHits || 0) / Math.max(1, Number(previousMetrics.acceptedShots || 0))
-      : null);
-  const opponentBehaviorState = updateOpponentBehaviorStateCore(previousBehavior, {
-    ...motionSamples[motionSamples.length - 1],
+    targetHp: hp,
     hitRate: observedHitRate
-  }, {
+  });
+  const opponentBehaviorState = updateOpponentBehaviorStateCore(previousBehavior, motionSamples[motionSamples.length - 1], {
     nowMs,
     windowMs: Math.min(12000, sampleWindowMs),
     hitRate: observedHitRate
   });
-  opponentBehaviorState.probeWeights = {
-    center: Number(previousBehavior?.probeWeights?.center || 0.6),
-    short: Number(previousBehavior?.probeWeights?.short || 0.45),
-    long: Number(previousBehavior?.probeWeights?.long || 0.45)
+  opponentBehaviorState.probeWeights = previousBehavior?.probeWeights || {
+    center: 0.6,
+    short: 0.45,
+    long: 0.45
   };
-  opponentBehaviorState.seenShotEventIds = Array.from(new Set([
-    ...(previousBehavior?.seenShotEventIds || []),
-    ...targetBulletIds
-  ].map(String))).slice(-256);
+  opponentBehaviorState.seenShotEventIds = appendUniqueStringsBounded(
+    previousSeenShotEventIds,
+    targetBulletIds,
+    256
+  );
   opponentBehaviorState.recentHitRate = observedHitRate;
   behaviorMap[String(id)] = opponentBehaviorState;
   const fireRiskProfile = opponentMotionProfileCore(self, target, motionSamples, {
@@ -2293,8 +2427,8 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     )
   }, options.fireRiskClassification);
   const escapeDecisionState = {
-    ...(same ? previous : null),
-    opponentBehaviorState
+    opponentBehaviorState,
+    escapeDecision: same ? previous?.escapeDecision || null : null
   };
   const escapeDecision = withOptionOverrides(options, {
     nowMs
@@ -2353,9 +2487,9 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     motionSamples,
     opponentBehaviorState,
     fireRiskClassification,
-    probeState: same ? cloneJson(previous.probeState || null) : null,
-    closeBandReserve: same ? cloneJson(previous.closeBandReserve || null) : null,
-    responsePolicyShadow: same ? cloneJson(previous.responsePolicyShadow || null) : null,
+    probeState: same ? previous.probeState || null : null,
+    closeBandReserve: same ? previous.closeBandReserve || null : null,
+    responsePolicyShadow: same ? previous.responsePolicyShadow || null : null,
     escapeDecision,
     provenHitRate: Math.max(
       Number(same ? previous.provenHitRate || 0 : 0),
@@ -2365,7 +2499,7 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   };
   recordRouteTransitionObservation(stateful, id, opponentBehaviorState, nowMs);
   finalizeCombatRouteFeedback(stateful, id, stateful.combatTarget, options.currentTick, nowMs, options);
-  const threatBulletIds = Array.from(new Set([...(previousMetrics.threatBulletIds || []), ...targetBulletIds])).slice(-200);
+  const threatBulletIds = appendUniqueStringsBounded(previousThreatBulletIds, targetBulletIds, 200);
   const initialStamina1d = Number(previousMetrics.initialStamina1d);
   const currentStamina1d = Number(self?.stamina_1d_remaining_milli ?? self?.stamina1dRemainingMilli);
   const totalStaminaSpent = Number.isFinite(initialStamina1d) && Number.isFinite(currentStamina1d)
@@ -2563,12 +2697,17 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   const realtime = state?.realtime || {};
   const dataGaps = [];
   const liveCombatEnabled = options.liveCombatEnabled === true || options.combatEnabled === true;
-  const self = normalizeCombatEntity(realtime.self, null, options);
+  const normalizedCombatInput = state?.[NORMALIZED_COMBAT_INPUT] === true;
+  const self = normalizedCombatInput
+    ? (realtime.self || null)
+    : normalizeCombatEntity(realtime.self, null, options);
   if (!self) dataGaps.push('missing-realtime-self');
   const selfUserId = Number(self?.user_id ?? state?.userId ?? options.userId ?? 0);
-  const entities = (Array.isArray(realtime.entities) ? realtime.entities : [])
-    .map(entity => normalizeCombatEntity(entity, self, options))
-    .filter(Boolean);
+  const entities = [];
+  for (const entity of Array.isArray(realtime.entities) ? realtime.entities : []) {
+    const normalized = normalizedCombatInput ? entity : normalizeCombatEntity(entity, self, options);
+    if (normalized) entities.push(normalized);
+  }
   const targets = entities.filter(entity => Number(entity.user_id) !== selfUserId);
   const bullets = (Array.isArray(realtime.bullets) ? realtime.bullets : [])
     .map(bullet => normalizeCombatBullet(bullet, self, { currentTick: realtime.tick }))
@@ -2767,11 +2906,20 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     : null;
   const combatPhaseState = combatTargetState && target
     ? {
-        ...combatTargetState,
         targetId: combatTargetId(target),
         nowMs: options.nowMs,
         engagedAt: phaseMetricsStartedAt ?? combatTargetState.firstSeenAt ?? combatTargetState.at,
+        firstSeenAt: combatTargetState.firstSeenAt,
+        firstHp: combatTargetState.firstHp,
+        minHp: combatTargetState.minHp,
         targetHp: hpValue(target),
+        hp: combatTargetState.hp,
+        damageFromStart: combatTargetState.damageFromStart,
+        damageKnown: combatTargetState.damageKnown ?? (
+          combatTargetState.damageFromStart !== null
+            && combatTargetState.damageFromStart !== undefined
+        ),
+        hardSafety: combatTargetState.hardSafety,
         distance: Number(target.distance),
         acceptedShotsSinceDamage: Math.max(
           0,
@@ -2782,12 +2930,15 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
           || combatTargetState.lastDamageAt
           || combatTargetState.firstSeenAt
           || options.nowMs),
+        lastDamageAt: combatTargetState.lastDamageAt,
         movementStaminaSinceDamage: Number(combatTargetState.movementStaminaSinceDamage || 0),
         shootingStaminaSinceDamage: Math.max(
           0,
           Number(stateful?.combatMetrics?.acceptedShots || 0)
             - Number(combatTargetState.acceptedShotsAtLastDamage || 0)
         ) * Math.max(1, Number(options.combatShotStaminaCostMs ?? 500)),
+        originIntent: combatTargetState.originIntent,
+        intent: combatTargetState.intent,
         ordinaryProfit: ['profit', 'engaged', 'reengage', 'afk-profit'].includes(String(
           combatTargetState.originIntent || combatTargetState.intent || target.combatIntent || ''
         ))
@@ -2806,7 +2957,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   if (combatTargetState && combatPhase) {
     combatTargetState.combatPhase = combatPhase.phase;
     combatTargetState.phaseStartedAt = combatPhase.phaseStartedAt;
-    combatTargetState.closePressure = combatPhase.active ? cloneJson(combatPhase) : null;
+    combatTargetState.closePressure = combatPhase.active ? combatPhase : null;
   }
   const metricsMatchTarget = Boolean(
     target
@@ -3008,10 +3159,13 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     bullets,
     contactEntryGuard: contactApplies ? contactEntryGuard : null
   }, mergedOptions => buildCombatMovementPlan(self, target, bullets, mergedOptions));
-  const exitEvaluation = buildCombatExitEvaluation(self, target, {
-    ...combatTargetState,
-    combatMetrics: stateful?.combatMetrics || combatTargetState?.combatMetrics || null
-  }, options);
+  const exitEvaluation = buildCombatExitEvaluation(
+    self,
+    target,
+    combatTargetState || {},
+    options,
+    stateful?.combatMetrics || combatTargetState?.combatMetrics || null
+  );
   if (stateful?.combatTarget && exitEvaluation.exchangeStopLoss) {
     stateful.combatTarget.exchangeDegradationSinceAt = exitEvaluation.exchangeStopLoss.degradationSinceAt;
     stateful.combatTarget.exchangeRetreatSinceAt = exitEvaluation.exchangeStopLoss.retreatSinceAt;
@@ -3398,9 +3552,6 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   closeBandReserve.lastAuthorization = sharedFireBudget.authorizationSource;
   if (stateful?.combatTarget) {
     stateful.combatTarget.closeBandReserve = closeBandReserve;
-    if (stateful.combatEngagements?.[String(combatTargetId(target) || '')]) {
-      stateful.combatEngagements[String(combatTargetId(target))].closeBandReserve = cloneJson(closeBandReserve);
-    }
   }
   const highEntropyFireGate = {
     ...baseHighEntropyFireGate,
@@ -3518,7 +3669,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     }
   }
   const commandSuppressed = Boolean(!liveCombatEnabled || !wouldShoot);
-  return {
+  const result = {
     ok: Boolean(self),
     dryRun: !liveCombatEnabled,
     liveEnabled: liveCombatEnabled,
@@ -3625,7 +3776,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       ordinaryBudgetRemaining: sharedFireBudget.ordinaryBudgetRemaining,
       reservedCloseBandShots: sharedFireBudget.reservedCloseBandShots,
       reservedCloseBandShotsRemaining: sharedFireBudget.reservedCloseBandShotsRemaining,
-      closeBandReserve: cloneJson(closeBandReserve),
+      closeBandReserve: { ...closeBandReserve },
       closeRangeFireOverride: sharedFireBudget.closeRangeFireOverride,
       budgetStateInvalid: sharedFireBudget.budgetStateInvalid,
       authorizationSource: sharedFireBudget.authorizationSource,
@@ -3685,11 +3836,19 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     })() : null,
     dataGaps
   };
+  Object.defineProperty(result, NORMALIZED_COMBAT_BULLETS, {
+    value: bullets,
+    configurable: true
+  });
+  return result;
 }
 
 module.exports = {
+  NORMALIZED_COMBAT_BULLETS,
+  NORMALIZED_COMBAT_INPUT,
   buildBrowserlessCombatDryRun,
   buildCombatMovementPlan,
+  combatLearningCellCount,
   estimateAim,
   normalizeCombatBullet,
   normalizeCombatEntity,

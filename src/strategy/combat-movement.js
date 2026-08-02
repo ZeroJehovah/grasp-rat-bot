@@ -8,6 +8,9 @@
 
 const { COMBAT_CONSTANTS } = require('./combat-constants');
 
+const NORMALIZED_PENDING_VELOCITY_COMMANDS = Symbol('normalized-pending-velocity-commands');
+const NORMALIZED_PENDING_VELOCITY_EVENTS = Symbol('normalized-pending-velocity-events');
+
 /**
  * Calculate desired spacing distance for combat target
  *
@@ -54,10 +57,17 @@ function normalizedDirection(direction = {}) {
 
 function directionThreatCore(threatField = [], direction = {}) {
   const normalized = normalizedDirection(direction);
-  return (threatField || [])
-    .filter(item => Number(item?.dx) === normalized.dx && Number(item?.dy) === normalized.dy)
-    .sort((left, right) => Number(left?.directHits || 0) - Number(right?.directHits || 0)
-      || Number(right?.minCPA || 0) - Number(left?.minCPA || 0))[0] || null;
+  let selected = null;
+  for (const item of threatField || []) {
+    if (Number(item?.dx) !== normalized.dx || Number(item?.dy) !== normalized.dy) continue;
+    if (!selected
+      || Number(item?.directHits || 0) < Number(selected?.directHits || 0)
+      || (Number(item?.directHits || 0) === Number(selected?.directHits || 0)
+        && Number(item?.minCPA || 0) > Number(selected?.minCPA || 0))) {
+      selected = item;
+    }
+  }
+  return selected;
 }
 
 function movementThreatSafeCore(threat, minimumCpaCm = 200) {
@@ -434,7 +444,8 @@ function normalizedPendingVelocityCommands(options = {}) {
 }
 
 function velocityScheduleVariants(currentVelocity, direction, options = {}) {
-  const pending = normalizedPendingVelocityCommands(options);
+  const pending = options[NORMALIZED_PENDING_VELOCITY_COMMANDS]
+    || normalizedPendingVelocityCommands(options);
   const timing = options.movementExecutionTiming || options.velocityExecutionTiming || {};
   const commandDelayTicks = Math.max(0, Number(
     options.commandDelayTicks
@@ -452,15 +463,16 @@ function velocityScheduleVariants(currentVelocity, direction, options = {}) {
           vx: direction.dx * diagonalScale * moveSpeedPerTick,
           vy: direction.dy * diagonalScale * moveSpeedPerTick
         });
-  const pendingEvents = pending.map(command => {
-    const scale = command.dx && command.dy ? Math.SQRT1_2 : 1;
-    return {
-      ...command,
-      vx: command.dx * scale * moveSpeedPerTick,
-      vy: command.dy * scale * moveSpeedPerTick,
-      source: 'pending-command'
-    };
-  });
+  const pendingEvents = options[NORMALIZED_PENDING_VELOCITY_EVENTS]
+    || pending.map(command => {
+      const scale = command.dx && command.dy ? Math.SQRT1_2 : 1;
+      return {
+        ...command,
+        vx: command.dx * scale * moveSpeedPerTick,
+        vy: command.dy * scale * moveSpeedPerTick,
+        source: 'pending-command'
+      };
+    });
   const lastPendingTick = pendingEvents.reduce((max, command) => Math.max(max, command.effectiveAfterTicks), -1);
   const candidateEffectiveAfterTicks = Math.max(commandDelayTicks, lastPendingTick >= 0 ? lastPendingTick + 1 : 0);
   const expected = [
@@ -548,7 +560,10 @@ function scheduledVelocityAt(intervalTick, currentVelocity, events) {
   let velocity = currentVelocity;
   for (const event of events) {
     if (Number(event.effectiveAfterTicks) > intervalTick + 1) break;
-    velocity = { vx: Number(event.vx || 0), vy: Number(event.vy || 0) };
+    // Schedule events are immutable for one threat-field evaluation. Reuse
+    // the event object instead of allocating a new velocity pair for every
+    // simulated tick and trajectory branch.
+    velocity = event;
   }
   return velocity;
 }
@@ -624,6 +639,24 @@ function calculateDodgeDirection(self, bullets, options = {}) {
   const currentVx = Number(self?.vx || 0);
   const currentVy = Number(self?.vy || 0);
   const observedVelocity = { vx: currentVx, vy: currentVy };
+  const normalizedPending = normalizedPendingVelocityCommands(options);
+  const normalizedPendingEvents = normalizedPending.map(command => {
+    const scale = command.dx && command.dy ? Math.SQRT1_2 : 1;
+    return {
+      ...command,
+      vx: command.dx * scale * moveSpeedPerTick,
+      vy: command.dy * scale * moveSpeedPerTick,
+      source: 'pending-command'
+    };
+  });
+  const velocityScheduleOptions = {
+    [NORMALIZED_PENDING_VELOCITY_COMMANDS]: normalizedPending,
+    [NORMALIZED_PENDING_VELOCITY_EVENTS]: normalizedPendingEvents,
+    movementExecutionTiming,
+    commandDelayTicks,
+    moveSpeedPerTick,
+    robustScheduleEnabled: options.robustScheduleEnabled
+  };
   const threatField = directions.map(dir => {
     let directHits = 0;
     let avoidableHits = 0;
@@ -634,12 +667,7 @@ function calculateDodgeDirection(self, bullets, options = {}) {
     let scheduleRobust = true;
     let unconfirmedTransitionRisk = false;
     const bulletRisks = [];
-    const schedule = velocityScheduleVariants(observedVelocity, dir, {
-      ...options,
-      commandDelayTicks,
-      movementExecutionTiming,
-      moveSpeedPerTick
-    });
+    const schedule = velocityScheduleVariants(observedVelocity, dir, velocityScheduleOptions);
 
     for (const bullet of incoming) {
       const tti = Number(bullet.timeToImpact || 1000);

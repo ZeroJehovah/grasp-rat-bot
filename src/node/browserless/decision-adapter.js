@@ -35,9 +35,16 @@ const {
   summarizeNearestCoinStaminaBudgetExitCore
 } = require('../../strategy/stamina-budget');
 const { buildRuntimeDefaults } = require('../../shared/runtime-defaults');
-const { buildBrowserlessCombatDryRun, recordCombatShotLearning } = require('./combat-adapter');
+const {
+  NORMALIZED_COMBAT_BULLETS,
+  NORMALIZED_COMBAT_INPUT,
+  buildBrowserlessCombatDryRun,
+  combatLearningCellCount,
+  recordCombatShotLearning
+} = require('./combat-adapter');
 const {
   buildLeavePendingCover,
+  filterNormalizedIncomingBullets,
   normalizedIncomingBullets
 } = require('./leave-pending-control');
 const {
@@ -201,6 +208,8 @@ const REALTIME_INPUT_CACHE = Symbol('browserless-realtime-input-cache');
 const EASY_KILL_RECONCILED = Symbol('browserless-easy-kill-reconciled');
 const DAMAGE_STATUS_RECONCILED = Symbol('browserless-damage-status-reconciled');
 const MISSING_OPTION_VALUE = Symbol('browserless-missing-option-value');
+const INTERNAL_REALTIME_OPTIONS = Symbol('browserless-internal-realtime-options');
+const OPTION_OVERRIDE_STACKS = new WeakMap();
 
 function buildBrowserlessRuntimeDefaults(config = {}) {
   return buildRuntimeDefaults(config, false);
@@ -212,15 +221,29 @@ function cloneJson(value) {
 }
 
 function withOptionOverrides(baseOptions, overrides, invoke, state) {
-  const keys = Object.keys(overrides || {});
-  if (!keys.length) return invoke(state, baseOptions);
-  const previous = new Array(keys.length);
-  for (let index = 0; index < keys.length; index += 1) {
-    const key = keys[index];
-    previous[index] = Object.prototype.hasOwnProperty.call(baseOptions, key)
+  let stack = OPTION_OVERRIDE_STACKS.get(baseOptions);
+  if (!stack) {
+    stack = { depth: 0, frames: [] };
+    OPTION_OVERRIDE_STACKS.set(baseOptions, stack);
+  }
+  const depth = stack.depth;
+  stack.depth += 1;
+  const frame = stack.frames[depth] || (stack.frames[depth] = { keys: [], previous: [] });
+  const keys = frame.keys;
+  const previous = frame.previous;
+  keys.length = 0;
+  previous.length = 0;
+  for (const key in (overrides || {})) {
+    if (!Object.prototype.hasOwnProperty.call(overrides, key)) continue;
+    keys.push(key);
+    previous.push(Object.prototype.hasOwnProperty.call(baseOptions, key)
       ? baseOptions[key]
-      : MISSING_OPTION_VALUE;
+      : MISSING_OPTION_VALUE);
     baseOptions[key] = overrides[key];
+  }
+  if (!keys.length) {
+    stack.depth -= 1;
+    return invoke(state, baseOptions);
   }
   try {
     return invoke(state, baseOptions);
@@ -230,6 +253,9 @@ function withOptionOverrides(baseOptions, overrides, invoke, state) {
       if (previous[index] === MISSING_OPTION_VALUE) delete baseOptions[key];
       else baseOptions[key] = previous[index];
     }
+    keys.length = 0;
+    previous.length = 0;
+    stack.depth -= 1;
   }
 }
 
@@ -1747,8 +1773,27 @@ function refreshRealtimeSnapshotObservation(state, self, stateful = {}, options 
     },
     selfKillEvidence: summarizeSelfKillEvidence(selfKillTargetTicks)
   };
+  const decisionObservedCoins = coinRows
+    .filter(row => Array.isArray(row) && row[0] !== undefined && Number(row[1] || 0) > 0)
+    .map(row => {
+      const id = String(row[0]);
+      return {
+        drop_id: id,
+        id,
+        key: `id:${id}`,
+        amount: Number(row[1]),
+        distance: Number(row[2] || Infinity),
+        authority: 'snapshot',
+        snapshotOnly: true
+      };
+    });
   Object.defineProperty(observation, '_nearbyKeys', {
     value: { coinKeys, playerKeys },
+    writable: true,
+    configurable: true
+  });
+  Object.defineProperty(observation, '_decisionObservedCoins', {
+    value: decisionObservedCoins,
     writable: true,
     configurable: true
   });
@@ -3295,20 +3340,22 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
   }
   markInputStage('threat-index');
   const realtimeSnapshotObservation = refreshRealtimeSnapshotObservation(state, self, stateful, options, nowMs);
-  const realtimeObservedCoins = (realtimeSnapshotObservation?.nearby?.c || [])
-    .filter(row => Array.isArray(row) && row[0] !== undefined && Number(row[1] || 0) > 0)
-    .map(row => {
-      const id = String(row[0]);
-      return {
-        drop_id: id,
-        id,
-        key: `id:${id}`,
-        amount: Number(row[1]),
-        distance: Number(row[2] || Infinity),
-        authority: 'snapshot',
-        snapshotOnly: true
-      };
-    });
+  const realtimeObservedCoins = Array.isArray(realtimeSnapshotObservation?._decisionObservedCoins)
+    ? realtimeSnapshotObservation._decisionObservedCoins
+    : (realtimeSnapshotObservation?.nearby?.c || [])
+      .filter(row => Array.isArray(row) && row[0] !== undefined && Number(row[1] || 0) > 0)
+      .map(row => {
+        const id = String(row[0]);
+        return {
+          drop_id: id,
+          id,
+          key: `id:${id}`,
+          amount: Number(row[1]),
+          distance: Number(row[2] || Infinity),
+          authority: 'snapshot',
+          snapshotOnly: true
+        };
+      });
   markInputStage('snapshot-observation');
   const result = {
     userId: Number(state?.userId || options.userId || 0),
@@ -3765,8 +3812,9 @@ function opportunityEnemyStaminaCost(target, options = {}) {
 function staminaRemaining(self, windowName) {
   const key = String(windowName || '').toLowerCase();
   if (!self || (key !== '5s' && key !== '1h' && key !== '1d')) return null;
-  const value = numberOrNull(self[`stamina_${key}_remaining_milli`]);
-  return value;
+  if (key === '5s') return numberOrNull(self.stamina_5s_remaining_milli);
+  if (key === '1h') return numberOrNull(self.stamina_1h_remaining_milli);
+  return numberOrNull(self.stamina_1d_remaining_milli);
 }
 
 function staminaExhaustedThreshold(options = {}) {
@@ -6009,10 +6057,7 @@ function buildRecoveryContactGuardDecision(input, stateful = {}, options = {}, i
       previousAction: stateful.lastDecisionAction || null,
       realBulletOwnerIds: incomingAssessment?.ownerIds || []
     },
-    {
-      ...BROWSER_RUNTIME_DEFAULTS,
-      ...options
-    }
+    options
   );
   stateful.recoveryContactGuard = result.state;
   const guard = result.decision;
@@ -7242,7 +7287,10 @@ function selectExecutableIncomingCover(cover) {
 function buildBrowserlessIncomingThreatAssessment(state, input, combat, options = {}) {
   if (!input?.self) return null;
   const nowMs = Number(input.nowMs || Date.now());
-  const normalizedBullets = normalizedIncomingBullets(state, input.self, options);
+  const combatBullets = combat?.dryRun?.[NORMALIZED_COMBAT_BULLETS];
+  const normalizedBullets = Array.isArray(combatBullets)
+    ? filterNormalizedIncomingBullets(combatBullets, input.self, options)
+    : normalizedIncomingBullets(state, input.self, options);
   const collisionBullets = normalizedBullets
     .filter(bullet => incomingBulletHasCollisionRiskCore(bullet, options));
   const combatMovement = combat?.dryRun?.movement || combat?.movement || null;
@@ -7449,23 +7497,42 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
   const normalizedBullets = threatAssessment?.normalizedBullets || [];
   const pendingCover = threatAssessment?.cover || null;
   const incoming = threatAssessment?.collisionBullets || [];
-  const ownerIds = Array.from(new Set(incoming
-    .map(bullet => String(bullet?.ownerId ?? ''))
-    .filter(Boolean)));
+  const ownerIds = [];
+  const ownerIdSet = new Set();
+  for (const bullet of incoming) {
+    const ownerId = String(bullet?.ownerId ?? '');
+    if (!ownerId || ownerIdSet.has(ownerId)) continue;
+    ownerIdSet.add(ownerId);
+    ownerIds.push(ownerId);
+  }
   const previous = stateful.browserlessLeaveRisk && typeof stateful.browserlessLeaveRisk === 'object'
     ? stateful.browserlessLeaveRisk
     : {};
   const damageMemoryMs = Math.max(1250, Number(options.leavePredictionDamageMemoryMs || 2500));
-  const hpSamples = (Array.isArray(previous.hpSamples) ? previous.hpSamples : [])
-    .filter(sample => nowMs - Number(sample.at || 0) <= damageMemoryMs);
+  const previousHpSamples = Array.isArray(previous.hpSamples) ? previous.hpSamples : [];
+  const hpSamples = Object.isExtensible(previousHpSamples) ? previousHpSamples : previousHpSamples.slice();
+  let retainedHpSampleCount = 0;
+  for (const sample of hpSamples) {
+    if (nowMs - Number(sample.at || 0) > damageMemoryMs) continue;
+    hpSamples[retainedHpSampleCount] = sample;
+    retainedHpSampleCount += 1;
+  }
+  hpSamples.length = retainedHpSampleCount;
   const lastHpSample = hpSamples[hpSamples.length - 1] || null;
   if (!lastHpSample
     || Number(lastHpSample.hp) !== selfHp
     || Number(lastHpSample.tick) !== Number(input.realtime?.tick)) {
     hpSamples.push({ at: nowMs, tick: input.realtime?.tick ?? null, hp: selfHp });
   }
-  const recentHpSamples = hpSamples.filter(sample => nowMs - Number(sample.at || 0) <= 1250);
-  const peakSample = recentHpSamples.slice().sort((a, b) => Number(b.hp) - Number(a.hp) || Number(a.at) - Number(b.at))[0] || null;
+  let peakSample = null;
+  for (const sample of hpSamples) {
+    if (nowMs - Number(sample.at || 0) > 1250) continue;
+    if (!peakSample
+      || Number(sample.hp) > Number(peakSample.hp)
+      || (Number(sample.hp) === Number(peakSample.hp) && Number(sample.at) < Number(peakSample.at))) {
+      peakSample = sample;
+    }
+  }
   const recentDamage = peakSample ? Math.max(0, Number(peakSample.hp) - selfHp) : 0;
   const recentDamageWindowMs = recentDamage > 0 && peakSample
     ? Math.max(0, nowMs - Number(peakSample.at || nowMs))
@@ -7494,9 +7561,23 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
   const damageRatePeakAt = damageRatePeakHpPerSecond > 0
     ? (refreshDamageRatePeak ? nowMs : previousDamageRatePeakAt)
     : 0;
-  const bulletObservations = (Array.isArray(previous.bulletObservations) ? previous.bulletObservations : [])
-    .filter(item => nowMs - Number(item.at || 0) <= 1500);
-  const observedIds = new Set(bulletObservations.map(item => item.id));
+  const previousBulletObservations = Array.isArray(previous.bulletObservations)
+    ? previous.bulletObservations
+    : [];
+  const bulletObservations = Object.isExtensible(previousBulletObservations)
+    ? previousBulletObservations
+    : previousBulletObservations.slice();
+  let retainedBulletObservationCount = 0;
+  for (const item of bulletObservations) {
+    if (nowMs - Number(item.at || 0) > 1500) continue;
+    bulletObservations[retainedBulletObservationCount] = item;
+    retainedBulletObservationCount += 1;
+  }
+  bulletObservations.length = retainedBulletObservationCount;
+  const observedIds = new Set();
+  if (incoming.length) {
+    for (const item of bulletObservations) observedIds.add(item.id);
+  }
   for (const bullet of incoming) {
     const id = leaveRiskBulletId(bullet);
     if (!id || observedIds.has(id)) continue;
@@ -7605,10 +7686,19 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
       selectedThreatPrediction: cloneJson(previous.lastCover.selectedThreatPrediction)
     };
   }
-  const bulletPredictionHistory = (Array.isArray(previous.bulletPredictionHistory)
+  const previousBulletPredictionHistory = Array.isArray(previous.bulletPredictionHistory)
     ? previous.bulletPredictionHistory
-    : [])
-    .filter(item => nowMs - Number(item.at || 0) <= 2500);
+    : [];
+  const bulletPredictionHistory = Object.isExtensible(previousBulletPredictionHistory)
+    ? previousBulletPredictionHistory
+    : previousBulletPredictionHistory.slice();
+  let retainedBulletPredictionCount = 0;
+  for (const item of bulletPredictionHistory) {
+    if (nowMs - Number(item.at || 0) > 2500) continue;
+    bulletPredictionHistory[retainedBulletPredictionCount] = item;
+    retainedBulletPredictionCount += 1;
+  }
+  bulletPredictionHistory.length = retainedBulletPredictionCount;
   const selectedThreatPrediction = lastCover?.selectedThreatPrediction || null;
   for (const bullet of selectedThreatPrediction?.dangerousBullets || []) {
     const bulletId = String(bullet?.bulletId || '');
@@ -7631,6 +7721,11 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
     ));
     if (duplicateIndex >= 0) bulletPredictionHistory[duplicateIndex] = entry;
     else bulletPredictionHistory.push(entry);
+  }
+  if (hpSamples.length > 32) hpSamples.splice(0, hpSamples.length - 32);
+  if (bulletObservations.length > 32) bulletObservations.splice(0, bulletObservations.length - 32);
+  if (bulletPredictionHistory.length > 64) {
+    bulletPredictionHistory.splice(0, bulletPredictionHistory.length - 64);
   }
   const assessment = {
     at: nowMs,
@@ -7669,9 +7764,9 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
     },
     prediction,
     lastCover,
-    hpSamples: hpSamples.slice(-32),
-    bulletObservations: bulletObservations.slice(-32),
-    bulletPredictionHistory: bulletPredictionHistory.slice(-64),
+    hpSamples,
+    bulletObservations,
+    bulletPredictionHistory,
     rule,
     reason
   };
@@ -7913,6 +8008,7 @@ function buildCombatDecision(input, stateful = {}, options = {}) {
     realtime: combatRealtime,
     command: input.command || null
   };
+  Object.defineProperty(combatState, NORMALIZED_COMBAT_INPUT, { value: true });
   const hadDecisionState = Object.prototype.hasOwnProperty.call(options, 'decisionState');
   const previousDecisionState = options.decisionState;
   const hadLiveCombatEnabled = Object.prototype.hasOwnProperty.call(options, 'liveCombatEnabled');
@@ -8129,11 +8225,18 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
   const postKillSettlementWaitAction = buildPostKillSettlementWaitDecision(input, stateful);
   const lootControl = buildRealtimeLootControl(input, combatForProfit, stateful, options);
   const combatActionEligible = isCombatActionEligibleForDecision(combat, options) && !realtimeEconomicSuppression;
-  const safetyContextOptions = {
-    ...options,
-    combatActionEligible,
-    preexistingCombatTarget: previousCombatTarget
-  };
+  const reuseSafetyContextOptions = options?.[INTERNAL_REALTIME_OPTIONS] === true;
+  const safetyContextOptions = reuseSafetyContextOptions
+    ? options
+    : {
+        ...options,
+        combatActionEligible,
+        preexistingCombatTarget: previousCombatTarget
+      };
+  if (reuseSafetyContextOptions) {
+    safetyContextOptions.combatActionEligible = combatActionEligible;
+    safetyContextOptions.preexistingCombatTarget = previousCombatTarget;
+  }
   const incomingThreatAssessment = buildBrowserlessIncomingThreatAssessment(
     state,
     input,
@@ -8359,7 +8462,7 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
       combatCandidateCount: combat?.candidates?.length || 0,
       behaviorSampleCount: behavior?.metrics?.sampleCount || 0,
       routeCandidateCount: combat?.dryRun?.aim?.routeCoverage?.candidates?.length || 0,
-      learningCellCount: Object.keys(stateful?.combatLearning?.hitRateByModeDistance || {}).length,
+      learningCellCount: combatLearningCellCount(stateful),
       input: inputStageScale
     });
   }
@@ -8819,10 +8922,15 @@ function proactiveCombatDefensiveRiskAssessment(combatDecision, input, stateful 
   const targetId = targetIdentity(target);
   const combatState = stateful?.combatTarget || null;
   const nowMs = Number.isFinite(Number(input?.nowMs)) ? Number(input.nowMs) : Date.now();
-  const targetBullets = targetId
-    ? (input?.bullets || []).filter(bullet => !bullet?.synthetic && String(bulletOwnerId(bullet) ?? '') === targetId)
-    : [];
-  const collisionRiskBullets = targetBullets.filter(bullet => incomingBulletHasCollisionRiskCore(bullet, options));
+  let targetBulletCount = 0;
+  let collisionRiskBulletCount = 0;
+  if (targetId) {
+    for (const bullet of input?.bullets || []) {
+      if (bullet?.synthetic || String(bulletOwnerId(bullet) ?? '') !== targetId) continue;
+      targetBulletCount += 1;
+      if (incomingBulletHasCollisionRiskCore(bullet, options)) collisionRiskBulletCount += 1;
+    }
+  }
   const injury = stateful?.browserlessInjury || null;
   const injuryAgeMs = injury?.at ? Math.max(0, nowMs - Number(injury.at || 0)) : null;
   const recentAttributedInjury = Boolean(
@@ -8831,9 +8939,17 @@ function proactiveCombatDefensiveRiskAssessment(combatDecision, input, stateful 
       && injury.attributable !== false
       && String(injury.targetKey || injury.recentCombatTargetKey || '') === targetId
   );
-  const samples = (combatState?.motionSamples || []).filter(sample => nowMs - Number(sample.at || 0) <= 2500);
-  const firstDistance = numberOrNull(samples[0]?.distance);
-  const lastDistance = numberOrNull(samples.at(-1)?.distance ?? target?.distance);
+  const motionSamples = combatState?.motionSamples || [];
+  let firstRecentSample = null;
+  let lastRecentSample = null;
+  for (let index = motionSamples.length - 1; index >= 0; index -= 1) {
+    const sample = motionSamples[index];
+    if (nowMs - Number(sample?.at || 0) > 2500) break;
+    firstRecentSample = sample;
+    if (!lastRecentSample) lastRecentSample = sample;
+  }
+  const firstDistance = numberOrNull(firstRecentSample?.distance);
+  const lastDistance = numberOrNull(lastRecentSample?.distance ?? target?.distance);
   const closingDistanceCm = firstDistance !== null && lastDistance !== null ? firstDistance - lastDistance : 0;
   const firingAgeMs = Number(combatState?.lastFiringAt || 0) > 0
     ? Math.max(0, nowMs - Number(combatState.lastFiringAt))
@@ -8851,14 +8967,14 @@ function proactiveCombatDefensiveRiskAssessment(combatDecision, input, stateful 
   );
   const reasons = [];
   if (recentAttributedInjury) reasons.push('recent-attributed-injury');
-  if (collisionRiskBullets.length) reasons.push('collision-risk-target-bullet');
+  if (collisionRiskBulletCount) reasons.push('collision-risk-target-bullet');
   if (recentFiringWhileClosing) reasons.push('recent-firing-while-closing');
   if (explicitDefensiveOrigin) reasons.push('explicit-defensive-origin');
   return {
     defensive: reasons.length > 0,
     reasons,
-    targetBulletCount: targetBullets.length,
-    collisionRiskBulletCount: collisionRiskBullets.length,
+    targetBulletCount,
+    collisionRiskBulletCount,
     recentAttributedInjury,
     injuryAgeMs,
     recentFiringWhileClosing,
@@ -10767,6 +10883,7 @@ function recordAttackHistoryFromActionResult(decisionState, actionResult, decisi
 function createBrowserlessDecisionAdapter(options = {}) {
   const decisionState = createBrowserlessDecisionState(options);
   const realtimeOptions = { ...options };
+  Object.defineProperty(realtimeOptions, INTERNAL_REALTIME_OPTIONS, { value: true });
   const snapshotObservationOptions = { ...options };
   const evaluateRealtimeWithOptions = (state, mergedOptions) => (
     buildBrowserlessRealtimeControlDecision(state, decisionState, mergedOptions)

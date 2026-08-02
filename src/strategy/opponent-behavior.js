@@ -247,7 +247,8 @@ function movementActionPhaseFromSample(sample = {}, dwellMs = 0, options = {}) {
 }
 
 function movementActionPhaseCore(samples = [], options = {}) {
-  const history = (samples || []).filter(Boolean);
+  const source = Array.isArray(samples) ? samples : [];
+  const history = source.some(sample => !sample) ? source.filter(Boolean) : source;
   const last = history.at(-1);
   if (!last) return movementActionPhaseFromSample({}, 0, options);
   const stationarySpeed = Math.max(0, Number(options.stationarySpeed ?? 5));
@@ -267,71 +268,136 @@ function movementActionPhaseCore(samples = [], options = {}) {
 
 function movementRouteContextKeyCore(behavior, distance, phase = {}) {
   const mode = String(behavior?.mode || behavior || 'mixed/unknown');
-  return [
-    `mode=${mode}`,
-    `distance=${phase.distanceBand || behaviorDistanceBand(distance)}`,
-    `direction=${phase.currentDirection || 'stop'}`,
-    `dwell=${phase.dwellBand || movementDwellBand(phase.dwellTicks)}`,
-    `speed=${phase.speedBand || 'stopped'}`,
-    `radial=${phase.radialRelation || 'stable'}`,
-    `lateral=${phase.lateralRelation || 'center'}`
-  ].join('|');
+  return `mode=${mode}`
+    + `|distance=${phase.distanceBand || behaviorDistanceBand(distance)}`
+    + `|direction=${phase.currentDirection || 'stop'}`
+    + `|dwell=${phase.dwellBand || movementDwellBand(phase.dwellTicks)}`
+    + `|speed=${phase.speedBand || 'stopped'}`
+    + `|radial=${phase.radialRelation || 'stable'}`
+    + `|lateral=${phase.lateralRelation || 'center'}`;
+}
+
+function movementRouteContextKeyFromSampleCore(behavior, sample = {}, dwellMs = 0, options = {}) {
+  const stationarySpeed = Math.max(0, Number(options.stationarySpeed ?? 5));
+  const serverTickMs = Math.max(1, Number(options.serverTickMs ?? 50));
+  const vx = Number(sample.vx) || 0;
+  const vy = Number(sample.vy) || 0;
+  const speed = Math.hypot(vx, vy);
+  const dx = Number(sample.x) - Number(sample.selfX || 0);
+  const dy = Number(sample.y) - Number(sample.selfY || 0);
+  const distance = Math.max(1, Math.hypot(dx, dy));
+  const radialSpeed = dx / distance * vx + dy / distance * vy;
+  const lateralSpeed = dx / distance * vy - dy / distance * vx;
+  const relationThreshold = Math.max(2, Number(options.relationSpeedThreshold ?? stationarySpeed));
+  const dwellTicks = Math.max(0, Number(dwellMs || 0) / serverTickMs);
+  return `mode=${String(behavior?.mode || behavior || 'mixed/unknown')}`
+    + `|distance=${behaviorDistanceBand(sampleDistance(sample))}`
+    + `|direction=${movementDirectionState(vx, vy, stationarySpeed)}`
+    + `|dwell=${movementDwellBand(dwellTicks)}`
+    + `|speed=${movementSpeedBand(speed, options)}`
+    + `|radial=${radialSpeed > relationThreshold ? 'receding' : (radialSpeed < -relationThreshold ? 'closing' : 'stable')}`
+    + `|lateral=${lateralSpeed > relationThreshold ? 'right' : (lateralSpeed < -relationThreshold ? 'left' : 'center')}`;
 }
 
 function movementTransitionModelCore(samples = [], options = {}) {
   const stationarySpeed = Math.max(0, Number(options.stationarySpeed ?? 5));
-  const history = (samples || []).filter(Boolean);
-  const states = history.map(sample => movementDirectionState(sample?.vx, sample?.vy, stationarySpeed));
+  const source = Array.isArray(samples) ? samples : [];
+  const history = source.some(sample => !sample) ? source.filter(Boolean) : source;
   const counts = {};
-  const conditionalCounts = {};
+  const phase = movementActionPhaseCore(history, options);
+  const contextKey = movementRouteContextKeyCore(
+    options.mode || 'mixed/unknown',
+    sampleDistance(history.at(-1)),
+    phase
+  );
+  const conditionalRow = {};
   let transitionCount = 0;
   let directionSinceAt = Number(history[0]?.at || 0);
-  for (let index = 1; index < states.length; index += 1) {
-    const from = states[index - 1];
-    const to = states[index];
+  let currentState = history.length
+    ? movementDirectionState(history[0]?.vx, history[0]?.vy, stationarySpeed)
+    : 'stop';
+  let stateBeforeFrom = null;
+  for (let index = 1; index < history.length; index += 1) {
+    const from = currentState;
+    const to = movementDirectionState(history[index]?.vx, history[index]?.vy, stationarySpeed);
     if (!counts[from]) counts[from] = {};
     counts[from][to] = Number(counts[from][to] || 0) + 1;
-    if (index > 1 && from !== states[index - 2]) directionSinceAt = Number(history[index - 1]?.at || directionSinceAt);
+    if (index > 1 && from !== stateBeforeFrom) directionSinceAt = Number(history[index - 1]?.at || directionSinceAt);
     const previousSample = history[index - 1] || {};
-    const phase = movementActionPhaseFromSample(
+    const transitionContextKey = movementRouteContextKeyFromSampleCore(
+      options.mode || 'mixed/unknown',
       previousSample,
       Math.max(0, Number(previousSample.at || 0) - directionSinceAt),
       options
     );
-    const contextKey = movementRouteContextKeyCore(options.mode || 'mixed/unknown', sampleDistance(previousSample), phase);
-    if (!conditionalCounts[contextKey]) conditionalCounts[contextKey] = {};
-    conditionalCounts[contextKey][to] = Number(conditionalCounts[contextKey][to] || 0) + 1;
+    if (transitionContextKey === contextKey) {
+      conditionalRow[to] = Number(conditionalRow[to] || 0) + 1;
+    }
     transitionCount += 1;
+    stateBeforeFrom = from;
+    currentState = to;
   }
   const matrix = {};
-  for (const [from, row] of Object.entries(counts)) {
-    const total = Object.values(row).reduce((sum, value) => sum + Number(value || 0), 0);
-    matrix[from] = Object.fromEntries(Object.entries(row)
-      .map(([to, value]) => [to, total > 0 ? Number(value) / total : 0])
-      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])));
+  for (const from in counts) {
+    if (!Object.prototype.hasOwnProperty.call(counts, from)) continue;
+    const row = counts[from];
+    let total = 0;
+    const entries = [];
+    for (const to in row) {
+      if (!Object.prototype.hasOwnProperty.call(row, to)) continue;
+      total += Number(row[to] || 0);
+      entries.push([to, Number(row[to] || 0)]);
+    }
+    entries.sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
+    const normalized = {};
+    for (const [to, value] of entries) normalized[to] = total > 0 ? value / total : 0;
+    matrix[from] = normalized;
   }
-  const currentState = states[states.length - 1] || 'stop';
-  const phase = movementActionPhaseCore(history, options);
-  const contextKey = movementRouteContextKeyCore(options.mode || 'mixed/unknown', sampleDistance(history.at(-1)), phase);
-  const conditionalRow = conditionalCounts[contextKey] || {};
-  const conditionalTotal = Object.values(conditionalRow).reduce((sum, value) => sum + Number(value || 0), 0);
-  const conditionalNext = Object.entries(conditionalRow)
-    .map(([state, count]) => ({
+  let conditionalTotal = 0;
+  for (const state in conditionalRow) {
+    if (Object.prototype.hasOwnProperty.call(conditionalRow, state)) {
+      conditionalTotal += Number(conditionalRow[state] || 0);
+    }
+  }
+  const conditionalNext = [];
+  for (const state in conditionalRow) {
+    if (!Object.prototype.hasOwnProperty.call(conditionalRow, state)) continue;
+    const count = Number(conditionalRow[state] || 0);
+    conditionalNext.push({
       state,
-      count: Number(count || 0),
-      probability: conditionalTotal > 0 ? Number(count) / conditionalTotal : 0,
+      count,
+      probability: conditionalTotal > 0 ? count / conditionalTotal : 0,
       vector: movementDirectionVector(state)
-    }))
-    .sort((a, b) => b.probability - a.probability || a.state.localeCompare(b.state));
-  const next = Object.entries(matrix[currentState] || {})
-    .map(([state, probability]) => ({ state, probability, vector: movementDirectionVector(state) }))
-    .sort((a, b) => b.probability - a.probability || a.state.localeCompare(b.state));
-  const entropy = next.length
-    ? -next.reduce((sum, item) => sum + (item.probability > 0 ? item.probability * Math.log2(item.probability) : 0), 0)
-    : null;
-  const rowPredictabilities = Object.values(matrix)
-    .map(row => Math.max(0, ...Object.values(row).map(Number).filter(Number.isFinite)))
-    .filter(Number.isFinite);
+    });
+  }
+  conditionalNext.sort((left, right) => right.probability - left.probability || left.state.localeCompare(right.state));
+  const next = [];
+  const currentRow = matrix[currentState] || {};
+  for (const state in currentRow) {
+    if (!Object.prototype.hasOwnProperty.call(currentRow, state)) continue;
+    next.push({ state, probability: currentRow[state], vector: movementDirectionVector(state) });
+  }
+  next.sort((left, right) => right.probability - left.probability || left.state.localeCompare(right.state));
+  let entropy = null;
+  if (next.length) {
+    entropy = 0;
+    for (const item of next) {
+      if (item.probability > 0) entropy -= item.probability * Math.log2(item.probability);
+    }
+  }
+  let predictabilityTotal = 0;
+  let predictabilityRows = 0;
+  for (const from in matrix) {
+    if (!Object.prototype.hasOwnProperty.call(matrix, from)) continue;
+    let rowMaximum = 0;
+    for (const state in matrix[from]) {
+      if (!Object.prototype.hasOwnProperty.call(matrix[from], state)) continue;
+      const probability = Number(matrix[from][state]);
+      if (Number.isFinite(probability)) rowMaximum = Math.max(rowMaximum, probability);
+    }
+    predictabilityTotal += rowMaximum;
+    predictabilityRows += 1;
+  }
   return {
     states: MOVEMENT_DIRECTION_STATES,
     currentState,
@@ -343,8 +409,8 @@ function movementTransitionModelCore(samples = [], options = {}) {
     matrix,
     next,
     entropy,
-    predictability: rowPredictabilities.length
-      ? rowPredictabilities.reduce((sum, value) => sum + value, 0) / rowPredictabilities.length
+    predictability: predictabilityRows
+      ? predictabilityTotal / predictabilityRows
       : 0.5,
     confidence: clamp(transitionCount / Math.max(4, Number(options.fullConfidenceTransitions ?? 12)), 0, 1)
   };
@@ -354,9 +420,12 @@ function opponentBehaviorMetricsCore(samples = [], options = {}) {
   const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
   const windowMs = Math.max(2000, Number(options.windowMs ?? 12000));
   const stationarySpeed = Math.max(1, Number(options.stationarySpeed ?? 5));
-  const history = (samples || [])
-    .filter(sample => sample && nowMs - Number(sample.at || 0) <= windowMs)
-    .slice(-80);
+  const source = Array.isArray(samples) ? samples : [];
+  const history = options.samplesAlreadyBounded === true
+    ? source
+    : source
+        .filter(sample => sample && nowMs - Number(sample.at || 0) <= windowMs)
+        .slice(-80);
   let radialSum = 0;
   let lateralSum = 0;
   let speedSum = 0;
@@ -476,10 +545,9 @@ function opponentBehaviorMetricsCore(samples = [], options = {}) {
     : null;
   const intervalVariance = intervalMean === null ? null : shotIntervals.reduce((sum, value) => sum + (value - intervalMean) ** 2, 0) / shotIntervals.length;
   const shotIntervalCv = intervalMean && intervalVariance !== null ? Math.sqrt(intervalVariance) / intervalMean : null;
-  const orderedShotEvents = shotEvents
-    .slice()
-    .sort((a, b) => a.createdTick - b.createdTick || a.observedAt - b.observedAt)
-    .slice(-32);
+  shotEvents.sort((a, b) => a.createdTick - b.createdTick || a.observedAt - b.observedAt);
+  if (shotEvents.length > 32) shotEvents.splice(0, shotEvents.length - 32);
+  const orderedShotEvents = shotEvents;
   const shotIntervalTicks = [];
   for (let index = 1; index < orderedShotEvents.length; index += 1) {
     const interval = orderedShotEvents[index].createdTick - orderedShotEvents[index - 1].createdTick;
@@ -622,8 +690,15 @@ function behaviorDimensionsCore(previous, classified, metrics, sample, nowMs, op
   const newShotCount = Array.isArray(sample.newShotEvents)
     ? sample.newShotEvents.length
     : Math.max(0, Number(sample.newBulletCount || 0));
-  const lastLocalShotAt = [...(previous?.samples || []), sample]
-    .slice().reverse().find(item => Number(item.newBulletCount || 0) > 0)?.at || 0;
+  let lastLocalShotAt = Number(sample.newBulletCount || 0) > 0 ? Number(sample.at || nowMs) : 0;
+  if (!lastLocalShotAt) {
+    const previousSamples = previous?.samples || [];
+    for (let index = previousSamples.length - 1; index >= 0; index -= 1) {
+      if (Number(previousSamples[index]?.newBulletCount || 0) <= 0) continue;
+      lastLocalShotAt = Number(previousSamples[index]?.at || 0);
+      break;
+    }
+  }
   const legacyRecentShot = lastCreatedTick === null
     && lastLocalShotAt > 0
     && Number.isFinite(Number(metrics.shotIntervalMeanMs))
@@ -886,10 +961,19 @@ function updateOpponentBehaviorStateCore(previous = null, sample = {}, options =
   const resetGapMs = Math.max(2000, Number(options.resetGapMs ?? 15000));
   const prior = previous && nowMs - Number(previous.lastAt || 0) <= resetGapMs ? previous : null;
   const windowMs = Math.max(2000, Number(options.windowMs ?? 12000));
-  const samples = [...(Array.isArray(prior?.samples) ? prior.samples : []), { ...sample, at: nowMs }]
-    .filter(item => nowMs - Number(item.at || 0) <= windowMs)
-    .slice(-80);
-  const metrics = opponentBehaviorMetricsCore(samples, { ...options, nowMs, windowMs });
+  const samples = [];
+  const previousSamples = Array.isArray(prior?.samples) ? prior.samples : [];
+  for (const item of previousSamples) {
+    if (item && nowMs - Number(item.at || 0) <= windowMs) samples.push(item);
+  }
+  if (samples.length >= 80) samples.splice(0, samples.length - 79);
+  samples.push({ ...sample, at: nowMs });
+  const metrics = opponentBehaviorMetricsCore(samples, {
+    ...options,
+    nowMs,
+    windowMs,
+    samplesAlreadyBounded: true
+  });
   const classified = classifyOpponentBehaviorCore(metrics, options);
   const dimensions = behaviorDimensionsCore(prior, classified, metrics, sample, nowMs, options);
   const currentMode = OPPONENT_BEHAVIOR_MODES.includes(String(prior?.mode)) ? String(prior.mode) : 'mixed/unknown';
@@ -914,14 +998,15 @@ function updateOpponentBehaviorStateCore(previous = null, sample = {}, options =
       transitionReason = `candidate:${classified.mode}:${classified.reason}`;
     }
   }
-  metrics.movementTransitions = movementTransitionModelCore(samples, {
-    ...options,
-    mode
-  });
+  const distance = sampleDistance(sample);
+  metrics.movementTransitions.contextKey = movementRouteContextKeyCore(
+    mode,
+    distance,
+    metrics.movementTransitions.phase
+  );
   metrics.movementPhase = metrics.movementTransitions.phase;
   let progressAt = Number(prior?.progressAt || since || nowMs);
   let progressDistance = numberOrNull(prior?.progressDistance);
-  const distance = sampleDistance(sample);
   if (mode !== 'retreat-kite') {
     progressAt = nowMs;
     progressDistance = distance;

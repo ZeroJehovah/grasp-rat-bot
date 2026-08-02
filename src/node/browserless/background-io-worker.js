@@ -1,11 +1,15 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const zlib = require('zlib');
 const { performance } = require('perf_hooks');
 const { parentPort } = require('worker_threads');
-const { redactStructuredSecrets } = require('./session-client');
+const {
+  redactStructuredSecrets,
+  stringifyRedactedJson
+} = require('./session-client');
 const {
   buildCompactBrowserlessStatus,
   buildPublicBrowserlessStatus
@@ -16,15 +20,26 @@ let temporarySequence = 0;
 const jsonStateCache = new Map();
 const chatHistoryWriters = new Map();
 
+// Linux schedules nice values per thread. Keep the realtime WebSocket main
+// thread at its inherited priority and let background logging/status work use
+// frame gaps when CPU is saturated. Failure to adjust priority is non-fatal on
+// platforms or containers that do not permit it; all queue/flush semantics stay
+// unchanged.
+if (process.platform === 'linux') {
+  try {
+    if (os.getPriority(0) < 10) os.setPriority(0, 10);
+  } catch (_) {}
+}
+
 function appendLog(message) {
   const file = path.resolve(String(message.file || ''));
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const entry = {
     at: new Date(Number(message.atMs || Date.now())).toISOString(),
     type: String(message.type || 'event'),
-    detail: redactStructuredSecrets(message.detail || {})
+    detail: message.detail || {}
   };
-  fs.appendFileSync(file, JSON.stringify(entry) + '\n');
+  fs.appendFileSync(file, stringifyRedactedJson(entry) + '\n');
 }
 
 function writeJsonFileAtomic(file, value) {
@@ -101,7 +116,7 @@ function finalizeGz(message) {
 function appendRawLine(message) {
   const file = path.resolve(String(message.file || ''));
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.appendFileSync(file, JSON.stringify(redactStructuredSecrets(message.value || {})) + '\n');
+  fs.appendFileSync(file, stringifyRedactedJson(message.value || {}) + '\n');
 }
 
 function appendChatHistory(message) {

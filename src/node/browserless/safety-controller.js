@@ -336,13 +336,14 @@ function dynamicCombatMovementStallThresholdMs(state = {}, context = {}, options
   return Math.round(Math.max(DEFAULT_OUTBOUND_CONTROL_MIN_MS, Math.min(capMs, threshold)));
 }
 
-function directionKey(direction = {}) {
-  return `${Math.sign(Number(direction.dx || 0))},${Math.sign(Number(direction.dy || 0))}`;
+function sameDirection(left = {}, right = {}) {
+  return Math.sign(Number(left.dx || 0)) === Math.sign(Number(right.dx || 0))
+    && Math.sign(Number(left.dy || 0)) === Math.sign(Number(right.dy || 0));
 }
 
-function outboundControlHealthAssessment(state = {}, context = {}, options = {}) {
+function outboundControlHealthAssessment(state = {}, context = {}, options = {}, pressureAssessment = null) {
   const nowMs = numberOrNull(context.nowMs) ?? Date.now();
-  const pressure = actionSettlementStallAssessment(state, context, options);
+  const pressure = pressureAssessment || actionSettlementStallAssessment(state, context, options);
   const realtime = state?.realtime || {};
   const frameAgeMs = numberOrNull(realtime.frameAgeMs ?? state?.frameAges?.realtimeAgeMs);
   const timing = state?.command?.movement?.timing || {};
@@ -358,12 +359,18 @@ function outboundControlHealthAssessment(state = {}, context = {}, options = {})
   const movingRequested = Boolean(Number(requested?.dx || 0) || Number(requested?.dy || 0));
   const directionMismatch = movingRequested
     && observed
-    && directionKey(requested) !== directionKey(observed);
+    && !sameDirection(requested, observed);
   const pending = Array.isArray(movement.pendingVelocityCommands)
     ? movement.pendingVelocityCommands
     : [];
-  const currentDirectionPending = pending.filter(command => directionKey(command) === directionKey(requested || {}));
-  const latestPending = currentDirectionPending.at(-1) || pending.at(-1) || null;
+  let currentDirectionPendingCount = 0;
+  let latestCurrentDirectionPending = null;
+  for (const command of pending) {
+    if (!sameDirection(command, requested || {})) continue;
+    currentDirectionPendingCount += 1;
+    latestCurrentDirectionPending = command;
+  }
+  const latestPending = latestCurrentDirectionPending || pending.at(-1) || null;
   const noProgressMs = Math.max(0, Number(context.actionSettlementStall?.noProgressMs || 0));
   const movementDeadlineMs = Math.max(
     DEFAULT_OUTBOUND_CONTROL_MIN_MS,
@@ -377,15 +384,20 @@ function outboundControlHealthAssessment(state = {}, context = {}, options = {})
       && inboundFresh
       && movingRequested
       && directionMismatch
-      && currentDirectionPending.length
+      && currentDirectionPendingCount > 0
       && noProgressMs >= movementDeadlineMs
   );
   const pendingShots = Array.isArray(state?.command?.shooting?.pendingShots)
     ? state.command.shooting.pendingShots
     : [];
-  const oldestShot = pendingShots
-    .slice()
-    .sort((left, right) => Number(left.requestedAtMs || 0) - Number(right.requestedAtMs || 0))[0] || null;
+  let oldestShot = null;
+  let oldestShotRequestedAtMs = Infinity;
+  for (const shot of pendingShots) {
+    const requestedAtMs = Number(shot?.requestedAtMs || 0);
+    if (oldestShot && requestedAtMs >= oldestShotRequestedAtMs) continue;
+    oldestShot = shot;
+    oldestShotRequestedAtMs = requestedAtMs;
+  }
   const oldestShotAgeMs = oldestShot
     ? Math.max(0, nowMs - Number(oldestShot.requestedAtMs || nowMs))
     : 0;
@@ -416,7 +428,7 @@ function outboundControlHealthAssessment(state = {}, context = {}, options = {})
     requestedDirection: requested ? { dx: Number(requested.dx || 0), dy: Number(requested.dy || 0) } : null,
     observedVelocity: observed ? { dx: Number(observed.dx || 0), dy: Number(observed.dy || 0), vx: Number(observed.vx || 0), vy: Number(observed.vy || 0) } : null,
     directionMismatch: Boolean(directionMismatch),
-    currentDirectionPendingCount: currentDirectionPending.length,
+    currentDirectionPendingCount,
     pendingDepth: pending.length,
     latestPendingAtMs: latestPending?.requestedAtMs ?? null,
     noProgressMs,
@@ -433,8 +445,8 @@ function outboundControlHealthAssessment(state = {}, context = {}, options = {})
   };
 }
 
-function realtimeTransportHealthAssessment(state = {}, context = {}, options = {}) {
-  const outboundControl = outboundControlHealthAssessment(state, context, options);
+function realtimeTransportHealthAssessment(state = {}, context = {}, options = {}, pressureAssessment = null) {
+  const outboundControl = outboundControlHealthAssessment(state, context, options, pressureAssessment);
   const incoming = context.transportHealth && typeof context.transportHealth === 'object'
     ? context.transportHealth
     : null;
@@ -578,7 +590,8 @@ function evaluateBrowserlessSafety(state = {}, context = {}, options = {}) {
     }, { nowMs });
   }
 
-  const transportHealth = realtimeTransportHealthAssessment(state, context, options);
+  const movementStallAssessment = actionSettlementStallAssessment(state, context, options);
+  const transportHealth = realtimeTransportHealthAssessment(state, context, options, movementStallAssessment);
   if (transportHealth.triggered) {
     return createSafetyEvent('realtime-transport-degraded', {
       failureModes: transportHealth.failureModes,
@@ -602,7 +615,6 @@ function evaluateBrowserlessSafety(state = {}, context = {}, options = {}) {
     });
   }
 
-  const movementStallAssessment = actionSettlementStallAssessment(state, context, options);
   if (movementStallAssessment.triggered) {
     const combatStall = movementStallAssessment.hostilePressure;
     return createSafetyEvent(combatStall ? 'combat-action-settlement-stalled' : 'action-settlement-stalled', {
@@ -659,12 +671,14 @@ function createBrowserlessSafetyController(options = {}) {
       return stopEvent;
     },
     evaluate(state, context = {}) {
-      const mergedContext = {
-        ...context,
-        stopRequested: Boolean(stopEvent),
-        stopReason: stopEvent?.reason || context.stopReason,
-        stopDetail: stopEvent?.detail || context.stopDetail
-      };
+      const mergedContext = stopEvent || context.stopRequested
+        ? {
+            ...context,
+            stopRequested: Boolean(stopEvent),
+            stopReason: stopEvent?.reason || context.stopReason,
+            stopDetail: stopEvent?.detail || context.stopDetail
+          }
+        : context;
       if (stopEvent || context.wsError || context.wsClosed || context.snapshotSafety?.ok === false) {
         frameGapSoftStop = null;
         return evaluateBrowserlessSafety(state, mergedContext, options);

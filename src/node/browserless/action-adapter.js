@@ -47,6 +47,8 @@ const DEFAULT_NEAR_COIN_CONTINUATION_LEASE_SLACK_MS = 125;
 const DEFAULT_NEAR_COIN_CONTINUATION_MIN_LEASE_MS = 250;
 const DEFAULT_NEAR_COIN_CONTINUATION_STOP_SPEED_TOLERANCE = 1;
 const DEFAULT_NEAR_COIN_CONTINUATION_SNAPSHOT_MAX_AGE_MS = 5000;
+const COMMAND_SUMMARY_CACHE = new WeakMap();
+const NO_TRANSPORT_FAILURE = Object.freeze({});
 
 function numberOrNull(value) {
   const number = Number(value);
@@ -457,7 +459,10 @@ function createInitialActionState() {
 
 function summarizeCommand(command) {
   if (!command) return null;
-  return {
+  const revision = Math.max(0, Number(command.summaryRevision || 0));
+  const cached = COMMAND_SUMMARY_CACHE.get(command);
+  if (cached?.revision === revision) return cached.summary;
+  const summary = {
     id: command.id,
     type: command.type,
     dx: command.dx,
@@ -480,6 +485,8 @@ function summarizeCommand(command) {
     movementTelemetry: command.movementTelemetry || null,
     target: command.target || null
   };
+  COMMAND_SUMMARY_CACHE.set(command, { revision, summary });
+  return summary;
 }
 
 function createBrowserlessActionAdapter(options = {}) {
@@ -532,6 +539,7 @@ function createBrowserlessActionAdapter(options = {}) {
     options.afkShootCorrelationOffsetCm ?? DEFAULT_AFK_SHOOT_CORRELATION_OFFSET_CM
   );
   const onShootRequest = typeof options.onShootRequest === 'function' ? options.onShootRequest : null;
+  const shootRequestUsesCommandObject = options.shootRequestUsesCommandObject === true;
   const onShootExecution = typeof options.onShootExecution === 'function' ? options.onShootExecution : null;
   const controlGeneration = String(options.controlGeneration || '');
   const shootRepeatEnabled = options.shootRepeatEnabled === true;
@@ -570,6 +578,7 @@ function createBrowserlessActionAdapter(options = {}) {
   let nextCommandId = 1;
   let nextShootAttemptSequence = 1;
   let activeApplyContext = null;
+  let inactiveMovementStallState = null;
 
   function emitShootExecution(event = {}) {
     const entry = {
@@ -718,27 +727,38 @@ function createBrowserlessActionAdapter(options = {}) {
       observedTick: optionalNumber(ownership.observedTick),
       priority: Number(ownership.priority || 0)
     };
+    command.summaryRevision = Math.max(0, Number(command.summaryRevision || 0)) + 1;
   }
 
   function velocityRequestTiming(atMs, sendOptions = {}) {
-    const context = {
-      ...(activeApplyContext || {}),
-      ...(sendOptions.ownership || {})
-    };
+    const context = activeApplyContext || {};
+    const ownershipOverride = sendOptions.ownership || null;
     const frameReceivedAtMs = optionalNumber(
       sendOptions.frameReceivedAtMs
         ?? sendOptions.observedAtMs
+        ?? ownershipOverride?.frameReceivedAtMs
+        ?? ownershipOverride?.observedAtMs
         ?? context.frameReceivedAtMs
         ?? state.latestObservedAtMs
     );
-    const decisionAtMs = optionalNumber(sendOptions.decisionAtMs ?? context.decisionAtMs) ?? atMs;
+    const decisionAtMs = optionalNumber(
+      sendOptions.decisionAtMs
+        ?? ownershipOverride?.decisionAtMs
+        ?? context.decisionAtMs
+    ) ?? atMs;
     const ownership = {
-      source: String(context.source || 'planner'),
-      band: String(context.band || ''),
-      hardSafety: context.hardSafety === true,
-      observedTick: optionalNumber(sendOptions.observedTick ?? context.observedTick ?? state.latestObservedTick),
-      priority: Number(context.priority || velocityOwnershipPriority(context))
+      source: String(ownershipOverride?.source ?? context.source ?? 'planner'),
+      band: String(ownershipOverride?.band ?? context.band ?? ''),
+      hardSafety: (ownershipOverride?.hardSafety ?? context.hardSafety) === true,
+      observedTick: optionalNumber(
+        sendOptions.observedTick
+          ?? ownershipOverride?.observedTick
+          ?? context.observedTick
+          ?? state.latestObservedTick
+      ),
+      priority: Number(ownershipOverride?.priority ?? context.priority ?? 0)
     };
+    if (!ownership.priority) ownership.priority = velocityOwnershipPriority(ownership);
     return {
       frameReceivedAtMs,
       decisionAtMs,
@@ -832,12 +852,14 @@ function createBrowserlessActionAdapter(options = {}) {
       stallMs: movementSettlementStallMs,
       minDistanceCm: movementSettlementMinDistanceCm
     };
-    return movementStallSummary();
+    inactiveMovementStallState = null;
+    return getMovementStallState().movementStall;
   }
 
   function updateMovementStallIntent(command) {
     const moving = Boolean(Number(command?.dx || 0) || Number(command?.dy || 0));
     if (!moving) return resetMovementStall('stop-command');
+    inactiveMovementStallState = null;
     const atMs = Number(command.sentAtMs || now());
     if (!state.movementStall?.active) {
       const origin = state.latestSelfSample ? { ...state.latestSelfSample } : null;
@@ -876,10 +898,10 @@ function createBrowserlessActionAdapter(options = {}) {
     const sample = movementSelfSample(stateSnapshot);
     if (sample) state.latestSelfSample = sample;
     const stall = state.movementStall;
-    if (!stall?.active) return movementStallSummary(stall);
+    if (!stall?.active) return stall || null;
     if (!sample) {
       stall.reason = 'waiting-for-self';
-      return movementStallSummary(stall);
+      return stall;
     }
     if (!stall.origin) {
       stall.origin = { ...sample };
@@ -887,7 +909,7 @@ function createBrowserlessActionAdapter(options = {}) {
       stall.startedAtMs = Number(stall.startedAtMs || sample.atMs);
       stall.lastProgressAtMs = Number(stall.lastProgressAtMs || sample.atMs);
       stall.reason = 'tracking';
-      return movementStallSummary(stall);
+      return stall;
     }
     const previousSample = stall.latest;
     const frameAdvanced = sample.tick !== null && previousSample?.tick !== null
@@ -906,7 +928,7 @@ function createBrowserlessActionAdapter(options = {}) {
       stall.movedCm = movedCm;
       stall.noProgressMs = 0;
       stall.observedFrames = 0;
-      return movementStallSummary(stall);
+      return stall;
     }
     const noProgressMs = Math.max(0, Number(sample.atMs) - Number(stall.lastProgressAtMs || stall.startedAtMs || sample.atMs));
     const stalled = noProgressMs >= movementSettlementStallMs
@@ -917,7 +939,7 @@ function createBrowserlessActionAdapter(options = {}) {
     stall.movedCm = movedCm;
     stall.noProgressMs = noProgressMs;
     if (stalled) state.lastMovementStall = movementStallSummary(stall);
-    return movementStallSummary(stall);
+    return stall;
   }
 
   function clearVelocityRepeatTimer() {
@@ -1409,7 +1431,7 @@ function createBrowserlessActionAdapter(options = {}) {
     clearShootRepeatTimer();
   }
 
-  function scheduleVelocityRepeat(dx, dy, ownerCommand) {
+  function scheduleVelocityRepeat(dx, dy, ownerCommand, includeSummary = true) {
     if (!velocityRepeatEnabled) {
       cancelVelocityRepeat();
       return null;
@@ -1419,16 +1441,18 @@ function createBrowserlessActionAdapter(options = {}) {
       && String(state.velocityRepeatOwnerCommandId) === String(ownerCommand?.id ?? '')
       && Number(state.velocityRepeatDx) === Number(dx)
       && Number(state.velocityRepeatDy) === Number(dy);
-    if (sameOwner && moving) {
-      state.velocityRepeatUntilMs = Math.max(Number(state.velocityRepeatUntilMs || 0), now() + velocityRepeatHoldMs);
-      state.velocityLogicalRefreshCount += 1;
-      if (state.velocityRepeatTimer) {
-        return {
+    if (sameOwner) {
+      if (moving) {
+        state.velocityRepeatUntilMs = Math.max(Number(state.velocityRepeatUntilMs || 0), now() + velocityRepeatHoldMs);
+        state.velocityLogicalRefreshCount += 1;
+      }
+      if (state.velocityRepeatTimer && (moving || Number(state.velocityStopRepeatsLeft || 0) > 0)) {
+        return includeSummary ? {
           repeatMs: velocityRepeatMs,
-          holdMs: velocityRepeatHoldMs,
-          stopRepeats: 0,
+          holdMs: moving ? velocityRepeatHoldMs : 0,
+          stopRepeats: moving ? 0 : Number(state.velocityStopRepeatsLeft || 0),
           ownerReused: true
-        };
+        } : null;
       }
     }
     clearVelocityRepeatTimer();
@@ -1498,15 +1522,15 @@ function createBrowserlessActionAdapter(options = {}) {
         state.lastVelocityRepeatError = err?.message || String(err);
         return;
       }
-      scheduleNext(run);
+      if (moving || Number(state.velocityStopRepeatsLeft || 0) > 0) scheduleNext(run);
     };
     state.velocityRepeatTimer = setTimeoutFn(run, velocityRepeatMs);
     unrefTimer(state.velocityRepeatTimer);
-    return {
+    return includeSummary ? {
       repeatMs: velocityRepeatMs,
       holdMs: moving ? velocityRepeatHoldMs : 0,
       stopRepeats: moving ? 0 : velocityStopRepeatCount
-    };
+    } : null;
   }
 
   function targetRepeatKey(target) {
@@ -1947,7 +1971,7 @@ function createBrowserlessActionAdapter(options = {}) {
     }
     if (!changed) refreshVelocityOwnership(ownership, last);
     if (!changed && velocityRepeatEnabled && !sendOptions.suppressRepeat) {
-      const repeat = scheduleVelocityRepeat(dx, dy, last);
+      const repeat = scheduleVelocityRepeat(dx, dy, last, sendOptions.repeatSummary !== false);
       state.skippedCount += 1;
       return {
         ok: true,
@@ -1990,6 +2014,7 @@ function createBrowserlessActionAdapter(options = {}) {
       reason,
       sentAtMs: atMs,
       sentAt: new Date(atMs).toISOString(),
+      summaryRevision: 0,
       directionGeneration: Math.max(1, Number(state.velocityDirectionGeneration || 1)),
       ownership: { ...ownership },
       target,
@@ -2040,7 +2065,7 @@ function createBrowserlessActionAdapter(options = {}) {
     }
     const repeat = sendOptions.suppressRepeat
       ? (cancelVelocityRepeat(), null)
-      : scheduleVelocityRepeat(dx, dy, command);
+      : scheduleVelocityRepeat(dx, dy, command, sendOptions.repeatSummary !== false);
     updateMovementStallIntent(command);
     state.velocityOwnership = {
       ...ownership,
@@ -2054,12 +2079,16 @@ function createBrowserlessActionAdapter(options = {}) {
   }
 
   function expirePendingShootCommands(atMs = now()) {
-    const retained = [];
+    const pending = state.pendingShootCommands;
+    let retainedCount = 0;
     for (const command of state.pendingShootCommands) {
       if (Number(atMs) - Number(command.sentAtMs || 0) > Number(state.shootAckTimeoutMs || initialShootAckTimeoutMs)) state.shootUnackedCount += 1;
-      else retained.push(command);
+      else {
+        pending[retainedCount] = command;
+        retainedCount += 1;
+      }
     }
-    state.pendingShootCommands = retained;
+    if (retainedCount !== pending.length) pending.length = retainedCount;
   }
 
   function sendShoot(targetX, targetY, startX, startY, reason, target = null, cadenceMs = combatShootMinIntervalMs, shotMeta = {}) {
@@ -2178,6 +2207,14 @@ function createBrowserlessActionAdapter(options = {}) {
         })
       };
     }
+    const combatShot = shotMeta.combatDecision || null;
+    const combatAim = combatShot?.aim || null;
+    const combatShooting = combatShot?.shooting || null;
+    const routeSelectionMode = shotMeta.coverageSelectionMode
+      ?? combatAim?.routeCoverage?.selection?.mode;
+    const routeSelectionCandidate = combatAim?.routeCoverage?.candidates?.find(candidate => (
+      candidate.hypothesis === combatAim?.routeCoverage?.selected
+    ));
     const command = {
       id: nextCommandId,
       type: 'shoot',
@@ -2192,42 +2229,48 @@ function createBrowserlessActionAdapter(options = {}) {
       sentAtMs: atMs,
       sentAt: new Date(atMs).toISOString(),
       target,
+      commandId: nextCommandId,
+      requestedAtMs: atMs,
+      targetId: targetRepeatKey(target),
       cadenceMs: intervalMs,
       baseCadenceMs: numberOrNull(shotMeta.baseCadenceMs),
       executionCadenceMs: intervalMs,
       advisoryCadenceMs: numberOrNull(shotMeta.advisoryCadenceMs),
       observedTick: numberOrNull(shotMeta.observedTick ?? state.latestObservedTick),
-      aimMode: String(shotMeta.aimMode || ''),
-      hypothesis: String(shotMeta.hypothesis || ''),
-      flightTicks: numberOrNull(shotMeta.flightTicks),
-      routeContextKey: String(shotMeta.routeContextKey || ''),
-      routeCandidate: String(shotMeta.routeCandidate || ''),
-      routeProbability: numberOrNull(shotMeta.routeProbability),
-      predictedDirectionState: String(shotMeta.predictedDirectionState || ''),
-      aimConfidence: numberOrNull(shotMeta.aimConfidence),
-      expectedHitProbability: numberOrNull(shotMeta.expectedHitProbability),
-      predictedShooterX: numberOrNull(shotMeta.predictedShooterX),
-      predictedShooterY: numberOrNull(shotMeta.predictedShooterY),
-      predictedTargetAtCreationX: numberOrNull(shotMeta.predictedTargetAtCreationX),
-      predictedTargetAtCreationY: numberOrNull(shotMeta.predictedTargetAtCreationY),
-      coverageMode: String(shotMeta.coverageMode || ''),
-      coverageSessionId: String(shotMeta.coverageSessionId || ''),
-      coverageSlot: numberOrNull(shotMeta.coverageSlot),
-      coverageSelectedTrajectory: String(shotMeta.coverageSelectedTrajectory || ''),
-      coverageVariant: String(shotMeta.coverageVariant || ''),
-      coverageMassBefore: numberOrNull(shotMeta.coverageMassBefore),
-      coverageMassAfter: numberOrNull(shotMeta.coverageMassAfter),
-      marginalCoverage: numberOrNull(shotMeta.marginalCoverage),
-      hardMarginalCoverage: numberOrNull(shotMeta.hardMarginalCoverage),
-      coverageAimX: numberOrNull(shotMeta.coverageAimX),
-      coverageAimY: numberOrNull(shotMeta.coverageAimY),
-      coverageApplied: shotMeta.coverageApplied === true,
-      coverageBaselineExpectedMissCm: numberOrNull(shotMeta.coverageBaselineExpectedMissCm),
-      coverageSelectedExpectedMissCm: numberOrNull(shotMeta.coverageSelectedExpectedMissCm),
-      coverageExpectedMissImprovementCm: numberOrNull(shotMeta.coverageExpectedMissImprovementCm),
-      coverageImprovementQualified: shotMeta.coverageImprovementQualified === true,
-      coverageSelectionMode: String(shotMeta.coverageSelectionMode || ''),
-      coverageRouteSelectionMode: String(shotMeta.coverageRouteSelectionMode || '')
+      aimMode: String(shotMeta.aimMode ?? combatAim?.mode ?? ''),
+      hypothesis: String(shotMeta.hypothesis ?? combatAim?.motionProbe?.hypothesis ?? ''),
+      flightTicks: numberOrNull(shotMeta.flightTicks ?? combatAim?.flightTicks),
+      routeContextKey: String(shotMeta.routeContextKey ?? combatAim?.routeCoverage?.contextKey ?? ''),
+      routeCandidate: String(shotMeta.routeCandidate ?? combatAim?.routeCoverage?.selected ?? ''),
+      routeProbability: numberOrNull(shotMeta.routeProbability ?? combatShooting?.selectedRouteProbability),
+      predictedDirectionState: String(shotMeta.predictedDirectionState ?? routeSelectionCandidate?.directionState ?? ''),
+      aimConfidence: numberOrNull(shotMeta.aimConfidence ?? combatAim?.confidence),
+      expectedHitProbability: numberOrNull(shotMeta.expectedHitProbability ?? combatShooting?.expectedHitProbability),
+      predictedShooterX: numberOrNull(shotMeta.predictedShooterX ?? combatAim?.predictedShooterOrigin?.x),
+      predictedShooterY: numberOrNull(shotMeta.predictedShooterY ?? combatAim?.predictedShooterOrigin?.y),
+      predictedTargetAtCreationX: numberOrNull(shotMeta.predictedTargetAtCreationX ?? combatAim?.predictedTargetAtCreation?.x),
+      predictedTargetAtCreationY: numberOrNull(shotMeta.predictedTargetAtCreationY ?? combatAim?.predictedTargetAtCreation?.y),
+      coverageMode: String(shotMeta.coverageMode ?? combatAim?.trajectoryCoverage?.mode ?? ''),
+      coverageSessionId: String(shotMeta.coverageSessionId ?? combatAim?.trajectoryCoverage?.sessionId ?? ''),
+      coverageSlot: numberOrNull(shotMeta.coverageSlot ?? combatAim?.trajectoryCoverage?.slot),
+      coverageSelectedTrajectory: String(shotMeta.coverageSelectedTrajectory ?? combatAim?.trajectoryCoverage?.selected?.hypothesis ?? ''),
+      coverageVariant: String(shotMeta.coverageVariant ?? combatAim?.trajectoryCoverage?.selected?.variant ?? ''),
+      coverageMassBefore: numberOrNull(shotMeta.coverageMassBefore ?? combatAim?.trajectoryCoverage?.selected?.coverageMassBefore),
+      coverageMassAfter: numberOrNull(shotMeta.coverageMassAfter ?? combatAim?.trajectoryCoverage?.selected?.coverageMassAfter),
+      marginalCoverage: numberOrNull(shotMeta.marginalCoverage ?? combatAim?.trajectoryCoverage?.selected?.marginalCoverage),
+      hardMarginalCoverage: numberOrNull(shotMeta.hardMarginalCoverage ?? combatAim?.trajectoryCoverage?.selected?.hardMarginalCoverage),
+      coverageAimX: numberOrNull(shotMeta.coverageAimX ?? combatAim?.trajectoryCoverage?.selected?.aimX),
+      coverageAimY: numberOrNull(shotMeta.coverageAimY ?? combatAim?.trajectoryCoverage?.selected?.aimY),
+      coverageApplied: (shotMeta.coverageApplied ?? combatAim?.trajectoryCoverage?.applied) === true,
+      coverageBaselineExpectedMissCm: numberOrNull(shotMeta.coverageBaselineExpectedMissCm ?? combatAim?.trajectoryCoverage?.selected?.baselineExpectedMissCm),
+      coverageSelectedExpectedMissCm: numberOrNull(shotMeta.coverageSelectedExpectedMissCm ?? combatAim?.trajectoryCoverage?.selected?.selectedExpectedMissCm),
+      coverageExpectedMissImprovementCm: numberOrNull(shotMeta.coverageExpectedMissImprovementCm ?? combatAim?.trajectoryCoverage?.selected?.expectedMissImprovementCm),
+      coverageImprovementQualified: (shotMeta.coverageImprovementQualified ?? combatAim?.trajectoryCoverage?.selected?.improvementQualified) === true,
+      coverageSelectionMode: String(routeSelectionMode ?? ''),
+      coverageRouteSelectionMode: String(
+        shotMeta.coverageRouteSelectionMode
+          ?? (combatShot ? (routeSelectionMode === 'legacy-fixed' ? 'legacy-fixed' : 'weighted') : '')
+      )
     };
     nextCommandId += 1;
     state.sentCount += 1;
@@ -2236,7 +2279,7 @@ function createBrowserlessActionAdapter(options = {}) {
     state.pendingShootCommands.push(command);
     if (onShootRequest) {
       try {
-        const telemetry = onShootRequest({
+        const telemetry = onShootRequest(shootRequestUsesCommandObject ? command : {
           commandId: command.id,
           requestId: command.requestId,
           controlGeneration: command.controlGeneration,
@@ -2375,12 +2418,12 @@ function createBrowserlessActionAdapter(options = {}) {
     };
   }
 
-  function transportFailure(...results) {
-    const transportClosed = results.some(result => Boolean(result?.transportClosed));
-    const failed = results.find(result => result?.error);
+  function transportFailure(first, second = null) {
+    const transportClosed = Boolean(first?.transportClosed || second?.transportClosed);
+    const failed = first?.error ? first : (second?.error ? second : null);
     return transportClosed || failed
       ? { transportClosed, error: failed?.error || '' }
-      : {};
+      : NO_TRANSPORT_FAILURE;
   }
 
   function applyDecision(stateSnapshot, decision, applyOptions = {}) {
@@ -2388,11 +2431,13 @@ function createBrowserlessActionAdapter(options = {}) {
     activeApplyContext = actionApplyContext(stateSnapshot, decision, applyOptions);
     try {
       cancelShootRepeat('new-decision');
+      const combat = combatSummaryFromDecision(decision);
+      if (combat) {
+        clearNearCoinContinuation('combat-decision');
+        return applyCombatDecision(stateSnapshot, decision, { combat });
+      }
       const profitAction = profitActionFromDecision(decision);
       if (profitAction?.type !== 'coin') clearNearCoinContinuation('planner-non-coin-action');
-      if (combatSummaryFromDecision(decision)) {
-        return applyCombatDecision(stateSnapshot, decision);
-      }
     const safetyMotion = safetyMotionFromDecision(decision);
     if (safetyMotion) {
       return applySafetyMotionDecision(safetyMotion);
@@ -2851,9 +2896,11 @@ function createBrowserlessActionAdapter(options = {}) {
     const previousApplyContext = activeApplyContext;
     if (!activeApplyContext) activeApplyContext = actionApplyContext(stateSnapshot, decision, applyOptions);
     try {
-      cancelShootRepeat('combat-decision');
-      clearNearCoinContinuation('combat-decision');
-      const combat = combatSummaryFromDecision(decision);
+      if (!previousApplyContext) {
+        cancelShootRepeat('combat-decision');
+        clearNearCoinContinuation('combat-decision');
+      }
+      const combat = applyOptions.combat || combatSummaryFromDecision(decision);
       const self = stateSnapshot?.realtime?.self || combat?.self || null;
       if (!combat?.target) {
         const stopped = stop('combat-live-no-target');
@@ -2871,7 +2918,8 @@ function createBrowserlessActionAdapter(options = {}) {
       roundVelocity(movement.dx),
       roundVelocity(movement.dy),
       movement.reason || 'combat-live-movement',
-      combat.target
+      combat.target,
+      { repeatSummary: false }
     );
     const shooting = combat.shooting || {};
     let shoot = {
@@ -2917,39 +2965,7 @@ function createBrowserlessActionAdapter(options = {}) {
             executionCadenceMs: shooting.executionCadenceMs || shooting.cadenceMs,
             advisoryCadenceMs: shooting.advisoryCadenceMs,
             advisoryReasons: shooting.advisoryCadenceReasons,
-            aimMode: combat.aim?.mode,
-            hypothesis: combat.aim?.motionProbe?.hypothesis,
-            flightTicks: combat.aim?.flightTicks,
-            routeContextKey: combat.aim?.routeCoverage?.contextKey,
-            routeCandidate: combat.aim?.routeCoverage?.selected,
-            routeProbability: combat.shooting?.selectedRouteProbability,
-            predictedDirectionState: combat.aim?.routeCoverage?.candidates?.find(candidate => candidate.hypothesis === combat.aim?.routeCoverage?.selected)?.directionState,
-            aimConfidence: combat.aim?.confidence,
-            expectedHitProbability: combat.shooting?.expectedHitProbability,
-            predictedShooterX: combat.aim?.predictedShooterOrigin?.x,
-            predictedShooterY: combat.aim?.predictedShooterOrigin?.y,
-            predictedTargetAtCreationX: combat.aim?.predictedTargetAtCreation?.x,
-            predictedTargetAtCreationY: combat.aim?.predictedTargetAtCreation?.y,
-            coverageMode: combat.aim?.trajectoryCoverage?.mode,
-            coverageSessionId: combat.aim?.trajectoryCoverage?.sessionId,
-            coverageSlot: combat.aim?.trajectoryCoverage?.slot,
-            coverageSelectedTrajectory: combat.aim?.trajectoryCoverage?.selected?.hypothesis,
-            coverageVariant: combat.aim?.trajectoryCoverage?.selected?.variant,
-            coverageMassBefore: combat.aim?.trajectoryCoverage?.selected?.coverageMassBefore,
-            coverageMassAfter: combat.aim?.trajectoryCoverage?.selected?.coverageMassAfter,
-            marginalCoverage: combat.aim?.trajectoryCoverage?.selected?.marginalCoverage,
-            hardMarginalCoverage: combat.aim?.trajectoryCoverage?.selected?.hardMarginalCoverage,
-            coverageAimX: combat.aim?.trajectoryCoverage?.selected?.aimX,
-            coverageAimY: combat.aim?.trajectoryCoverage?.selected?.aimY,
-            coverageApplied: combat.aim?.trajectoryCoverage?.applied === true,
-            coverageBaselineExpectedMissCm: combat.aim?.trajectoryCoverage?.selected?.baselineExpectedMissCm,
-            coverageSelectedExpectedMissCm: combat.aim?.trajectoryCoverage?.selected?.selectedExpectedMissCm,
-            coverageExpectedMissImprovementCm: combat.aim?.trajectoryCoverage?.selected?.expectedMissImprovementCm,
-            coverageImprovementQualified: combat.aim?.trajectoryCoverage?.selected?.improvementQualified === true,
-            coverageSelectionMode: combat.aim?.routeCoverage?.selection?.mode,
-            coverageRouteSelectionMode: combat.aim?.routeCoverage?.selection?.mode === 'legacy-fixed'
-              ? 'legacy-fixed'
-              : 'weighted'
+            combatDecision: combat
           }
         );
       }
@@ -3108,10 +3124,46 @@ function createBrowserlessActionAdapter(options = {}) {
     };
   }
 
+  function getMovementStallState() {
+    if (!state.movementStall?.active && inactiveMovementStallState) return inactiveMovementStallState;
+    const summary = {
+      movementStall: movementStallSummary(),
+      lastMovementStall: state.lastMovementStall ? { ...state.lastMovementStall } : null
+    };
+    if (!state.movementStall?.active) inactiveMovementStallState = summary;
+    return summary;
+  }
+
+  function getPublicationState() {
+    const movementState = getMovementStallState();
+    return {
+      sentCount: state.sentCount,
+      velocitySentCount: state.velocitySentCount,
+      shootSentCount: state.shootSentCount,
+      shootAcceptedCount: state.shootAcceptedCount,
+      shootUnackedCount: state.shootUnackedCount,
+      pendingShootCount: state.pendingShootCommands.length,
+      velocityRepeatSentCount: state.velocityRepeatSentCount,
+      shootRepeatSentCount: state.shootRepeatSentCount,
+      velocityLogicalRefreshCount: state.velocityLogicalRefreshCount,
+      velocityOwnershipSuppressedCount: state.velocityOwnershipSuppressedCount,
+      velocityRepeatSuppressedCount: state.velocityRepeatSuppressedCount,
+      shootRepeatSuppressedCount: state.shootRepeatSuppressedCount,
+      stopCount: state.stopCount,
+      skippedCount: state.skippedCount,
+      lastSettlement: state.lastSettlement,
+      movementStall: movementState.movementStall,
+      lastMovementStall: movementState.lastMovementStall,
+      lastShootAck: state.lastShootAck
+    };
+  }
+
   return {
     applyDecision,
     applyCombatDecision,
     continueCloseCoinPickup,
+    getMovementStallState,
+    getPublicationState,
     getState,
     observeState,
     sealShooting,

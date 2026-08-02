@@ -1,11 +1,23 @@
 'use strict';
 
+const os = require('os');
 const { parentPort, workerData } = require('worker_threads');
 const { performance } = require('perf_hooks');
 const {
   createBrowserlessDecisionAdapter,
   summarizeBrowserlessDecision
 } = require('./decision-adapter');
+
+// Full profit/route planning is advisory background work. On Linux, keep it
+// below the realtime WebSocket thread so a one-second planner burst consumes
+// frame gaps instead of descheduling safety/combat control on a saturated VPS.
+// A stale result is already discarded by the caller; failure to adjust the
+// thread-local priority is non-fatal on unsupported platforms.
+if (process.platform === 'linux') {
+  try {
+    if (os.getPriority(0) < 10) os.setPriority(0, 10);
+  } catch (_) {}
+}
 
 const adapter = createBrowserlessDecisionAdapter(workerData?.options || {});
 

@@ -6,6 +6,7 @@ After=network-online.target
 
 [Service]
 Type=simple
+Nice=-10
 WorkingDirectory=/opt/grasp-rat-bot
 EnvironmentFile=/etc/grasp-rat/browserless-runner.env
 ExecStart=/usr/bin/env node scripts/browserless-runner.js

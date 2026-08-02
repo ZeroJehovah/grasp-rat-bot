@@ -82,6 +82,7 @@ const {
 } = require('./browserless/decision-state');
 const {
   attachConfirmedLeaveEvidence,
+  createActionPublicationGate,
   createLatestFrameScheduler,
   createCanaryRunId,
   nextCombatControlTickCore,
@@ -105,8 +106,10 @@ const {
 const {
   buildBrowserlessCombatDryRun,
   buildCombatMovementPlan,
+  combatLearningCellCount,
   estimateAim,
-  recordCombatShotLearning
+  recordCombatShotLearning,
+  rememberBrowserlessCombatEngagement
 } = require('./browserless/combat-adapter');
 const {
   movementTransitionModelCore,
@@ -191,6 +194,8 @@ const {
   browserlessCompactStatusSource,
   buildCompactBrowserlessStatus,
   buildPublicBrowserlessStatus,
+  defaultBrowserlessState,
+  mergeLiveActionState,
   mergeLiveState,
   readBrowserlessStateFile,
   reconcileBrowserlessExitKillEvidence,
@@ -6675,6 +6680,146 @@ async function runSelfTest() {
       want: 'true|true|true|true|true|1'
     },
     {
+      name: 'browserless action publication coalesces only identical no-wire skipped results',
+      got: (() => {
+        const gate = createActionPublicationGate({ windowMs: 500 });
+        const base = {
+          ok: true,
+          kind: 'combat-live',
+          reason: 'combat-live-realtime',
+          target: { type: 'enemy', userId: 8 },
+          movement: {
+            ok: true,
+            skipped: true,
+            reason: 'unchanged-command-throttled',
+            command: { id: 4, type: 'velocity', dx: 1, dy: 0, reason: 'combat-spacing' }
+          },
+          shoot: {
+            ok: true,
+            skipped: true,
+            reason: 'shoot-command-throttled',
+            command: { id: 5, type: 'shoot', requestId: 'shot-5' }
+          }
+        };
+        const context = { decision: { band: 'combat', action: { kind: 'combat-live', band: 'combat' } } };
+        const first = gate.evaluate(base, context, 1000);
+        const duplicate = gate.evaluate(base, context, 1200);
+        const beforeBoundary = gate.evaluate(base, context, 1499);
+        const boundary = gate.evaluate(base, context, 1500);
+        const targetChange = gate.evaluate({ ...base, target: { type: 'enemy', userId: 9 } }, context, 1501);
+        const reasonChange = gate.evaluate({ ...base, reason: 'combat-live-close-pressure' }, context, 1502);
+        const movementSend = gate.evaluate({
+          ...base,
+          movement: {
+            ok: true,
+            skipped: false,
+            reason: 'combat-spacing',
+            command: { id: 6, type: 'velocity', dx: -1, dy: 0, reason: 'combat-spacing' }
+          }
+        }, context, 1503);
+        const shootSend = gate.evaluate({
+          ...base,
+          shoot: {
+            ok: true,
+            skipped: false,
+            reason: 'combat-live-shoot',
+            command: { id: 7, type: 'shoot', requestId: 'shot-7' }
+          }
+        }, context, 1504);
+        const afterSend = gate.evaluate(base, context, 1505);
+        const error = gate.evaluate({ ...base, ok: false, error: 'synthetic send failure' }, context, 1506);
+        const stop = {
+          ok: true,
+          kind: 'wait',
+          reason: 'wait-for-recovery',
+          skipped: true,
+          handledBy: 'action-adapter-stop',
+          command: { id: 8, type: 'velocity', dx: 0, dy: 0, reason: 'wait-for-recovery' }
+        };
+        const stopFirst = gate.evaluate(stop, { decision: { band: 'wait' } }, 1507);
+        const stopAgain = gate.evaluate(stop, { decision: { band: 'wait' } }, 1508);
+        const status = gate.status();
+        return [
+          first.publish,
+          duplicate.publish,
+          beforeBoundary.publish,
+          boundary.publish,
+          boundary.coalescedSkippedCount,
+          targetChange.publish,
+          reasonChange.publish,
+          movementSend.publish,
+          shootSend.publish,
+          afterSend.publish,
+          error.publish,
+          stopFirst.publish,
+          stopAgain.publish,
+          status.publishedCount,
+          status.suppressedSkippedCount,
+          status.pendingSuppressedSkippedCount
+        ].join('|');
+      })(),
+      want: 'true|false|false|true|2|true|true|true|true|true|true|true|true|10|2|0'
+    },
+    {
+      name: 'browserless action publication scalar fingerprint preserves normalized key semantics',
+      got: (() => {
+        const gate = createActionPublicationGate({ windowMs: 500 });
+        const base = {
+          ok: true,
+          skipped: true,
+          kind: 'combat-live',
+          reason: 'combat-live-realtime',
+          target: { type: 'enemy', userId: 8 },
+          vector: { dx: 1, dy: 0 },
+          movement: {
+            ok: true,
+            skipped: true,
+            reason: 'unchanged-command-throttled',
+            command: { id: 4, type: 'velocity', dx: 1, dy: 0, reason: 'combat-spacing' }
+          },
+          shoot: {
+            ok: true,
+            skipped: true,
+            reason: 'shoot-command-throttled',
+            command: { id: 5, type: 'shoot', requestId: 9, directionGeneration: 2 },
+            outstanding: { commandId: 5 }
+          }
+        };
+        const context = { decision: { band: 'combat', action: { kind: 'combat-live', band: 'combat' } } };
+        const first = gate.evaluate(base, context, 1000);
+        const normalizedDuplicate = gate.evaluate({
+          ...base,
+          target: { type: 'enemy', userId: '8' },
+          vector: { dx: '1', dy: '0' },
+          movement: {
+            ...base.movement,
+            command: { ...base.movement.command, id: '4', dx: '1', dy: '0' }
+          },
+          shoot: {
+            ...base.shoot,
+            command: {
+              ...base.shoot.command,
+              id: '5',
+              requestId: '9',
+              directionGeneration: '2'
+            },
+            outstanding: { commandId: '5' }
+          }
+        }, context, 1100);
+        const emptyCommandChange = gate.evaluate({ ...base, command: {} }, context, 1101);
+        const status = gate.status();
+        return [
+          first.publish,
+          normalizedDuplicate.publish,
+          emptyCommandChange.publish,
+          emptyCommandChange.reason,
+          status.publishedCount,
+          status.suppressedSkippedCount
+        ].join('|');
+      })(),
+      want: 'true|false|true|skipped-semantic-change|2|1'
+    },
+    {
       name: 'browserless WS scheduler keeps latest pos and snapshot while preserving control frames',
       got: (() => {
         const processed = [];
@@ -7579,6 +7724,43 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'realtime|11|600|realtime|pos|100|2|realtime'
+    },
+    {
+      name: 'browserless state store realtime object reuse matches isolated normalization',
+      got: (() => {
+        const sourceFrame = {
+          type: 'pos',
+          tick: 12,
+          entities: [
+            { entity_id: 1, user_id: 7, name: 'self', x: '100', y: 200, vx: '1', vy: 0, hp: 90, max_hp: 100 },
+            { entity_id: 2, user_id: 8, name: 'other', x: 300, y: 400, vx: 0, vy: 0, hp: 80, max_hp: 100 }
+          ],
+          bullets: [{ bullet_id: 9, owner_user_id: 8, x: 0, y: 0, dir_x: 1, dir_y: 0, speed_per_tick: 500 }],
+          coin_drops: [{ drop_id: 3, x: '400', y: 500, amount: '2' }]
+        };
+        const isolatedFrame = JSON.parse(JSON.stringify(sourceFrame));
+        const reusedFrame = JSON.parse(JSON.stringify(sourceFrame));
+        const isolatedStore = createBrowserlessStateStore({ userId: 7, now: () => 2000 });
+        const reusedStore = createBrowserlessStateStore({
+          userId: 7,
+          now: () => 2000,
+          reuseRealtimeFrameObjects: true
+        });
+        isolatedStore.ingestFrame(isolatedFrame, { receivedAtMs: 1000 });
+        reusedStore.ingestFrame(reusedFrame, { receivedAtMs: 1000 });
+        const isolated = isolatedStore.getDecisionState(1600).realtime;
+        const reused = reusedStore.getDecisionState(1600).realtime;
+        return [
+          isolated.entities[0] === isolatedFrame.entities[0],
+          reused.entities[0] === reusedFrame.entities[0],
+          Object.prototype.hasOwnProperty.call(isolatedFrame.entities[0], 'authority'),
+          reusedFrame.entities[0].authority,
+          reusedFrame.bullets[0].trajectoryObservationCount,
+          reusedFrame.coin_drops[0].amount,
+          JSON.stringify(isolated) === JSON.stringify(reused)
+        ].join('|');
+      })(),
+      want: 'false|true|false|realtime|1|2|true'
     },
     {
       name: 'browserless state store derives bounded bullet trajectory uncertainty and expires history',
@@ -16963,6 +17145,79 @@ async function runSelfTest() {
       want: '8:1000|1000|1200|80|85|5|70|75|5'
     },
     {
+      name: 'browserless combat learning cache invalidates without rescanning unchanged cells',
+      got: (() => {
+        const stateful = {};
+        const target = {
+          userId: 8,
+          name: 'cache-target',
+          distance: 9000,
+          active: true,
+          moving: true,
+          firing: true
+        };
+        const combat = {
+          behavior: { mode: 'mixed/unknown' },
+          aim: { motionProbe: { hypothesis: 'center' } }
+        };
+        const first = recordCombatShotLearning(stateful, target, combat, { nowMs: 1000 });
+        const firstCount = combatLearningCellCount(stateful);
+        const second = recordCombatShotLearning(stateful, target, combat, { nowMs: 1100 });
+        const secondCount = combatLearningCellCount(stateful);
+        return [
+          firstCount,
+          secondCount,
+          Object.keys(stateful.combatLearning.hitRateByModeDistance).length,
+          Number(first.hitRate.toFixed(6)),
+          Number(second.hitRate.toFixed(6)),
+          second.hitRate < first.hitRate
+        ].join('|');
+      })(),
+      want: '1|1|1|0.2|0.167504|true'
+    },
+    {
+      name: 'browserless combat motion history reuses the bounded same-target buffer',
+      got: (() => {
+        const stateful = {};
+        const self = { user_id: 7, x: 0, y: 0, vx: 0, vy: 0, hp: 100, max_hp: 100 };
+        const target = {
+          user_id: 8,
+          name: 'moving-target',
+          x: 1000,
+          y: 0,
+          vx: 20,
+          vy: 0,
+          hp: 100,
+          max_hp: 100,
+          distance: 1000,
+          active: true,
+          moving: true,
+          firing: true
+        };
+        rememberBrowserlessCombatEngagement(stateful, self, target, {
+          nowMs: 1000,
+          currentTick: 10,
+          bullets: [],
+          combatAttackRange: 14500
+        });
+        const firstBuffer = stateful.combatTarget.motionSamples;
+        rememberBrowserlessCombatEngagement(stateful, self, { ...target, x: 1020 }, {
+          nowMs: 1050,
+          currentTick: 11,
+          bullets: [],
+          combatAttackRange: 14500
+        });
+        return [
+          stateful.combatTarget.motionSamples === firstBuffer,
+          firstBuffer.length,
+          firstBuffer[0]?.tick,
+          firstBuffer[1]?.tick,
+          stateful.combatTarget.x
+        ].join('|');
+      })(),
+      want: 'true|2|10|11|1020'
+    },
+    {
       name: 'browserless combat hit metrics credit only recorded shots',
       got: (() => {
         const stateful = {};
@@ -22006,13 +22261,14 @@ async function runSelfTest() {
         t = 1010;
         const stale = adapter.applyDecision({ realtime: { tick: 19, receivedAtMs: 980, self: { x: 0, y: 0 } } }, combatDecision(-1, 'planner-old', false));
         const state = adapter.getState();
+        const publicationState = adapter.getPublicationState();
         return [
           commands.join(','),
           stale.movement.skipped,
           stale.movement.reason,
           state.velocityOwnership.source,
           state.velocityOwnership.observedTick,
-          state.velocityOwnershipSuppressedCount
+          publicationState.velocityOwnershipSuppressedCount
         ].join('|');
       })(),
       want: 'vel 1 0|true|velocity-ownership-superseded|realtime-control|20|1'
@@ -22107,6 +22363,7 @@ async function runSelfTest() {
         t = 1060;
         const switched = adapter.applyDecision({ realtime: { tick: 2, receivedAtMs: 1040, self: { x: 0, y: 0 } } }, decision(-1));
         const state = adapter.getState();
+        const publicationState = adapter.getPublicationState();
         return [
           commands.join(','),
           first.movement.command.directionGeneration,
@@ -22115,7 +22372,7 @@ async function runSelfTest() {
           switched.movement.command.directionGeneration,
           firstTimer.canceled,
           state.velocityRepeatOwnerCommandId,
-          state.velocityLogicalRefreshCount
+          publicationState.velocityLogicalRefreshCount
         ].join('|');
       })(),
       want: 'vel 1 0,vel -1 0|1|1|unchanged-direction-repeat-owned|2|true|2|1'
@@ -22165,16 +22422,66 @@ async function runSelfTest() {
         bufferedAmount = 0;
         recovered.fn();
         const state = adapter.getState();
+        const publicationState = adapter.getPublicationState();
         return [
           commands.join(','),
           state.velocityRepeatSentCount,
-          state.velocityRepeatSuppressedCount,
+          publicationState.velocityRepeatSuppressedCount,
           state.lastRepeatTimerDriftMs,
           state.lastTransportBufferedAmount,
           state.transportHighWaterBytes
         ].join('|');
       })(),
       want: 'vel 1 0,vel 1 0|1|2|0|0|4096'
+    },
+    {
+      name: 'browserless repeated stop reuses the active redundant-stop burst',
+      got: (() => {
+        let t = 1000;
+        const commands = [];
+        const timers = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => t,
+          commandIntervalMs: 1,
+          velocityRepeatEnabled: true,
+          velocityRepeatMs: 50,
+          velocityStopRepeatCount: 3,
+          setTimeout: (fn, ms) => {
+            const timer = { fn, ms, canceled: false };
+            timers.push(timer);
+            return timer;
+          },
+          clearTimeout: timer => {
+            if (timer) timer.canceled = true;
+          },
+          transport: { sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`) }
+        });
+        adapter.stop('idle-hold');
+        const firstTimer = timers[0];
+        t = 1005;
+        const repeated = adapter.stop('idle-hold');
+        let guard = 0;
+        while (timers.length && guard < 10) {
+          guard += 1;
+          const timer = timers.shift();
+          if (!timer || timer.canceled) continue;
+          t += timer.ms;
+          timer.fn();
+        }
+        const state = adapter.getState();
+        t += 1;
+        const rearmed = adapter.stop('idle-hold');
+        return [
+          firstTimer.canceled,
+          repeated.skipped,
+          repeated.repeat.ownerReused,
+          commands.join(','),
+          state.velocityRepeatSentCount,
+          timers.length,
+          rearmed.repeat.ownerReused === true
+        ].join('|');
+      })(),
+      want: 'false|true|true|vel 0 0,vel 0 0,vel 0 0,vel 0 0|3|1|false'
     },
     {
       name: 'browserless action adapter uses tighter dead zone for coins',
@@ -23392,11 +23699,12 @@ async function runSelfTest() {
         t += resumed.ms;
         resumed.fn();
         const state = adapter.getState();
+        const publicationState = adapter.getPublicationState();
         return [
           commands.join(','),
           state.shootSentCount,
           state.shootRepeatSentCount,
-          state.shootRepeatSuppressedCount,
+          publicationState.shootRepeatSuppressedCount,
           state.lastTransportBufferedAmount
         ].join('|');
       })(),
@@ -23802,12 +24110,38 @@ async function runSelfTest() {
             self: { x: 0, y: 0 },
             target: { userId: 8, x: 1000, y: 0, authority: 'realtime' },
             movement: { dx: 1, dy: 0, reason: 'close-in' },
-            aim: { x: 1000, y: 0 },
+            aim: {
+              x: 1000,
+              y: 0,
+              mode: 'predictive-lead',
+              motionProbe: { hypothesis: 'north-probe' },
+              flightTicks: 4,
+              routeCoverage: {
+                contextKey: 'route-context',
+                selected: 'north-probe',
+                candidates: [{ hypothesis: 'north-probe', directionState: 'north' }],
+                selection: { mode: 'legacy-fixed' }
+              },
+              trajectoryCoverage: {
+                mode: 'live-single',
+                sessionId: 'coverage-1',
+                slot: 2,
+                applied: true,
+                selected: {
+                  hypothesis: 'north-probe',
+                  variant: 'lead',
+                  expectedMissImprovementCm: 120,
+                  improvementQualified: true
+                }
+              }
+            },
             shooting: {
               wouldShoot: true,
               commandSuppressed: false,
               reason: 'normal-fire',
-              effectiveCadenceMs: 160
+              effectiveCadenceMs: 160,
+              selectedRouteProbability: 0.75,
+              expectedHitProbability: 0.6
             }
           }
         });
@@ -23828,6 +24162,172 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'combat-live|velocity|shoot|vel 1 0,shoot 1000 0 0 0|2|1|1|44'
+    },
+    {
+      name: 'browserless action adapter preserves internal and external shoot request callback contracts',
+      got: (() => {
+        const stateSnapshot = {
+          realtime: { self: { x: 0, y: 0 }, tick: 7 }
+        };
+        const decision = {
+          kind: 'combat-live',
+          band: 'combat',
+          action: { kind: 'combat-live', band: 'combat', reason: 'combat-live-realtime' },
+          combat: {
+            self: { x: 0, y: 0 },
+            target: { userId: 8, x: 1000, y: 0, authority: 'realtime' },
+            movement: { dx: 1, dy: 0, reason: 'close-in' },
+            aim: {
+              x: 1000,
+              y: 0,
+              mode: 'predictive-lead',
+              motionProbe: { hypothesis: 'north-probe' },
+              flightTicks: 4,
+              routeCoverage: {
+                contextKey: 'route-context',
+                selected: 'north-probe',
+                candidates: [{ hypothesis: 'north-probe', directionState: 'north' }],
+                selection: { mode: 'legacy-fixed' }
+              },
+              trajectoryCoverage: {
+                mode: 'live-single',
+                sessionId: 'coverage-1',
+                slot: 2,
+                applied: true,
+                selected: {
+                  hypothesis: 'north-probe',
+                  variant: 'lead',
+                  expectedMissImprovementCm: 120,
+                  improvementQualified: true
+                }
+              }
+            },
+            shooting: {
+              wouldShoot: true,
+              commandSuppressed: false,
+              reason: 'normal-fire',
+              effectiveCadenceMs: 160,
+              selectedRouteProbability: 0.75,
+              expectedHitProbability: 0.6
+            }
+          }
+        };
+        let internalRequest = null;
+        const store = createBrowserlessStateStore({ userId: 7, now: () => 1000 });
+        const internalAdapter = createBrowserlessActionAdapter({
+          now: () => 1000,
+          commandIntervalMs: 1,
+          combatShootMinIntervalMs: 160,
+          shootRequestUsesCommandObject: true,
+          transport: {
+            sendVelocity: () => {},
+            sendShoot: () => {}
+          },
+          onShootRequest: request => {
+            internalRequest = request;
+            return store.recordShootRequest(request, { returnInternal: true });
+          }
+        });
+        const internalAction = internalAdapter.applyCombatDecision(stateSnapshot, decision);
+        const stored = store.getCommandState(1000).shooting.pendingShots[0];
+
+        let externalRequest = null;
+        let externalShape = null;
+        const externalAdapter = createBrowserlessActionAdapter({
+          now: () => 2000,
+          commandIntervalMs: 1,
+          combatShootMinIntervalMs: 160,
+          transport: {
+            sendVelocity: () => {},
+            sendShoot: () => {}
+          },
+          onShootRequest: request => {
+            externalRequest = request;
+            externalShape = [
+              Object.prototype.hasOwnProperty.call(request, 'id'),
+              Object.prototype.hasOwnProperty.call(request, 'type'),
+              Object.prototype.hasOwnProperty.call(request, 'sentAtMs')
+            ];
+            request.type = 'mutated';
+            request.targetX = 9999;
+          }
+        });
+        const externalAction = externalAdapter.applyDecision(stateSnapshot, decision);
+        return [
+          internalRequest.id === internalRequest.commandId,
+          internalRequest.sentAtMs === internalRequest.requestedAtMs,
+          internalRequest.targetId,
+          stored.commandId === internalAction.shoot.command.id,
+          stored.requestedAtMs === internalAction.shoot.command.sentAtMs,
+          stored.predictedDirectionState,
+          stored.coverageApplied,
+          stored.coverageExpectedMissImprovementCm,
+          stored.coverageRouteSelectionMode,
+          externalShape[0],
+          externalShape[1],
+          externalShape[2],
+          externalRequest.targetX,
+          externalAction.shoot.command.type,
+          externalAction.shoot.command.targetX
+        ].join('|');
+      })(),
+      want: 'true|true|8|true|true|north|true|120|legacy-fixed|false|false|false|9999|shoot|1000'
+    },
+    {
+      name: 'browserless state store preserves external callback isolation while internal action callbacks reuse entries',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7, now: () => 1000 });
+        let externalListenerEntry = null;
+        store.setShootExecutionListener(entry => {
+          externalListenerEntry = entry;
+          entry.outcome = 'listener-mutated';
+        });
+        const external = store.recordShootExecution({
+          type: 'shoot-skip',
+          atMs: 1000,
+          requestId: 'external-1',
+          outcome: 'skipped'
+        });
+        external.outcome = 'return-mutated';
+        const externalStored = store.getCommandState(1000).shooting.executionEvents.at(-1);
+
+        let internalListenerEntry = null;
+        store.setShootExecutionListener(entry => {
+          internalListenerEntry = entry;
+        });
+        const internal = store.recordShootExecution({
+          type: 'shoot-skip',
+          atMs: 1001,
+          requestId: 'internal-1',
+          outcome: 'skipped'
+        }, {
+          returnInternal: true,
+          listenerUsesInternal: true
+        });
+        const velocityInternal = store.recordVelocityRequest({
+          commandId: 9,
+          dx: 1,
+          dy: 0,
+          requestedAtMs: 1001
+        }, { returnInternal: true });
+        const velocityExternal = store.recordVelocityRequest({
+          commandId: 10,
+          dx: 0,
+          dy: 1,
+          requestedAtMs: 1002
+        });
+        velocityExternal.reason = 'mutated';
+        const movement = store.getDecisionState(1002).command.movement.pendingVelocityCommands;
+        return [
+          externalListenerEntry === external,
+          externalStored.outcome,
+          internalListenerEntry === internal,
+          internal.requestId,
+          velocityInternal.commandId,
+          movement.find(command => command.commandId === 10)?.reason || ''
+        ].join('|');
+      })(),
+      want: 'false|skipped|true|internal-1|9|'
     },
     {
       name: 'browserless active combat keeps normal multi-pending cadence without AFK ACK pacing',
@@ -26128,7 +26628,15 @@ async function runSelfTest() {
             now: () => Date.UTC(2026, 6, 8, 1, 0, 0),
             backgroundIo
           });
-          const queued = store.append('runner', 'background-test', { token: 'secret-token', ok: true });
+          const queued = store.append('runner', 'background-test', {
+            token: 'secret-token',
+            authorization: { nested: 'secret-authorization' },
+            nested: {
+              url: 'https://x.test/?secret=secret-url',
+              bearer: 'Bearer secret-bearer'
+            },
+            ok: true
+          });
           const jsonFile = path.join(dir, 'state', 'test.json');
           backgroundIo.writeJsonAtomic(jsonFile, { value: 7 });
           const patchFile = path.join(dir, 'state', 'patch.json');
@@ -26185,6 +26693,7 @@ async function runSelfTest() {
           }, { statusHost: '127.0.0.1', statusPort: 18767, webToken: 'present' }, true);
           const flushed = await store.flush();
           const logText = fs.readFileSync(queued.file, 'utf8');
+          const logEntry = JSON.parse(logText.trim());
           const json = JSON.parse(fs.readFileSync(jsonFile, 'utf8'));
           const patched = JSON.parse(fs.readFileSync(patchFile, 'utf8'));
           const combatPatched = JSON.parse(fs.readFileSync(combatFile, 'utf8'));
@@ -26194,7 +26703,10 @@ async function runSelfTest() {
             flushed.ok,
             flushed.pending,
             logText.includes('[redacted]'),
-            !logText.includes('secret-token'),
+            logEntry.detail.authorization,
+            logEntry.detail.nested.url.includes('[redacted]'),
+            logEntry.detail.nested.bearer.includes('[redacted]'),
+            !/secret-token|secret-authorization|secret-url|secret-bearer/.test(logText),
             json.value,
             patched.players.old === undefined,
             patched.players.fresh?.score,
@@ -26213,7 +26725,7 @@ async function runSelfTest() {
           await backgroundIo.close();
         }
       }),
-      want: 'true|0|true|true|7|true|2|true|5|9|3|true|5|true|true|true|true'
+      want: 'true|0|true|[redacted]|true|true|true|7|true|2|true|5|9|3|true|5|true|true|true|true'
     },
     {
       name: 'browserless background IO continues after one operation failure',
@@ -26382,14 +26894,19 @@ async function runSelfTest() {
       got: (() => {
         const session = { userId: 7, authenticated: true };
         const action = { kind: 'wait', reason: 'old' };
-        const decision = { kind: 'profit-candidate', action: { kind: 'seek-coin' } };
+        const combat = { target: { userId: 8 }, shooting: { wouldShoot: true } };
+        const decision = { kind: 'profit-candidate', action: { kind: 'seek-coin' }, combat };
         const base = {
           session,
-          current: { action, decision: { kind: 'wait' } },
+          current: {
+            action,
+            decision: { kind: 'wait' },
+            combatSummary: { target: { userId: 9 }, stale: true }
+          },
           stats: { currentSession: { online: true, coinsGained: 3 } }
         };
         const merged = mergeLiveState(base, {
-          current: { decision },
+          current: { decision, combatSummary: combat },
           stats: { currentSession: { coinsGained: 4 } }
         });
         return [
@@ -26398,12 +26915,91 @@ async function runSelfTest() {
           merged.current !== base.current,
           merged.current.action === action,
           merged.current.decision === decision,
+          merged.current.combatSummary === decision.combat,
+          Object.prototype.hasOwnProperty.call(merged.current.combatSummary, 'stale'),
           merged.stats.currentSession.online,
           merged.stats.currentSession.coinsGained,
           base.stats.currentSession.coinsGained
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|4|3'
+      want: 'true|true|true|true|true|true|false|true|4|3'
+    },
+    {
+      name: 'browserless live action publication shares one replace-only snapshot',
+      got: (() => {
+        const session = { userId: 7, authenticated: true };
+        const previousAction = { kind: 'wait', reason: 'old' };
+        const actionSnapshot = { kind: 'stop', reason: 'idle-hold', actionState: { stopCount: 1 } };
+        const battlePresentation = { targetKey: 'player:8' };
+        const base = {
+          updatedAt: 'old',
+          session,
+          runner: { running: true, currentAction: previousAction },
+          current: { action: previousAction, battlePresentation },
+          stats: { currentSession: { online: true } }
+        };
+        const merged = mergeLiveActionState(base, actionSnapshot, {
+          updatedAt: '2026-08-02T00:00:00.000Z',
+          battlePresentation
+        });
+        return [
+          merged !== base,
+          merged.session === session,
+          merged.runner !== base.runner,
+          merged.current !== base.current,
+          merged.runner.currentAction === actionSnapshot,
+          merged.current.action === actionSnapshot,
+          merged.current.battlePresentation === battlePresentation,
+          merged.stats === base.stats,
+          base.runner.currentAction === previousAction,
+          merged.updatedAt
+        ].join('|');
+      })(),
+      want: 'true|true|true|true|true|true|true|true|true|2026-08-02T00:00:00.000Z'
+    },
+    {
+      name: 'browserless normalized live stats update matches defensive normalization',
+      got: (() => {
+        const startedAt = Date.parse('2026-08-02T00:00:00.000Z');
+        const decision = atMs => ({
+          at: new Date(atMs).toISOString(),
+          tick: Math.round(atMs / 1000),
+          input: {
+            self: {
+              userId: 7,
+              drop: 100,
+              stamina1dRemainingMilli: 19000000,
+              stamina1dLimitMilli: 20000000
+            },
+            stamina: {
+              stamina1dRemainingMilli: 19000000,
+              stamina1dLimitMilli: 20000000
+            },
+            realtime: { tick: Math.round(atMs / 1000) },
+            coinPickups: [],
+            selfKillEvidence: []
+          }
+        });
+        const state = defaultBrowserlessState();
+        state.session.userId = 7;
+        state.stats = browserlessStatsForDecision(state, decision(startedAt), { nowMs: startedAt });
+        const originalLastSeenAt = state.stats.currentSession.lastSeenAt;
+        const nextAt = startedAt + 1000;
+        const defensive = browserlessStatsForDecision(state, decision(nextAt), { nowMs: nextAt });
+        const live = browserlessStatsForDecision(state, decision(nextAt), {
+          nowMs: nextAt,
+          assumeNormalized: true
+        });
+        return [
+          JSON.stringify(live) === JSON.stringify(defensive),
+          live !== state.stats,
+          live.currentSession !== state.stats.currentSession,
+          live.today !== state.stats.today,
+          state.stats.currentSession.lastSeenAt === originalLastSeenAt,
+          live.currentSession.lastSeenAt
+        ].join('|');
+      })(),
+      want: 'true|true|true|true|true|2026-08-02T00:00:01.000Z'
     },
     {
       name: 'browserless log retention keeps today and yesterday by UTC+8 day',
@@ -27313,6 +27909,7 @@ async function runSelfTest() {
           unit.includes('Description=Grasp Rat Browserless Runner'),
           unit.includes('EnvironmentFile=/etc/grasp-rat/browserless-runner.env'),
           unit.includes('ExecStart=/usr/bin/env node scripts/browserless-runner.js'),
+          unit.includes('Nice=-10'),
           unit.includes('TimeoutStopSec=infinity'),
           unit.includes('ReadWritePaths=/var/lib/grasp-rat-browserless /var/log/grasp-rat-browserless'),
           env.includes('GRASP_RAT_BROWSERLESS_DATA_DIR=/var/lib/grasp-rat-browserless'),
@@ -27358,7 +27955,7 @@ async function runSelfTest() {
           installer.includes('systemctl daemon-reload')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless deployment audit checks installed service evidence',
@@ -27380,6 +27977,7 @@ async function runSelfTest() {
           `WorkingDirectory=${appDir}`,
           `EnvironmentFile=${envPath}`,
           'ExecStart=/usr/bin/env node scripts/browserless-runner.js',
+          'Nice=-10',
           'Restart=on-failure',
           'TimeoutStopSec=infinity',
           `ReadWritePaths=${dataDir} ${logDir}`,

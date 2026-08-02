@@ -116,5 +116,6 @@ Runtime directories:
 Next commands:
   sudo systemctl start $SERVICE_NAME
   sudo systemctl status $SERVICE_NAME
+  systemctl show $SERVICE_NAME -p Nice
   sudo journalctl -u $SERVICE_NAME -n 120 --no-pager
 EOF

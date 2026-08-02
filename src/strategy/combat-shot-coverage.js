@@ -298,30 +298,38 @@ function buildCandidateShotForPath(path, input = {}, options = {}) {
   const bulletSpeed = Math.max(1, Number(options.bulletSpeedCmPerTick ?? DEFAULT_BULLET_SPEED_CM_PER_TICK));
   const lifetime = Math.max(1, Math.min(path.points.length - 1, Math.round(Number(options.bulletLifetimeTicks ?? DEFAULT_BULLET_LIFETIME_TICKS))));
   const origin = input.predictedShooterOrigin;
-  let best = null;
+  let bestTick = 0;
+  let bestTargetPoint = null;
+  let bestRadialGap = Infinity;
   for (let tick = 1; tick <= lifetime; tick += 1) {
     const targetPoint = pointAt(path, tick);
     const distance = Math.hypot(Number(targetPoint.x) - Number(origin.x), Number(targetPoint.y) - Number(origin.y));
     const radialGap = Math.abs(distance - bulletSpeed * tick);
-    if (!best || radialGap < best.radialGap) best = { tick, targetPoint, radialGap, distance };
+    if (radialGap < bestRadialGap) {
+      bestTick = tick;
+      bestTargetPoint = targetPoint;
+      bestRadialGap = radialGap;
+    }
   }
-  if (!best) return null;
-  const direction = normalizeVector(Number(best.targetPoint.x) - Number(origin.x), Number(best.targetPoint.y) - Number(origin.y));
-  if (!(direction.length > 0)) return null;
+  if (!bestTargetPoint) return null;
+  const directionDx = Number(bestTargetPoint.x) - Number(origin.x);
+  const directionDy = Number(bestTargetPoint.y) - Number(origin.y);
+  const directionLength = Math.hypot(directionDx, directionDy);
+  if (!(directionLength > 0)) return null;
   return {
     id: path.id,
     hypothesis: path.cluster,
     variant: path.variant,
-    aimX: Number(best.targetPoint.x),
-    aimY: Number(best.targetPoint.y),
+    aimX: Number(bestTargetPoint.x),
+    aimY: Number(bestTargetPoint.y),
     startX: Number(origin.x),
     startY: Number(origin.y),
     startTick: Number(input.createdTick || 0),
     expireTick: Number(input.createdTick || 0) + lifetime,
-    directionX: direction.x,
-    directionY: direction.y,
-    interceptTick: best.tick,
-    radialGapCm: best.radialGap,
+    directionX: directionDx / directionLength,
+    directionY: directionDy / directionLength,
+    interceptTick: bestTick,
+    radialGapCm: bestRadialGap,
     routeProbability: path.weight,
     directionState: path.directionState || null
   };
@@ -347,17 +355,23 @@ function shotCorridorMissCore(shot, path, input = {}, options = {}) {
   const expireTick = Number.isFinite(Number(shot.expireTick))
     ? Number(shot.expireTick)
     : startTick + Math.max(1, Number(options.bulletLifetimeTicks || DEFAULT_BULLET_LIFETIME_TICKS));
-  const direction = Number.isFinite(Number(shot.directionX)) && Number.isFinite(Number(shot.directionY))
-    ? normalizeVector(Number(shot.directionX), Number(shot.directionY))
-    : normalizeVector(Number(shot.aimX) - Number(shot.startX), Number(shot.aimY) - Number(shot.startY));
-  if (!(direction.length > 0)) return Infinity;
+  const rawDirectionX = Number.isFinite(Number(shot.directionX)) && Number.isFinite(Number(shot.directionY))
+    ? Number(shot.directionX)
+    : Number(shot.aimX) - Number(shot.startX);
+  const rawDirectionY = Number.isFinite(Number(shot.directionX)) && Number.isFinite(Number(shot.directionY))
+    ? Number(shot.directionY)
+    : Number(shot.aimY) - Number(shot.startY);
+  const directionLength = Math.hypot(rawDirectionX, rawDirectionY);
+  if (!(directionLength > 0)) return Infinity;
+  const directionX = rawDirectionX / directionLength;
+  const directionY = rawDirectionY / directionLength;
   let minimum = Infinity;
   for (let relativeTick = 0; relativeTick < path.points.length; relativeTick += 1) {
     const absoluteTick = planCreatedTick + relativeTick;
     if (absoluteTick < startTick || absoluteTick > expireTick) continue;
     const elapsed = absoluteTick - startTick;
-    const bulletX = Number(shot.startX) + direction.x * bulletSpeed * elapsed;
-    const bulletY = Number(shot.startY) + direction.y * bulletSpeed * elapsed;
+    const bulletX = Number(shot.startX) + directionX * bulletSpeed * elapsed;
+    const bulletY = Number(shot.startY) + directionY * bulletSpeed * elapsed;
     const targetPoint = path.points[relativeTick];
     minimum = Math.min(minimum, Math.hypot(bulletX - targetPoint.x, bulletY - targetPoint.y));
   }

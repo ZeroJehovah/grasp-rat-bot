@@ -98,13 +98,33 @@ function redactStructuredSecrets(value, depth = 0) {
   if (typeof value !== 'object') return value;
   const output = {};
   for (const [key, item] of Object.entries(value)) {
-    if (/^(?:code|token|sessionToken|session_token|tmpGameSessionToken|cookie|set-cookie|authorization)$/i.test(key)) {
+    if (JSON_SECRET_KEY_RE.test(key)) {
       output[key] = '[redacted]';
     } else {
       output[key] = redactStructuredSecrets(item, depth + 1);
     }
   }
   return output;
+}
+
+const JSON_SECRET_KEY_RE = /^(?:code|token|sessionToken|session_token|tmpGameSessionToken|cookie|set-cookie|authorization)$/i;
+const JSON_STRING_SECRET_TRIGGER_RE = /(?:[?&]|&amp;)(?:code|token|session|auth|secret)[^=]*=|(?:auth\.session-token|cf_clearance|_cfuvid|__stripe_mid)=|\bBearer\s+/i;
+
+function redactJsonReplacer(key, item) {
+  if (key && JSON_SECRET_KEY_RE.test(key)) return '[redacted]';
+  if (typeof item === 'string' && JSON_STRING_SECRET_TRIGGER_RE.test(item)) {
+    return redactSecrets(item);
+  }
+  return item;
+}
+
+// Background log payloads are already structured-cloned by Worker transport.
+// Serialize and redact in one pass instead of recursively cloning the full
+// object a second time. Ordinary strings avoid all replacement regexes after
+// one cheap trigger test; secret-valued keys are still replaced regardless of
+// whether their value is a string, number, array, or object.
+function stringifyRedactedJson(value, space = undefined) {
+  return JSON.stringify(value, redactJsonReplacer, space);
 }
 
 async function fetchWithTimeout(url, options = {}) {
@@ -896,6 +916,7 @@ module.exports = {
   submitApproveCurl,
   submitCallbackInput,
   submitGameCallbackUrl,
+  stringifyRedactedJson,
   summarizeLoginPayload,
   summarizeSnapshotFreshness,
   summarizeSnapshotPayload,

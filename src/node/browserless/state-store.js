@@ -2,6 +2,8 @@
 
 const { summarizeGrzShotAck } = require('../../shared/grz-frame');
 
+const EMPTY_ARRAY = Object.freeze([]);
+
 function cloneJson(value) {
   if (value === null || value === undefined) return value;
   return JSON.parse(JSON.stringify(value));
@@ -49,17 +51,34 @@ function hasCoinDropArrayField(frame) {
 }
 
 function coinDropArraysFromFrame(frame) {
-  if (!frame || typeof frame !== 'object') return [];
-  const arrays = [];
+  if (!frame || typeof frame !== 'object') return EMPTY_ARRAY;
+  let drops = null;
   for (const field of COIN_DROP_ARRAY_FIELDS) {
     const value = frame[field];
-    if (Array.isArray(value)) arrays.push(...value);
+    if (!Array.isArray(value)) continue;
+    if (drops === null) drops = value;
+    else if (drops === value) continue;
+    else if (drops.length === 0) drops = value;
+    else if (value.length > 0) drops = [...drops, ...value];
   }
-  return arrays;
+  return drops && drops.length ? drops : EMPTY_ARRAY;
 }
 
-function normalizeEntity(entity, meta) {
+function normalizeEntity(entity, meta, reuse = false) {
   if (!entity || typeof entity !== 'object') return null;
+  if (reuse) {
+    if (typeof entity.x !== 'number' || !Number.isFinite(entity.x)) entity.x = numericOrNull(entity.x);
+    if (typeof entity.y !== 'number' || !Number.isFinite(entity.y)) entity.y = numericOrNull(entity.y);
+    if (typeof entity.vx !== 'number' || !Number.isFinite(entity.vx)) entity.vx = numericOrNull(entity.vx);
+    if (typeof entity.vy !== 'number' || !Number.isFinite(entity.vy)) entity.vy = numericOrNull(entity.vy);
+    if (typeof entity.hp !== 'number' || !Number.isFinite(entity.hp)) entity.hp = numericOrNull(entity.hp);
+    if (typeof entity.max_hp !== 'number' || !Number.isFinite(entity.max_hp)) entity.max_hp = numericOrNull(entity.max_hp);
+    entity.authority = meta.authority;
+    entity.source = meta.source;
+    entity.tick = meta.tick;
+    entity.receivedAtMs = meta.receivedAtMs;
+    return entity;
+  }
   return {
     ...entity,
     x: numericOrNull(entity.x),
@@ -75,8 +94,15 @@ function normalizeEntity(entity, meta) {
   };
 }
 
-function normalizeBullet(bullet, meta) {
+function normalizeBullet(bullet, meta, reuse = false) {
   if (!bullet || typeof bullet !== 'object') return null;
+  if (reuse) {
+    bullet.authority = meta.authority;
+    bullet.source = meta.source;
+    bullet.tick = meta.tick;
+    bullet.receivedAtMs = meta.receivedAtMs;
+    return bullet;
+  }
   return {
     ...bullet,
     authority: meta.authority,
@@ -125,7 +151,7 @@ function bulletDirectionAndSpeed(bullet) {
 
 function bulletTrajectorySummary(history) {
   const observations = Array.isArray(history?.observations) ? history.observations : [];
-  const residuals = [];
+  let residualCm = 0;
   let largestGapTicks = 1;
   for (let index = 1; index < observations.length; index += 1) {
     const previous = observations[index - 1];
@@ -135,10 +161,12 @@ function bulletTrajectorySummary(history) {
     if ([previous.x, previous.y, current.x, current.y, current.dx, current.dy, current.speed].every(Number.isFinite)) {
       const predictedX = Number(previous.x) + Number(current.dx) * Number(current.speed) * tickGap;
       const predictedY = Number(previous.y) + Number(current.dy) * Number(current.speed) * tickGap;
-      residuals.push(Math.hypot(Number(current.x) - predictedX, Number(current.y) - predictedY));
+      residualCm = Math.max(
+        residualCm,
+        Math.hypot(Number(current.x) - predictedX, Number(current.y) - predictedY)
+      );
     }
   }
-  const residualCm = residuals.length ? Math.max(...residuals.slice(-4)) : 0;
   const insufficientObservation = observations.length < 3;
   const uncertaintyCm = Math.min(260, Math.max(
     residualCm,
@@ -154,8 +182,18 @@ function bulletTrajectorySummary(history) {
   };
 }
 
-function normalizeCoinDrop(drop, meta) {
+function normalizeCoinDrop(drop, meta, reuse = false) {
   if (!drop || typeof drop !== 'object') return null;
+  if (reuse) {
+    if (typeof drop.x !== 'number' || !Number.isFinite(drop.x)) drop.x = numericOrNull(drop.x);
+    if (typeof drop.y !== 'number' || !Number.isFinite(drop.y)) drop.y = numericOrNull(drop.y);
+    if (typeof drop.amount !== 'number' || !Number.isFinite(drop.amount)) drop.amount = numericOrNull(drop.amount);
+    drop.authority = meta.authority;
+    drop.source = meta.source;
+    drop.tick = meta.tick;
+    drop.receivedAtMs = meta.receivedAtMs;
+    return drop;
+  }
   return {
     ...drop,
     x: numericOrNull(drop.x),
@@ -503,6 +541,7 @@ function createInitialState(userId = 0, controlGeneration = '') {
 
 function createBrowserlessStateStore(options = {}) {
   const now = typeof options.now === 'function' ? options.now : Date.now;
+  const reuseRealtimeFrameObjects = options.reuseRealtimeFrameObjects === true;
   let shootExecutionListener = typeof options.onShootExecution === 'function'
     ? options.onShootExecution
     : null;
@@ -514,6 +553,47 @@ function createBrowserlessStateStore(options = {}) {
     String(reason || 'start').replace(/[^\w.-]+/g, '_').slice(0, 32)
   ].join(':');
   const state = createInitialState(options.userId, nextControlGeneration('start'));
+  let shotTimingCache = { samples: null, value: null };
+  let shotAckTimeoutCache = { samples: null, value: null };
+  let shotOriginCache = { samples: null, value: null };
+  let movementTimingCache = { samples: null, transitions: null, value: null };
+
+  function currentShotTimingSummary() {
+    const samples = state.command.delaySamples;
+    if (shotTimingCache.samples !== samples) {
+      shotTimingCache = { samples, value: shotTimingSummary(samples) };
+    }
+    return shotTimingCache.value;
+  }
+
+  function currentShotAckTimeoutMs() {
+    const samples = state.command.ackLatencySamples;
+    if (shotAckTimeoutCache.samples !== samples) {
+      shotAckTimeoutCache = { samples, value: shotAckTimeoutMs(samples) };
+    }
+    return shotAckTimeoutCache.value;
+  }
+
+  function currentShotOriginSummary() {
+    const samples = state.command.originErrorSamples;
+    if (shotOriginCache.samples !== samples) {
+      shotOriginCache = { samples, value: shotOriginSummary(samples) };
+    }
+    return shotOriginCache.value;
+  }
+
+  function currentMovementTimingSummary() {
+    const movement = state.command.movement;
+    if (movementTimingCache.samples !== movement.delaySamples
+      || movementTimingCache.transitions !== movement.actualTransitions) {
+      movementTimingCache = {
+        samples: movement.delaySamples,
+        transitions: movement.actualTransitions,
+        value: movementTimingSummary(movement.delaySamples, movement.actualTransitions)
+      };
+    }
+    return movementTimingCache.value;
+  }
 
   function setUserId(userId) {
     state.userId = Number(userId || 0);
@@ -537,7 +617,7 @@ function createBrowserlessStateStore(options = {}) {
     return String(state.command.controlGeneration || '');
   }
 
-  function recordShootExecution(event = {}) {
+  function recordShootExecution(event = {}, optionsForRecord = {}) {
     const entry = {
       sequence: state.command.nextExecutionSequence++,
       type: String(event.type || 'shoot-execution'),
@@ -556,13 +636,17 @@ function createBrowserlessStateStore(options = {}) {
       observedTick: optionalNumericOrNull(event.observedTick)
     };
     state.command.shootExecutionEvents.push(entry);
-    state.command.shootExecutionEvents = state.command.shootExecutionEvents.slice(-128);
+    if (state.command.shootExecutionEvents.length > 128) {
+      state.command.shootExecutionEvents.splice(0, state.command.shootExecutionEvents.length - 128);
+    }
     if (shootExecutionListener) {
       try {
-        shootExecutionListener(cloneJson(entry));
+        shootExecutionListener(
+          optionsForRecord.listenerUsesInternal === true ? entry : cloneJson(entry)
+        );
       } catch (_) {}
     }
-    return cloneJson(entry);
+    return optionsForRecord.returnInternal === true ? entry : cloneJson(entry);
   }
 
   function setShootExecutionListener(listener) {
@@ -610,24 +694,37 @@ function createBrowserlessStateStore(options = {}) {
     const bullets = Array.isArray(frame.bullets) ? frame.bullets : [];
     const coinDrops = coinDropArraysFromFrame(frame);
     const coinDropsObserved = hasCoinDropArrayField(frame);
-    const normalizedEntities = entities
-      .map(entity => normalizeEntity(entity, { ...meta, authority: 'realtime', source: 'pos' }))
-      .filter(Boolean);
-    const entitiesByKey = {};
+    const frameMeta = {
+      receivedAtMs: meta.receivedAtMs,
+      tick: meta.tick,
+      authority: 'realtime',
+      source: 'pos'
+    };
+    const normalizedEntities = reuseRealtimeFrameObjects ? entities : [];
     const entitiesByUserId = {};
-    for (const entity of normalizedEntities) {
-      const key = entityKey(entity);
-      if (key) entitiesByKey[key] = entity;
+    let self = null;
+    let normalizedEntityCount = 0;
+    for (const rawEntity of entities) {
+      const entity = normalizeEntity(rawEntity, frameMeta, reuseRealtimeFrameObjects);
+      if (!entity) continue;
+      if (reuseRealtimeFrameObjects) normalizedEntities[normalizedEntityCount] = entity;
+      else normalizedEntities.push(entity);
+      normalizedEntityCount += 1;
       const userId = entity?.user_id ?? entity?.userId;
-      if (userId !== null && userId !== undefined && userId !== '') entitiesByUserId[String(userId)] = entity;
+      if (userId !== null && userId !== undefined && userId !== '') entitiesByUserId[userId] = entity;
+      if (Number(userId) === Number(state.userId)) self = entity;
+    }
+    if (reuseRealtimeFrameObjects && normalizedEntityCount !== normalizedEntities.length) {
+      normalizedEntities.length = normalizedEntityCount;
     }
     state.realtime.tick = meta.tick;
     state.realtime.receivedAtMs = meta.receivedAtMs;
     state.realtime.entities = normalizedEntities;
-    state.realtime.entitiesByKey = entitiesByKey;
     state.realtime.entitiesByUserId = entitiesByUserId;
     const trajectoryTtlMs = 2000;
-    for (const [key, history] of Object.entries(state.realtime.bulletTrajectories)) {
+    for (const key in state.realtime.bulletTrajectories) {
+      if (!Object.prototype.hasOwnProperty.call(state.realtime.bulletTrajectories, key)) continue;
+      const history = state.realtime.bulletTrajectories[key];
       if (meta.receivedAtMs - Number(history.lastSeenAtMs || 0) > trajectoryTtlMs) delete state.realtime.bulletTrajectories[key];
     }
     for (const bullet of bullets) {
@@ -638,38 +735,65 @@ function createBrowserlessStateStore(options = {}) {
       const y = numericOrNull(bullet.y ?? bullet.current_y ?? bullet.currentY);
       const direction = bulletDirectionAndSpeed(bullet);
       if (x !== null && y !== null && meta.tick !== null) {
-        current.observations = current.observations.concat([{
+        current.observations.push({
           tick: meta.tick,
           atMs: meta.receivedAtMs,
           x,
           y,
           ...direction
-        }]).slice(-5);
+        });
+        if (current.observations.length > 5) {
+          current.observations.splice(0, current.observations.length - 5);
+        }
       }
       current.lastSeenAtMs = meta.receivedAtMs;
       state.realtime.bulletTrajectories[key] = current;
     }
-    const retainedTrajectoryKeys = Object.entries(state.realtime.bulletTrajectories)
-      .sort((a, b) => Number(b[1].lastSeenAtMs || 0) - Number(a[1].lastSeenAtMs || 0))
-      .slice(0, 32)
-      .map(([key]) => key);
-    const retainedTrajectoryKeySet = new Set(retainedTrajectoryKeys);
-    for (const key of Object.keys(state.realtime.bulletTrajectories)) {
-      if (!retainedTrajectoryKeySet.has(key)) delete state.realtime.bulletTrajectories[key];
+    const trajectoryKeys = Object.keys(state.realtime.bulletTrajectories);
+    if (trajectoryKeys.length > 32) {
+      trajectoryKeys.sort((left, right) => (
+        Number(state.realtime.bulletTrajectories[right]?.lastSeenAtMs || 0)
+          - Number(state.realtime.bulletTrajectories[left]?.lastSeenAtMs || 0)
+      ));
+      const retainedTrajectoryKeySet = new Set(trajectoryKeys.slice(0, 32));
+      for (const key of trajectoryKeys) {
+        if (!retainedTrajectoryKeySet.has(key)) delete state.realtime.bulletTrajectories[key];
+      }
     }
-    state.realtime.bullets = bullets
-      .map(bullet => {
-        const normalized = normalizeBullet(bullet, { ...meta, authority: 'realtime', source: 'pos' });
-        const history = state.realtime.bulletTrajectories[bulletKey(bullet)];
-        return normalized && history ? { ...normalized, ...bulletTrajectorySummary(history) } : normalized;
-      })
-      .filter(Boolean);
-    state.realtime.coinDrops = coinDrops
-      .map(drop => normalizeCoinDrop(drop, { ...meta, authority: 'realtime', source: 'pos' }))
-      .filter(Boolean);
+    const normalizedBullets = reuseRealtimeFrameObjects ? bullets : [];
+    let normalizedBulletCount = 0;
+    for (const bullet of bullets) {
+      const normalized = normalizeBullet(bullet, frameMeta, reuseRealtimeFrameObjects);
+      if (!normalized) continue;
+      const history = state.realtime.bulletTrajectories[bulletKey(bullet)];
+      if (history && reuseRealtimeFrameObjects) Object.assign(normalized, bulletTrajectorySummary(history));
+      const outputBullet = history && !reuseRealtimeFrameObjects
+        ? { ...normalized, ...bulletTrajectorySummary(history) }
+        : normalized;
+      if (reuseRealtimeFrameObjects) normalizedBullets[normalizedBulletCount] = outputBullet;
+      else normalizedBullets.push(outputBullet);
+      normalizedBulletCount += 1;
+    }
+    if (reuseRealtimeFrameObjects && normalizedBulletCount !== normalizedBullets.length) {
+      normalizedBullets.length = normalizedBulletCount;
+    }
+    state.realtime.bullets = normalizedBullets;
+    const normalizedCoinDrops = reuseRealtimeFrameObjects && coinDrops !== EMPTY_ARRAY ? coinDrops : [];
+    let normalizedCoinDropCount = 0;
+    for (const drop of coinDrops) {
+      const normalized = normalizeCoinDrop(drop, frameMeta, reuseRealtimeFrameObjects);
+      if (!normalized) continue;
+      if (reuseRealtimeFrameObjects) normalizedCoinDrops[normalizedCoinDropCount] = normalized;
+      else normalizedCoinDrops.push(normalized);
+      normalizedCoinDropCount += 1;
+    }
+    if (reuseRealtimeFrameObjects && normalizedCoinDropCount !== normalizedCoinDrops.length) {
+      normalizedCoinDrops.length = normalizedCoinDropCount;
+    }
+    state.realtime.coinDrops = normalizedCoinDrops;
     state.realtime.coinDropsObserved = coinDropsObserved;
-    state.realtime.self = normalizedEntities.find(entity => Number(entity.user_id) === Number(state.userId)) || null;
-    if (state.realtime.self) state.realtime.lastSelf = cloneJson(state.realtime.self);
+    state.realtime.self = self;
+    if (self) state.realtime.lastSelf = self;
     observeVelocityTransition(state.realtime.self, meta);
   }
 
@@ -762,15 +886,18 @@ function createBrowserlessStateStore(options = {}) {
         movement.pendingCommands = retained;
       }
     }
-    const timing = movementTimingSummary(movement.delaySamples, movement.actualTransitions);
+    const timing = currentMovementTimingSummary();
     const observedAtMs = optionalNumericOrNull(meta.receivedAtMs);
     const maximumPendingAgeMs = Math.max(3000, Number(timing.p90Ticks || DEFAULT_MOVEMENT_P90_TICKS) * 50 * 8);
-    movement.pendingCommands = movement.pendingCommands
-      .filter(command => {
+    if (movement.pendingCommands.length) {
+      movement.pendingCommands = movement.pendingCommands.filter(command => {
         const requestedAtMs = optionalNumericOrNull(command.requestedAtMs);
         return observedAtMs === null || requestedAtMs === null || observedAtMs - requestedAtMs <= maximumPendingAgeMs;
-      })
-      .slice(-32);
+      });
+      if (movement.pendingCommands.length > 32) {
+        movement.pendingCommands.splice(0, movement.pendingCommands.length - 32);
+      }
+    }
     movement.lastObservedVelocity = { ...observed, tick, at: meta.receivedAtMs };
     return movement.actualTransitions.at(-1) || null;
   }
@@ -939,20 +1066,25 @@ function createBrowserlessStateStore(options = {}) {
   }
 
   function expirePendingShots(atMs = now()) {
-    const timeoutMs = shotAckTimeoutMs(state.command.ackLatencySamples);
-    const retained = [];
-    for (const shot of state.command.pendingShots) {
+    const timeoutMs = currentShotAckTimeoutMs();
+    const pendingShots = state.command.pendingShots;
+    let retainedCount = 0;
+    for (const shot of pendingShots) {
       if (Number(atMs) - Number(shot.requestedAtMs || 0) > timeoutMs) {
         state.command.unackedShots += 1;
         state.command.expiredShots.push({ ...shot, expiredAtMs: Number(atMs) });
+      } else {
+        pendingShots[retainedCount] = shot;
+        retainedCount += 1;
       }
-      else retained.push(shot);
     }
-    state.command.pendingShots = retained;
-    state.command.expiredShots = state.command.expiredShots.slice(-64);
+    if (retainedCount !== pendingShots.length) pendingShots.length = retainedCount;
+    if (state.command.expiredShots.length > 64) {
+      state.command.expiredShots.splice(0, state.command.expiredShots.length - 64);
+    }
   }
 
-  function recordShootRequest(request = {}) {
+  function recordShootRequest(request = {}, optionsForRecord = {}) {
     const requestedAtMs = Number(request.requestedAtMs || now());
     expirePendingShots(requestedAtMs);
     const shot = {
@@ -1003,10 +1135,10 @@ function createBrowserlessStateStore(options = {}) {
     state.command.requestedShots += 1;
     state.command.pendingShots.push(shot);
     state.command.pendingShots = state.command.pendingShots.slice(-16);
-    return cloneJson(shot);
+    return optionsForRecord.returnInternal === true ? shot : cloneJson(shot);
   }
 
-  function recordVelocityRequest(request = {}) {
+  function recordVelocityRequest(request = {}, optionsForRecord = {}) {
     const movement = state.command.movement;
     const requestedAtMs = Number(request.requestedAtMs || now());
     const sequence = movement.nextSequence++;
@@ -1024,7 +1156,7 @@ function createBrowserlessStateStore(options = {}) {
         owner.repeatCount = Math.max(0, Number(owner.repeatCount || 0)) + 1;
         owner.lastRepeatObservedTickAgeMs = optionalNumericOrNull(request.observedTickAgeAtSendMs);
         owner.lastRepeatFrameReceivedAtMs = optionalNumericOrNull(request.frameReceivedAtMs ?? request.observedAtMs);
-        return cloneJson(owner);
+        return optionsForRecord.returnInternal === true ? owner : cloneJson(owner);
       }
     }
     const direction = { dx, dy };
@@ -1040,7 +1172,7 @@ function createBrowserlessStateStore(options = {}) {
         pending.replacedByDirection = { dx, dy };
       }
     }
-    const timing = movementTimingSummary(movement.delaySamples, movement.actualTransitions);
+    const timing = currentMovementTimingSummary();
     const observedTick = optionalNumericOrNull(request.observedTick ?? state.realtime.tick);
     const observedAtMs = optionalNumericOrNull(request.observedAtMs ?? request.frameReceivedAtMs ?? state.realtime.receivedAtMs);
     const observedTickAgeAtSendMs = optionalNumericOrNull(request.observedTickAgeAtSendMs)
@@ -1078,12 +1210,12 @@ function createBrowserlessStateStore(options = {}) {
     movement.pendingCommands.push(command);
     movement.pendingCommands = movement.pendingCommands.slice(-32);
     movement.lastRequestedDirection = { dx, dy, directionGeneration };
-    return cloneJson(command);
+    return optionsForRecord.returnInternal === true ? command : cloneJson(command);
   }
 
   function movementCommandState(options = {}) {
     const movement = state.command.movement;
-    const timing = movementTimingSummary(movement.delaySamples, movement.actualTransitions);
+    const timing = currentMovementTimingSummary();
     const currentTick = optionalNumericOrNull(state.realtime.tick);
     const clone = options.clone !== false;
     const copy = value => clone ? cloneJson(value) : value;
@@ -1096,14 +1228,20 @@ function createBrowserlessStateStore(options = {}) {
     return {
       timing,
       observedVelocity: copy(movement.lastObservedVelocity),
-      pendingVelocityCommands: movement.pendingCommands.slice(-8).map(command => ({
+      pendingVelocityCommands: movement.pendingCommands.length
+        ? movement.pendingCommands.slice(-8).map(command => ({
         ...copyCommand(command),
         effectiveAfterTicks: currentTick === null || command.expectedEffectiveTick === null
           ? Number(timing.p90Ticks || 5)
           : Math.max(0, Number(command.expectedEffectiveTick) - currentTick)
-      })),
-      actualVelocityTransitions: copy(movement.actualTransitions.slice(-16)),
-      settledCommands: copy(movement.settledCommands.slice(-8)),
+        }))
+        : (clone ? [] : EMPTY_ARRAY),
+      actualVelocityTransitions: movement.actualTransitions.length
+        ? copy(movement.actualTransitions.slice(-16))
+        : (clone ? [] : EMPTY_ARRAY),
+      settledCommands: movement.settledCommands.length
+        ? copy(movement.settledCommands.slice(-8))
+        : (clone ? [] : EMPTY_ARRAY),
       lastRequestedDirection: copy(movement.lastRequestedDirection)
     };
   }
@@ -1154,8 +1292,8 @@ function createBrowserlessStateStore(options = {}) {
 
   function getCommandState(nowMs = now()) {
     expirePendingShots(nowMs);
-    const timing = shotTimingSummary(state.command.delaySamples);
-    const ackTimeoutMs = shotAckTimeoutMs(state.command.ackLatencySamples);
+    const timing = currentShotTimingSummary();
+    const ackTimeoutMs = currentShotAckTimeoutMs();
     return {
       lastAck: cloneJson(state.command.lastAck),
       ackAgeMs: frameAge(nowMs, state.command.lastAck?.receivedAtMs),
@@ -1175,7 +1313,7 @@ function createBrowserlessStateStore(options = {}) {
           : null,
         ackTimeoutMs,
         timing,
-        shooterOrigin: shotOriginSummary(state.command.originErrorSamples),
+        shooterOrigin: currentShotOriginSummary(),
         pendingShots: cloneJson(state.command.pendingShots.slice(-8)),
         expiredShots: cloneJson(state.command.expiredShots.slice(-8)),
         confirmedShots: cloneJson(state.command.confirmedShots.slice(-16)),
@@ -1201,8 +1339,8 @@ function createBrowserlessStateStore(options = {}) {
 
   function getDecisionState(nowMs = now()) {
     expirePendingShots(nowMs);
-    const timing = shotTimingSummary(state.command.delaySamples);
-    const ackTimeoutMs = shotAckTimeoutMs(state.command.ackLatencySamples);
+    const timing = currentShotTimingSummary();
+    const ackTimeoutMs = currentShotAckTimeoutMs();
     return {
       userId: state.userId,
       latestFrameAtMs: state.latestFrameAtMs,
@@ -1257,11 +1395,13 @@ function createBrowserlessStateStore(options = {}) {
             : null,
           ackTimeoutMs,
           timing,
-          shooterOrigin: shotOriginSummary(state.command.originErrorSamples),
-          pendingShots: state.command.pendingShots.slice(-8),
-          expiredShots: state.command.expiredShots.slice(-8),
-          confirmedShots: state.command.confirmedShots.slice(-16),
-          executionEvents: state.command.shootExecutionEvents.slice(-32)
+          shooterOrigin: currentShotOriginSummary(),
+          pendingShots: state.command.pendingShots.length ? state.command.pendingShots.slice(-8) : EMPTY_ARRAY,
+          expiredShots: state.command.expiredShots.length ? state.command.expiredShots.slice(-8) : EMPTY_ARRAY,
+          confirmedShots: state.command.confirmedShots.length ? state.command.confirmedShots.slice(-16) : EMPTY_ARRAY,
+          executionEvents: state.command.shootExecutionEvents.length
+            ? state.command.shootExecutionEvents.slice(-32)
+            : EMPTY_ARRAY
         },
         movement: movementCommandState({ clone: false })
       },

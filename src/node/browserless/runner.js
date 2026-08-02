@@ -17,6 +17,7 @@ const {
   buildCompactBrowserlessStatus,
   buildPublicBrowserlessStatus,
   loginPointFromAnyState,
+  mergeLiveActionState,
   mergeLiveState,
   mergeState,
   readBrowserlessStateFile,
@@ -3543,6 +3544,27 @@ async function runBrowserlessRunner(config, deps = {}) {
       if (!bypassPreLoginSafetyReason) {
         markSourceIpSnapshotWait('source-ip-snapshot-safety-wait');
       }
+      const publishDecisionLiveState = decision => {
+        const currentBeforeDecision = liveState || stateBeforeCanary;
+        const decisionPatch = decisionStatePatch(decision);
+        const stats = browserlessStatsForDecision(currentBeforeDecision, decision, {
+          nowMs: now(),
+          assumeNormalized: true
+        });
+        patchLiveState({
+          ...decisionPatch,
+          current: {
+            ...(decisionPatch.current || {}),
+            battlePresentation: browserlessBattlePresentation(
+              currentBeforeDecision.current?.battlePresentation,
+              decision
+            )
+          }
+        }, {
+          updatedAt: new Date(now()).toISOString()
+        });
+        liveState.stats = stats;
+      };
       canary = await readOnlyCanary(config, {
         logStore,
         combatBattleLog,
@@ -3576,62 +3598,21 @@ async function runBrowserlessRunner(config, deps = {}) {
         restartDrainCoordinator: restartDrain,
         onRestartDrainStatus: status => publishRestartDrainStatus(status),
         useDecisionWorker: deps.useDecisionWorker !== false,
-        onDecision: decision => {
-          const currentBeforeDecision = liveState || stateBeforeCanary;
-          const decisionPatch = decisionStatePatch(decision);
-          patchLiveState({
-            ...decisionPatch,
-            current: {
-              ...(decisionPatch.current || {}),
-              battlePresentation: browserlessBattlePresentation(
-                currentBeforeDecision.current?.battlePresentation,
-                decision
-              )
-            },
-            stats: browserlessStatsForDecision(currentBeforeDecision, decision, { nowMs: now() })
-          }, {
-            updatedAt: new Date(now()).toISOString()
-          });
-        },
-        onCombatControl: decision => {
-          const currentBeforeDecision = liveState || stateBeforeCanary;
-          const decisionPatch = decisionStatePatch(decision);
-          patchLiveState({
-            ...decisionPatch,
-            current: {
-              ...(decisionPatch.current || {}),
-              battlePresentation: browserlessBattlePresentation(
-                currentBeforeDecision.current?.battlePresentation,
-                decision
-              )
-            },
-            stats: browserlessStatsForDecision(currentBeforeDecision, decision, { nowMs: now() })
-          }, {
-            updatedAt: new Date(now()).toISOString()
-          });
-        },
+        onDecision: decision => publishDecisionLiveState(decision),
+        onCombatControl: decision => publishDecisionLiveState(decision),
         onAction: (action, context = {}) => {
           const currentBeforeAction = liveState || stateBeforeCanary;
-          patchLiveState({
-            runner: {
-              currentAction: {
-                ...(action || {}),
-                actionState: context.actionState || null
-              }
-            },
-            current: {
-              action: {
-                ...(action || {}),
-                actionState: context.actionState || null
-              },
-              battlePresentation: browserlessBattlePresentationAfterAction(
-                currentBeforeAction.current?.battlePresentation,
-                action,
-                context
-              )
-            }
-          }, {
-            updatedAt: new Date(now()).toISOString()
+          const actionSnapshot = {
+            ...(action || {}),
+            actionState: context.actionState || null
+          };
+          liveState = mergeLiveActionState(currentBeforeAction, actionSnapshot, {
+            updatedAt: new Date(now()).toISOString(),
+            battlePresentation: browserlessBattlePresentationAfterAction(
+              currentBeforeAction.current?.battlePresentation,
+              action,
+              context
+            )
           });
         }
       });

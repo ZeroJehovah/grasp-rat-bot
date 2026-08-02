@@ -42,22 +42,42 @@ function findLockedTarget(state, pending, self, options = {}) {
   return entity ? normalizeCombatEntity(entity, self, options) : null;
 }
 
+function appendIncomingBullet(incoming, normalized, selfId, maximumDistance) {
+  if (!normalized) return;
+  const ownerValue = normalized.ownerId;
+  const owner = ownerValue === null || ownerValue === undefined || ownerValue === ''
+    ? ''
+    : String(ownerValue);
+  if (!owner || (selfId && owner !== selfId)) normalized.incoming = true;
+  if (!normalized.incoming) return;
+  const distance = Number(normalized.distance);
+  if (!Number.isFinite(distance) || distance >= maximumDistance) return;
+  const timeToImpact = Number(normalized.timeToImpact);
+  if (!Number.isFinite(timeToImpact) || timeToImpact <= 0) return;
+  incoming.push(normalized);
+}
+
+function filterNormalizedIncomingBullets(bullets, self, options = {}) {
+  const selfId = targetId(self);
+  const maximumDistance = Math.max(1000, Number(options.leavePendingBulletMaxDistanceCm || 20000));
+  const incoming = [];
+  for (const normalized of bullets || []) {
+    appendIncomingBullet(incoming, normalized, selfId, maximumDistance);
+  }
+  return incoming;
+}
+
 function normalizedIncomingBullets(state, self, options = {}) {
   const currentTick = state?.realtime?.tick;
   const selfId = targetId(self);
-  return (state?.realtime?.bullets || [])
-    .map(raw => {
-      const normalized = normalizeCombatBullet(raw, self, { currentTick });
-      if (!normalized) return null;
-      const owner = targetId({ userId: normalized.ownerId });
-      if (!owner || (selfId && owner !== selfId)) normalized.incoming = true;
-      return normalized;
-    })
-    .filter(Boolean)
-    .filter(bullet => bullet.incoming)
-    .filter(bullet => Number.isFinite(Number(bullet.distance)))
-    .filter(bullet => Number(bullet.distance) < Math.max(1000, Number(options.leavePendingBulletMaxDistanceCm || 20000)))
-    .filter(bullet => Number.isFinite(Number(bullet.timeToImpact)) && Number(bullet.timeToImpact) > 0);
+  const maximumDistance = Math.max(1000, Number(options.leavePendingBulletMaxDistanceCm || 20000));
+  const bulletOptions = { currentTick };
+  const incoming = [];
+  for (const raw of state?.realtime?.bullets || []) {
+    const normalized = normalizeCombatBullet(raw, self, bulletOptions);
+    appendIncomingBullet(incoming, normalized, selfId, maximumDistance);
+  }
+  return incoming;
 }
 
 function triggerMovement(pending = {}) {
@@ -255,6 +275,7 @@ function buildLeavePendingCover(state = {}, pending = {}, options = {}) {
 
 module.exports = {
   buildLeavePendingCover,
+  filterNormalizedIncomingBullets,
   normalizedIncomingBullets,
   pendingTargetId
 };
