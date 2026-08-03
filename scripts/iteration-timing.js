@@ -21,6 +21,7 @@ const PHASE_NAMES = new Set([
   'restart-end',
 ]);
 const REPLACEABLE_PHASE_NAMES = new Set(['development-end', 'validation-end']);
+const ITERATION_MODES = new Set(['release', 'daily-log']);
 const ACTIVITY_STATUSES = new Set(['running', 'completed', 'failed', 'interrupted', 'skipped']);
 const ACTIVITY_CATEGORIES = new Set([
   'inspect',
@@ -41,7 +42,7 @@ const STATE_LOCK_STALE_MS = 60_000;
 function usage() {
   return [
     'Usage:',
-    '  node scripts/iteration-timing.js start --summary <中文一句话> [--at <ISO时间>]',
+    '  node scripts/iteration-timing.js start --summary <中文一句话> [--mode release|daily-log] [--at <ISO时间>]',
     '  node scripts/iteration-timing.js mark <阶段> [--at <ISO时间>]',
     '  node scripts/iteration-timing.js step-start --label <步骤名> [--category <类别>] [--at <ISO时间>]',
     '  node scripts/iteration-timing.js step-end --label <步骤名> [--status <状态>] [--error <摘要>] [--at <ISO时间>]',
@@ -50,6 +51,7 @@ function usage() {
     '  node scripts/iteration-timing.js finish [--no-restart] [--status completed|blocked] [--at <ISO时间>]',
     '  node scripts/iteration-timing.js --self-test',
     '',
+    '迭代模式: release（默认发布迭代）, daily-log（明确要求的每日日志迭代）',
     '阶段: development-end, validation-start, validation-end, restart-start, restart-end',
     '活动状态: running, completed, failed, interrupted, skipped',
   ].join('\n');
@@ -200,6 +202,8 @@ function readStateFile(file) {
 }
 
 function normalizeState(state) {
+  state.mode ||= 'release';
+  if (!ITERATION_MODES.has(state.mode)) throw new Error(`迭代模式无效: ${state.mode}`);
   state.phaseHistory ||= {};
   state.steps ||= [];
   return state;
@@ -302,6 +306,18 @@ function validateActivityCategory(value) {
   return category;
 }
 
+function validateIterationMode(value) {
+  const mode = String(value || 'release').trim();
+  if (!ITERATION_MODES.has(mode)) {
+    throw new Error(`迭代模式只能是 release 或 daily-log，收到: ${mode}`);
+  }
+  return mode;
+}
+
+function iterationModeLabel(mode) {
+  return mode === 'daily-log' ? '每日日志迭代' : '发布迭代';
+}
+
 function validateActivityStatus(value) {
   const status = String(value || 'completed').trim();
   if (!ACTIVITY_STATUSES.has(status) || status === 'running') {
@@ -336,8 +352,9 @@ function start(options) {
   if (fs.existsSync(file)) throw new Error('已有进行中的迭代；请先执行 status 或 finish');
   validateDocumentWorkspace();
   const state = {
-    version: 3,
+    version: 4,
     summary: validateSummary(options.summary),
+    mode: validateIterationMode(options.mode),
     startedAt: parseTimestamp(options.at),
     workspaceRoot: WORKSPACE_ROOT,
     phases: {},
@@ -347,6 +364,7 @@ function start(options) {
   writeState(state);
   return [
     `迭代计时已开始: ${state.summary}`,
+    `迭代模式: ${iterationModeLabel(state.mode)} (${state.mode})`,
     `开发开始: ${formatTimestamp(state.startedAt)}`,
     `迭代工作区: ${WORKSPACE_ROOT}`,
   ].join('\n');
@@ -726,6 +744,7 @@ function renderRecord(state, options, finishedAt) {
   const lines = [
     `## ${formatTimestamp(state.startedAt)} — ${state.summary}`,
     '',
+    `- 模式：${iterationModeLabel(state.mode)}（${state.mode}）`,
     `- 状态：${statusLabel}`,
     `- 记录完成：${formatTimestamp(finishedAt)}`,
     `- 总历时：${formatDuration(metrics.totalMs)}（${Math.round(metrics.totalMs)}ms）`,
@@ -839,6 +858,8 @@ function statusDetails(state, location) {
     sourceWorktree: location.worktreeRoot,
     stateFile: location.stateFile,
     summary: state.summary,
+    mode: state.mode,
+    modeLabel: iterationModeLabel(state.mode),
     startedAt: formatTimestamp(state.startedAt),
     phases: Object.fromEntries(Object.entries(state.phases).map(([key, value]) => [key, formatTimestamp(value)])),
     steps: state.steps.map((step) => ({
@@ -1006,7 +1027,8 @@ async function selfTest() {
     assert(standaloneRecord.includes('验证独立迭代记录文件'), '独立迭代记录内容缺失');
 
     const commandIterationStart = new Date(Date.now() - 5000);
-    start({ summary: '验证命令级细粒度耗时记录', at: commandIterationStart.toISOString() });
+    start({ summary: '验证命令级细粒度耗时记录', mode: 'daily-log', at: commandIterationStart.toISOString() });
+    assert(readState().mode === 'daily-log', '每日日志迭代模式未保存');
     const successfulCommand = await runCommand({
       label: '成功命令',
       category: 'test',
@@ -1049,7 +1071,7 @@ async function selfTest() {
       .map((file) => fs.readFileSync(path.join(process.env.GRASP_RAT_ITERATION_TIMING_DOCUMENT_DIRECTORY, file), 'utf8'))
       .find((content) => content.includes('验证命令级细粒度耗时记录'));
     assert(commandRecord, '命令级记录内容缺失');
-    for (const value of ['成功命令', '失败命令', '信号中断命令', 'exit=7', 'signal=SIGTERM', 'interrupted', '并行重叠', '未记录空档']) {
+    for (const value of ['每日日志迭代', '成功命令', '失败命令', '信号中断命令', 'exit=7', 'signal=SIGTERM', 'interrupted', '并行重叠', '未记录空档']) {
       assert(commandRecord.includes(value), `命令级自检输出缺少: ${value}`);
     }
   } finally {
