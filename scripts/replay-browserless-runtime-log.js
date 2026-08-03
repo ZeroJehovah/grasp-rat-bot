@@ -24,9 +24,14 @@ const {
 } = require('../src/strategy/combat-exit');
 const {
   calculateDodgeDirection,
+  createSeededRandomCore,
+  currentProspectiveReactionSlackCore,
   contactEntryRiskCore,
   contactEntrySyntheticBulletCore,
+  deriveCombatReactionBudgetCore,
+  directionOppositeCore,
   pickSafeClosingDodgeCore,
+  resolveDistanceAwareDodgeCore,
   selectCombatMovementArbitrationCore,
   stabilizeCombatMovementDirectionCore
 } = require('../src/strategy/combat-movement');
@@ -95,7 +100,11 @@ function parseArgs(argv) {
     expectCases: 0,
     expectTailLoss: null,
     projectedLeaveP50Ms: 400,
-    projectedLeaveP95Ms: 700
+    projectedLeaveP95Ms: 700,
+    selfTest: false,
+    seed: 1,
+    maxPendingShootCommands: 3,
+    shootAckTimeoutMs: 3000
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -123,9 +132,13 @@ function parseArgs(argv) {
     else if (arg === '--expect-tail-loss') options.expectTailLoss = Number(argv[++index]);
     else if (arg === '--projected-leave-p50-ms') options.projectedLeaveP50Ms = Number(argv[++index] || 400);
     else if (arg === '--projected-leave-p95-ms') options.projectedLeaveP95Ms = Number(argv[++index] || 700);
+    else if (arg === '--self-test') options.selfTest = true;
+    else if (arg === '--seed') options.seed = Number(argv[++index] || 1);
+    else if (arg === '--max-pending-shoot-commands') options.maxPendingShootCommands = Number(argv[++index] || 3);
+    else if (arg === '--shoot-ack-timeout-ms') options.shootAckTimeoutMs = Number(argv[++index] || 3000);
     else throw new Error(`unknown argument: ${arg}`);
   }
-  if (!options.file) throw new Error('--file is required');
+  if (!options.file && !options.selfTest) throw new Error('--file is required');
   return options;
 }
 
@@ -239,6 +252,190 @@ function optionalNumberOrNull(value) {
   return numberOrNull(value);
 }
 
+function independentPositiveInterceptCore(origin, target, options = {}) {
+  const ox = optionalNumberOrNull(origin?.x);
+  const oy = optionalNumberOrNull(origin?.y);
+  const tx = optionalNumberOrNull(target?.x);
+  const ty = optionalNumberOrNull(target?.y);
+  const vx = optionalNumberOrNull(target?.vx) ?? 0;
+  const vy = optionalNumberOrNull(target?.vy) ?? 0;
+  const speed = Math.max(1, Number(options.bulletSpeedCmPerTick ?? 500));
+  const range = Math.max(1, Number(options.bulletRangeCm ?? 15000));
+  const lifetime = Math.max(1, Number(options.bulletLifetimeTicks ?? 30));
+  const hitRadius = Math.max(0, Number(options.hitRadiusCm ?? 90));
+  if (![ox, oy, tx, ty, vx, vy].every(Number.isFinite)) {
+    return { reachable: false, reason: 'invalid-geometry' };
+  }
+  const rx = tx - ox;
+  const ry = ty - oy;
+  const a = vx * vx + vy * vy - speed * speed;
+  const b = 2 * (rx * vx + ry * vy);
+  const c = rx * rx + ry * ry;
+  const roots = [];
+  if (Math.abs(a) < 1e-9) {
+    if (Math.abs(b) > 1e-9) roots.push(-c / b);
+  } else {
+    const discriminant = b * b - 4 * a * c;
+    if (discriminant >= -1e-6) {
+      const squareRoot = Math.sqrt(Math.max(0, discriminant));
+      roots.push((-b - squareRoot) / (2 * a), (-b + squareRoot) / (2 * a));
+    }
+  }
+  const positive = roots.filter(value => Number.isFinite(value) && value > 0).sort((left, right) => left - right);
+  if (!positive.length) return { reachable: false, reason: 'no-positive-intercept' };
+  const interceptTicks = positive[0];
+  const interceptPoint = {
+    x: tx + vx * interceptTicks,
+    y: ty + vy * interceptTicks
+  };
+  const interceptRangeCm = Math.hypot(interceptPoint.x - ox, interceptPoint.y - oy);
+  const rangeGapCm = Math.max(0, interceptRangeCm - range - hitRadius);
+  if (rangeGapCm > 1e-6) {
+    return {
+      reachable: false,
+      reason: 'intercept-beyond-bullet-range',
+      interceptTicks,
+      interceptRangeCm,
+      interceptPoint,
+      rangeGapCm
+    };
+  }
+  if (interceptTicks > lifetime + 1e-6) {
+    const targetAtLifetime = { x: tx + vx * lifetime, y: ty + vy * lifetime };
+    const targetRangeAtLifetime = Math.hypot(targetAtLifetime.x - ox, targetAtLifetime.y - oy);
+    const edgeToleranceCm = Math.abs(targetRangeAtLifetime - speed * lifetime);
+    if (edgeToleranceCm <= hitRadius + 1e-6 && targetRangeAtLifetime <= range + hitRadius + 1e-6) {
+      return {
+        reachable: true,
+        reason: 'reachable',
+        interceptTicks: lifetime,
+        interceptRangeCm: speed * lifetime,
+        interceptPoint: targetAtLifetime,
+        rangeGapCm: 0,
+        edgeToleranceCm
+      };
+    }
+    return {
+      reachable: false,
+      reason: 'intercept-after-lifetime',
+      interceptTicks,
+      interceptRangeCm,
+      interceptPoint,
+      rangeGapCm
+    };
+  }
+  return {
+    reachable: true,
+    reason: 'reachable',
+    interceptTicks,
+    interceptRangeCm,
+    interceptPoint,
+    rangeGapCm: 0
+  };
+}
+
+function independentCreationReachabilityOracleCore(self, target, aim, options = {}) {
+  const sx = optionalNumberOrNull(self?.x);
+  const sy = optionalNumberOrNull(self?.y);
+  const svx = optionalNumberOrNull(self?.vx) ?? 0;
+  const svy = optionalNumberOrNull(self?.vy) ?? 0;
+  const tx = optionalNumberOrNull(target?.x);
+  const ty = optionalNumberOrNull(target?.y);
+  const tvx = optionalNumberOrNull(target?.vx) ?? 0;
+  const tvy = optionalNumberOrNull(target?.vy) ?? 0;
+  const aimX = optionalNumberOrNull(aim?.x);
+  const aimY = optionalNumberOrNull(aim?.y);
+  const speed = Math.max(1, Number(options.bulletSpeedCmPerTick ?? 500));
+  const range = Math.max(1, Number(options.bulletRangeCm ?? 15000));
+  const lifetime = Math.max(1, Number(options.bulletLifetimeTicks ?? 30));
+  const hitRadius = Math.max(0, Number(options.hitRadiusCm ?? 90));
+  const stateAgeMs = optionalNumberOrNull(options.realtimeStateAgeMs);
+  const maximumStateAgeMs = Math.max(0, Number(options.maximumRealtimeStateAgeMs ?? 500));
+  const medianDelay = Math.max(0, Number(options.creationDelayTicks ?? 5));
+  const delayMin = Math.max(0, Number(options.creationDelayMinTicks ?? medianDelay));
+  const delayMax = Math.max(delayMin, Number(options.creationDelayMaxTicks ?? medianDelay));
+  const maximumWindowTicks = Math.max(0, Number(options.maximumCreationWindowTicks ?? 4));
+  const base = {
+    reachable: false,
+    reason: 'invalid-geometry',
+    creationDelayWindowTicks: { min: delayMin, median: medianDelay, max: delayMax },
+    stateAgeMs,
+    source: 'independent-replay-oracle'
+  };
+  if (![sx, sy, svx, svy, tx, ty, tvx, tvy, aimX, aimY].every(Number.isFinite)) return base;
+  if (stateAgeMs !== null && stateAgeMs > maximumStateAgeMs) {
+    return { ...base, reason: 'stale-realtime-state' };
+  }
+  const targetCreationWindowDisplacementCm = Math.hypot(tvx, tvy) * (delayMax - delayMin);
+  if (delayMax - delayMin > maximumWindowTicks
+    && targetCreationWindowDisplacementCm > hitRadius + 1e-6) {
+    return { ...base, reason: 'creation-window-unstable', targetCreationWindowDisplacementCm };
+  }
+  const delays = Array.from(new Set([delayMin, Math.max(delayMin, Math.min(delayMax, medianDelay)), delayMax]));
+  const evaluations = delays.map(delayTicks => {
+    const origin = { x: sx + svx * delayTicks, y: sy + svy * delayTicks };
+    const targetAtCreation = {
+      x: tx + tvx * delayTicks,
+      y: ty + tvy * delayTicks,
+      vx: tvx,
+      vy: tvy
+    };
+    const intercept = independentPositiveInterceptCore(origin, targetAtCreation, {
+      bulletSpeedCmPerTick: speed,
+      bulletRangeCm: range,
+      bulletLifetimeTicks: lifetime,
+      hitRadiusCm: hitRadius
+    });
+    const aimDistanceCm = Math.hypot(aimX - origin.x, aimY - origin.y);
+    const aimFlightTicks = aimDistanceCm / speed;
+    let aimPointReachable = true;
+    let aimPointReason = 'reachable';
+    if (aimDistanceCm > range + hitRadius + 1e-6) {
+      aimPointReachable = false;
+      aimPointReason = 'intercept-beyond-bullet-range';
+    } else if (aimFlightTicks > lifetime + hitRadius / speed + 1e-6) {
+      aimPointReachable = false;
+      aimPointReason = 'intercept-after-lifetime';
+    }
+    return {
+      delayTicks,
+      origin,
+      targetAtCreation,
+      intercept,
+      aimPoint: {
+        reachable: aimPointReachable,
+        reason: aimPointReason,
+        distanceCm: aimDistanceCm,
+        flightTicks: aimFlightTicks
+      },
+      reachable: intercept.reachable === true && aimPointReachable,
+      reason: intercept.reachable === true ? aimPointReason : intercept.reason
+    };
+  });
+  const rejected = evaluations.find(item => item.reachable !== true);
+  if (rejected) {
+    return {
+      ...base,
+      reason: rejected.reason,
+      interceptTicks: optionalNumberOrNull(rejected.intercept?.interceptTicks),
+      interceptRangeCm: optionalNumberOrNull(rejected.intercept?.interceptRangeCm),
+      aimDistanceCm: rejected.aimPoint.distanceCm,
+      evaluations
+    };
+  }
+  const medianEvaluation = evaluations.find(item => item.delayTicks === medianDelay) || evaluations[0];
+  return {
+    ...base,
+    reachable: true,
+    reason: 'reachable',
+    interceptTicks: medianEvaluation.intercept.interceptTicks,
+    interceptRangeCm: medianEvaluation.intercept.interceptRangeCm,
+    aimDistanceCm: medianEvaluation.aimPoint.distanceCm,
+    targetCreationWindowDisplacementCm,
+    evaluations
+  };
+}
+
 function normalizedReplayCombatEntity(value = {}) {
   const source = value && typeof value === 'object' ? value : {};
   const stamina5s = source.stamina_5s_remaining_milli
@@ -306,12 +503,43 @@ function bulletCorridorMiss(rows, ack, aim = null) {
   const createdTick = Number(ack.created_tick);
   const expireTick = Number(ack.expire_tick || createdTick + 30);
   let minMiss = Infinity;
-  for (let tick = createdTick; tick <= expireTick; tick += 1) {
-    const target = targetAtTick(rows, tick);
-    if (!target) continue;
-    const bulletX = startX + dx * speed * (tick - createdTick);
-    const bulletY = startY + dy * speed * (tick - createdTick);
-    minMiss = Math.min(minMiss, Math.hypot(bulletX - Number(target.x), bulletY - Number(target.y)));
+  const indexed = rows
+    .map(row => ({ tick: Number(row.detail.tick), target: row.detail.target }))
+    .filter(item => Number.isFinite(item.tick)
+      && Number.isFinite(Number(item.target?.x))
+      && Number.isFinite(Number(item.target?.y)));
+  for (let index = 0; index < indexed.length; index += 1) {
+    const before = indexed[index];
+    const after = indexed[index + 1] || null;
+    const segmentStart = Math.max(createdTick, before.tick);
+    const segmentEnd = Math.min(
+      expireTick,
+      after && after.tick > before.tick ? after.tick : before.tick + 1
+    );
+    if (segmentEnd < segmentStart) continue;
+    const targetVx = after && after.tick > before.tick
+      ? (Number(after.target.x) - Number(before.target.x)) / (after.tick - before.tick)
+      : Number(before.target.vx || 0);
+    const targetVy = after && after.tick > before.tick
+      ? (Number(after.target.y) - Number(before.target.y)) / (after.tick - before.tick)
+      : Number(before.target.vy || 0);
+    const targetStartX = Number(before.target.x) + targetVx * (segmentStart - before.tick);
+    const targetStartY = Number(before.target.y) + targetVy * (segmentStart - before.tick);
+    const bulletStartX = startX + dx * speed * (segmentStart - createdTick);
+    const bulletStartY = startY + dy * speed * (segmentStart - createdTick);
+    const relativeX = bulletStartX - targetStartX;
+    const relativeY = bulletStartY - targetStartY;
+    const relativeVx = dx * speed - targetVx;
+    const relativeVy = dy * speed - targetVy;
+    const duration = Math.max(0, segmentEnd - segmentStart);
+    const velocitySquared = relativeVx * relativeVx + relativeVy * relativeVy;
+    const closestOffset = velocitySquared > 1e-9
+      ? Math.max(0, Math.min(duration, -(relativeX * relativeVx + relativeY * relativeVy) / velocitySquared))
+      : 0;
+    minMiss = Math.min(
+      minMiss,
+      Math.hypot(relativeX + relativeVx * closestOffset, relativeY + relativeVy * closestOffset)
+    );
   }
   return minMiss;
 }
@@ -323,11 +551,45 @@ function theoreticalShotMinimumMiss(rows, ack) {
   const createdTick = Number(ack.created_tick);
   const expireTick = Number(ack.expire_tick || createdTick + 30);
   let minimum = Infinity;
-  for (let tick = createdTick; tick <= expireTick; tick += 1) {
-    const target = targetAtTick(rows, tick);
-    if (!target) continue;
-    const targetDistance = Math.hypot(Number(target.x) - startX, Number(target.y) - startY);
-    minimum = Math.min(minimum, Math.abs(targetDistance - speed * (tick - createdTick)));
+  const indexed = rows
+    .map(row => ({ tick: Number(row.detail.tick), target: row.detail.target }))
+    .filter(item => Number.isFinite(item.tick)
+      && Number.isFinite(Number(item.target?.x))
+      && Number.isFinite(Number(item.target?.y)));
+  for (let index = 0; index < indexed.length; index += 1) {
+    const before = indexed[index];
+    const after = indexed[index + 1] || null;
+    const segmentStart = Math.max(createdTick, before.tick);
+    const segmentEnd = Math.min(expireTick, after && after.tick > before.tick ? after.tick : before.tick + 1);
+    if (segmentEnd < segmentStart) continue;
+    const targetVx = after && after.tick > before.tick
+      ? (Number(after.target.x) - Number(before.target.x)) / (after.tick - before.tick)
+      : Number(before.target.vx || 0);
+    const targetVy = after && after.tick > before.tick
+      ? (Number(after.target.y) - Number(before.target.y)) / (after.tick - before.tick)
+      : Number(before.target.vy || 0);
+    const px = Number(before.target.x) + targetVx * (segmentStart - before.tick) - startX;
+    const py = Number(before.target.y) + targetVy * (segmentStart - before.tick) - startY;
+    const radialStart = speed * (segmentStart - createdTick);
+    const duration = Math.max(0, segmentEnd - segmentStart);
+    const a = targetVx * targetVx + targetVy * targetVy - speed * speed;
+    const b = 2 * (px * targetVx + py * targetVy - radialStart * speed);
+    const c = px * px + py * py - radialStart * radialStart;
+    const candidates = [0, duration];
+    if (Math.abs(a) < 1e-9) {
+      if (Math.abs(b) > 1e-9) candidates.push(-c / b);
+    } else {
+      const discriminant = b * b - 4 * a * c;
+      if (discriminant >= -1e-6) {
+        const root = Math.sqrt(Math.max(0, discriminant));
+        candidates.push((-b - root) / (2 * a), (-b + root) / (2 * a));
+      }
+    }
+    for (const offset of candidates) {
+      if (!Number.isFinite(offset) || offset < 0 || offset > duration) continue;
+      const targetDistance = Math.hypot(px + targetVx * offset, py + targetVy * offset);
+      minimum = Math.min(minimum, Math.abs(targetDistance - (radialStart + speed * offset)));
+    }
   }
   return minimum;
 }
@@ -360,6 +622,64 @@ function confirmedShotsForRows(options, rows) {
       && shot.at <= lastAt
       && String(shot.ack.owner_user_id ?? '') === selfId
   ));
+}
+
+function executionMatchedConfirmedShots(options, allRows, rows) {
+  const candidates = confirmedShotsForRows(options, rows);
+  if (!candidates.length) return [];
+  const targetId = String(options.targetId || rows[0]?.detail?.target?.userId || '');
+  const dispatchByRequest = new Map(allRows
+    .filter(row => row.entry?.type === 'shoot-execution'
+      && row.detail?.type === 'shoot-dispatch'
+      && row.detail?.requestId)
+    .map(row => [String(row.detail.requestId), {
+      at: optionalNumberOrNull(row.detail?.atMs) ?? Date.parse(row.entry.at || ''),
+      observedTick: optionalNumberOrNull(row.detail?.observedTick)
+    }]));
+  const accepted = allRows
+    .filter(row => row.entry?.type === 'shoot-execution'
+      && row.detail?.type === 'shoot-ack-accepted'
+      && (!targetId || String(row.detail?.targetId ?? '') === targetId))
+    .map(row => ({
+      at: optionalNumberOrNull(row.detail?.atMs) ?? Date.parse(row.entry.at || ''),
+      requestId: String(row.detail?.requestId || ''),
+      targetId: String(row.detail?.targetId ?? '')
+    }))
+    .filter(item => Number.isFinite(item.at))
+    .sort((left, right) => left.at - right.at);
+  const unused = candidates.map((shot, index) => ({ ...shot, index, used: false }));
+  const matched = [];
+  for (const event of accepted) {
+    let best = null;
+    for (const shot of unused) {
+      if (shot.used) continue;
+      const gap = Math.abs(shot.at - event.at);
+      if (gap > 1000) continue;
+      if (!best || gap < best.gap || (gap === best.gap && shot.at < best.shot.at)) best = { shot, gap };
+    }
+    if (!best) continue;
+    best.shot.used = true;
+    const dispatch = dispatchByRequest.get(event.requestId) || null;
+    const createdTick = optionalNumberOrNull(best.shot.ack?.created_tick);
+    const executionDelayTicks = createdTick === null || dispatch?.observedTick === null
+      || dispatch?.observedTick === undefined
+      ? null
+      : createdTick - Number(dispatch.observedTick);
+    matched.push({
+      at: best.shot.at,
+      ack: best.shot.ack,
+      requestId: event.requestId,
+      targetId: event.targetId,
+      ackEventAt: event.at,
+      ackPairingGapMs: best.gap,
+      dispatchAt: dispatch?.at ?? null,
+      dispatchObservedTick: dispatch?.observedTick ?? null,
+      executionDelayTicks: Number.isFinite(executionDelayTicks) && executionDelayTicks >= 0
+        ? executionDelayTicks
+        : null
+    });
+  }
+  return matched.sort((left, right) => left.at - right.at);
 }
 
 function combatDamageEvents(rows) {
@@ -5529,7 +5849,1027 @@ function replayPostAttackDropAttribution(options) {
   return result;
 }
 
+function distanceAwareReplayTiming(detail = {}, options = {}) {
+  if (options.causalExecutionTiming) return options.causalExecutionTiming;
+  const timing = detail.aim?.timing || detail.timing || {};
+  const median = Math.max(0, optionalNumberOrNull(timing.rollingMedianTicks)
+    ?? optionalNumberOrNull(timing.executionDelayTicks)
+    ?? Number(options.executionDelayTicks || 5));
+  const mad = Math.max(0, optionalNumberOrNull(timing.rollingMadTicks) ?? 0);
+  const p90 = Math.max(median, optionalNumberOrNull(timing.rollingP90Ticks) ?? median);
+  return {
+    medianTicks: median,
+    p90Ticks: p90,
+    madTicks: mad,
+    minTicks: Math.max(0, median - Math.max(1, mad)),
+    maxTicks: Math.max(p90, median + Math.max(1, mad)),
+    source: 'logged-causal-shoot-timing'
+  };
+}
+
+function distanceAwareCausalShootTiming(matchedShots = [], atMs = 0) {
+  const values = matchedShots
+    .filter(shot => Number(shot.ackEventAt) <= Number(atMs))
+    .map(shot => Number(shot.executionDelayTicks))
+    .filter(value => Number.isFinite(value) && value >= 0)
+    .slice(-32);
+  if (!values.length) return null;
+  const median = percentile(values, 0.5);
+  const p90 = percentile(values, 0.9);
+  const deviations = values.map(value => Math.abs(value - median));
+  const mad = percentile(deviations, 0.5) ?? 0;
+  return {
+    medianTicks: median,
+    p90Ticks: Math.max(median, p90 ?? median),
+    madTicks: mad,
+    minTicks: Math.max(0, median - Math.max(1, mad)),
+    maxTicks: Math.max(p90 ?? median, median + Math.max(1, mad)),
+    sampleCount: values.length,
+    source: 'execution-matched-causal-shoot-timing'
+  };
+}
+
+function recomputeDistanceAwareAimForRow(rows, index, options = {}) {
+  const row = rows[index];
+  if (!row?.detail?.self || !row?.detail?.target) return { ok: false, reason: 'missing-realtime-entity' };
+  const history = rows.slice(Math.max(0, index - 79), index + 1).map(item => ({
+    at: Date.parse(item.entry.at || ''),
+    x: item.detail.target?.x,
+    y: item.detail.target?.y,
+    vx: item.detail.target?.vx,
+    vy: item.detail.target?.vy,
+    selfX: item.detail.self?.x,
+    selfY: item.detail.self?.y,
+    distance: item.detail.target?.distance
+  }));
+  const loggedBehavior = row.detail.behavior && typeof row.detail.behavior === 'object'
+    ? row.detail.behavior
+    : null;
+  const combatTargetState = {
+    motionSamples: history,
+    opponentBehaviorState: loggedBehavior,
+    provenHitRate: Math.max(0, Number(row.detail.behavior?.recentHitRate || 0)),
+    noDamageMs: Math.max(0, Number(row.detail.aim?.noDamageMs || 0)),
+    fireRiskClassification: row.detail.shooting?.fireRiskClassification || null
+  };
+  const atMs = Date.parse(row.entry.at || '');
+  return estimateAim(
+    normalizedReplayCombatEntity(row.detail.self),
+    normalizedReplayCombatEntity(row.detail.target),
+    {
+      combatTargetState,
+      observedTick: row.detail.tick,
+      nowMs: atMs,
+      realtimeStateObservedAtMs: atMs,
+      executionTiming: distanceAwareReplayTiming(row.detail, options),
+      actualShots: Math.max(0, Number(options.actualShots || 0)),
+      trajectoryRouteSelectionMode: options.trajectoryRouteSelectionMode || 'weighted',
+      combatDynamicRouteSequencePhase: Number(options.trajectoryRouteSequencePhase || 0)
+    }
+  );
+}
+
+function distanceAwareIndependentOracleForRow(row, aim, options = {}) {
+  const timing = distanceAwareReplayTiming(row.detail, options);
+  return independentCreationReachabilityOracleCore(row.detail.self, row.detail.target, aim, {
+    bulletSpeedCmPerTick: 500,
+    bulletRangeCm: 15000,
+    bulletLifetimeTicks: 30,
+    hitRadiusCm: Number(options.hitRadius || 90),
+    creationDelayTicks: timing.medianTicks,
+    creationDelayMinTicks: timing.minTicks,
+    creationDelayMaxTicks: timing.maxTicks,
+    maximumCreationWindowTicks: 4,
+    realtimeStateAgeMs: 0,
+    maximumRealtimeStateAgeMs: 500
+  });
+}
+
+function distanceAwareAimStats(values = []) {
+  const finite = values.filter(Number.isFinite);
+  return {
+    count: finite.length,
+    estimatedHits: finite.filter(value => value <= 90).length,
+    meanMissCm: finite.length
+      ? Number((finite.reduce((sum, value) => sum + value, 0) / finite.length).toFixed(1))
+      : null,
+    p50MissCm: percentile(finite, 0.5),
+    p90MissCm: percentile(finite, 0.9),
+    p95MissCm: percentile(finite, 0.95)
+  };
+}
+
+function replayDistanceAwareAim(allRows, rows, options = {}) {
+  const confirmedShots = options.executionMatchedShots
+    || executionMatchedConfirmedShots(options, allRows, rows);
+  const baselineMisses = [];
+  const currentMisses = [];
+  const sharedBaselineMisses = [];
+  const sharedCurrentMisses = [];
+  const routeBestMisses = [];
+  const motionProbeBestMisses = [];
+  const tailSamples = [];
+  const reasonCounts = {};
+  const routeDiagnostics = {};
+  const samples = [];
+  let historicalOutcomeUnreachable = 0;
+  let historicalOutcomeUnreachableStillDispatched = 0;
+  let productionIndependentFalseSafe = 0;
+  let productionIndependentFalseNegative = 0;
+  let currentDispatchOpportunities = 0;
+  let currentEstimatedHits = 0;
+  let historicalEstimatedHits = 0;
+  for (let shotIndex = 0; shotIndex < confirmedShots.length; shotIndex += 1) {
+    const shot = confirmedShots[shotIndex];
+    const createdTick = Number(shot.ack.created_tick);
+    const rowIndex = Math.max(0, rows.findLastIndex(row => Number(row.detail.tick) <= createdTick));
+    const row = rows[rowIndex];
+    if (!row?.detail?.aim) continue;
+    const causalExecutionTiming = distanceAwareCausalShootTiming(
+      confirmedShots,
+      Date.parse(row.entry.at || '')
+    );
+    const historicalAim = row.detail.aim;
+    const currentAim = recomputeDistanceAwareAimForRow(rows, rowIndex, {
+      ...options,
+      causalExecutionTiming,
+      actualShots: currentDispatchOpportunities
+    });
+    if (!currentAim.ok) continue;
+    const historicalOracle = distanceAwareIndependentOracleForRow(row, historicalAim, {
+      ...options,
+      causalExecutionTiming
+    });
+    const currentOracle = distanceAwareIndependentOracleForRow(row, currentAim, {
+      ...options,
+      causalExecutionTiming
+    });
+    const productionReachable = currentAim.fireReachability?.reachable === true;
+    const outcomeMinimumMiss = theoreticalShotMinimumMiss(rows, shot.ack);
+    const historicalOutcomeReachable = outcomeMinimumMiss <= Number(options.hitRadius || 90);
+    const historicalMiss = bulletCorridorMiss(rows, shot.ack, historicalAim);
+    const currentMiss = bulletCorridorMiss(rows, shot.ack, currentAim);
+    const routeCandidateMisses = (currentAim.routeCoverage?.candidates || [])
+      .map(candidate => bulletCorridorMiss(rows, shot.ack, { x: candidate.x, y: candidate.y }))
+      .filter(Number.isFinite);
+    const motionProbeCandidateMisses = (currentAim.motionProbe?.candidates || [])
+      .map(candidate => bulletCorridorMiss(rows, shot.ack, { x: candidate.x, y: candidate.y }))
+      .filter(Number.isFinite);
+    if (routeCandidateMisses.length) routeBestMisses.push(Math.min(...routeCandidateMisses));
+    if (motionProbeCandidateMisses.length) motionProbeBestMisses.push(Math.min(...motionProbeCandidateMisses));
+    const selectedHypothesis = String(currentAim.routeCoverage?.selected || currentAim.motionProbe?.hypothesis || 'baseline');
+    const selectedStyle = String(currentAim.routeCoverage?.style || currentAim.mode || 'unknown');
+    const selectedKey = `${selectedStyle}|selected:${selectedHypothesis}`;
+    const selectedCell = routeDiagnostics[selectedKey] || { shots: 0, misses: [], estimatedHits: 0 };
+    selectedCell.shots += 1;
+    selectedCell.misses.push(currentMiss);
+    selectedCell.estimatedHits += currentMiss <= Number(options.hitRadius || 90) ? 1 : 0;
+    routeDiagnostics[selectedKey] = selectedCell;
+    if (currentMiss >= 600 || historicalMiss >= 600) {
+      tailSamples.push({
+        line: row.line,
+        at: row.entry.at,
+        historicalMissCm: Number(historicalMiss.toFixed(1)),
+        currentMissCm: Number(currentMiss.toFixed(1)),
+        selectedStyle,
+        selectedHypothesis,
+        routeCandidates: (currentAim.routeCoverage?.candidates || []).map(candidate => ({
+          hypothesis: candidate.hypothesis,
+          missCm: Number(bulletCorridorMiss(rows, shot.ack, { x: candidate.x, y: candidate.y }).toFixed(1))
+        })),
+        motionProbeCandidates: (currentAim.motionProbe?.candidates || []).map(candidate => ({
+          hypothesis: candidate.hypothesis,
+          missCm: Number(bulletCorridorMiss(rows, shot.ack, { x: candidate.x, y: candidate.y }).toFixed(1))
+        }))
+      });
+    }
+    for (const candidate of currentAim.routeCoverage?.candidates || []) {
+      const candidateMiss = bulletCorridorMiss(rows, shot.ack, candidate);
+      const key = `${selectedStyle}|candidate:${String(candidate.hypothesis || 'unknown')}`;
+      const cell = routeDiagnostics[key] || { shots: 0, misses: [], estimatedHits: 0 };
+      cell.shots += 1;
+      cell.misses.push(candidateMiss);
+      cell.estimatedHits += candidateMiss <= Number(options.hitRadius || 90) ? 1 : 0;
+      routeDiagnostics[key] = cell;
+    }
+    baselineMisses.push(historicalMiss);
+    currentMisses.push(currentMiss);
+    historicalEstimatedHits += historicalMiss <= Number(options.hitRadius || 90) ? 1 : 0;
+    if (!historicalOutcomeReachable) historicalOutcomeUnreachable += 1;
+    if (productionReachable) {
+      currentDispatchOpportunities += 1;
+      currentEstimatedHits += currentMiss <= Number(options.hitRadius || 90) ? 1 : 0;
+      if (!historicalOutcomeReachable) historicalOutcomeUnreachableStillDispatched += 1;
+    }
+    if (productionReachable && currentOracle.reachable !== true) productionIndependentFalseSafe += 1;
+    if (!productionReachable && currentOracle.reachable === true) productionIndependentFalseNegative += 1;
+    reasonCounts[currentOracle.reason] = Number(reasonCounts[currentOracle.reason] || 0) + 1;
+    if (historicalOracle.reachable === true && currentOracle.reachable === true) {
+      sharedBaselineMisses.push(historicalMiss);
+      sharedCurrentMisses.push(currentMiss);
+    }
+    if (samples.length < 20 && (!historicalOutcomeReachable || productionReachable !== currentOracle.reachable)) {
+      samples.push({
+        line: row.line,
+        at: row.entry.at,
+        createdTick,
+        historicalOutcomeMinimumMissCm: Number(outcomeMinimumMiss.toFixed(1)),
+        historicalOracleReason: historicalOracle.reason,
+        productionReason: currentAim.fireReachability?.reason || '',
+        independentReason: currentOracle.reason,
+        currentWouldDispatch: productionReachable,
+        historicalMissCm: Number(historicalMiss.toFixed(1)),
+        currentMissCm: Number(currentMiss.toFixed(1))
+      });
+    }
+  }
+  const historical = distanceAwareAimStats(baselineMisses);
+  const current = distanceAwareAimStats(currentMisses);
+  const sharedHistorical = distanceAwareAimStats(sharedBaselineMisses);
+  const sharedCurrent = distanceAwareAimStats(sharedCurrentMisses);
+  const improvement = (before, after) => Number.isFinite(before) && before > 0 && Number.isFinite(after)
+    ? Number(((before - after) / before * 100).toFixed(1))
+    : null;
+  const p50ImprovementPct = improvement(sharedHistorical.p50MissCm, sharedCurrent.p50MissCm);
+  const p90ImprovementPct = improvement(sharedHistorical.p90MissCm, sharedCurrent.p90MissCm);
+  const concreteImprovement = currentEstimatedHits > historicalEstimatedHits
+    || (p50ImprovementPct !== null && p50ImprovementPct > 0)
+    || (p90ImprovementPct !== null && p90ImprovementPct > 0);
+  const positiveControlNoRegression = confirmedShots.length > 0
+    && historicalEstimatedHits / confirmedShots.length >= 0.8
+    && currentDispatchOpportunities >= confirmedShots.length
+    && currentEstimatedHits >= historicalEstimatedHits;
+  const summarizedRouteDiagnostics = Object.fromEntries(Object.entries(routeDiagnostics).map(([key, cell]) => [
+    key,
+    {
+      shots: cell.shots,
+      estimatedHits: cell.estimatedHits,
+      meanMissCm: cell.misses.length
+        ? Number((cell.misses.reduce((sum, value) => sum + value, 0) / cell.misses.length).toFixed(1))
+        : null,
+      p50MissCm: percentile(cell.misses, 0.5),
+      p90MissCm: percentile(cell.misses, 0.9)
+    }
+  ]));
+  return {
+    confirmedShots: confirmedShots.length,
+    historical,
+    current,
+    sharedReachableOpportunitySet: {
+      historical: sharedHistorical,
+      current: sharedCurrent,
+      p50ImprovementPct,
+      p90ImprovementPct,
+      historicalMissesCm: sharedBaselineMisses,
+      currentMissesCm: sharedCurrentMisses,
+      routeBestMissesCm: routeBestMisses,
+      motionProbeBestMissesCm: motionProbeBestMisses,
+      tailSamples: tailSamples.slice(0, 40)
+    },
+    historicalOutcomeUnreachable,
+    historicalOutcomeUnreachableStillDispatched,
+    currentDispatchOpportunities,
+    historicalEstimatedHits,
+    currentEstimatedHits,
+    productionIndependentFalseSafe,
+    productionIndependentFalseNegative,
+    independentReasonCounts: reasonCounts,
+    routeDiagnostics: summarizedRouteDiagnostics,
+    concreteImprovement,
+    positiveControlNoRegression,
+    samples,
+    accepted: confirmedShots.length > 0
+      && productionIndependentFalseSafe === 0
+      && (concreteImprovement || positiveControlNoRegression)
+  };
+}
+
+function distanceAwareShootExecutionLedger(allRows = []) {
+  const dispatchByCommand = new Map();
+  const ackLatencies = [];
+  const counts = {};
+  for (const row of allRows) {
+    if (row.entry?.type !== 'shoot-execution') continue;
+    const detail = row.detail || {};
+    const type = String(detail.type || '');
+    counts[type] = Number(counts[type] || 0) + 1;
+    const atMs = optionalNumberOrNull(detail.atMs) ?? Date.parse(row.entry.at || '');
+    const commandId = String(detail.commandId ?? '');
+    if (type === 'shoot-dispatch' && commandId) dispatchByCommand.set(commandId, atMs);
+    if ((type === 'shoot-ack-accepted' || type === 'shoot-ack-late') && commandId && dispatchByCommand.has(commandId)) {
+      const sentAtMs = dispatchByCommand.get(commandId);
+      ackLatencies.push({ atMs, latencyMs: Math.max(0, atMs - sentAtMs) });
+    }
+  }
+  return { counts, ackLatencies: ackLatencies.sort((left, right) => left.atMs - right.atMs) };
+}
+
+function shootDispatchStateStepCore(previous = {}, input = {}, options = {}) {
+  const nowMs = Number(input.nowMs || 0);
+  const timeoutMs = Math.max(500, Number(options.shootAckTimeoutMs ?? 3000));
+  const maximumPending = Math.max(1, Number(options.maxPendingShootCommands ?? 3));
+  const state = {
+    lastDispatchAt: optionalNumberOrNull(previous.lastDispatchAt),
+    pending: (previous.pending || []).filter(item => (
+      Number(item.ackAtMs || Infinity) > nowMs
+        && nowMs - Number(item.sentAtMs || 0) <= timeoutMs
+    )),
+    dispatchCount: Math.max(0, Number(previous.dispatchCount || 0)),
+    skipCounts: { ...(previous.skipCounts || {}) }
+  };
+  if (!input.intent) return { state, outcome: 'no-intent', legal: false, dispatched: false };
+  const cadenceMs = Math.max(1, Number(input.cadenceMs || 160));
+  if (state.pending.length >= maximumPending) {
+    state.skipCounts.backpressure = Number(state.skipCounts.backpressure || 0) + 1;
+    return { state, outcome: 'backpressure', legal: false, dispatched: false };
+  }
+  if (state.lastDispatchAt !== null && nowMs - state.lastDispatchAt < cadenceMs) {
+    state.skipCounts.cooldown = Number(state.skipCounts.cooldown || 0) + 1;
+    return { state, outcome: 'cooldown', legal: false, dispatched: false };
+  }
+  const ackLatencyMs = Math.max(1, Number(input.ackLatencyMs || 200));
+  state.lastDispatchAt = nowMs;
+  state.pending.push({ sentAtMs: nowMs, ackAtMs: nowMs + ackLatencyMs });
+  state.dispatchCount += 1;
+  return { state, outcome: 'dispatch', legal: true, dispatched: true };
+}
+
+function replayDistanceAwareDispatch(allRows, rows, options = {}) {
+  const ledger = distanceAwareShootExecutionLedger(allRows);
+  const matchedShots = options.executionMatchedShots
+    || executionMatchedConfirmedShots(options, allRows, rows);
+  const causalAckLatencies = [];
+  let ackCursor = 0;
+  let baselineState = {};
+  let currentState = {};
+  let currentActualShots = 0;
+  let legalReachableOpportunities = 0;
+  let selectedLegalReachableOpportunities = 0;
+  let independentUnreachableDispatches = 0;
+  let recoveryWindows = 0;
+  let recoveryDispatches = 0;
+  let previousProductionReachable = true;
+  const blockerCounts = {};
+  const samples = [];
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    const atMs = Date.parse(row.entry.at || '');
+    if (!Number.isFinite(atMs)) continue;
+    while (ackCursor < ledger.ackLatencies.length && ledger.ackLatencies[ackCursor].atMs <= atMs) {
+      causalAckLatencies.push(ledger.ackLatencies[ackCursor].latencyMs);
+      ackCursor += 1;
+    }
+    const causalAckP90 = percentile(causalAckLatencies.slice(-32), 0.9) ?? 200;
+    const shooting = row.detail.shooting || {};
+    const historicalIntent = shooting.wouldShoot === true && shooting.commandSuppressed !== true;
+    const currentAim = recomputeDistanceAwareAimForRow(rows, index, {
+      ...options,
+      causalExecutionTiming: distanceAwareCausalShootTiming(matchedShots, atMs),
+      actualShots: currentActualShots
+    });
+    const productionReachable = currentAim.ok && currentAim.fireReachability?.reachable === true;
+    const independent = currentAim.ok
+      ? distanceAwareIndependentOracleForRow(row, currentAim, options)
+      : { reachable: false, reason: currentAim.reason || 'aim-unavailable' };
+    const baseEligible = Boolean(
+      row.detail.target
+        && !row.detail.exit
+        && shooting.inRange === true
+        && !['disabled', 'paused'].includes(String(shooting.state || ''))
+        && row.detail.contactEntryGuard?.movementOnly !== true
+    );
+    const currentIntent = baseEligible && productionReachable;
+    const cadenceMs = Math.max(1, Number(shooting.executionCadenceMs || shooting.cadenceMs || 160));
+    const baselineStep = shootDispatchStateStepCore(baselineState, {
+      nowMs: atMs,
+      intent: historicalIntent,
+      cadenceMs,
+      ackLatencyMs: causalAckP90
+    }, options);
+    baselineState = baselineStep.state;
+    const currentStep = shootDispatchStateStepCore(currentState, {
+      nowMs: atMs,
+      intent: currentIntent,
+      cadenceMs,
+      ackLatencyMs: causalAckP90
+    }, options);
+    currentState = currentStep.state;
+    if (currentIntent && currentStep.legal) {
+      legalReachableOpportunities += 1;
+      if (currentStep.dispatched) selectedLegalReachableOpportunities += 1;
+    }
+    if (currentStep.dispatched) {
+      currentActualShots += 1;
+      if (independent.reachable !== true) independentUnreachableDispatches += 1;
+    }
+    if (!previousProductionReachable && productionReachable && baseEligible) {
+      recoveryWindows += 1;
+      if (currentStep.dispatched || currentStep.outcome === 'cooldown' || currentStep.outcome === 'backpressure') {
+        recoveryDispatches += 1;
+      }
+    }
+    previousProductionReachable = productionReachable;
+    const blocker = productionReachable ? currentStep.outcome : `aim:${currentAim.fireReachability?.reason || currentAim.reason || 'unavailable'}`;
+    blockerCounts[blocker] = Number(blockerCounts[blocker] || 0) + 1;
+    if (samples.length < 20 && (currentStep.dispatched || (!productionReachable && historicalIntent))) {
+      samples.push({
+        line: row.line,
+        at: row.entry.at,
+        tick: row.detail.tick,
+        historicalIntent,
+        productionReachable,
+        independentReachable: independent.reachable,
+        reason: currentAim.fireReachability?.reason || currentAim.reason || '',
+        outcome: currentStep.outcome
+      });
+    }
+  }
+  const selectionRate = legalReachableOpportunities
+    ? selectedLegalReachableOpportunities / legalReachableOpportunities
+    : null;
+  return {
+    historicalExecutionCounts: ledger.counts,
+    modeledHistoricalDispatches: Number(baselineState.dispatchCount || 0),
+    modeledCurrentDispatches: Number(currentState.dispatchCount || 0),
+    legalReachableOpportunities,
+    selectedLegalReachableOpportunities,
+    reachableSelectionRate: selectionRate,
+    independentUnreachableDispatches,
+    recoveryWindows,
+    recoveryDispatches,
+    blockerCounts,
+    baselineState: {
+      pendingCount: baselineState.pending?.length || 0,
+      skipCounts: baselineState.skipCounts || {}
+    },
+    currentState: {
+      pendingCount: currentState.pending?.length || 0,
+      skipCounts: currentState.skipCounts || {}
+    },
+    samples,
+    accepted: legalReachableOpportunities > 0
+      && selectionRate === 1
+      && independentUnreachableDispatches === 0
+      && recoveryDispatches === recoveryWindows
+  };
+}
+
+function distanceAwareReplayBullets(threatField = []) {
+  const bullets = new Map();
+  for (const threat of threatField || []) {
+    for (const bullet of threat?.dangerousBullets || []) {
+      const id = String(bullet?.bulletId || `${bullet?.ownerId || ''}:${bullet?.timeToImpact || ''}`);
+      if (!id || bullets.has(id)) continue;
+      const timeToImpact = optionalNumberOrNull(bullet?.timeToImpact);
+      if (timeToImpact === null || timeToImpact <= 0) continue;
+      bullets.set(id, {
+        incoming: true,
+        bullet_id: id,
+        ownerId: bullet.ownerId ?? null,
+        timeToImpact,
+        cpa: optionalNumberOrNull(bullet.cpa),
+        distance: optionalNumberOrNull(bullet.cpa) ?? 0
+      });
+    }
+  }
+  return Array.from(bullets.values()).slice(0, 8);
+}
+
+function distanceAwareReplaySelectedThreat(threatField = [], direction = {}) {
+  const dx = Math.sign(Number(direction.dx || 0));
+  const dy = Math.sign(Number(direction.dy || 0));
+  return (threatField || []).find(item => Number(item?.dx) === dx && Number(item?.dy) === dy) || null;
+}
+
+function distanceAwareReplayBaseBand(detail = {}) {
+  const movement = detail.movement || {};
+  const modifiers = movement.modifiers || [];
+  if (modifiers.some(value => /back-away|separate/.test(String(value)))) return 'separate';
+  if (modifiers.some(value => /strafe/.test(String(value)))) return 'strafe';
+  if (modifiers.some(value => /close-in/.test(String(value)))) return 'approach';
+  const distance = optionalNumberOrNull(detail.target?.distance);
+  const spacing = optionalNumberOrNull(movement.spacing);
+  const strategic = movement.movementArbitration?.strategicDirection;
+  if (strategic && distance !== null && spacing !== null && distance > spacing + 100) return 'approach';
+  return 'hold-spacing';
+}
+
+function distanceAwareReplayRadialIntent(detail = {}, band = 'hold-spacing') {
+  const self = detail.self || {};
+  const target = detail.target || {};
+  const toward = {
+    dx: Math.sign(Number(target.x || 0) - Number(self.x || 0)),
+    dy: Math.sign(Number(target.y || 0) - Number(self.y || 0))
+  };
+  if (band === 'approach') return toward;
+  if (band === 'separate') return { dx: -toward.dx, dy: -toward.dy };
+  if (band === 'strafe') return detail.movement?.movementArbitration?.strategicDirection || detail.movement || { dx: 0, dy: 0 };
+  return { dx: 0, dy: 0 };
+}
+
+function replayDistanceAwareDodge(rows, options = {}) {
+  let state = null;
+  const rng = createSeededRandomCore(Number(options.seed || 1));
+  const timingSamples = [];
+  const modeCounts = { 'long-observe': 0, 'medium-reactive': 0, 'close-proactive': 0 };
+  const submodeCounts = { predictive: 0, stochastic: 0 };
+  const reasonCounts = {};
+  const samples = [];
+  const oldCloseDirections = [];
+  const currentCloseDirections = [];
+  const oldPreDodgeDirections = [];
+  const currentPreDodgeDirections = [];
+  let currentDirectHitsOld = 0;
+  let currentDirectHitsCurrent = 0;
+  let newFalseSafe = 0;
+  let unavoidableCurrentShot = 0;
+  let unavoidableWithoutProof = 0;
+  let nextVolleyOldHits = 0;
+  let nextVolleyCurrentHits = 0;
+  let nextVolleyCpaGainCm = 0;
+  let modeRoundTripsUnder300Ms = 0;
+  let equivalentCommandDispatches = 0;
+  let lowStaminaTriggers = 0;
+  let leaveTriggers = 0;
+  let staleTriggers = 0;
+  let radialBandMismatch = 0;
+  let radialOverrideWithoutImmediateThreat = 0;
+  let directionStabilityHolds = 0;
+  let preDodgeTriggers = 0;
+  const directionTransitions = [];
+  let previousCloseDirection = null;
+  let previousCloseDirectionAt = 0;
+  let previousMode = null;
+  let previousModeAt = 0;
+  let priorMode = null;
+  let priorModeAt = 0;
+  for (const row of rows) {
+    const detail = row.detail || {};
+    const movement = detail.movement || {};
+    const threatField = Array.isArray(movement.dodge?.threatField) ? movement.dodge.threatField : [];
+    const bullets = distanceAwareReplayBullets(threatField);
+    const currentDirection = {
+      dx: Math.sign(Number(detail.self?.vx || 0)),
+      dy: Math.sign(Number(detail.self?.vy || 0))
+    };
+    const pendingDirection = movement.movementArbitration?.pendingDirection || null;
+    const pendingCommands = pendingDirection
+      ? [{
+          commandId: 'logged-pending-direction',
+          dx: pendingDirection.dx,
+          dy: pendingDirection.dy,
+          effectiveAfterTicks: Math.max(1, Number(movement.commandLatency?.visibleTransitionTickDelay || 5)),
+          sequence: 1
+        }]
+      : [];
+    const visibleDelay = optionalNumberOrNull(movement.commandLatency?.visibleTransitionTickDelay);
+    if (visibleDelay !== null) timingSamples.push(visibleDelay);
+    if (timingSamples.length > 32) timingSamples.shift();
+    const movementTiming = {
+      sampleCount: timingSamples.length,
+      medianTicks: percentile(timingSamples, 0.5) ?? 5,
+      p90Ticks: percentile(timingSamples, 0.9) ?? 5,
+      source: timingSamples.length >= 4 ? 'causal-visible-transition-replay' : 'startup-conservative'
+    };
+    const selectedOldThreat = distanceAwareReplaySelectedThreat(threatField, movement);
+    const ordinaryDodge = {
+      ...(movement.dodge || {}),
+      unavoidableCurrentShot: movement.dodge?.unavoidableCurrentShot === true
+        || (selectedOldThreat && Number(selectedOldThreat.unavoidableHits || 0) > 0
+          && Number(selectedOldThreat.avoidableHits || 0) === 0)
+    };
+    const atMs = Date.parse(row.entry.at || '');
+    const commandBudget = deriveCombatReactionBudgetCore({
+      nowMs: atMs,
+      realtimeStateObservedAtMs: atMs,
+      movementExecutionTiming: movementTiming,
+      pendingVelocityCommands: pendingCommands
+    }, { tickMs: 50 });
+    const reactionSlack = currentProspectiveReactionSlackCore({
+      nowMs: atMs,
+      commandBudget,
+      self: detail.self,
+      target: detail.target,
+      bullets,
+      dodge: ordinaryDodge,
+      currentDirection,
+      pendingDirection
+    }, { bulletSpeedCmPerTick: 500, minimumCpaCm: 200 });
+    const baseBand = distanceAwareReplayBaseBand(detail);
+    const radialIntent = distanceAwareReplayRadialIntent(detail, baseBand);
+    const shootingPhase = detail.behavior?.dimensions?.shootingPhase || {};
+    const shotSampleCount = Math.max(0, Number(
+      shootingPhase.burstSampleCount
+        ?? detail.behavior?.metrics?.burstSampleCount
+        ?? 0
+    ));
+    const lowStamina = optionalNumberOrNull(detail.self?.stamina5s) !== null
+      && Number(detail.self.stamina5s) < 3400;
+    const resolved = resolveDistanceAwareDodgeCore({
+      nowMs: atMs,
+      targetId: String(detail.target?.userId ?? ''),
+      engagementId: String(detail.metrics?.engagementId || detail.target?.userId || ''),
+      self: detail.self,
+      target: detail.target,
+      bullets,
+      dodge: ordinaryDodge,
+      baseMovement: movement,
+      baseDistanceBand: baseBand,
+      currentDirection,
+      pendingDirection,
+      unavoidableHoldDirection: pendingDirection || currentDirection,
+      pendingVelocityCommands: pendingCommands,
+      movementExecutionTiming: movementTiming,
+      currentTick: detail.tick,
+      radialIntentVector: radialIntent,
+      previousState: state,
+      reactionSlack,
+      activeOpponent: detail.target?.active === true,
+      recentDirectedThreat: bullets.length > 0 || shotSampleCount >= 2,
+      lowStamina,
+      exitActive: Boolean(detail.exit),
+      boundaryRisk: false,
+      collisionRisk: false,
+      opponentBehaviorState: detail.behavior,
+      shootingPhase,
+      nextShotInMs: optionalNumberOrNull(shootingPhase.nextShotInMs),
+      shotIntervalMeanMs: optionalNumberOrNull(detail.behavior?.metrics?.shotIntervalMeanMs),
+      shotIntervalCv: optionalNumberOrNull(detail.behavior?.metrics?.shotIntervalCv),
+      shotSampleCount
+    }, {
+      rng,
+      minimumCpaCm: 200,
+      moveSpeedPerTick: 50,
+      bulletSpeedCmPerTick: 500,
+      modeMinimumHoldMs: 300,
+      latchMinimumHoldMs: 400
+    });
+    state = resolved.state;
+    const currentMovement = resolved.applied || resolved.suppressCurrentShotDodge
+      ? resolved.direction
+      : movement;
+    const selectedCurrentThreat = distanceAwareReplaySelectedThreat(threatField, currentMovement);
+    const oldHits = Number(selectedOldThreat?.directHits || 0);
+    const currentHits = Number(selectedCurrentThreat?.directHits || 0);
+    currentDirectHitsOld += oldHits;
+    currentDirectHitsCurrent += currentHits;
+    if (oldHits === 0 && currentHits > 0) newFalseSafe += 1;
+    if (resolved.preDodgeReason === 'unavoidable-current-shot') {
+      unavoidableCurrentShot += 1;
+      const safeCandidate = threatField.some(item => Number(item?.directHits || 0) === 0
+        && Number(item?.unavoidableHits || 0) === 0
+        && item?.scheduleRobust !== false);
+      if (!threatField.length || safeCandidate) unavoidableWithoutProof += 1;
+    }
+    if (resolved.baselineNextVolleyDirectHits !== null) {
+      nextVolleyOldHits += Number(resolved.baselineNextVolleyDirectHits || 0);
+      nextVolleyCurrentHits += Number(resolved.nextVolleyDirectHits || 0);
+      if (Number.isFinite(Number(resolved.nextVolleyMinCpaCm))
+        && Number.isFinite(Number(resolved.baselineNextVolleyMinCpaCm))) {
+        nextVolleyCpaGainCm = Math.max(
+          nextVolleyCpaGainCm,
+          Number(resolved.nextVolleyMinCpaCm) - Number(resolved.baselineNextVolleyMinCpaCm)
+        );
+      }
+    }
+    if (resolved.applied
+      && ((currentDirection.dx === Number(resolved.direction.dx) && currentDirection.dy === Number(resolved.direction.dy))
+        || (pendingDirection
+          && Number(pendingDirection.dx) === Number(resolved.direction.dx)
+          && Number(pendingDirection.dy) === Number(resolved.direction.dy)))) {
+      equivalentCommandDispatches += 1;
+    }
+    if (resolved.applied && lowStamina) lowStaminaTriggers += 1;
+    if (resolved.applied && detail.exit) leaveTriggers += 1;
+    if (resolved.applied && resolved.preDodgeReason === 'stale-realtime-state') staleTriggers += 1;
+    if (resolved.directionStabilityHeld) directionStabilityHolds += 1;
+    if (resolved.preDodgeTrigger) preDodgeTriggers += 1;
+    if (resolved.baseDistanceBand !== baseBand) radialBandMismatch += 1;
+    if (resolved.applied && !threatField.length && resolved.baseRadialIntent?.source !== 'explicit') {
+      radialOverrideWithoutImmediateThreat += 1;
+    }
+    modeCounts[resolved.mode] = Number(modeCounts[resolved.mode] || 0) + 1;
+    if (resolved.closeSubmode) submodeCounts[resolved.closeSubmode] = Number(submodeCounts[resolved.closeSubmode] || 0) + 1;
+    reasonCounts[resolved.preDodgeReason] = Number(reasonCounts[resolved.preDodgeReason] || 0) + 1;
+    if (resolved.mode !== previousMode) {
+      if (priorMode === 'medium-reactive'
+        && previousMode === 'close-proactive'
+        && resolved.mode === 'medium-reactive'
+        && atMs - priorModeAt < 300
+        && !bullets.length) {
+        modeRoundTripsUnder300Ms += 1;
+      }
+      priorMode = previousMode;
+      priorModeAt = previousModeAt;
+      previousMode = resolved.mode;
+      previousModeAt = atMs;
+    }
+    if (resolved.mode === 'close-proactive') {
+      const oldDirection = { dx: Number(movement.dx || 0), dy: Number(movement.dy || 0) };
+      const currentDirection = { dx: Number(currentMovement.dx || 0), dy: Number(currentMovement.dy || 0) };
+      oldCloseDirections.push({ atMs, direction: oldDirection });
+      currentCloseDirections.push({ atMs, direction: currentDirection });
+      if (resolved.applied || resolved.directionStabilityHeld) {
+        oldPreDodgeDirections.push({ atMs, direction: oldDirection });
+        currentPreDodgeDirections.push({ atMs, direction: currentDirection });
+      }
+      if (previousCloseDirection
+        && atMs - previousCloseDirectionAt <= 500
+        && directionOppositeCore(previousCloseDirection, currentDirection)
+        && directionTransitions.length < 32) {
+        directionTransitions.push({
+          at: row.entry.at,
+          oldDirection,
+          previousCurrentDirection: previousCloseDirection,
+          currentDirection,
+          reason: resolved.preDodgeReason,
+          closeSubmode: resolved.closeSubmode,
+          directionStabilityHeld: resolved.directionStabilityHeld === true,
+          preDodgeTrigger: resolved.preDodgeTrigger === true
+        });
+      }
+      previousCloseDirection = currentDirection;
+      previousCloseDirectionAt = atMs;
+    }
+    if (samples.length < 24 && (resolved.applied || resolved.suppressCurrentShotDodge)) {
+      samples.push({
+        line: row.line,
+        at: row.entry.at,
+        tick: detail.tick,
+        mode: resolved.mode,
+        closeSubmode: resolved.closeSubmode,
+        reason: resolved.preDodgeReason,
+        oldDirection: { dx: Number(movement.dx || 0), dy: Number(movement.dy || 0) },
+        currentDirection: { dx: Number(currentMovement.dx || 0), dy: Number(currentMovement.dy || 0) },
+        reactionSlackMs: resolved.reactionSlackMs,
+        prospectiveReactionSlackMs: resolved.prospectiveReactionSlackMs,
+        baselineNextVolleyMinCpaCm: resolved.baselineNextVolleyMinCpaCm,
+        nextVolleyMinCpaCm: resolved.nextVolleyMinCpaCm
+      });
+    }
+  }
+  const reversalCount = entries => {
+    let count = 0;
+    for (let index = 1; index < entries.length; index += 1) {
+      if (entries[index].atMs - entries[index - 1].atMs > 500) continue;
+      if (directionOppositeCore(entries[index - 1].direction, entries[index].direction)) count += 1;
+    }
+    return count;
+  };
+  const oldReversals = reversalCount(oldCloseDirections);
+  const currentReversals = reversalCount(currentCloseDirections);
+  const oldPreDodgeReversals = reversalCount(oldPreDodgeDirections);
+  const currentPreDodgeReversals = reversalCount(currentPreDodgeDirections);
+  const preDodgeReversalReductionPct = oldPreDodgeReversals
+    ? Number(((oldPreDodgeReversals - currentPreDodgeReversals) / oldPreDodgeReversals * 100).toFixed(1))
+    : (currentPreDodgeReversals === 0 ? 100 : null);
+  const reversalReductionPct = oldReversals
+    ? Number(((oldReversals - currentReversals) / oldReversals * 100).toFixed(1))
+    : null;
+  const concreteNextVolleyImprovement = nextVolleyCurrentHits < nextVolleyOldHits || nextVolleyCpaGainCm >= 90;
+  return {
+    frames: rows.length,
+    modeCounts,
+    submodeCounts,
+    reasonCounts,
+    currentShot: {
+      historicalDirectHits: currentDirectHitsOld,
+      currentDirectHits: currentDirectHitsCurrent,
+      newFalseSafe,
+      unavoidableCurrentShot,
+      unavoidableWithoutProof
+    },
+    nextVolley: {
+      historicalDirectHits: nextVolleyOldHits,
+      currentDirectHits: nextVolleyCurrentHits,
+      maximumCpaGainCm: Number(nextVolleyCpaGainCm.toFixed(1)),
+      concreteImprovement: concreteNextVolleyImprovement
+    },
+    commandStability: {
+      historicalCloseReversals500Ms: oldReversals,
+      currentCloseReversals500Ms: currentReversals,
+      reversalReductionPct,
+      modeRoundTripsUnder300Ms,
+      equivalentCommandDispatches
+    },
+    distanceAwareCommandStability: {
+      historicalPreDodgeReversals500Ms: oldPreDodgeReversals,
+      currentPreDodgeReversals500Ms: currentPreDodgeReversals,
+      reversalReductionPct: preDodgeReversalReductionPct,
+      preDodgeDirectionSamples: currentPreDodgeDirections.length
+    },
+    directionStability: {
+      windowMs: 500,
+      holds: directionStabilityHolds,
+      preDodgeTriggers,
+      oppositeTransitions: directionTransitions
+    },
+    invariants: {
+      radialBandMismatch,
+      radialOverrideWithoutImmediateThreat,
+      lowStaminaTriggers,
+      leaveTriggers,
+      staleTriggers
+    },
+    samples,
+    accepted: newFalseSafe === 0
+      && currentDirectHitsCurrent <= currentDirectHitsOld
+      && unavoidableWithoutProof === 0
+      && nextVolleyCurrentHits <= nextVolleyOldHits
+      && modeRoundTripsUnder300Ms === 0
+      && equivalentCommandDispatches === 0
+      && radialBandMismatch === 0
+      && lowStaminaTriggers === 0
+      && leaveTriggers === 0
+      && staleTriggers === 0
+  };
+}
+
+function replayDistanceAwareCombat(options = {}) {
+  const allRows = selectedEntries(options);
+  const rows = allRows.filter(row => row.entry?.type === 'combat-live'
+    && (!options.targetId || String(row.detail.target?.userId ?? '') === String(options.targetId)));
+  const executionMatchedShots = executionMatchedConfirmedShots(options, allRows, rows);
+  const replayOptions = { ...options, executionMatchedShots };
+  const aim = replayDistanceAwareAim(allRows, rows, replayOptions);
+  const dispatch = replayDistanceAwareDispatch(allRows, rows, replayOptions);
+  const dodge = replayDistanceAwareDodge(rows, options);
+  return {
+    mode: 'distance-aware-combat',
+    targetId: options.targetId || '',
+    lines: `${options.startLine}-${options.endLine}`,
+    frames: rows.length,
+    causalPrefixOnly: true,
+    independentOracle: 'replay-local-created-tick-quadratic-and-fixed-aim-range',
+    aim,
+    dispatch,
+    dodge,
+    accepted: rows.length > 0 && aim.accepted && dispatch.accepted && dodge.accepted
+  };
+}
+
+function runDistanceAwareReplaySelfTest() {
+  const checks = [];
+  const oracle = distance => independentCreationReachabilityOracleCore(
+    { x: 0, y: 0, vx: 0, vy: 0 },
+    { x: distance, y: 0, vx: 0, vy: 0 },
+    { x: distance, y: 0 },
+    {
+      bulletSpeedCmPerTick: 500,
+      bulletRangeCm: 15000,
+      bulletLifetimeTicks: 30,
+      hitRadiusCm: 90,
+      creationDelayTicks: 0,
+      creationDelayMinTicks: 0,
+      creationDelayMaxTicks: 0
+    }
+  );
+  checks.push({
+    name: 'independent-oracle-range-boundaries',
+    passed: oracle(14910).reachable === true
+      && oracle(15000).reachable === true
+      && oracle(15090).reachable === true
+      && oracle(15100).reason === 'intercept-beyond-bullet-range'
+  });
+  const noRoot = independentCreationReachabilityOracleCore(
+    { x: 0, y: 0, vx: 0, vy: 0 },
+    { x: 1000, y: 0, vx: 600, vy: 0 },
+    { x: 1000, y: 0 },
+    { creationDelayTicks: 0, creationDelayMinTicks: 0, creationDelayMaxTicks: 0 }
+  );
+  const stale = independentCreationReachabilityOracleCore(
+    { x: 0, y: 0, vx: 0, vy: 0 },
+    { x: 1000, y: 0, vx: 0, vy: 0 },
+    { x: 1000, y: 0 },
+    { creationDelayTicks: 0, realtimeStateAgeMs: 501 }
+  );
+  const stableStationaryWindow = independentCreationReachabilityOracleCore(
+    { x: 0, y: 0, vx: 0, vy: 0 },
+    { x: 1000, y: 0, vx: 0, vy: 0 },
+    { x: 1000, y: 0 },
+    { creationDelayTicks: 3, creationDelayMinTicks: 1, creationDelayMaxTicks: 6 }
+  );
+  const unstable = independentCreationReachabilityOracleCore(
+    { x: 0, y: 0, vx: 0, vy: 0 },
+    { x: 1000, y: 0, vx: 50, vy: 0 },
+    { x: 1000, y: 0 },
+    { creationDelayTicks: 3, creationDelayMinTicks: 1, creationDelayMaxTicks: 6 }
+  );
+  checks.push({
+    name: 'independent-oracle-rejects-no-root-stale-and-unstable-input',
+    passed: noRoot.reason === 'no-positive-intercept'
+      && stale.reason === 'stale-realtime-state'
+      && stableStationaryWindow.reachable === true
+      && unstable.reason === 'creation-window-unstable'
+  });
+  let dispatchState = {};
+  const dispatchOutcomes = [];
+  for (const input of [
+    { nowMs: 0, intent: true, cadenceMs: 160 },
+    { nowMs: 50, intent: true, cadenceMs: 160 },
+    { nowMs: 160, intent: false, cadenceMs: 160 },
+    { nowMs: 210, intent: true, cadenceMs: 160 }
+  ]) {
+    const step = shootDispatchStateStepCore(dispatchState, { ...input, ackLatencyMs: 180 });
+    dispatchState = step.state;
+    dispatchOutcomes.push(step.outcome);
+  }
+  checks.push({
+    name: 'dispatch-state-recovers-on-first-legal-window-after-unreachable-frame',
+    passed: dispatchOutcomes.join(',') === 'dispatch,cooldown,no-intent,dispatch'
+      && dispatchState.dispatchCount === 2
+  });
+  const baseDodgeInput = {
+    nowMs: 1000,
+    targetId: 'synthetic-target',
+    engagementId: 'synthetic-engagement',
+    activeOpponent: true,
+    self: { x: 0, y: 0, vx: 0, vy: 0 },
+    target: { x: 4000, y: 0, vx: 0, vy: 0 },
+    baseMovement: { dx: 1, dy: 0 },
+    baseDistanceBand: 'approach',
+    radialIntentVector: { dx: 1, dy: 0 },
+    currentDirection: { dx: 0, dy: 0 },
+    nextShotInMs: 250,
+    shotSampleCount: 1,
+    reactionSlack: {
+      currentShotAvoidability: 'safe',
+      threateningBulletCount: 0,
+      currentDirectionSafe: false,
+      pendingDirectionSafe: false,
+      nextVolleyMinCpaCm: 0,
+      reactionSlackMs: null,
+      prospectiveReactionSlackMs: -50,
+      commandBudgetMs: 400,
+      observationAgeMs: 0,
+      pendingCommandSchedule: []
+    }
+  };
+  const first = resolveDistanceAwareDodgeCore(baseDodgeInput, {
+    rng: createSeededRandomCore(17),
+    minimumCpaCm: 200,
+    latchMinimumHoldMs: 400
+  });
+  const second = resolveDistanceAwareDodgeCore({ ...baseDodgeInput, nowMs: 1050, previousState: first.state }, {
+    rng: () => { throw new Error('latched replay must not resample'); },
+    minimumCpaCm: 200,
+    latchMinimumHoldMs: 400
+  });
+  const lowStamina = resolveDistanceAwareDodgeCore({ ...baseDodgeInput, lowStamina: true }, { rng: () => 0.5 });
+  const leave = resolveDistanceAwareDodgeCore({ ...baseDodgeInput, exitActive: true }, { rng: () => 0.5 });
+  const staleDodge = resolveDistanceAwareDodgeCore({
+    ...baseDodgeInput,
+    reactionSlack: { ...baseDodgeInput.reactionSlack, observationAgeMs: 501 }
+  }, { rng: () => 0.5 });
+  const receding = resolveDistanceAwareDodgeCore({
+    ...baseDodgeInput,
+    target: { x: 4000, y: 0, vx: 50, vy: 0 }
+  }, { rng: () => 0.5 });
+  const tangential = resolveDistanceAwareDodgeCore({
+    ...baseDodgeInput,
+    target: { x: 4000, y: 0, vx: 0, vy: 50 }
+  }, { rng: () => 0.5 });
+  checks.push({
+    name: 'distance-aware-synthetic-causal-latch-and-negative-gates',
+    passed: first.applied === true
+      && first.closeSubmode === 'stochastic'
+      && second.randomChoice?.unit === first.randomChoice?.unit
+      && lowStamina.preDodgeReason === 'stamina-insufficient'
+      && leave.preDodgeReason === 'leave-active'
+      && staleDodge.preDodgeReason === 'stale-realtime-state'
+      && receding.preDodgeReason === 'receding-without-threat-evidence'
+      && tangential.preDodgeReason === 'tangential-without-threat-evidence'
+  });
+  const symmetric = Array.from({ length: 1000 }, (_, index) => resolveDistanceAwareDodgeCore({
+    ...baseDodgeInput,
+    targetId: 'remapped-target',
+    engagementId: `remapped-engagement-${index}`
+  }, {
+    rng: createSeededRandomCore(Math.imul(index + 1, 0x9e3779b1)),
+    minimumCpaCm: 200
+  })).filter(item => item.applied);
+  const negativeY = symmetric.filter(item => Number(item.direction.dy) < 0).length;
+  const positiveY = symmetric.filter(item => Number(item.direction.dy) > 0).length;
+  checks.push({
+    name: 'distance-aware-symmetric-1000-seed-distribution-is-repeatable',
+    passed: symmetric.length === 1000
+      && negativeY >= 450 && negativeY <= 550
+      && positiveY >= 450 && positiveY <= 550
+  });
+  const failed = checks.filter(check => !check.passed);
+  return {
+    mode: 'distance-aware-combat-self-test',
+    passed: checks.length - failed.length,
+    failed: failed.length,
+    total: checks.length,
+    checks,
+    accepted: failed.length === 0
+  };
+}
+
 function runReplay(options) {
+  if (options.selfTest) return runDistanceAwareReplaySelfTest();
+  if (options.mode === 'distance-aware-combat') return replayDistanceAwareCombat(options);
   if (options.mode === 'movement-command-latency') return replayMovementCommandLatency(options);
   if (options.mode === 'opportunity') return replayOpportunity(options);
   if (options.mode === 'afk-finish-commitment') return replayAfkFinishCommitment(options);
@@ -5565,7 +6905,9 @@ if (require.main === module) {
 }
 
 module.exports = {
+  independentCreationReachabilityOracleCore,
   parseArgs,
+  replayDistanceAwareCombat,
   replayCombatClosePressure,
   replayNoDamageGenerationGrid,
   replayResponsePolicyShadow,
@@ -5584,5 +6926,6 @@ module.exports = {
   replayMovementCommandLatency,
   replayMovementStallExit,
   replayRecoveryThreatExit,
+  runDistanceAwareReplaySelfTest,
   runReplay
 };

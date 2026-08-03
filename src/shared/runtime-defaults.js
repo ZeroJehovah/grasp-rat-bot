@@ -73,6 +73,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     dynamicWhitelistProximitySafetyEnabled: config.dynamicWhitelistProximitySafetyEnabled !== false,
     preTargetIncomingDodgeEnabled: config.preTargetIncomingDodgeEnabled !== false,
     combatRobustDodgeEnabled: config.combatRobustDodgeEnabled !== false,
+    combatDistanceAwareDodgeEnabled: config.combatDistanceAwareDodgeEnabled !== false,
     combatCloseBandReserveEnabled: config.combatCloseBandReserveEnabled !== false,
     combatMovementStabilityEnabled: config.combatMovementStabilityEnabled === true,
     combatSafeRetreatInterceptEnabled: config.combatSafeRetreatInterceptEnabled === true,

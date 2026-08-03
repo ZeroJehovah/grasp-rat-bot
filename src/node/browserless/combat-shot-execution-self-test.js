@@ -140,6 +140,36 @@ function runCombatShotExecutionSelfTest() {
   check('unmatched ACK is explicitly orphaned', command.orphanAckCount === 1
     && command.acceptedShots === 2);
 
+  let matchNowMs = 5000;
+  const matchStore = createBrowserlessStateStore({ userId: 1, now: () => matchNowMs });
+  const matchControl = matchStore.beginControlGeneration('ws-open');
+  matchStore.recordShootRequest({
+    requestId: 'request-same-aim-expired',
+    targetId: 8,
+    targetX: 400,
+    targetY: 0,
+    controlGeneration: matchControl,
+    engagementGeneration: 'engagement-old',
+    observedTick: 50
+  });
+  matchNowMs += 1100;
+  matchStore.recordShootRequest({
+    requestId: 'request-same-aim-pending',
+    targetId: 8,
+    targetX: 400,
+    targetY: 0,
+    controlGeneration: matchControl,
+    engagementGeneration: 'engagement-current',
+    observedTick: 90
+  });
+  matchStore.ingestFrame(shotAck('bullet-same-aim-current', 400, 0, 94), { receivedAtMs: matchNowMs + 10 });
+  const sameAimCommand = matchStore.getCommandState(matchNowMs + 10).shooting;
+  const sameAim = sameAimCommand.confirmedShots.find(shot => shot.bullet_id === 'bullet-same-aim-current');
+  check('created tick matches a same-aim ACK to the causal pending request', sameAim?.requestId === 'request-same-aim-pending'
+    && sameAim.lateAck === false
+    && sameAim.executionDelayTicks === 4
+    && sameAimCommand.expiredShots.some(shot => shot.requestId === 'request-same-aim-expired'));
+
   const controlB = store.beginControlGeneration('ws-reconnect');
   check('WebSocket reconnect changes control generation', controlB !== controlA);
   store.reset({ userId: 1, reason: 'session-restart' });

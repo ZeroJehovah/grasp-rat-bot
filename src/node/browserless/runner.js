@@ -193,6 +193,7 @@ function publicConfig(config) {
     browserlessProfitPursuitPressureCycleMs: Number(config.browserlessProfitPursuitPressureCycleMs || 0),
     combatEnabled: Boolean(config.combatEnabled),
     combatRobustDodgeEnabled: config.combatRobustDodgeEnabled !== false,
+    combatDistanceAwareDodgeEnabled: config.combatDistanceAwareDodgeEnabled !== false,
     combatCloseBandReserveEnabled: config.combatCloseBandReserveEnabled !== false,
     combatMovementStabilityEnabled: config.combatMovementStabilityEnabled === true,
     combatSafeRetreatInterceptEnabled: config.combatSafeRetreatInterceptEnabled === true,

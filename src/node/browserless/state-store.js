@@ -976,6 +976,8 @@ function createBrowserlessStateStore(options = {}) {
     }
     const targetX = numericOrNull(ack.target_x);
     const targetY = numericOrNull(ack.target_y);
+    const createdTick = numericOrNull(ack.created_tick);
+    const expectedDelayTicks = Math.max(0, Number(currentShotTimingSummary().medianTicks || 5));
     const candidates = [
       ...state.command.pendingShots.map((item, index) => ({ item, index, source: 'pending' })),
       ...state.command.expiredShots.map((item, index) => ({ item, index, source: 'expired' }))
@@ -985,10 +987,18 @@ function createBrowserlessStateStore(options = {}) {
         ...candidate,
         distance: targetX === null || targetY === null
           ? candidate.index
-          : Math.hypot(Number(candidate.item.targetX) - targetX, Number(candidate.item.targetY) - targetY)
+          : Math.hypot(Number(candidate.item.targetX) - targetX, Number(candidate.item.targetY) - targetY),
+        creationDelayTicks: createdTick === null || numericOrNull(candidate.item.observedTick) === null
+          ? null
+          : createdTick - Number(candidate.item.observedTick)
       }))
       .filter(candidate => targetX === null || targetY === null || candidate.distance <= 5)
       .sort((a, b) => a.distance - b.distance
+        || Number(a.creationDelayTicks === null || a.creationDelayTicks < 0)
+          - Number(b.creationDelayTicks === null || b.creationDelayTicks < 0)
+        || Math.abs(Number(a.creationDelayTicks ?? expectedDelayTicks) - expectedDelayTicks)
+          - Math.abs(Number(b.creationDelayTicks ?? expectedDelayTicks) - expectedDelayTicks)
+        || Number(a.source === 'expired') - Number(b.source === 'expired')
         || Number(a.item.requestedAtMs || 0) - Number(b.item.requestedAtMs || 0))[0] || null;
     let confirmed = null;
     if (pending) {
@@ -1000,7 +1010,6 @@ function createBrowserlessStateStore(options = {}) {
         state.command.pendingShots.splice(pending.index, 1);
       }
       const observedTick = numericOrNull(pending.item.observedTick);
-      const createdTick = numericOrNull(ack.created_tick);
       confirmed = {
         ...pending.item,
         ...ack,

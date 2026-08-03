@@ -297,21 +297,29 @@ function buildTrajectoryPathsCore(input = {}, options = {}) {
 function buildCandidateShotForPath(path, input = {}, options = {}) {
   const bulletSpeed = Math.max(1, Number(options.bulletSpeedCmPerTick ?? DEFAULT_BULLET_SPEED_CM_PER_TICK));
   const lifetime = Math.max(1, Math.min(path.points.length - 1, Math.round(Number(options.bulletLifetimeTicks ?? DEFAULT_BULLET_LIFETIME_TICKS))));
+  const bulletRange = Math.max(1, Number(
+    options.bulletRangeCm ?? bulletSpeed * lifetime
+  ));
+  const hitRadius = Math.max(0, Number(options.hitRadiusCm ?? DEFAULT_HIT_RADIUS_CM));
   const origin = input.predictedShooterOrigin;
+  if (!origin || !Number.isFinite(Number(origin.x)) || !Number.isFinite(Number(origin.y))) return null;
   let bestTick = 0;
   let bestTargetPoint = null;
   let bestRadialGap = Infinity;
+  let bestRangeCm = null;
   for (let tick = 1; tick <= lifetime; tick += 1) {
     const targetPoint = pointAt(path, tick);
     const distance = Math.hypot(Number(targetPoint.x) - Number(origin.x), Number(targetPoint.y) - Number(origin.y));
+    if (distance > bulletRange + hitRadius + 1e-6) continue;
     const radialGap = Math.abs(distance - bulletSpeed * tick);
     if (radialGap < bestRadialGap) {
       bestTick = tick;
       bestTargetPoint = targetPoint;
       bestRadialGap = radialGap;
+      bestRangeCm = distance;
     }
   }
-  if (!bestTargetPoint) return null;
+  if (!bestTargetPoint || bestRadialGap > hitRadius + 1e-6) return null;
   const directionDx = Number(bestTargetPoint.x) - Number(origin.x);
   const directionDy = Number(bestTargetPoint.y) - Number(origin.y);
   const directionLength = Math.hypot(directionDx, directionDy);
@@ -330,6 +338,9 @@ function buildCandidateShotForPath(path, input = {}, options = {}) {
     directionY: directionDy / directionLength,
     interceptTick: bestTick,
     radialGapCm: bestRadialGap,
+    interceptRangeCm: bestRangeCm,
+    physicallyReachable: true,
+    reachabilityReason: 'reachable',
     routeProbability: path.weight,
     directionState: path.directionState || null
   };
@@ -366,14 +377,35 @@ function shotCorridorMissCore(shot, path, input = {}, options = {}) {
   const directionX = rawDirectionX / directionLength;
   const directionY = rawDirectionY / directionLength;
   let minimum = Infinity;
-  for (let relativeTick = 0; relativeTick < path.points.length; relativeTick += 1) {
-    const absoluteTick = planCreatedTick + relativeTick;
-    if (absoluteTick < startTick || absoluteTick > expireTick) continue;
-    const elapsed = absoluteTick - startTick;
+  for (let relativeTick = 0; relativeTick < path.points.length - 1; relativeTick += 1) {
+    const segmentStartTick = planCreatedTick + relativeTick;
+    const segmentEndTick = segmentStartTick + 1;
+    const activeStartTick = Math.max(segmentStartTick, startTick);
+    const activeEndTick = Math.min(segmentEndTick, expireTick);
+    if (activeEndTick < activeStartTick) continue;
+    const segmentOffset = activeStartTick - segmentStartTick;
+    const elapsed = activeStartTick - startTick;
     const bulletX = Number(shot.startX) + directionX * bulletSpeed * elapsed;
     const bulletY = Number(shot.startY) + directionY * bulletSpeed * elapsed;
-    const targetPoint = path.points[relativeTick];
-    minimum = Math.min(minimum, Math.hypot(bulletX - targetPoint.x, bulletY - targetPoint.y));
+    const targetStart = path.points[relativeTick];
+    const targetEnd = path.points[relativeTick + 1];
+    const targetVx = Number(targetEnd.x) - Number(targetStart.x);
+    const targetVy = Number(targetEnd.y) - Number(targetStart.y);
+    const targetX = Number(targetStart.x) + targetVx * segmentOffset;
+    const targetY = Number(targetStart.y) + targetVy * segmentOffset;
+    const relativeX = bulletX - targetX;
+    const relativeY = bulletY - targetY;
+    const relativeVx = directionX * bulletSpeed - targetVx;
+    const relativeVy = directionY * bulletSpeed - targetVy;
+    const duration = Math.max(0, activeEndTick - activeStartTick);
+    const velocitySquared = relativeVx * relativeVx + relativeVy * relativeVy;
+    const closestOffset = velocitySquared > 1e-9
+      ? clamp(-(relativeX * relativeVx + relativeY * relativeVy) / velocitySquared, 0, duration)
+      : 0;
+    minimum = Math.min(minimum, Math.hypot(
+      relativeX + relativeVx * closestOffset,
+      relativeY + relativeVy * closestOffset
+    ));
   }
   return minimum;
 }
@@ -485,7 +517,89 @@ function robustShotMissCore(shot, paths, input, options = {}) {
   }));
   return {
     expectedMissCm: rows.reduce((sum, row) => sum + Number(row.weight || 0) * Number(row.value || 0), 0),
-    robustMissCm: weightedPercentile(rows, 0.75)
+    medianMissCm: weightedPercentile(rows, 0.5),
+    robustMissCm: weightedPercentile(rows, 0.75),
+    tailMissCm: weightedPercentile(rows, 0.9)
+  };
+}
+
+function selectRobustTrajectoryAimCore(input = {}, options = {}) {
+  const paths = buildTrajectoryPathsCore(input, options);
+  if (!paths.length) {
+    return {
+      selected: null,
+      reason: 'no-trajectory-paths',
+      candidateCount: 0,
+      trajectoryCount: 0
+    };
+  }
+  const candidates = dedupeCandidateShots(
+    paths.map(path => buildCandidateShotForPath(path, input, options)),
+    options
+  ).map(shot => {
+    const miss = robustShotMissCore(shot, paths, input, options);
+    const hitRadius = Math.max(1, Number(options.hitRadiusCm ?? DEFAULT_HIT_RADIUS_CM));
+    const hardCoverageMass = paths.reduce((sum, path) => (
+      sum + (shotCorridorMissCore(shot, path, input, options) <= hitRadius ? path.weight : 0)
+    ), 0);
+    return {
+      ...shot,
+      ...miss,
+      hardCoverageMass,
+      // A route that asks the target to travel a long distance from the
+      // creation-time observation carries more unmodelled turn/stop risk.
+      // Keep that uncertainty in the candidate ordering without making it a
+      // fire gate; the base intercept remains a valid fallback.
+      routeExtrapolationCm: Math.max(0, Math.hypot(
+        Number(shot.aimX) - Number(input.predictedTargetAtCreation?.x || 0),
+        Number(shot.aimY) - Number(input.predictedTargetAtCreation?.y || 0)
+      )),
+      robustScore: miss.tailMissCm + miss.robustMissCm * 0.35 + miss.expectedMissCm * 0.15
+        + Math.max(0, Math.hypot(
+          Number(shot.aimX) - Number(input.predictedTargetAtCreation?.x || 0),
+          Number(shot.aimY) - Number(input.predictedTargetAtCreation?.y || 0)
+        ) - Math.max(1, Number(options.hitRadiusCm ?? DEFAULT_HIT_RADIUS_CM))) * 0.80
+    };
+  }).sort((left, right) => left.robustScore - right.robustScore
+    || left.tailMissCm - right.tailMissCm
+    || left.robustMissCm - right.robustMissCm
+    || left.expectedMissCm - right.expectedMissCm
+    || right.hardCoverageMass - left.hardCoverageMass
+    || right.routeProbability - left.routeProbability
+    || String(left.id || '').localeCompare(String(right.id || '')));
+  const selected = candidates[0] || null;
+  const baseline = robustShotMissCore(baselineShotCore(input, options), paths, input, options);
+  const summarize = candidate => candidate ? {
+    hypothesis: candidate.hypothesis,
+    variant: candidate.variant,
+    aimX: Math.round(candidate.aimX),
+    aimY: Math.round(candidate.aimY),
+    interceptTick: candidate.interceptTick,
+    interceptRangeCm: Math.round(candidate.interceptRangeCm),
+    radialGapCm: Math.round(candidate.radialGapCm * 10) / 10,
+    routeProbability: Number(candidate.routeProbability.toFixed(4)),
+    expectedMissCm: Math.round(candidate.expectedMissCm),
+    medianMissCm: Math.round(candidate.medianMissCm),
+    robustMissCm: Math.round(candidate.robustMissCm),
+    tailMissCm: Math.round(candidate.tailMissCm),
+    robustScore: Math.round(candidate.robustScore),
+    routeExtrapolationCm: Math.round(candidate.routeExtrapolationCm),
+    hardCoverageMass: Number(candidate.hardCoverageMass.toFixed(4)),
+    physicallyReachable: candidate.physicallyReachable === true,
+    reachabilityReason: candidate.reachabilityReason || ''
+  } : null;
+  return {
+    selected: summarize(selected),
+    baseline: {
+      expectedMissCm: Number.isFinite(baseline.expectedMissCm) ? Math.round(baseline.expectedMissCm) : null,
+      medianMissCm: Number.isFinite(baseline.medianMissCm) ? Math.round(baseline.medianMissCm) : null,
+      robustMissCm: Number.isFinite(baseline.robustMissCm) ? Math.round(baseline.robustMissCm) : null,
+      tailMissCm: Number.isFinite(baseline.tailMissCm) ? Math.round(baseline.tailMissCm) : null
+    },
+    reason: selected ? 'robust-trajectory-medoid' : 'no-shot-candidates',
+    candidateCount: candidates.length,
+    trajectoryCount: paths.length,
+    candidates: candidates.slice(0, 4).map(summarize)
   };
 }
 
@@ -658,6 +772,11 @@ function buildTrajectoryCoveragePlanCore(input = {}, options = {}) {
     expectedMissImprovementCm: Math.round(expectedMissImprovementCm),
     minimumImprovementCm: Number.isFinite(minimumImprovementCm) ? Math.round(minimumImprovementCm) : null,
     improvementQualified,
+    physicallyReachable: selected.physicallyReachable === true,
+    reachabilityReason: selected.reachabilityReason || '',
+    interceptRangeCm: selected.interceptRangeCm === null
+      ? null
+      : Math.round(selected.interceptRangeCm),
     directionState: selected.directionState || null
   } : null;
   return {
@@ -681,7 +800,12 @@ function buildTrajectoryCoveragePlanCore(input = {}, options = {}) {
       aimY: Math.round(candidate.aimY),
       marginalCoverage: Number(candidate.marginalCoverage.toFixed(4)),
       hardMarginalCoverage: Number(candidate.hardMarginalCoverage.toFixed(4)),
-      radialGapCm: Math.round(candidate.radialGapCm * 10) / 10
+      radialGapCm: Math.round(candidate.radialGapCm * 10) / 10,
+      physicallyReachable: candidate.physicallyReachable === true,
+      reachabilityReason: candidate.reachabilityReason || '',
+      interceptRangeCm: candidate.interceptRangeCm === null
+        ? null
+        : Math.round(candidate.interceptRangeCm)
     }))
   };
 }
@@ -694,6 +818,7 @@ module.exports = {
   normalizeTrajectoryCoverageMode,
   normalizedDynamicRouteSelectionMode,
   rankedDynamicRouteCandidates,
+  selectRobustTrajectoryAimCore,
   selectDynamicRouteCandidateCore,
   shouldApplyTrajectoryCoverageCore,
   shotCorridorMissCore

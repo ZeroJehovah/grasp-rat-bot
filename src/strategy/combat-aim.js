@@ -4,6 +4,246 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+const DEFAULT_BULLET_SPEED_CM_PER_TICK = 500;
+const DEFAULT_BULLET_RANGE_CM = 15000;
+const DEFAULT_BULLET_LIFETIME_TICKS = 30;
+const DEFAULT_HIT_RADIUS_CM = 90;
+const DEFAULT_CREATION_DELAY_TICKS = 5;
+const DEFAULT_MAX_STATE_AGE_MS = 500;
+const DEFAULT_MAX_CREATION_WINDOW_TICKS = 4;
+
+function finiteOrNull(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function creationDelayWindowCore(options = {}) {
+  const fallback = Math.max(0, Number(
+    options.creationDelayTicks
+      ?? options.observationToExecutionTicks
+      ?? options.renderDelayTicks
+      ?? DEFAULT_CREATION_DELAY_TICKS
+  ));
+  const minimum = Math.max(0, Number(
+    options.creationDelayMinTicks
+      ?? options.creationDelayTicks
+      ?? options.observationToExecutionTicks
+      ?? fallback
+  ));
+  const maximum = Math.max(minimum, Number(
+    options.creationDelayMaxTicks
+      ?? options.creationDelayTicks
+      ?? options.observationToExecutionTicks
+      ?? fallback
+  ));
+  const width = maximum - minimum;
+  const configuredSelected = finiteOrNull(options.selectedCreationDelayTicks);
+  return {
+    minTicks: minimum,
+    maxTicks: maximum,
+    widthTicks: width,
+    selectedTicks: configuredSelected === null
+      ? (minimum + maximum) / 2
+      : clamp(configuredSelected, minimum, maximum),
+    unstable: options.creationWindowUnstable === true
+      || width > Math.max(0, Number(options.maxCreationWindowTicks ?? DEFAULT_MAX_CREATION_WINDOW_TICKS))
+  };
+}
+
+function realtimeStateAgeCore(self, target, options = {}) {
+  const explicitAge = finiteOrNull(options.realtimeStateAgeMs ?? options.observationAgeMs);
+  if (explicitAge !== null) return Math.max(0, explicitAge);
+  const nowMs = finiteOrNull(options.nowMs);
+  const observedAt = finiteOrNull(
+    options.realtimeStateObservedAtMs
+      ?? options.observedAtMs
+      ?? target?.receivedAtMs
+      ?? self?.receivedAtMs
+  );
+  if (nowMs === null || observedAt === null) return null;
+  return Math.max(0, nowMs - observedAt);
+}
+
+function solveInterceptAtCreationCore(self, target, options = {}) {
+  const sx = finiteOrNull(self?.x);
+  const sy = finiteOrNull(self?.y);
+  const tx = finiteOrNull(target?.x);
+  const ty = finiteOrNull(target?.y);
+  const targetVx = finiteOrNull(target?.vx) ?? 0;
+  const targetVy = finiteOrNull(target?.vy) ?? 0;
+  const shooterVx = finiteOrNull(options.shooterVelocity?.vx ?? self?.vx) ?? 0;
+  const shooterVy = finiteOrNull(options.shooterVelocity?.vy ?? self?.vy) ?? 0;
+  const bulletSpeed = Math.max(1, Number(options.bulletSpeedCmPerTick ?? options.bulletSpeed ?? DEFAULT_BULLET_SPEED_CM_PER_TICK));
+  const bulletRange = Math.max(1, Number(options.bulletRangeCm ?? options.bulletRange ?? DEFAULT_BULLET_RANGE_CM));
+  const hitRadius = Math.max(0, Number(options.hitRadiusCm ?? options.hitRadius ?? DEFAULT_HIT_RADIUS_CM));
+  const lifetimeTicks = Math.max(1, Number(
+    options.bulletLifetimeTicks ?? options.maxTicks ?? Math.min(DEFAULT_BULLET_LIFETIME_TICKS, bulletRange / bulletSpeed)
+  ));
+  const stateAgeMs = realtimeStateAgeCore(self, target, options);
+  const maxStateAgeMs = Math.max(0, Number(options.maxRealtimeStateAgeMs ?? DEFAULT_MAX_STATE_AGE_MS));
+  const creationWindow = creationDelayWindowCore(options);
+  const base = {
+    reachable: false,
+    reason: 'invalid-geometry',
+    creationDelayWindowTicks: {
+      min: creationWindow.minTicks,
+      max: creationWindow.maxTicks,
+      width: creationWindow.widthTicks
+    },
+    observationAgeMs: stateAgeMs,
+    bulletSpeedCmPerTick: bulletSpeed,
+    bulletRangeCm: bulletRange,
+    bulletLifetimeTicks: lifetimeTicks,
+    hitRadiusCm: hitRadius,
+    predictedShooterOrigin: null,
+    predictedTargetAtCreation: null,
+    interceptTicks: null,
+    interceptRangeCm: null,
+    interceptPoint: null,
+    rangeGapCm: null
+  };
+  if (target?.authority && String(target.authority) !== 'realtime') {
+    return { ...base, reason: 'stale-realtime-state' };
+  }
+  if (stateAgeMs !== null && stateAgeMs > maxStateAgeMs) {
+    return { ...base, reason: 'stale-realtime-state' };
+  }
+  if (![sx, sy, tx, ty, targetVx, targetVy, shooterVx, shooterVy].every(Number.isFinite)) return base;
+  const targetCreationWindowDisplacementCm = Math.hypot(targetVx, targetVy) * creationWindow.widthTicks;
+  if (creationWindow.unstable && targetCreationWindowDisplacementCm > hitRadius + 1e-6) {
+    return {
+      ...base,
+      reason: 'creation-window-unstable',
+      targetCreationWindowDisplacementCm
+    };
+  }
+
+  const delayTicks = creationWindow.selectedTicks;
+  const shooterOrigin = {
+    x: sx + shooterVx * delayTicks,
+    y: sy + shooterVy * delayTicks,
+    vx: shooterVx,
+    vy: shooterVy
+  };
+  const targetAtCreation = {
+    x: tx + targetVx * delayTicks,
+    y: ty + targetVy * delayTicks,
+    vx: targetVx,
+    vy: targetVy
+  };
+  const dx = targetAtCreation.x - shooterOrigin.x;
+  const dy = targetAtCreation.y - shooterOrigin.y;
+  const c = dx * dx + dy * dy;
+  const resultBase = {
+    ...base,
+    predictedShooterOrigin: shooterOrigin,
+    predictedTargetAtCreation: targetAtCreation,
+    targetCreationWindowDisplacementCm
+  };
+  if (!(c > 0)) return { ...resultBase, reason: 'invalid-geometry' };
+
+  const a = targetVx * targetVx + targetVy * targetVy - bulletSpeed * bulletSpeed;
+  const b = 2 * (dx * targetVx + dy * targetVy);
+  const roots = [];
+  if (Math.abs(a) < 1e-6) {
+    if (Math.abs(b) > 1e-6) roots.push(-c / b);
+  } else {
+    const discriminant = b * b - 4 * a * c;
+    if (discriminant >= -1e-6) {
+      const root = Math.sqrt(Math.max(0, discriminant));
+      roots.push((-b - root) / (2 * a), (-b + root) / (2 * a));
+    }
+  }
+  const positiveRoots = roots.filter(root => Number.isFinite(root) && root > 0).sort((left, right) => left - right);
+  if (!positiveRoots.length) return { ...resultBase, reason: 'no-positive-intercept' };
+  const flightTicks = positiveRoots[0];
+  const interceptPoint = {
+    x: targetAtCreation.x + targetVx * flightTicks,
+    y: targetAtCreation.y + targetVy * flightTicks
+  };
+  const interceptRangeCm = Math.hypot(interceptPoint.x - shooterOrigin.x, interceptPoint.y - shooterOrigin.y);
+  const rangeGapCm = Math.max(0, interceptRangeCm - bulletRange - hitRadius);
+  if (rangeGapCm > 1e-6) {
+    return {
+      ...resultBase,
+      reason: 'intercept-beyond-bullet-range',
+      interceptTicks: flightTicks,
+      interceptRangeCm,
+      interceptPoint,
+      rangeGapCm
+    };
+  }
+  if (flightTicks > lifetimeTicks + 1e-6) {
+    const edgeTarget = {
+      x: targetAtCreation.x + targetVx * lifetimeTicks,
+      y: targetAtCreation.y + targetVy * lifetimeTicks
+    };
+    const edgeRangeCm = Math.hypot(edgeTarget.x - shooterOrigin.x, edgeTarget.y - shooterOrigin.y);
+    const edgeToleranceCm = Math.abs(edgeRangeCm - bulletSpeed * lifetimeTicks);
+    if (edgeToleranceCm <= hitRadius + 1e-6 && edgeRangeCm <= bulletRange + hitRadius + 1e-6) {
+      return {
+        ...resultBase,
+        reachable: true,
+        reason: 'reachable',
+        interceptTicks: lifetimeTicks,
+        interceptRangeCm: bulletSpeed * lifetimeTicks,
+        interceptPoint: edgeTarget,
+        rangeGapCm: 0,
+        edgeToleranceCm
+      };
+    }
+    return {
+      ...resultBase,
+      reason: 'intercept-after-lifetime',
+      interceptTicks: flightTicks,
+      interceptRangeCm,
+      interceptPoint,
+      rangeGapCm
+    };
+  }
+  return {
+    ...resultBase,
+    reachable: true,
+    reason: 'reachable',
+    interceptTicks: flightTicks,
+    interceptRangeCm,
+    interceptPoint,
+    rangeGapCm: 0
+  };
+}
+
+function evaluateAimPointReachabilityCore(origin, point, options = {}) {
+  const ox = finiteOrNull(origin?.x);
+  const oy = finiteOrNull(origin?.y);
+  const px = finiteOrNull(point?.x);
+  const py = finiteOrNull(point?.y);
+  const bulletSpeed = Math.max(1, Number(options.bulletSpeedCmPerTick ?? options.bulletSpeed ?? DEFAULT_BULLET_SPEED_CM_PER_TICK));
+  const bulletRange = Math.max(1, Number(options.bulletRangeCm ?? options.bulletRange ?? DEFAULT_BULLET_RANGE_CM));
+  const hitRadius = Math.max(0, Number(options.hitRadiusCm ?? options.hitRadius ?? DEFAULT_HIT_RADIUS_CM));
+  const lifetimeTicks = Math.max(1, Number(options.bulletLifetimeTicks ?? options.maxTicks ?? bulletRange / bulletSpeed));
+  if (![ox, oy, px, py].every(Number.isFinite)) return { reachable: false, reason: 'invalid-geometry' };
+  const distanceCm = Math.hypot(px - ox, py - oy);
+  const flightTicks = distanceCm / bulletSpeed;
+  if (distanceCm > bulletRange + hitRadius + 1e-6) {
+    return { reachable: false, reason: 'intercept-beyond-bullet-range', distanceCm, flightTicks, rangeGapCm: distanceCm - bulletRange - hitRadius };
+  }
+  if (flightTicks > lifetimeTicks + 1e-6) {
+    const edgeToleranceCm = Math.abs(distanceCm - bulletSpeed * lifetimeTicks);
+    if (edgeToleranceCm <= hitRadius + 1e-6 && distanceCm <= bulletRange + hitRadius + 1e-6) {
+      return {
+        reachable: true,
+        reason: 'reachable',
+        distanceCm,
+        flightTicks: lifetimeTicks,
+        rangeGapCm: 0,
+        edgeToleranceCm
+      };
+    }
+    return { reachable: false, reason: 'intercept-after-lifetime', distanceCm, flightTicks, rangeGapCm: Math.max(0, distanceCm - bulletRange - hitRadius) };
+  }
+  return { reachable: true, reason: 'reachable', distanceCm, flightTicks, rangeGapCm: 0 };
+}
+
 function opponentMotionProfileCore(self, target, samples = [], options = {}) {
   const threshold = Math.max(1, Number(options.stationarySpeed || 5));
   const history = (samples || []).filter(Boolean).slice(-80);
@@ -142,4 +382,11 @@ function quadraticInterceptCore(self, target, options = {}) {
   };
 }
 
-module.exports = { opponentMotionProfileCore, quadraticInterceptCore };
+module.exports = {
+  creationDelayWindowCore,
+  evaluateAimPointReachabilityCore,
+  opponentMotionProfileCore,
+  quadraticInterceptCore,
+  realtimeStateAgeCore,
+  solveInterceptAtCreationCore
+};

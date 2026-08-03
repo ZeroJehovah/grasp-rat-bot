@@ -83,6 +83,7 @@ const DEFAULTS = {
   dynamicWhitelistProximitySafetyEnabled: true,
   preTargetIncomingDodgeEnabled: true,
   combatRobustDodgeEnabled: true,
+  combatDistanceAwareDodgeEnabled: true,
   combatCloseBandReserveEnabled: true,
   combatMovementStabilityEnabled: false,
   combatSafeRetreatInterceptEnabled: false,
@@ -259,6 +260,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       DEFAULTS.preTargetIncomingDodgeEnabled
     ),
     combatRobustDodgeEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_ROBUST_DODGE_ENABLED, DEFAULTS.combatRobustDodgeEnabled),
+    combatDistanceAwareDodgeEnabled: boolEnv(
+      env.GRASP_RAT_BROWSERLESS_COMBAT_DISTANCE_AWARE_DODGE_ENABLED,
+      DEFAULTS.combatDistanceAwareDodgeEnabled
+    ),
     combatCloseBandReserveEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_BAND_RESERVE_ENABLED, DEFAULTS.combatCloseBandReserveEnabled),
     combatMovementStabilityEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_MOVEMENT_STABILITY_ENABLED, DEFAULTS.combatMovementStabilityEnabled),
     combatSafeRetreatInterceptEnabled: boolEnv(
@@ -484,6 +489,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.combatShootMinIntervalMs = numberEnv(argv[++i], config.combatShootMinIntervalMs);
     } else if (arg === '--no-combat-robust-dodge') {
       config.combatRobustDodgeEnabled = false;
+    } else if (arg === '--combat-distance-aware-dodge') {
+      config.combatDistanceAwareDodgeEnabled = true;
+    } else if (arg === '--no-combat-distance-aware-dodge') {
+      config.combatDistanceAwareDodgeEnabled = false;
     } else if (arg === '--no-combat-close-band-reserve') {
       config.combatCloseBandReserveEnabled = false;
     } else if (arg === '--combat-movement-stability') {
@@ -677,6 +686,7 @@ function usage() {
     '  --combat-response-policy-shadow-minimum-hold-ms <ms>  Minimum shadow policy hold. Default: 500',
     '  --combat-trajectory-coverage-mode <mode>  Multi-trajectory aim mode: off|shadow|live-single|live-volley. Default: live-single',
     '  --no-combat-robust-dodge  Disable robust Dodge schedule/trajectory uncertainty for rollback',
+    '  --no-combat-distance-aware-dodge  Disable distance-aware Dodge rollout for rollback',
     '  --no-combat-close-band-reserve  Disable the two-shot close-band reserve for rollback',
     '  --ws-trace              Write decoded WebSocket frame/command trace to ws.jsonl',
     '  --no-ws-trace           Disable WebSocket trace logging',

@@ -19,8 +19,11 @@ const {
   applyCombatMovementModifiers,
   calculateCombatSpacing,
   calculateDodgeDirection,
+  currentProspectiveReactionSlackCore,
   contactEntryRiskCore,
   contactEntrySyntheticBulletCore,
+  deriveCombatReactionBudgetCore,
+  resolveDistanceAwareDodgeCore,
   selectCombatMovementArbitrationCore,
   safeRetreatInterceptCandidateCore,
   stabilizeCombatMovementDirectionCore,
@@ -43,13 +46,19 @@ const {
   evaluateConfirmedCombatHpExitCore,
   evaluateCombatHpExitCore
 } = require('../../strategy/combat-exit');
-const { opponentMotionProfileCore, quadraticInterceptCore } = require('../../strategy/combat-aim');
+const {
+  evaluateAimPointReachabilityCore,
+  opponentMotionProfileCore,
+  quadraticInterceptCore,
+  solveInterceptAtCreationCore
+} = require('../../strategy/combat-aim');
 const {
   buildTrajectoryCoveragePlanCore,
   dynamicBehaviorTrajectoryEligibilityCore,
   normalizeTrajectoryCoverageMode,
   normalizedDynamicRouteSelectionMode,
   selectDynamicRouteCandidateCore,
+  selectRobustTrajectoryAimCore,
   shouldApplyTrajectoryCoverageCore
 } = require('../../strategy/combat-shot-coverage');
 const {
@@ -1256,6 +1265,45 @@ function estimateAim(self, target, options = {}) {
   const shooterVy = numberOrNull(options.shooterVelocity?.vy) ?? numberOrNull(self.vy) ?? 0;
   const bulletRange = Math.max(1, Number(options.combatBulletRangeCm || COMBAT_CONSTANTS.BULLET_RANGE_CM));
   const hitRadius = Math.max(0, Number(options.combatBulletHitRadiusCm || 90));
+  const bulletLifetimeTicks = Math.max(1, Number(
+    options.combatBulletLifetimeTicks
+      ?? COMBAT_CONSTANTS.BULLET_LIFETIME_TICKS
+      ?? bulletRange / bulletSpeed
+  ));
+  const creationDelayMinTicks = Math.max(0, numberOrNull(
+    options.combatAimCreationDelayMinTicks
+      ?? timing.minTicks
+      ?? timing.medianTicks
+  ) ?? observationToExecutionTicks);
+  const creationDelayMaxTicks = Math.max(creationDelayMinTicks, numberOrNull(
+    options.combatAimCreationDelayMaxTicks
+      ?? timing.maxTicks
+      ?? timing.p90Ticks
+  ) ?? observationToExecutionTicks);
+  const realtimeStateObservedAtMs = numberOrNull(
+    options.realtimeStateObservedAtMs
+      ?? options.observedAtMs
+      ?? target.receivedAtMs
+      ?? self.receivedAtMs
+  );
+  const creationOracle = solveInterceptAtCreationCore(self, target, {
+    bulletSpeedCmPerTick: bulletSpeed,
+    bulletRangeCm: bulletRange,
+    bulletLifetimeTicks,
+    hitRadiusCm: hitRadius,
+    selectedCreationDelayTicks: observationToExecutionTicks,
+    creationDelayMinTicks,
+    creationDelayMaxTicks,
+    maxCreationWindowTicks: options.combatAimMaxCreationWindowTicks,
+    realtimeStateObservedAtMs,
+    nowMs: options.nowMs,
+    realtimeStateAgeMs: options.realtimeStateAgeMs,
+    maxRealtimeStateAgeMs: options.combatAimMaxRealtimeStateAgeMs,
+    shooterVelocity: {
+      vx: shooterVx,
+      vy: shooterVy
+    }
+  });
   const interceptOptions = {
     bulletSpeed,
     observationToExecutionTicks,
@@ -1270,35 +1318,69 @@ function estimateAim(self, target, options = {}) {
     maxTargetSpeed: options.combatTargetDodgeSpeedPerTick || 50,
     motionScale
   };
-  const intercept = quadraticInterceptCore(self, target, {
+  const constrainedIntercept = quadraticInterceptCore(self, target, {
     ...interceptOptions,
     bulletRange,
     maxTicks: options.combatInterceptMaxTicks,
   });
+  const oracleIntercept = creationOracle.reachable === true && creationOracle.interceptPoint
+    ? {
+        x: creationOracle.interceptPoint.x,
+        y: creationOracle.interceptPoint.y,
+        flightTicks: creationOracle.interceptTicks,
+        flightMs: Number(creationOracle.interceptTicks || 0) * 50,
+        travelDistance: creationOracle.interceptRangeCm,
+        leadDistance: Math.hypot(
+          creationOracle.interceptPoint.x - tx,
+          creationOracle.interceptPoint.y - ty
+        ),
+        predictedShooterOrigin: creationOracle.predictedShooterOrigin,
+        predictedTargetAtCreation: creationOracle.predictedTargetAtCreation,
+        relativeExecutionDisplacement: {
+          x: (vx - shooterVx) * observationToExecutionTicks,
+          y: (vy - shooterVy) * observationToExecutionTicks
+        },
+        targetSpeed: Math.hypot(vx, vy),
+        confidence: 0.55
+      }
+    : null;
+  const intercept = creationOracle.reachable === true
+    ? (constrainedIntercept || oracleIntercept)
+    : null;
   const unconstrainedIntercept = intercept || quadraticInterceptCore(self, target, {
     ...interceptOptions,
     bulletRange: Math.max(60000, bulletRange * 4),
     maxTicks: Math.max(120, Number(options.combatInterceptMaxTicks || 0))
   });
-  const requiredTravelDistance = numberOrNull(unconstrainedIntercept?.travelDistance);
-  const reachabilityGapCm = requiredTravelDistance === null
-    ? null
-    : Math.max(0, requiredTravelDistance - bulletRange - hitRadius);
+  const requiredTravelDistance = numberOrNull(
+    creationOracle.interceptRangeCm ?? unconstrainedIntercept?.travelDistance
+  );
+  const reachabilityGapCm = creationOracle.reachable === true
+    ? 0
+    : (requiredTravelDistance === null
+        ? null
+        : Math.max(0, requiredTravelDistance - bulletRange - hitRadius));
   const fireReachability = {
-    feasible: Boolean(intercept || (reachabilityGapCm !== null && reachabilityGapCm <= 0)),
-    unreachable: Boolean(!intercept && reachabilityGapCm !== null && reachabilityGapCm > 0),
-    reason: intercept
-      ? 'intercept-within-bullet-range'
-      : (reachabilityGapCm !== null && reachabilityGapCm > 0
-          ? 'intercept-beyond-bullet-range'
-          : 'intercept-unresolved'),
+    reachable: creationOracle.reachable === true,
+    feasible: creationOracle.reachable === true,
+    unreachable: creationOracle.reachable !== true,
+    reason: creationOracle.reason,
+    authority: 'realtime-creation-oracle',
+    observationAgeMs: creationOracle.observationAgeMs,
+    creationDelayWindowTicks: creationOracle.creationDelayWindowTicks,
     bulletRangeCm: bulletRange,
+    bulletLifetimeTicks,
     hitRadiusCm: hitRadius,
     requiredTravelDistanceCm: requiredTravelDistance === null ? null : Math.round(requiredTravelDistance),
     rangeGapCm: reachabilityGapCm === null ? null : Math.round(reachabilityGapCm),
-    requiredFlightTicks: numberOrNull(unconstrainedIntercept?.flightTicks)
+    requiredFlightTicks: numberOrNull(creationOracle.interceptTicks ?? unconstrainedIntercept?.flightTicks),
+    interceptPoint: creationOracle.interceptPoint,
+    predictedShooterOrigin: creationOracle.predictedShooterOrigin,
+    predictedTargetAtCreation: creationOracle.predictedTargetAtCreation
   };
-  const flightTicks = intercept?.flightTicks ?? Math.max(0, distance / bulletSpeed);
+  const flightTicks = intercept?.flightTicks
+    ?? creationOracle.interceptTicks
+    ?? Math.max(0, distance / bulletSpeed);
   const leadTicks = flightTicks + observationToExecutionTicks;
   const fallbackPredictedShooterOrigin = {
     x: Number(self.x) + shooterVx * observationToExecutionTicks,
@@ -1391,7 +1473,7 @@ function estimateAim(self, target, options = {}) {
       && Number(transitionModel?.transitionCount || 0) >= 4
       && Number(transitionModel?.next?.[0]?.probability || 0) >= 0.5
   );
-  if (moving && coverageAffordable && behavior?.mode !== 'stationary') {
+  if (moving && creationOracle.reachable === true) {
     const ux = vx / targetSpeed;
     const uy = vy / targetSpeed;
     const targetAtCreationX = Number(intercept?.predictedTargetAtCreation?.x ?? tx + vx * observationToExecutionTicks);
@@ -1439,6 +1521,7 @@ function estimateAim(self, target, options = {}) {
     }
     const localWeight = Math.min(3, localSamples / 4);
     const globalWeight = Math.min(4, Math.max(0, Number(globalCell?.samples || 0)) / 12);
+    const creationOrigin = creationOracle.predictedShooterOrigin || fallbackPredictedShooterOrigin;
     let candidates = Array.from(candidateByDirection.values()).map(candidate => {
       const localProbability = Number(localDistribution.get(candidate.directionState) || 0);
       const globalProbability = Number(globalDistribution.get(candidate.directionState) || 0);
@@ -1447,6 +1530,18 @@ function estimateAim(self, target, options = {}) {
         / Math.max(1, 1 + localWeight + globalWeight);
       const feedback = routeLearning?.routeAimFeedback?.[routeFeedbackKey(routeContextKey, candidate.hypothesis)] || null;
       const feedbackSamples = Math.max(0, Number(feedback?.samples || 0));
+      const targetMotionReachable = Math.hypot(
+        Number(candidate.x) - targetAtCreationX,
+        Number(candidate.y) - targetAtCreationY
+      ) <= reachable + hitRadius + 1;
+      const aimPointReachability = targetMotionReachable
+        ? evaluateAimPointReachabilityCore(creationOrigin, candidate, {
+            bulletSpeedCmPerTick: bulletSpeed,
+            bulletRangeCm: bulletRange,
+            bulletLifetimeTicks,
+            hitRadiusCm: hitRadius
+          })
+        : { reachable: false, reason: 'target-motion-out-of-horizon' };
       return {
         ...candidate,
         priorProbability,
@@ -1463,7 +1558,10 @@ function estimateAim(self, target, options = {}) {
         feedbackSamples,
         probability: Math.max(0.001, rawProbability),
         shotStaminaCost: Math.max(1, Number(options.combatShotStaminaCostMs ?? 500)),
-        uncertaintyCm: Math.round(targetSpeed * leadTicks * Math.max(0.1, 1 - rawProbability))
+        uncertaintyCm: Math.round(targetSpeed * leadTicks * Math.max(0.1, 1 - rawProbability)),
+        physicallyReachable: aimPointReachability.reachable === true,
+        reachabilityReason: aimPointReachability.reason,
+        reachabilityDistanceCm: numberOrNull(aimPointReachability.distanceCm)
       };
     });
     const probabilityTotal = candidates.reduce((sum, candidate) => sum + Number(candidate.probability || 0), 0);
@@ -1471,8 +1569,46 @@ function estimateAim(self, target, options = {}) {
       ...candidate,
       probability: probabilityTotal > 0 ? Number(candidate.probability || 0) / probabilityTotal : 0
     }));
+    const robustTrajectorySelection = profile.sampleCount >= 4
+      ? selectRobustTrajectoryAimCore({
+          targetId: combatTargetId(target),
+          createdTick: Number(options.observedTick || 0) + observationToExecutionTicks,
+          executionDelayTicks: observationToExecutionTicks,
+          controlIntervalTicks: Math.max(1, Math.ceil(Number(options.combatControlIntervalMs || 50) / 50)),
+          learnedDwellTicks: 0,
+          flightTicks,
+          predictedShooterOrigin: creationOrigin,
+          predictedTargetAtCreation: creationOracle.predictedTargetAtCreation || fallbackPredictedTargetAtCreation,
+          baselineAim: { x, y },
+          target,
+          routeCandidates: candidates
+        }, {
+          bulletSpeedCmPerTick: bulletSpeed,
+          bulletLifetimeTicks,
+          bulletRangeCm: bulletRange,
+          hitRadiusCm: hitRadius,
+          maxRouteClusters: 4,
+          maxShotCandidates: 12
+        })
+      : null;
+    const robustSelected = robustTrajectorySelection?.selected || null;
+    const robustApplied = Boolean(robustSelected
+      && robustSelected.physicallyReachable === true
+      && profile.sampleCount >= 4);
+    const routePriorHypothesis = {
+      'charge-close': 'continue',
+      'steady-linear': 'stop',
+      'zigzag-strafe': 'stop',
+      'retreat-kite': 'stop',
+      'pressure-shooter': 'stop'
+    }[String(behavior?.mode || '')] || '';
+    const routePriorCandidate = routePriorHypothesis
+      ? candidates.find(candidate => candidate.hypothesis === routePriorHypothesis
+        && candidate.physicallyReachable === true)
+      : null;
     const shotIndex = Math.max(0, Math.round(Number(options.actualShots || 0)));
-    const rankedCandidates = candidates.slice().sort((a, b) => b.probability - a.probability
+    const selectableCandidates = candidates.filter(candidate => candidate.physicallyReachable === true);
+    const rankedCandidates = selectableCandidates.slice().sort((a, b) => b.probability - a.probability
       || String(a.hypothesis || '').localeCompare(String(b.hypothesis || '')));
     const primaryCandidate = rankedCandidates[0] || null;
     const explorationCandidate = rankedCandidates[1] || null;
@@ -1502,20 +1638,40 @@ function estimateAim(self, target, options = {}) {
       : (highEntropyCoverage
           ? [primaryCandidate, ...(highEntropyExplore ? [explorationCandidate] : [])].filter(Boolean)
           : rankedCandidates.slice(0, 2));
-    const selected = dynamicBehaviorCoverage
+    let selected = dynamicBehaviorCoverage
       ? (routeSelectionMode === 'legacy-fixed'
           ? coverageSequence[shotIndex % Math.max(1, coverageSequence.length)]
           : dynamicSelection?.selected || null)
       : (highEntropyCoverage
           ? (highEntropyExplore ? explorationCandidate : primaryCandidate)
           : coverageSequence[shotIndex % coverageSequence.length]);
-    if (selected && (dynamicBehaviorCoverage || highEntropyCoverage || noDamageWidened || scriptTransitionCoverage)) {
-      const persistedCandidates = dynamicBehaviorCoverage ? coverageSequence.slice(0, 4) : rankedCandidates.slice(0, 4);
+    if (robustApplied) {
+      const routeCandidate = candidates.find(candidate => (
+        String(candidate.hypothesis || '') === String(robustSelected.hypothesis || '')
+      ));
+      const selectedRoute = routePriorCandidate || routeCandidate;
+      selected = {
+        ...(selectedRoute || {}),
+        hypothesis: selectedRoute?.hypothesis || robustSelected.hypothesis,
+        variant: routePriorCandidate ? 'causal-route-prior' : robustSelected.variant,
+        x: routePriorCandidate ? routePriorCandidate.x : robustSelected.aimX,
+        y: routePriorCandidate ? routePriorCandidate.y : robustSelected.aimY,
+        interceptTick: routePriorCandidate?.interceptTick ?? robustSelected.interceptTick,
+        radialGapCm: routePriorCandidate?.radialGapCm ?? robustSelected.radialGapCm,
+        routeProbability: routePriorCandidate?.probability ?? robustSelected.routeProbability,
+        routePriorHypothesis,
+        robustTrajectorySelection
+      };
       x = selected.x;
       y = selected.y;
+    }
+    if (selected && (robustApplied || dynamicBehaviorCoverage || highEntropyCoverage || noDamageWidened || scriptTransitionCoverage)) {
+      const persistedCandidates = dynamicBehaviorCoverage ? coverageSequence.slice(0, 4) : rankedCandidates.slice(0, 4);
       routeCoverage = {
         enabled: true,
-        style: dynamicBehaviorCoverage
+        style: robustApplied
+          ? `robust-trajectory-medoid-${behavior?.mode || 'moving'}`
+          : dynamicBehaviorCoverage
           ? (routeSelectionMode === 'legacy-fixed'
               ? `dynamic-behavior-legacy-fixed-${behavior.mode}`
               : `dynamic-behavior-weighted-${behavior.mode}`)
@@ -1567,8 +1723,11 @@ function estimateAim(self, target, options = {}) {
           uncertaintyCm: item.uncertaintyCm,
           x: Math.round(item.x),
           y: Math.round(item.y),
-          physicallyReachable: Math.hypot(item.x - tx, item.y - ty) <= reachable + 1
+          physicallyReachable: item.physicallyReachable === true,
+          reachabilityReason: item.reachabilityReason || '',
+          reachabilityDistanceCm: item.reachabilityDistanceCm
         })),
+        robustTrajectorySelection: robustApplied ? robustTrajectorySelection : null,
         movementTransition: {
           currentState: transitionModel?.currentState || null,
           contextKey: routeContextKey,
@@ -1589,6 +1748,29 @@ function estimateAim(self, target, options = {}) {
       };
     }
   }
+  const finalAimPointReachability = evaluateAimPointReachabilityCore(
+    creationOracle.predictedShooterOrigin || fallbackPredictedShooterOrigin,
+    { x, y },
+    {
+      bulletSpeedCmPerTick: bulletSpeed,
+      bulletRangeCm: bulletRange,
+      bulletLifetimeTicks,
+      hitRadiusCm: hitRadius
+    }
+  );
+  if (creationOracle.reachable !== true || finalAimPointReachability.reachable !== true) {
+    fireReachability.reachable = false;
+    fireReachability.feasible = false;
+    fireReachability.unreachable = true;
+    fireReachability.reason = creationOracle.reachable !== true
+      ? creationOracle.reason
+      : finalAimPointReachability.reason;
+  }
+  fireReachability.actualAimPoint = {
+    x: Math.round(x),
+    y: Math.round(y),
+    ...finalAimPointReachability
+  };
   const leadDistance = distanceBetween({ x: tx, y: ty }, { x, y });
   const confidence = Math.max(0.2, Math.min(1, (moving ? Number(intercept?.confidence || 0.55) * profile.aimConfidenceScale : 1) - Math.min(0.25, noDamageLevel * 0.04)));
   if (routeCoverage?.candidates?.length) {
@@ -2104,6 +2286,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
         strategicDirection: predictiveDirection,
         currentDirection,
         pendingDirection,
+        unavoidableHoldDirection: pendingDirection || currentDirection,
         pendingActive: Boolean(pendingDirection),
         emergencyDirection: contactEntryDodge || dodge || { dx: 0, dy: 0 }
       }, { minimumCpaCm: movementSafetyCpaCm })
@@ -2137,6 +2320,142 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       backAway,
       closeIn
     });
+  }
+  const distanceAwareDodgeEnabled = options.combatDistanceAwareDodgeEnabled === true;
+  const distanceAwareReactionBudget = distanceAwareDodgeEnabled
+    ? deriveCombatReactionBudgetCore({
+        nowMs: options.nowMs,
+        realtimeStateObservedAtMs: options.realtimeStateObservedAtMs,
+        realtimeStateAgeMs: options.realtimeStateAgeMs,
+        movementExecutionTiming: options.movementExecutionTiming,
+        pendingVelocityCommands: options.pendingVelocityCommands,
+        decisionQueueDelayTicks: options.combatDecisionQueueDelayTicks,
+        movementDispatchDelayTicks: options.combatMovementDispatchDelayTicks,
+        reactionSafetyMarginTicks: options.combatReactionSafetyMarginTicks
+      }, {
+        tickMs: 50,
+        reactionSafetyMarginTicks: 2
+      })
+    : null;
+  const distanceAwareReactionSlack = distanceAwareDodgeEnabled
+    ? currentProspectiveReactionSlackCore({
+        nowMs: options.nowMs,
+        commandBudget: distanceAwareReactionBudget,
+        self,
+        target,
+        bullets,
+        dodge,
+        currentDirection,
+        pendingDirection,
+        bulletSpeedCmPerTick: COMBAT_CONSTANTS.BULLET_SPEED_CM_PER_TICK
+      }, {
+        bulletSpeedCmPerTick: COMBAT_CONSTANTS.BULLET_SPEED_CM_PER_TICK,
+        minimumCpaCm: movementSafetyCpaCm
+      })
+    : null;
+  const distanceAwareDodge = distanceAwareDodgeEnabled
+    ? resolveDistanceAwareDodgeCore({
+        nowMs: options.nowMs,
+        targetId: combatTargetId(target),
+        engagementId: options.engagementId || combatTargetId(target),
+        self,
+        target,
+        bullets,
+        dodge,
+        baseMovement: movement,
+        baseDistanceBand: closePressureTooClose
+          ? 'separate'
+          : (strafe?.active
+              ? 'strafe'
+              : (closeIn ? 'approach' : 'hold-spacing')),
+        currentDirection,
+        pendingDirection,
+        pendingVelocityCommands: options.pendingVelocityCommands,
+        movementExecutionTiming: options.movementExecutionTiming,
+        currentTick: options.currentTick,
+        moveSpeedPerTick: options.combatMoveSpeedPerTick || 50,
+        radialIntentVector: closePressureTooClose
+          ? awayFromTarget
+          : (closeIn ? towardTarget : movement),
+        previousState: options.distanceAwareDodgeState || null,
+        reactionSlack: distanceAwareReactionSlack,
+        activeOpponent: target.active === true,
+        recentDirectedThreat: Boolean(
+          bullets.some(bullet => bullet?.incoming === true)
+            || opponentBehavior?.metrics?.realBulletPressure
+            || burstSampleCount >= 2
+        ),
+        lowStamina: selfStamina5s !== null
+          && selfStamina5s < Math.max(
+            COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS,
+            Number(options.combatShootDodgeReserveMs || COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS)
+          ) + Math.max(0, Number(options.combatPreDodgeStaminaCostMs ?? 1000)),
+        exitActive: options.leaveActive === true,
+        collisionRisk: options.collisionRisk === true,
+        boundary: options.combatBoundary || options.boundary,
+        opponentBehaviorState: opponentBehavior,
+        shootingPhase,
+        nextShotInMs,
+        shotIntervalMeanMs: legacyShotIntervalMeanMs,
+        shotIntervalCv,
+        shotSampleCount: burstSampleCount,
+        targetId: combatTargetId(target)
+      }, {
+        rng: options.distanceAwareDodgeRng || options.rng,
+        boundary: options.combatBoundary || options.boundary,
+        moveSpeedPerTick: options.combatMoveSpeedPerTick || 50,
+        minimumCpaCm: movementSafetyCpaCm,
+        modeMinimumHoldMs: options.combatDistanceAwareDodgeMinimumHoldMs,
+        latchMinimumHoldMs: options.combatDistanceAwareDodgeLatchHoldMs
+      })
+    : {
+        applied: false,
+        mode: null,
+        closeSubmode: null,
+        reactionSlackMs: null,
+        prospectiveReactionSlackMs: null,
+        currentShotAvoidability: null,
+        pendingCommandSchedule: [],
+        nextVolleyMinCpaCm: null,
+        preDodgeTrigger: false,
+        preDodgeReason: 'distance-aware-dodge-disabled',
+        predictedFireWindowTicks: null,
+        predictedLaneCount: 0,
+        randomChoice: null,
+        randomHoldUntil: null,
+        baseRadialIntent: null,
+        radialOverrideReason: '',
+        latchAgeMs: 0,
+        state: null,
+        blockedReason: 'distance-aware-dodge-disabled'
+      };
+  if (distanceAwareDodge.applied) {
+    movement = {
+      ...movement,
+      dx: Number(distanceAwareDodge.direction.dx || 0),
+      dy: Number(distanceAwareDodge.direction.dy || 0),
+      modifiers: Array.from(new Set([...(movement.modifiers || []), 'dodge', 'distance-aware-dodge']))
+    };
+    effectiveDodge = {
+      ...(effectiveDodge || dodge || {}),
+      dx: movement.dx,
+      dy: movement.dy,
+      reason: `distance-aware-${distanceAwareDodge.closeSubmode || 'dodge'}`,
+      active: true
+    };
+  } else if (distanceAwareDodge.suppressCurrentShotDodge
+    && movement.modifiers.includes('dodge')) {
+    movement = {
+      ...movement,
+      dx: Number(distanceAwareDodge.direction.dx || 0),
+      dy: Number(distanceAwareDodge.direction.dy || 0),
+      modifiers: Array.from(new Set([
+        ...movement.modifiers.filter(modifier => modifier !== 'dodge'),
+        'hold-current',
+        'distance-aware-unavoidable-hold'
+      ]))
+    };
+    effectiveDodge = null;
   }
   const closeReason = pressureClose
     ? (closePressureActive ? 'combat-close-pressure-approach' : 'combat-pressure-close')
@@ -2179,8 +2498,57 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       dy: effectiveDodge?.dy ?? dodge.dy,
       reason: effectiveDodge?.reason || dodge.reason,
       applied: movement.modifiers.includes('dodge'),
+      mode: distanceAwareDodge.mode,
+      closeSubmode: distanceAwareDodge.closeSubmode,
+      reactionSlackMs: distanceAwareDodge.reactionSlackMs,
+      prospectiveReactionSlackMs: distanceAwareDodge.prospectiveReactionSlackMs,
+      currentShotAvoidability: distanceAwareDodge.currentShotAvoidability,
+      pendingCommandSchedule: distanceAwareDodge.pendingCommandSchedule,
+      nextVolleyMinCpaCm: distanceAwareDodge.nextVolleyMinCpaCm,
+      preDodgeTrigger: distanceAwareDodge.preDodgeTrigger,
+      preDodgeReason: distanceAwareDodge.preDodgeReason,
+      predictedFireWindowTicks: distanceAwareDodge.predictedFireWindowTicks,
+      predictedLaneCount: distanceAwareDodge.predictedLaneCount,
+      predictedThreatSource: distanceAwareDodge.predictedThreatSource,
+      prospectiveBullet: distanceAwareDodge.prospectiveBullet,
+      randomChoice: distanceAwareDodge.randomChoice,
+      randomHoldUntil: distanceAwareDodge.randomHoldUntil,
+      directionStabilityHeld: distanceAwareDodge.directionStabilityHeld,
+      directionStabilityWindowMs: distanceAwareDodge.directionStabilityWindowMs,
+      baseDistanceBand: distanceAwareDodge.baseDistanceBand,
+      baseRadialIntent: distanceAwareDodge.baseRadialIntent,
+      radialOverrideReason: distanceAwareDodge.radialOverrideReason,
+      latchAgeMs: distanceAwareDodge.latchAgeMs,
       threatField: summarizeDodgeThreatField(dodge.threatField)
-    } : null,
+    } : (distanceAwareDodgeEnabled ? {
+      dx: Number(movement.dx || 0),
+      dy: Number(movement.dy || 0),
+      reason: distanceAwareDodge.preDodgeReason,
+      applied: distanceAwareDodge.applied,
+      mode: distanceAwareDodge.mode,
+      closeSubmode: distanceAwareDodge.closeSubmode,
+      reactionSlackMs: distanceAwareDodge.reactionSlackMs,
+      prospectiveReactionSlackMs: distanceAwareDodge.prospectiveReactionSlackMs,
+      currentShotAvoidability: distanceAwareDodge.currentShotAvoidability,
+      pendingCommandSchedule: distanceAwareDodge.pendingCommandSchedule,
+      nextVolleyMinCpaCm: distanceAwareDodge.nextVolleyMinCpaCm,
+      preDodgeTrigger: distanceAwareDodge.preDodgeTrigger,
+      preDodgeReason: distanceAwareDodge.preDodgeReason,
+      predictedFireWindowTicks: distanceAwareDodge.predictedFireWindowTicks,
+      predictedLaneCount: distanceAwareDodge.predictedLaneCount,
+      predictedThreatSource: distanceAwareDodge.predictedThreatSource,
+      prospectiveBullet: distanceAwareDodge.prospectiveBullet,
+      randomChoice: distanceAwareDodge.randomChoice,
+      randomHoldUntil: distanceAwareDodge.randomHoldUntil,
+      directionStabilityHeld: distanceAwareDodge.directionStabilityHeld,
+      directionStabilityWindowMs: distanceAwareDodge.directionStabilityWindowMs,
+      baseDistanceBand: distanceAwareDodge.baseDistanceBand,
+      baseRadialIntent: distanceAwareDodge.baseRadialIntent,
+      radialOverrideReason: distanceAwareDodge.radialOverrideReason,
+      latchAgeMs: distanceAwareDodge.latchAgeMs,
+      threatField: []
+    } : null),
+    distanceAwareDodge,
     modifiers: movement.modifiers || [],
     safeRetreatIntercept: {
       ...safeRetreatIntercept,
@@ -3074,6 +3442,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   let aim = withOptionOverrides(options, {
     combatTargetState,
     observedTick: realtime.tick,
+    realtimeStateObservedAtMs: realtime.receivedAtMs,
     executionTiming: state?.command?.shooting?.timing || options.executionTiming,
     latestConfirmedShot: state?.command?.lastAck?.matchedShot || null,
     shooterOriginErrorSummary: state?.command?.shooting?.shooterOrigin || null,
@@ -3246,10 +3615,19 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     executionTiming: state?.command?.shooting?.timing || options.executionTiming,
     movementExecutionTiming: state?.command?.movement?.timing || options.movementExecutionTiming,
     pendingVelocityCommands: state?.command?.movement?.pendingVelocityCommands || options.pendingVelocityCommands,
+    realtimeStateObservedAtMs: realtime.receivedAtMs,
+    combatDistanceAwareDodgeEnabled: options.combatDistanceAwareDodgeEnabled === true,
+    distanceAwareDodgeState: stateful?.distanceAwareDodgeState || null,
+    engagementId: stateful?.combatMetrics?.engagementId || '',
     currentTick: realtime.tick,
     bullets,
     contactEntryGuard: contactApplies ? contactEntryGuard : null
   }, mergedOptions => buildCombatMovementPlan(self, target, bullets, mergedOptions));
+  if (stateful && options.combatDistanceAwareDodgeEnabled === true) {
+    stateful.distanceAwareDodgeState = movement?.distanceAwareDodge?.state || null;
+  } else if (stateful) {
+    stateful.distanceAwareDodgeState = null;
+  }
   const exitEvaluation = buildCombatExitEvaluation(
     self,
     target,

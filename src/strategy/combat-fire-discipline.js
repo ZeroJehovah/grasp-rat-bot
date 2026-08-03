@@ -166,9 +166,14 @@ function resolveEstablishedCombatFireAuthorizationCore(input = {}) {
     ? input.fireState
     : {};
   const staminaBlocked = fireState.state === FIRE_STATE.DISABLED || fireState.state === FIRE_STATE.PAUSED;
+  const fireReachability = input.aim?.fireReachability || null;
+  const reachabilityChecked = fireReachability && typeof fireReachability === 'object';
   let finalFireBlocker = 'none';
   if (!targetPresent) finalFireBlocker = 'no-target';
   else if (!aimOk) finalFireBlocker = `aim:${String(input.aim?.reason || input.aimReason || 'unavailable')}`;
+  else if (reachabilityChecked && fireReachability.reachable !== true) {
+    finalFireBlocker = `aim-unreachable:${String(fireReachability.reason || 'creation-oracle-rejected')}`;
+  }
   else if (!inRange) finalFireBlocker = 'target-out-of-range';
   else if (staminaBlocked) finalFireBlocker = `fire-state:${String(fireState.reason || fireState.state)}`;
   else if (input.contactEntryOnly === true) finalFireBlocker = 'movement-only-contact-entry';

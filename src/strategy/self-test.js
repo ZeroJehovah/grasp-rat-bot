@@ -12,11 +12,16 @@ const {
   applyFinalActionArbitrationCore
 } = require('./action-arbitration');
 const { buildFinalActionCandidate, selectFinalActionCandidateCore } = require('./final-candidate-selection');
-const { quadraticInterceptCore } = require('./combat-aim');
+const {
+  evaluateAimPointReachabilityCore,
+  quadraticInterceptCore,
+  solveInterceptAtCreationCore
+} = require('./combat-aim');
 const {
   buildTrajectoryCoveragePlanCore,
   buildTrajectoryPathsCore,
   dynamicBehaviorTrajectoryEligibilityCore,
+  selectRobustTrajectoryAimCore,
   shouldApplyTrajectoryCoverageCore,
   shotCorridorMissCore
 } = require('./combat-shot-coverage');
@@ -32,9 +37,16 @@ const {
 const {
   applyCombatMovementModifiers,
   calculateDodgeDirection,
+  classifyDistanceAwareDodgeModeCore,
+  createSeededRandomCore,
+  currentProspectiveReactionSlackCore,
+  deriveCombatReactionBudgetCore,
+  predictNextFireWindowCore,
   contactEntryRiskCore,
   contactEntrySyntheticBulletCore,
   pickSafeClosingDodgeCore,
+  resolveDistanceAwareDodgeCore,
+  selectStochasticDodgeCandidateCore,
   safeRetreatInterceptCandidateCore,
   selectCombatMovementArbitrationCore
 } = require('./combat-movement');
@@ -608,6 +620,13 @@ function runStrategyModuleSelfTests() {
     inRange: true,
     fireState: { state: 'paused', reason: 'close-pressure-movement-reserve' }
   });
+  const physicallyUnreachableFire = resolveEstablishedCombatFireAuthorizationCore({
+    targetPresent: true,
+    aimOk: true,
+    inRange: true,
+    fireState: { state: 'normal', reason: 'normal-fire' },
+    aim: { fireReachability: { reachable: false, reason: 'intercept-beyond-bullet-range' } }
+  });
   results.push({
     name: 'established-combat-fire-ignores-statistical-gates-but-preserves-dodge-stamina-reserve',
     passed: standardCombatFire.wouldShoot === true
@@ -616,6 +635,8 @@ function runStrategyModuleSelfTests() {
       && dodgeReserveBlockedFire.wouldShoot === false
       && dodgeReserveBlockedFire.finalFireBlocker === 'fire-state:close-pressure-movement-reserve'
       && dodgeReserveBlockedFire.fireAuthorizationClass === 'stamina-reserve-blocked'
+      && physicallyUnreachableFire.wouldShoot === false
+      && physicallyUnreachableFire.finalFireBlocker === 'aim-unreachable:intercept-beyond-bullet-range'
   });
   const initialProbe = updateCombatProbePhaseCore(null, {
     nowMs: 1000,
@@ -1054,6 +1075,338 @@ function runStrategyModuleSelfTests() {
       && contactStationary?.directHits === 1
       && contactSelected?.directHits === 0
       && contactSelected?.minCPA >= 200)
+  });
+
+  const creationOracleBase = {
+    x: 0,
+    y: 0,
+    vx: 0,
+    vy: 0,
+    authority: 'realtime'
+  };
+  const creationOracle = (distance, extra = {}, options = {}) => solveInterceptAtCreationCore(
+    creationOracleBase,
+    { x: distance, y: 0, vx: 0, vy: 0, authority: 'realtime', ...extra },
+    {
+      bulletSpeedCmPerTick: 500,
+      bulletRangeCm: 15000,
+      bulletLifetimeTicks: 30,
+      hitRadiusCm: 90,
+      creationDelayTicks: 0,
+      nowMs: 1000,
+      realtimeStateObservedAtMs: 1000,
+      ...options
+    }
+  );
+  const oracle14910 = creationOracle(14910);
+  const oracle15000 = creationOracle(15000);
+  const oracle15090 = creationOracle(15090);
+  const oracle15100 = creationOracle(15100);
+  const oracleNoPositiveRoot = creationOracle(1000, { vx: 600 });
+  const oracleStale = creationOracle(1000, {}, { realtimeStateAgeMs: 501 });
+  const oracleStableStationaryWindow = creationOracle(1000, {}, {
+    creationDelayMinTicks: 1,
+    creationDelayMaxTicks: 6,
+    maxCreationWindowTicks: 4
+  });
+  const oracleUnstableWindow = creationOracle(1000, { vx: 50 }, {
+    creationDelayMinTicks: 1,
+    creationDelayMaxTicks: 6,
+    maxCreationWindowTicks: 4
+  });
+  const aimEdge = evaluateAimPointReachabilityCore(
+    { x: 0, y: 0 },
+    { x: 15090, y: 0 },
+    { bulletSpeedCmPerTick: 500, bulletRangeCm: 15000, bulletLifetimeTicks: 30, hitRadiusCm: 90 }
+  );
+  results.push({
+    name: 'created-tick-reachability-oracle-covers-range-lifetime-staleness-and-window-boundaries',
+    passed: oracle14910.reachable === true
+      && oracle15000.reachable === true
+      && oracle15090.reachable === true
+      && oracle15090.edgeToleranceCm === 90
+      && oracle15100.reachable === false
+      && oracle15100.reason === 'intercept-beyond-bullet-range'
+      && oracleNoPositiveRoot.reason === 'no-positive-intercept'
+      && oracleStale.reason === 'stale-realtime-state'
+      && oracleStableStationaryWindow.reachable === true
+      && oracleUnstableWindow.reason === 'creation-window-unstable'
+      && aimEdge.reachable === true
+  });
+
+  const distanceAwareReaction = {
+    currentShotAvoidability: 'safe',
+    threateningBulletCount: 0,
+    currentDirectionSafe: false,
+    pendingDirectionSafe: false,
+    nextVolleyMinCpaCm: 100,
+    reactionSlackMs: -50,
+    prospectiveReactionSlackMs: -50,
+    commandBudgetMs: 100,
+    pendingCommandSchedule: []
+  };
+  const distanceAwareThreatField = [
+    { dx: 1, dy: 1, directHits: 0, unavoidableHits: 0, scheduleRobust: true, worstCaseCpaCm: 320, minCPA: 320 },
+    { dx: 1, dy: -1, directHits: 0, unavoidableHits: 0, scheduleRobust: true, worstCaseCpaCm: 310, minCPA: 310 },
+    { dx: 0, dy: 1, directHits: 0, unavoidableHits: 0, scheduleRobust: true, worstCaseCpaCm: 500, minCPA: 500 }
+  ];
+  let stochasticCalls = 0;
+  const stochasticRng = () => {
+    stochasticCalls += 1;
+    return 0.25;
+  };
+  const distanceAwareInput = {
+    nowMs: 1000,
+    targetId: 'target-a',
+    engagementId: 'engagement-a',
+    activeOpponent: true,
+    baseMovement: { dx: 1, dy: 0 },
+    currentDirection: { dx: 0, dy: 0 },
+    radialIntentVector: { dx: 1, dy: 0 },
+    reactionSlack: distanceAwareReaction,
+    threatField: distanceAwareThreatField,
+    nextShotInMs: 100,
+    shotSampleCount: 0
+  };
+  const firstDistanceAware = resolveDistanceAwareDodgeCore(distanceAwareInput, {
+    rng: stochasticRng,
+    minimumCpaCm: 200,
+    latchMinimumHoldMs: 500
+  });
+  const latchedDistanceAware = resolveDistanceAwareDodgeCore({
+    ...distanceAwareInput,
+    nowMs: 1050,
+    previousState: firstDistanceAware.state
+  }, {
+    rng: () => {
+      stochasticCalls += 100;
+      return 0.9;
+    },
+    minimumCpaCm: 200,
+    latchMinimumHoldMs: 500
+  });
+  const stabilityThreatField = [
+    { dx: 0, dy: 1, directHits: 0, unavoidableHits: 0, scheduleRobust: true, minCPA: 320 },
+    { dx: 0, dy: -1, directHits: 0, unavoidableHits: 0, scheduleRobust: true, minCPA: 310 }
+  ];
+  const stabilityFirst = resolveDistanceAwareDodgeCore({
+    ...distanceAwareInput,
+    baseMovement: { dx: 0, dy: 0 },
+    currentDirection: { dx: 0, dy: 1 },
+    radialIntentVector: { dx: 0, dy: 0 },
+    threatField: stabilityThreatField
+  }, {
+    rng: () => 0,
+    minimumCpaCm: 200,
+    latchMinimumHoldMs: 200,
+    directionStabilityWindowMs: 500
+  });
+  const stabilitySecond = resolveDistanceAwareDodgeCore({
+    ...distanceAwareInput,
+    nowMs: 1100,
+    baseMovement: { dx: 0, dy: 0 },
+    currentDirection: { dx: 0, dy: 1 },
+    radialIntentVector: { dx: 0, dy: 0 },
+    threatField: stabilityThreatField.slice().reverse(),
+    previousState: { ...stabilityFirst.state, latch: null }
+  }, {
+    rng: () => 0,
+    minimumCpaCm: 200,
+    latchMinimumHoldMs: 200,
+    directionStabilityWindowMs: 500
+  });
+  const boundaryDistanceAware = resolveDistanceAwareDodgeCore({
+    ...distanceAwareInput,
+    boundaryRisk: true
+  }, { rng: () => { throw new Error('boundary risk must block pre-dodge'); } });
+  const collisionDistanceAware = resolveDistanceAwareDodgeCore({
+    ...distanceAwareInput,
+    collisionRisk: true
+  }, { rng: () => { throw new Error('collision risk must block pre-dodge'); } });
+  const unavoidableDistanceAware = resolveDistanceAwareDodgeCore({
+    ...distanceAwareInput,
+    reactionSlack: {
+      ...distanceAwareReaction,
+      currentShotAvoidability: 'unavoidable',
+      threateningBulletCount: 1
+    },
+    dodge: { dx: -1, dy: 0 },
+    previousState: firstDistanceAware.state
+  }, {
+    rng: stochasticRng,
+    minimumCpaCm: 200,
+    latchMinimumHoldMs: 500
+  });
+  const noEvidenceDistanceAware = resolveDistanceAwareDodgeCore({
+    ...distanceAwareInput,
+    threatField: undefined
+  }, { rng: stochasticRng, minimumCpaCm: 200, latchMinimumHoldMs: 500 });
+  const noCadenceCloseUnsafe = resolveDistanceAwareDodgeCore({
+    ...distanceAwareInput,
+    self: { x: 0, y: 0, vx: 0, vy: 0 },
+    target: { x: 4000, y: 0, vx: 0, vy: 0 },
+    baseDistanceBand: 'approach',
+    nextShotInMs: null,
+    shotSampleCount: 0,
+    threatField: undefined
+  }, {
+    rng: () => 0.25,
+    minimumCpaCm: 200,
+    latchMinimumHoldMs: 500,
+    moveSpeedPerTick: 50,
+    bulletSpeedCmPerTick: 500
+  });
+  const lowConfidenceWindowStochastic = resolveDistanceAwareDodgeCore({
+    ...distanceAwareInput,
+    self: { x: 0, y: 0, vx: 0, vy: 0 },
+    target: { x: 4000, y: 0, vx: 0, vy: 0 },
+    baseDistanceBand: 'approach',
+    nextShotInMs: 250,
+    shotSampleCount: 1,
+    threatField: undefined
+  }, {
+    rng: () => 0.25,
+    minimumCpaCm: 200,
+    latchMinimumHoldMs: 500,
+    moveSpeedPerTick: 50,
+    bulletSpeedCmPerTick: 500
+  });
+  const staleDistanceAware = resolveDistanceAwareDodgeCore({
+    ...distanceAwareInput,
+    reactionSlack: { ...distanceAwareReaction, observationAgeMs: 501 }
+  }, { rng: () => 0.25, minimumCpaCm: 200 });
+  const recedingDistanceAware = resolveDistanceAwareDodgeCore({
+    ...distanceAwareInput,
+    self: { x: 0, y: 0, vx: 0, vy: 0 },
+    target: { x: 4000, y: 0, vx: 50, vy: 0 },
+    threatField: undefined,
+    nextShotInMs: 250,
+    shotSampleCount: 1
+  }, { rng: () => 0.25, minimumCpaCm: 200 });
+  const tangentialDistanceAware = resolveDistanceAwareDodgeCore({
+    ...distanceAwareInput,
+    self: { x: 0, y: 0, vx: 0, vy: 0 },
+    target: { x: 4000, y: 0, vx: 0, vy: 50 },
+    threatField: undefined,
+    nextShotInMs: 250,
+    shotSampleCount: 1
+  }, { rng: () => 0.25, minimumCpaCm: 200 });
+  const causalPredictiveDistanceAware = resolveDistanceAwareDodgeCore({
+    ...distanceAwareInput,
+    self: { x: 0, y: 0, vx: 50, vy: 0 },
+    target: { x: 8000, y: 0, vx: 0, vy: 0 },
+    nextShotInMs: 100,
+    shotSampleCount: 4,
+    shotIntervalCv: 0.1,
+    threatField: undefined
+  }, {
+    rng: stochasticRng,
+    minimumCpaCm: 200,
+    latchMinimumHoldMs: 500,
+    moveSpeedPerTick: 50,
+    bulletSpeedCmPerTick: 500
+  });
+  const distanceAwareModeStart = classifyDistanceAwareDodgeModeCore({
+    nowMs: 1000,
+    targetId: 'target-a',
+    engagementId: 'engagement-a',
+    previousState: { targetId: 'target-a', engagementId: 'engagement-a', mode: 'long-observe', modeSinceMs: 900 },
+    reactionSlack: {
+      ...distanceAwareReaction,
+      threateningBulletCount: 1,
+      currentShotAvoidability: 'safe',
+      reactionSlackMs: 100,
+      prospectiveReactionSlackMs: 100
+    }
+  }, { modeMinimumHoldMs: 300 });
+  const distanceAwareModeAfterHold = classifyDistanceAwareDodgeModeCore({
+    nowMs: 1301,
+    targetId: 'target-a',
+    engagementId: 'engagement-a',
+    previousState: distanceAwareModeStart.state,
+    reactionSlack: {
+      ...distanceAwareReaction,
+      threateningBulletCount: 1,
+      currentShotAvoidability: 'safe',
+      reactionSlackMs: 100,
+      prospectiveReactionSlackMs: 100
+    }
+  }, { modeMinimumHoldMs: 300 });
+  const reactionBudget = deriveCombatReactionBudgetCore({
+    nowMs: 1000,
+    realtimeStateObservedAtMs: 900,
+    movementExecutionTiming: { sampleCount: 8, medianTicks: 3, p90Ticks: 5 },
+    pendingVelocityCommands: [{ commandId: 'pending-1', dx: 1, dy: 0, effectiveAfterTicks: 3 }]
+  }, { tickMs: 50 });
+  const predictedWindow = predictNextFireWindowCore({
+    nowMs: 1000,
+    nextShotInMs: 200,
+    shotSampleCount: 4,
+    shotIntervalCv: 0.1
+  });
+  const seededLeftRight = Array.from({ length: 1000 }, (_, index) => {
+    const selection = selectStochasticDodgeCandidateCore([
+      { dx: -1, dy: 0, safe: true, minCpaCm: 300 },
+      { dx: 1, dy: 0, safe: true, minCpaCm: 300 }
+    ], { rng: createSeededRandomCore(Math.imul(index + 1, 0x9e3779b1)) });
+    return selection.selected?.dx;
+  });
+  const leftCount = seededLeftRight.filter(direction => direction === -1).length;
+  const rightCount = seededLeftRight.filter(direction => direction === 1).length;
+  results.push({
+    name: 'distance-aware-dodge-preserves-radial-intent-and-latches-one-stochastic-sample',
+    passed: firstDistanceAware.mode === 'close-proactive'
+      && firstDistanceAware.closeSubmode === 'stochastic'
+      && firstDistanceAware.applied === true
+      && firstDistanceAware.direction.dx === 1
+      && firstDistanceAware.direction.dy !== 0
+      && latchedDistanceAware.preDodgeReason === 'latched-pre-dodge'
+      && latchedDistanceAware.randomChoice?.unit === firstDistanceAware.randomChoice?.unit
+      && stabilityFirst.applied === true
+      && stabilitySecond.direction.dy === stabilityFirst.direction.dy
+      && stabilitySecond.directionStabilityHeld === true
+      && stabilitySecond.preDodgeReason === 'direction-stability-hold'
+      && stabilitySecond.state.lastAppliedAtMs === stabilityFirst.state.lastAppliedAtMs
+      && boundaryDistanceAware.applied === false
+      && boundaryDistanceAware.preDodgeReason === 'boundary-risk'
+      && collisionDistanceAware.applied === false
+      && collisionDistanceAware.preDodgeReason === 'collision-risk'
+      && stochasticCalls === 1
+      && unavoidableDistanceAware.applied === false
+      && unavoidableDistanceAware.preDodgeReason === 'unavoidable-current-shot'
+      && unavoidableDistanceAware.suppressCurrentShotDodge === true
+      && unavoidableDistanceAware.direction.dx === 0
+      && unavoidableDistanceAware.direction.dy === 0
+      && unavoidableDistanceAware.state.latch === null
+      && noEvidenceDistanceAware.applied === false
+      && noEvidenceDistanceAware.preDodgeReason === 'no-safe-lateral-candidate'
+      && noCadenceCloseUnsafe.applied === false
+      && noCadenceCloseUnsafe.preDodgeReason === 'no-safe-lateral-candidate'
+      && noCadenceCloseUnsafe.predictedThreatSource === 'causal-close-envelope-counterfactual'
+      && lowConfidenceWindowStochastic.applied === true
+      && lowConfidenceWindowStochastic.closeSubmode === 'stochastic'
+      && lowConfidenceWindowStochastic.predictedThreatSource === 'causal-low-confidence-fire-window'
+      && lowConfidenceWindowStochastic.baseDistanceBand === 'approach'
+      && staleDistanceAware.applied === false
+      && staleDistanceAware.preDodgeReason === 'stale-realtime-state'
+      && recedingDistanceAware.applied === false
+      && recedingDistanceAware.preDodgeReason === 'receding-without-threat-evidence'
+      && tangentialDistanceAware.applied === false
+      && tangentialDistanceAware.preDodgeReason === 'tangential-without-threat-evidence'
+      && causalPredictiveDistanceAware.applied === true
+      && causalPredictiveDistanceAware.closeSubmode === 'predictive'
+      && causalPredictiveDistanceAware.preDodgeReason === 'predicted-next-fire-window'
+      && causalPredictiveDistanceAware.predictedThreatSource === 'causal-next-fire-window'
+      && distanceAwareModeStart.mode === 'long-observe'
+      && distanceAwareModeStart.held === true
+      && distanceAwareModeAfterHold.mode === 'medium-reactive'
+      && reactionBudget.commandBudgetTicks === 13
+      && reactionBudget.observationAgeMs === 100
+      && predictedWindow.predictiveEligible === true
+      && leftCount >= 450
+      && leftCount <= 550
+      && rightCount >= 450
+      && rightCount <= 550
   });
 
   // Test action priority bands
@@ -5716,6 +6069,40 @@ function runStrategyModuleSelfTests() {
     startTick: 100,
     expireTick: 130
   }, stopPath, coverageInput, {});
+  const continuousPath = {
+    points: [{ x: 0, y: 0 }, { x: 500, y: 100 }, { x: 1000, y: -100 }],
+    weight: 1,
+    uncertaintyCm: 90
+  };
+  const continuousMiss = shotCorridorMissCore({
+    startX: 0,
+    startY: 0,
+    aimX: 1000,
+    aimY: 0,
+    startTick: 100,
+    expireTick: 130
+  }, continuousPath, { createdTick: 100 }, {});
+  const robustSelection = selectRobustTrajectoryAimCore(coverageInput, {
+    maxTrajectoryTicks: 30,
+    maxRouteClusters: 4,
+    maxShotCandidates: 12,
+    bulletSpeedCmPerTick: 500,
+    bulletLifetimeTicks: 30,
+    bulletRangeCm: 15000,
+    hitRadiusCm: 90
+  });
+  const unreachableCoverage = buildTrajectoryCoveragePlanCore({
+    ...coverageInput,
+    predictedTargetAtCreation: { x: 16000, y: 0, vx: 0, vy: 0 },
+    target: { x: 16000, y: 0, vx: 0, vy: 0 },
+    routeCandidates: [{ hypothesis: 'stationary-beyond-range', probability: 1, x: 16000, y: 0, uncertaintyCm: 0 }]
+  }, {
+    bulletSpeedCmPerTick: 500,
+    bulletLifetimeTicks: 30,
+    bulletRangeCm: 15000,
+    hitRadiusCm: 90,
+    minimumMarginalCoverage: 0
+  });
   results.push({
     name: 'combat-shot-coverage-bounds-paths-and-selects-complementary-second-shot',
     passed: coveragePaths.length === 8
@@ -5725,6 +6112,16 @@ function runStrategyModuleSelfTests() {
       && secondCoverage.selected?.marginalCoverage > 0
       && secondCoverage.selected?.coverageMassAfter > firstCoverage.selected?.coverageMassAfter
       && directStopMiss <= 90
+      && continuousMiss <= 1e-6
+      && robustSelection.selected?.physicallyReachable === true
+      && robustSelection.candidateCount > 0
+      && robustSelection.candidateCount <= 12
+      && Number.isFinite(robustSelection.selected?.robustScore)
+      && firstCoverage.candidates.every(candidate => candidate.physicallyReachable === true
+        && candidate.reachabilityReason === 'reachable')
+      && unreachableCoverage.active === false
+      && unreachableCoverage.candidateCount === 0
+      && unreachableCoverage.reason === 'no-shot-candidates'
   });
 
   const staleCoverage = buildTrajectoryCoveragePlanCore({
