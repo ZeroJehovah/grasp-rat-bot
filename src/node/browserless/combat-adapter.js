@@ -1887,21 +1887,34 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     currentTick: options.currentTick,
     reactionSafetyMarginMs: options.combatReactionSafetyMarginMs ?? 100
   });
-  const incomingOwners = new Set((bullets || [])
-    .filter(bullet => bullet?.incoming === true && bullet?.ownerId !== null && bullet?.ownerId !== undefined)
-    .map(bullet => String(bullet.ownerId)));
-  const safeRetreatIntercept = safeRetreatInterceptCandidateCore(self, target, {
-    opponentBehavior,
-    threatField: dodge?.threatField || [],
-    recentIncomingDamage: combatTargetState?.lastSelfDamage || 0,
-    selfHpLossObserved: combatTargetState?.selfHpLossObserved === true,
-    otherAttackerCount: Math.max(0, incomingOwners.size - (incomingOwners.has(String(target.user_id)) ? 1 : 0)),
-    boundary: options.combatBoundary || options.boundary,
-    selfSpeedPerTick: options.combatMoveSpeedPerTick || 50,
-    minimumCpaCm: Math.max(1, Number(options.combatMovementSafeCpaCm || 0),
-      Number(options.combatBulletHitRadiusCm || COMBAT_CONSTANTS.BULLET_HIT_RADIUS_CM) + 110),
-    enabled: options.combatSafeRetreatInterceptEnabled === true
-  });
+  const safeRetreatInterceptEnabled = options.combatSafeRetreatInterceptEnabled === true;
+  const safeRetreatModeConfirmed = String(opponentBehavior?.mode || '') === 'retreat-kite'
+    && Number(opponentBehavior?.confidence || 0) >= 0.65;
+  // The shadow candidate has no useful geometry work until retreat-kite is
+  // confirmed. Keep the cheap core call for its existing diagnostic reasons,
+  // but defer the per-frame attacker Set and candidate context construction.
+  const safeRetreatIntercept = safeRetreatModeConfirmed
+    ? (() => {
+        const incomingOwners = new Set((bullets || [])
+          .filter(bullet => bullet?.incoming === true && bullet?.ownerId !== null && bullet?.ownerId !== undefined)
+          .map(bullet => String(bullet.ownerId)));
+        return safeRetreatInterceptCandidateCore(self, target, {
+          opponentBehavior,
+          threatField: dodge?.threatField || [],
+          recentIncomingDamage: combatTargetState?.lastSelfDamage || 0,
+          selfHpLossObserved: combatTargetState?.selfHpLossObserved === true,
+          otherAttackerCount: Math.max(0, incomingOwners.size - (incomingOwners.has(String(target.user_id)) ? 1 : 0)),
+          boundary: options.combatBoundary || options.boundary,
+          selfSpeedPerTick: options.combatMoveSpeedPerTick || 50,
+          minimumCpaCm: Math.max(1, Number(options.combatMovementSafeCpaCm || 0),
+            Number(options.combatBulletHitRadiusCm || COMBAT_CONSTANTS.BULLET_HIT_RADIUS_CM) + 110),
+          enabled: safeRetreatInterceptEnabled
+        });
+      })()
+    : safeRetreatInterceptCandidateCore(self, target, {
+        opponentBehavior,
+        enabled: safeRetreatInterceptEnabled
+      });
   const behaviorSamples = Array.isArray(opponentBehavior?.samples) ? opponentBehavior.samples : [];
   const shootingPhase = opponentBehavior?.dimensions?.shootingPhase || null;
   const lastObservedShot = behaviorSamples.slice().reverse().find(sample => Number(sample.newBulletCount || 0) > 0) || null;
@@ -2062,7 +2075,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     ? awayFromTarget
     : (strafe?.active
         ? { dx: strafe.dx, dy: strafe.dy }
-        : (options.combatSafeRetreatInterceptEnabled === true
+        : (safeRetreatInterceptEnabled
             && safeRetreatIntercept.eligible
             && !preDodge
             ? safeRetreatIntercept.direction
@@ -2146,7 +2159,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
                 ? 'combat-escape-confirmed-hold'
                 : (outOfRange ? 'combat-out-of-range-hold' : 'hold-spacing'))));
   const safeRetreatInterceptApplied = Boolean(
-    options.combatSafeRetreatInterceptEnabled === true
+    safeRetreatInterceptEnabled
       && safeRetreatIntercept.eligible
       && !preDodge
       && movementArbitration?.source === 'strategic-safe'
@@ -3480,9 +3493,10 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     } else {
       stateful.combatMetrics.combatHpLossAttribution = null;
     }
-    stateful.combatMetrics.lastDodgeThreatField = summarizeDodgeThreatField(
-      movement?.dodge?.threatField || []
-    );
+    // buildCombatMovementPlan already stores the bounded public threat summary
+    // on movement.dodge. Reuse that array for the next-frame attribution state
+    // instead of mapping the same threat field a second time.
+    stateful.combatMetrics.lastDodgeThreatField = movement?.dodge?.threatField || [];
     stateful.combatMetrics.lastSelectedDodgeDirection = movement?.dodge
       ? { dx: Number(movement.dodge.dx || 0), dy: Number(movement.dodge.dy || 0) }
       : { dx: Number(self?.vx || 0), dy: Number(self?.vy || 0) };
