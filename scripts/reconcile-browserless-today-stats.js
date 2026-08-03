@@ -131,7 +131,9 @@ async function analyzeDay(options) {
   const endMs = Math.min(startMs + DAY_MS - 1, Number(options.cutoffMs));
   if (endMs < startMs) throw new Error('cutoff is before the selected day');
   const days = utcLogDays(startMs, endMs);
+  const contextDays = utcLogDays(Math.max(0, startMs - DAY_MS), endMs);
   const wsFiles = days.map(day => path.join(options.logDir, day, 'ws.jsonl'));
+  const contextWsFiles = contextDays.map(day => path.join(options.logDir, day, 'ws.jsonl'));
   const decisionFiles = days.map(day => path.join(options.logDir, day, 'decisions.jsonl'));
   const exitFiles = days.map(day => path.join(options.logDir, day, 'exits.jsonl'));
   const runs = new Map();
@@ -142,28 +144,101 @@ async function analyzeDay(options) {
   let firstSelfAt = '';
   let lastSelfAt = '';
   let lastDrop = null;
+  let initialDrop = null;
+  let maxDrop = null;
+  let contextDrop = null;
+  let contextTick = null;
+  let dayDropPending = false;
+  let fallbackPreviousDrop = null;
+  let fallbackInitialDrop = null;
+  let fallbackMaxDrop = null;
+  let fallbackLatestDrop = null;
+  let fallbackPositiveDropUnits = 0;
+  let fallbackDropResetCount = 0;
 
-  await eachJsonLine(wsFiles, entry => {
+  function observeFallbackDrop(drop) {
+    if (fallbackInitialDrop === null) fallbackInitialDrop = drop;
+    fallbackMaxDrop = fallbackMaxDrop === null ? drop : Math.max(fallbackMaxDrop, drop);
+    if (fallbackPreviousDrop !== null) {
+      if (drop >= fallbackPreviousDrop) fallbackPositiveDropUnits += drop - fallbackPreviousDrop;
+      else fallbackDropResetCount += 1;
+    }
+    fallbackPreviousDrop = drop;
+    fallbackLatestDrop = drop;
+  }
+
+  function startNewDayDropBaseline(drop) {
+    initialDrop = drop;
+    maxDrop = drop;
+    lastDrop = drop;
+    positiveDropUnits = 0;
+    dropResetCount = 0;
+  }
+
+  await eachJsonLine(contextWsFiles, entry => {
     const atMs = Date.parse(String(entry?.at || ''));
-    if (!Number.isFinite(atMs) || atMs < startMs || atMs > endMs) return;
+    if (!Number.isFinite(atMs) || atMs > endMs) return;
     const self = entry?.detail?.decodedSummary?.self;
     if (Number(self?.user_id ?? self?.userId) !== Number(options.userId)) return;
     const drop = Number(self?.death_drop_coins ?? self?.drop);
     if (!Number.isFinite(drop)) return;
+    const tick = Number(entry?.detail?.decodedSummary?.tick);
+    const hasTick = Number.isFinite(tick);
+    if (atMs < startMs) {
+      contextDrop = drop;
+      contextTick = hasTick ? tick : null;
+      return;
+    }
     const runId = String(entry?.detail?.runId || 'unknown-run');
     const run = runs.get(runId);
     if (!run) runs.set(runId, { runId, firstAtMs: atMs, lastAtMs: atMs });
     else run.lastAtMs = Math.max(run.lastAtMs, atMs);
-    if (previousDrop !== null) {
-      if (drop >= previousDrop) positiveDropUnits += drop - previousDrop;
-      else dropResetCount += 1;
+    if (selfSamples === 0) {
+      dayDropPending = contextDrop !== null || contextTick !== null;
+      if (dayDropPending) {
+        fallbackPreviousDrop = null;
+        fallbackInitialDrop = null;
+        fallbackMaxDrop = null;
+        fallbackLatestDrop = null;
+        fallbackPositiveDropUnits = 0;
+        fallbackDropResetCount = 0;
+        observeFallbackDrop(drop);
+        const epochAlreadyReset = hasTick && contextTick !== null && tick < contextTick;
+        if (epochAlreadyReset) {
+          dayDropPending = false;
+          startNewDayDropBaseline(drop);
+        }
+      } else {
+        startNewDayDropBaseline(drop);
+      }
+    } else if (dayDropPending) {
+      observeFallbackDrop(drop);
+      const epochReset = hasTick && contextTick !== null && tick < contextTick;
+      if (epochReset) {
+        dayDropPending = false;
+        startNewDayDropBaseline(drop);
+      }
+    } else {
+      if (previousDrop !== null) {
+        if (drop >= previousDrop) positiveDropUnits += drop - previousDrop;
+        else dropResetCount += 1;
+      }
+      maxDrop = maxDrop === null ? drop : Math.max(maxDrop, drop);
+      lastDrop = drop;
     }
     previousDrop = drop;
-    lastDrop = drop;
     selfSamples += 1;
     if (!firstSelfAt) firstSelfAt = entry.at;
     lastSelfAt = entry.at;
   });
+
+  if (dayDropPending) {
+    initialDrop = fallbackInitialDrop;
+    maxDrop = fallbackMaxDrop;
+    lastDrop = fallbackLatestDrop;
+    positiveDropUnits = fallbackPositiveDropUnits;
+    dropResetCount = fallbackDropResetCount;
+  }
 
   let firstEvidenceAt = '';
   let baseline = null;
@@ -256,6 +331,8 @@ async function analyzeDay(options) {
       lastSelfAt,
       firstEvidenceAt,
       initialKillBaselineCount: baseline?.size || 0,
+      initialDrop,
+      maxDrop,
       dropResetCount,
       lastDrop,
       staminaSamples,
@@ -298,9 +375,14 @@ function reconcileState(state, analysis) {
     ...currentToday,
     day: analysis.day,
     uptimeMs: Math.max(Number(currentToday.uptimeMs || 0), analysis.stats.uptimeMs),
-    coinsGained: Math.max(Number(currentToday.coinsGained || 0), analysis.stats.coinsGained),
+    coinsGained: analysis.stats.coinsGained,
     kills: Math.max(Number(currentToday.kills || 0), analysis.stats.kills),
     sessionCount: Math.max(Number(currentToday.sessionCount || 0), analysis.evidence.runCount),
+    initialDrop: analysis.evidence.initialDrop,
+    maxDrop: analysis.evidence.maxDrop,
+    latestDrop: analysis.evidence.lastDrop,
+    dropResetCount: analysis.evidence.dropResetCount,
+    crossDayDropPending: null,
     ...(staminaSpentMs === null ? {} : { staminaSpentMs }),
     ...(analysis.evidence.staminaSamples > 0 ? {
       staminaSpentBeforeResetMs: analysis.stats.staminaSpentBeforeResetMs,
@@ -402,7 +484,34 @@ async function runSelfTest() {
         currentSession: { online: false },
         today: { day: '2026-07-15', staminaSpentMs: 600000 }
       }
-    }, analysis);
+      }, analysis);
+    const crossDayLogDir = path.join(root, 'cross-day-logs');
+    const crossDayPreviousDir = path.join(crossDayLogDir, '2026-07-15');
+    const crossDayDir = path.join(crossDayLogDir, '2026-07-16');
+    fs.mkdirSync(crossDayPreviousDir, { recursive: true });
+    fs.mkdirSync(crossDayDir, { recursive: true });
+    const crossDayRows = [
+      ['2026-07-15T15:59:59.000Z', 2000, 100],
+      ['2026-07-15T16:00:01.000Z', 2000, 101],
+      ['2026-07-15T16:00:02.000Z', 0, 102],
+      ['2026-07-15T16:00:16.000Z', 4000, 10],
+      ['2026-07-15T16:00:17.000Z', 4010, 11]
+    ].map(([at, drop, tick]) => JSON.stringify({
+      at,
+      type: 'message',
+      detail: {
+        runId: 'cross-day-run',
+        decodedSummary: { tick, self: { user_id: 7, death_drop_coins: drop } }
+      }
+    })).join('\n') + '\n';
+    fs.writeFileSync(path.join(crossDayPreviousDir, 'ws.jsonl'), crossDayRows.split('\n')[0] + '\n');
+    fs.writeFileSync(path.join(crossDayDir, 'ws.jsonl'), crossDayRows.split('\n').slice(1).join('\n'));
+    const crossDayAnalysis = await analyzeDay({
+      day: '2026-07-16',
+      cutoffMs: Date.parse('2026-07-16T07:59:59.000Z'),
+      logDir: crossDayLogDir,
+      userId: 7
+    });
     let mismatchedDayRejected = false;
     try {
       assertApplySafe({
@@ -426,6 +535,12 @@ async function runSelfTest() {
         && reconciled.today.staminaSpentBeforeResetMs === 1200000
         && analysis.stats.uptimeMs === 30000
         && analysis.evidence.dropResetCount === 1
+        && crossDayAnalysis.evidence.initialDrop === 4000
+        && crossDayAnalysis.evidence.maxDrop === 4010
+        && crossDayAnalysis.evidence.lastDrop === 4010
+        && crossDayAnalysis.stats.dropUnitsGained === 10
+        && crossDayAnalysis.stats.coinsGained === 20
+        && crossDayAnalysis.evidence.dropResetCount === 0
         && mismatchedDayRejected,
       analysis
     };

@@ -108,6 +108,7 @@ function defaultBrowserlessStats() {
       userId: 0,
       enteredAt: '',
       enteredTick: null,
+      lastRealtimeTick: null,
       lastSeenAt: '',
       exitedAt: '',
       exitReason: '',
@@ -148,7 +149,8 @@ function defaultBrowserlessStats() {
       activeEnteredAt: '',
       activeBaseStaminaSpentMs: 0,
       activeBaseCoinsGained: 0,
-      activeBaseKills: 0
+      activeBaseKills: 0,
+      crossDayDropPending: null
     },
     lastExit: {
       at: '',
@@ -605,6 +607,15 @@ function normalizePendingCoinCalibration(value) {
   };
 }
 
+function normalizeCrossDayDropPending(value) {
+  if (!value || typeof value !== 'object') return null;
+  const sessionId = compactString(value.sessionId, 96);
+  const previousDrop = compactNumber(value.previousDrop);
+  const previousTick = compactNumber(value.previousTick);
+  if (!sessionId || (previousDrop === null && previousTick === null)) return null;
+  return { sessionId, previousDrop, previousTick };
+}
+
 function normalizeBrowserlessStats(stats, rawStats = stats) {
   const inputKillAccountingVersion = Number(rawStats?.killAccountingVersion || 0);
   const inputCoinAccountingVersion = Number(rawStats?.coinAccountingVersion || 0);
@@ -615,6 +626,7 @@ function normalizeBrowserlessStats(stats, rawStats = stats) {
   const today = normalized.today || {};
   const lastExit = normalized.lastExit || {};
   const enteredTick = resetUntrustedKills ? null : compactNumber(session.enteredTick);
+  const lastRealtimeTick = compactNumber(session.lastRealtimeTick);
   const killBaselineKeys = resetUntrustedKills
     ? []
     : (Array.isArray(session.killBaselineKeys)
@@ -668,6 +680,7 @@ function normalizeBrowserlessStats(stats, rawStats = stats) {
     userId: compactNumber(session.userId) || 0,
     enteredAt: compactString(session.enteredAt, 48),
     enteredTick,
+    lastRealtimeTick,
     lastSeenAt: compactString(session.lastSeenAt, 48),
     exitedAt: compactString(session.exitedAt, 48),
     exitReason: compactString(session.exitReason, 160),
@@ -711,7 +724,8 @@ function normalizeBrowserlessStats(stats, rawStats = stats) {
     activeEnteredAt: compactString(today.activeEnteredAt, 48),
     activeBaseStaminaSpentMs: Math.max(0, Math.round(Number(today.activeBaseStaminaSpentMs || 0) || 0)),
     activeBaseCoinsGained,
-    activeBaseKills: resetUntrustedKills ? 0 : Math.max(0, Math.round(Number(today.activeBaseKills || 0) || 0))
+    activeBaseKills: resetUntrustedKills ? 0 : Math.max(0, Math.round(Number(today.activeBaseKills || 0) || 0)),
+    crossDayDropPending: normalizeCrossDayDropPending(today.crossDayDropPending)
   };
   normalized.lastExit = {
     at: compactString(lastExit.at, 48),
@@ -741,7 +755,12 @@ function cloneBrowserlessStatsForLiveUpdate(stats) {
   return {
     ...stats,
     currentSession: { ...stats.currentSession },
-    today: { ...stats.today },
+    today: {
+      ...stats.today,
+      crossDayDropPending: stats.today.crossDayDropPending
+        ? { ...stats.today.crossDayDropPending }
+        : null
+    },
     lastExit: { ...stats.lastExit }
   };
 }
@@ -756,8 +775,17 @@ function resetBrowserlessTodayStats(day) {
 function ensureBrowserlessStatsDay(stats, nowMs) {
   const day = browserlessStatsDayKey(nowMs);
   if (stats.today.day === day) return stats;
-  stats.today = resetBrowserlessTodayStats(day);
   const session = stats.currentSession || {};
+  const crossDayDropPending = session.online && session.sessionId
+    && (compactNumber(session.lastDrop) !== null || compactNumber(session.lastRealtimeTick) !== null)
+    ? {
+        sessionId: session.sessionId,
+        previousDrop: compactNumber(session.lastDrop),
+        previousTick: compactNumber(session.lastRealtimeTick)
+      }
+    : null;
+  stats.today = resetBrowserlessTodayStats(day);
+  stats.today.crossDayDropPending = crossDayDropPending;
   if (session.online && session.sessionId) {
     stats.today.activeSessionId = session.sessionId;
     stats.today.activeEnteredAt = isoFromMs(Math.max(eventTimeMs(nowMs), browserlessStatsDayStartMs(day)));
@@ -909,6 +937,7 @@ function startBrowserlessStatsSession(stats, state, self, stamina, nowMs, decisi
     userId,
     enteredAt,
     enteredTick: statsDecisionTick(decision),
+    lastRealtimeTick: statsDecisionTick(decision),
     lastSeenAt: enteredAt,
     baseDrop: drop,
     lastDrop: drop,
@@ -917,6 +946,7 @@ function startBrowserlessStatsSession(stats, state, self, stamina, nowMs, decisi
     killBaselineInitialized: true,
     killBaselineKeys: killEvidence.map(item => item.key).slice(-300)
   };
+  stats.today.crossDayDropPending = null;
   stats.today.activeSessionId = sessionId;
   stats.today.activeEnteredAt = enteredAt;
   stats.today.activeBaseStaminaSpentMs = 0;
@@ -989,6 +1019,16 @@ function updateBrowserlessStatsSessionDrop(session, self) {
     session.dropResetCount = Math.max(0, Math.round(Number(session.dropResetCount || 0) + 1));
   }
   session.lastDrop = drop;
+  return true;
+}
+
+function resetBrowserlessSessionDropBaseline(session, self) {
+  const drop = statsSelfDrop(self);
+  if (drop === null) return false;
+  session.baseDrop = drop;
+  session.lastDrop = drop;
+  session.pendingCoinPickupCalibration = null;
+  session.pendingDropCalibration = null;
   return true;
 }
 
@@ -1123,10 +1163,19 @@ function updateBrowserlessStatsSessionCoinPickups(session, decision, nowMs, prev
   return added;
 }
 
-function updateBrowserlessStatsTodayDrop(stats, self) {
+function updateBrowserlessStatsTodayDrop(stats, self, options = {}) {
   const drop = statsSelfDrop(self);
   if (drop === null) return { observed: false, addedCoins: 0, reset: false };
+  if (options.mode === 'stale') {
+    return { observed: false, addedCoins: 0, reset: false, stale: true };
+  }
   const today = stats.today || (stats.today = resetBrowserlessTodayStats(browserlessStatsDayKey()));
+  if (options.mode === 'baseline') {
+    today.initialDrop = drop;
+    today.maxDrop = drop;
+    today.latestDrop = drop;
+    return { observed: true, addedCoins: 0, reset: false, baseline: true };
+  }
   const initialDrop = compactNumber(today.initialDrop);
   const maxDrop = compactNumber(today.maxDrop);
   const previousDrop = compactNumber(today.latestDrop);
@@ -1143,13 +1192,38 @@ function updateBrowserlessStatsTodayDrop(stats, self) {
   return { observed: true, addedCoins, reset };
 }
 
-function updateBrowserlessStatsSession(stats, session, decision, self, stamina, nowMs) {
+function observeBrowserlessCrossDayDrop(stats, session, self, decision) {
+  const pending = normalizeCrossDayDropPending(stats.today?.crossDayDropPending);
+  if (!pending) return { mode: 'normal', tick: statsDecisionTick(decision) };
+  if (!session?.sessionId || pending.sessionId !== session.sessionId) {
+    stats.today.crossDayDropPending = null;
+    return { mode: 'normal', tick: statsDecisionTick(decision) };
+  }
+  const drop = statsSelfDrop(self);
+  const tick = statsDecisionTick(decision);
+  const epochReset = tick !== null
+    && pending.previousTick !== null
+    && tick < pending.previousTick;
+  const dropMovedForwardWithoutTick = tick === null
+    && drop !== null
+    && (pending.previousDrop === null || drop > pending.previousDrop);
+  if (epochReset || dropMovedForwardWithoutTick || (pending.previousDrop === null && drop !== null && tick === null)) {
+    stats.today.crossDayDropPending = null;
+    return { mode: 'baseline', tick };
+  }
+  return { mode: 'stale', tick };
+}
+
+function updateBrowserlessStatsSession(stats, session, decision, self, stamina, nowMs, options = {}) {
   session.lastSeenAt = isoFromMs(nowMs);
   session.exitedAt = '';
   session.exitReason = '';
+  const decisionTick = statsDecisionTick(decision);
+  if (decisionTick !== null) session.lastRealtimeTick = decisionTick;
   const previousCoinsGained = Math.max(0, Math.round(Number(session.coinsGained || 0) || 0));
   const previousDropCalibratedCoins = Math.max(0, Math.round(Number(session.dropCalibratedCoins || 0) || 0));
-  updateBrowserlessStatsSessionDrop(session, self);
+  if (options.dropMode === 'baseline') resetBrowserlessSessionDropBaseline(session, self);
+  else if (options.dropMode !== 'stale') updateBrowserlessStatsSessionDrop(session, self);
   const dropCalibrationAdded = Math.max(
     0,
     Math.round(Number(session.dropCalibratedCoins || 0) || 0) - previousDropCalibratedCoins
@@ -1206,8 +1280,11 @@ function browserlessStatsForDecision(state, decision, options = {}) {
   if (!active.online || !active.sessionId) {
     startBrowserlessStatsSession(stats, state, self, stamina, nowMs, decision);
   }
-  const todayDropTransition = updateBrowserlessStatsTodayDrop(stats, self);
-  updateBrowserlessStatsSession(stats, stats.currentSession, decision, self, stamina, nowMs);
+  const crossDayDrop = observeBrowserlessCrossDayDrop(stats, stats.currentSession, self, decision);
+  const todayDropTransition = updateBrowserlessStatsTodayDrop(stats, self, { mode: crossDayDrop.mode });
+  updateBrowserlessStatsSession(stats, stats.currentSession, decision, self, stamina, nowMs, {
+    dropMode: crossDayDrop.mode
+  });
   stats.today.coinsGained = Math.max(0, Math.round(
     Number(stats.today.coinsGained || 0)
       + todayDropTransition.addedCoins
@@ -1267,8 +1344,16 @@ function finalizeBrowserlessStatsSession(stats, detail = {}, nowMs = Date.now())
   let lastExitReason = stats.lastExit.reason || '';
   let lastExitRunId = stats.lastExit.runId || '';
   if (session.online && session.sessionId) {
-    const todayDropTransition = updateBrowserlessStatsTodayDrop(stats, detail.self);
-    const finalDropObserved = updateBrowserlessStatsSessionDrop(session, detail.self);
+    const finalDecision = { tick: detail.realtimeTick ?? detail.tick };
+    const crossDayDrop = observeBrowserlessCrossDayDrop(stats, session, detail.self, finalDecision);
+    const todayDropTransition = updateBrowserlessStatsTodayDrop(stats, detail.self, {
+      mode: crossDayDrop.mode
+    });
+    const finalDropObserved = crossDayDrop.mode === 'baseline'
+      ? resetBrowserlessSessionDropBaseline(session, detail.self)
+      : crossDayDrop.mode === 'stale'
+        ? false
+        : updateBrowserlessStatsSessionDrop(session, detail.self);
     stats.today.coinsGained = Math.max(0, Math.round(
       Number(stats.today.coinsGained || 0)
         + todayDropTransition.addedCoins
@@ -1294,6 +1379,7 @@ function finalizeBrowserlessStatsSession(stats, detail = {}, nowMs = Date.now())
       stats.today.activeBaseKills = 0;
     }
     session.online = false;
+    stats.today.crossDayDropPending = null;
     session.exitedAt = at;
     session.exitReason = reason;
     lastExitAt = at || lastExitAt;
@@ -1376,6 +1462,7 @@ function compactBrowserlessStats(normalized, game, action, options = {}, lastKno
       initialDrop: compactNumber(stats.today.initialDrop),
       maxDrop: compactNumber(stats.today.maxDrop),
       latestDrop: compactNumber(stats.today.latestDrop),
+      dropBaselinePending: Boolean(stats.today.crossDayDropPending),
       inGameDurationMs: Math.max(0, Math.round(Number(stats.today.uptimeMs || 0) + activeDelta.uptimeMs)),
       staminaSpentMs: actualTodayStaminaSpentMs === null
         ? summedTodayStaminaSpentMs

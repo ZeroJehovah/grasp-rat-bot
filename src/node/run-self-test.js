@@ -32441,6 +32441,55 @@ async function runSelfTest() {
       want: '10|20|40|1|40|40|100|110|20'
     },
     {
+      name: 'browserless stats ignore stale cross-day Drop until realtime Tick epoch resets',
+      got: (() => {
+        const state = {
+          session: { userId: 7, sessionToken: 'state-secret-token' },
+          runner: { running: true, mode: 'profit-live', controlMode: 'profit-live' }
+        };
+        const decision = (at, drop, tick) => ({
+          at: new Date(at).toISOString(),
+          input: {
+            self: { userId: 7, name: 'self', drop, dropKnown: true },
+            realtime: { tick },
+            stamina: {},
+            selfKillEvidence: []
+          }
+        });
+        const beforeMidnight = Date.parse('2026-08-02T15:59:59.000Z');
+        const staleAt = beforeMidnight + 2000;
+        state.stats = browserlessStatsForDecision(state, decision(beforeMidnight, 2144, 1721788), {
+          nowMs: beforeMidnight
+        });
+        state.stats = browserlessStatsForDecision(state, decision(staleAt, 2144, 1721807), { nowMs: staleAt });
+        state.stats = browserlessStatsForDecision(state, decision(staleAt + 1000, 0, 1721826), {
+          nowMs: staleAt + 1000
+        });
+        const pending = buildCompactBrowserlessStatus(state, { nowMs: staleAt + 1000 });
+        state.stats = browserlessStatsForDecision(state, decision(staleAt + 16000, 4293, 257), {
+          nowMs: staleAt + 16000
+        });
+        state.stats = browserlessStatsForDecision(state, decision(staleAt + 17000, 4300, 277), {
+          nowMs: staleAt + 17000
+        });
+        const settled = buildCompactBrowserlessStatus(state, { nowMs: staleAt + 17000 });
+        return [
+          pending.stats.today.dropBaselinePending,
+          pending.stats.today.coinsGained,
+          pending.stats.today.initialDrop === null,
+          state.stats.currentSession.baseDrop,
+          state.stats.currentSession.lastDrop,
+          state.stats.currentSession.coinsGained,
+          settled.stats.today.initialDrop,
+          settled.stats.today.maxDrop,
+          settled.stats.today.latestDrop,
+          settled.stats.today.coinsGained,
+          settled.stats.today.dropBaselinePending
+        ].join('|');
+      })(),
+      want: 'true|0|true|4293|4300|14|4293|4300|4300|14|false'
+    },
+    {
       name: 'browserless today coin ledger includes Drop growth between login sessions exactly once',
       got: (() => {
         const state = {
@@ -33529,7 +33578,7 @@ async function runSelfTest() {
           panelHtml.includes('.transport-metric.muted,.transport-metric.muted .metric-value{color:var(--muted)}')
         ].join('|');
       })(),
-      want: '2026.08.02.3|ok|warn|bad|ok|warn|bad|ok|warn|bad|muted|true|true|true|true|true|true'
+      want: '2026.08.03.1|ok|warn|bad|ok|warn|bad|ok|warn|bad|muted|true|true|true|true|true|true'
     },
     {
       name: 'browserless web panel animates keyed map markers between status refreshes',
@@ -33567,7 +33616,7 @@ async function runSelfTest() {
           /function stopAutoRefresh\(\)\s*\{\s*cancelMapMarkerAnimation\(true\);/.test(panelScript)
         ].join('|');
       })(),
-      want: '2026.08.02.3|coin:0|player:alice||0|0.875|1|97.5|195.0|110|220|true|true|true|true|true|true|true|true|true|true|true'
+      want: '2026.08.03.1|coin:0|player:alice||0|0.875|1|97.5|195.0|110|220|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless status server adds dynamic whitelist players by name',
@@ -34506,7 +34555,7 @@ async function runSelfTest() {
             < panelScript.indexOf("if (/combat/i.test(text)) return '正在处理打架';")
         ].join('|');
       })(),
-      want: '2026.08.02.3|true|true|true'
+      want: '2026.08.03.1|true|true|true'
     },
     {
       name: 'browserless restart drain wait explains planned service restart',
@@ -35042,7 +35091,7 @@ async function runSelfTest() {
           !panelScript.includes("setRichText('roleTitleMeta', [{ text: '已离线', className: 'muted' }], 'muted');")
         ].join('|');
       })(),
-      want: '2026.08.02.3|true|true|true|true|true|true'
+      want: '2026.08.03.1|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',
