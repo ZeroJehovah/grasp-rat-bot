@@ -374,6 +374,8 @@ function completeCombatHpLossAttributionCore(pending = null, input = {}, options
     classification,
     evidenceStatus,
     reason,
+    lossAtMs: numberOrNull(current.atMs),
+    lossTick: numberOrNull(current.tick),
     hpLoss: Number(hpLoss.amount.toFixed(3)),
     previousSelfHp: hpLoss.previousHp,
     currentSelfHp: hpLoss.currentHp,
@@ -451,6 +453,8 @@ function runCombatHpLossAttributionSelfTest() {
       && frame.observation.bullets.length === 2
       && matched.classification === 'matched-collision'
       && matched.candidateCount === 2
+      && matched.lossAtMs === 1050
+      && matched.lossTick === 11
       && matched.diagnosticOnly === true);
 
     const commandNotVisible = completeCombatHpLossAttributionCore(

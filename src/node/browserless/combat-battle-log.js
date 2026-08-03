@@ -81,6 +81,34 @@ const TRAJECTORY_COVERAGE_REASON_KEYS = Object.freeze([
   'no-shot-candidates',
   'other'
 ]);
+const HP_LOSS_ATTRIBUTION_CLASS_KEYS = Object.freeze([
+  'matched-collision',
+  'selected-direction-risk',
+  'unavoidable-all-directions',
+  'observation-gap',
+  'command-not-visible',
+  'no-physical-match',
+  'ambiguous',
+  'other'
+]);
+const HP_LOSS_ATTRIBUTION_EVIDENCE_KEYS = Object.freeze([
+  'complete',
+  'insufficient',
+  'other'
+]);
+const HP_LOSS_ATTRIBUTION_DIRECTION_KEYS = Object.freeze([
+  '-1,-1',
+  '-1,0',
+  '-1,1',
+  '0,-1',
+  '0,0',
+  '0,1',
+  '1,-1',
+  '1,0',
+  '1,1',
+  'other'
+]);
+const MAX_HP_LOSS_ATTRIBUTION_EVENTS = 256;
 
 function sanitizeEngagementId(value, fallback = 'battle') {
   const text = String(value == null ? '' : value)
@@ -345,6 +373,24 @@ function normalizeTrajectoryCoverageReason(value) {
   return TRAJECTORY_COVERAGE_REASON_KEYS.includes(reason) ? reason : 'other';
 }
 
+function normalizeHpLossAttributionClass(value) {
+  const classification = String(value || '');
+  return HP_LOSS_ATTRIBUTION_CLASS_KEYS.includes(classification) ? classification : 'other';
+}
+
+function normalizeHpLossAttributionEvidence(value) {
+  const evidence = String(value || '');
+  return HP_LOSS_ATTRIBUTION_EVIDENCE_KEYS.includes(evidence) ? evidence : 'other';
+}
+
+function normalizeHpLossAttributionDirection(value) {
+  const direction = value && typeof value === 'object' ? value : {};
+  const dx = Math.max(-1, Math.min(1, Math.sign(Number(direction.dx || 0))));
+  const dy = Math.max(-1, Math.min(1, Math.sign(Number(direction.dy || 0))));
+  const key = `${dx},${dy}`;
+  return HP_LOSS_ATTRIBUTION_DIRECTION_KEYS.includes(key) ? key : 'other';
+}
+
 function boundedIncrement(counter, key, limit = 8) {
   const normalized = String(key || 'other').slice(0, 64) || 'other';
   if (Object.prototype.hasOwnProperty.call(counter, normalized)) {
@@ -374,6 +420,79 @@ function createTrajectoryCoverageShotObservations(acceptedShotFloor = 0) {
     hypothesisCounts: {},
     variantCounts: {},
     selectionModeCounts: {}
+  };
+}
+
+function createHpLossAttributionObservations() {
+  return {
+    eventKeys: new Map(),
+    eventCount: 0,
+    totalDamage: 0,
+    totalCandidates: 0,
+    totalCompleteDirections: 0,
+    classCounts: boundedCounter(HP_LOSS_ATTRIBUTION_CLASS_KEYS),
+    evidenceStatusCounts: boundedCounter(HP_LOSS_ATTRIBUTION_EVIDENCE_KEYS),
+    selectedDirectionCounts: boundedCounter(HP_LOSS_ATTRIBUTION_DIRECTION_KEYS),
+    maxFrameGapMs: null,
+    maxFrameGapTicks: null,
+    maxCommandVisibilityDelayMs: null
+  };
+}
+
+function observeHpLossAttribution(observed, attribution, detail, targetId, atMs) {
+  if (!attribution || typeof attribution !== 'object'
+    || String(attribution.type || '') !== 'combat-hp-loss-attribution') return;
+  const value = attribution;
+  const lossTick = numberOrNull(value.lossTick ?? detail?.tick);
+  const lossAtMs = numberOrNull(value.lossAtMs ?? atMs);
+  const eventKey = lossTick !== null
+    ? `tick:${String(targetId || '')}:${lossTick}`
+    : (lossAtMs !== null
+        ? `at:${String(targetId || '')}:${lossAtMs}`
+        : `hp:${String(targetId || '')}:${value.previousSelfHp ?? ''}:${value.currentSelfHp ?? ''}:${value.frameGapMs ?? ''}`);
+  if (observed.eventKeys.has(eventKey)) return;
+  observed.eventKeys.set(eventKey, true);
+  while (observed.eventKeys.size > MAX_HP_LOSS_ATTRIBUTION_EVENTS) {
+    observed.eventKeys.delete(observed.eventKeys.keys().next().value);
+  }
+
+  observed.eventCount += 1;
+  observed.classCounts[normalizeHpLossAttributionClass(value.classification)] += 1;
+  observed.evidenceStatusCounts[normalizeHpLossAttributionEvidence(value.evidenceStatus)] += 1;
+  observed.selectedDirectionCounts[normalizeHpLossAttributionDirection(value.movementDirection)] += 1;
+  const hpLoss = numberOrNull(value.hpLoss);
+  if (hpLoss !== null) observed.totalDamage += Math.max(0, hpLoss);
+  const candidateCount = numberOrNull(value.candidateCount);
+  if (candidateCount !== null) observed.totalCandidates += Math.max(0, candidateCount);
+  const completeDirectionCount = numberOrNull(value.completeDirectionCount);
+  if (completeDirectionCount !== null) observed.totalCompleteDirections += Math.max(0, completeDirectionCount);
+  const frameGapMs = numberOrNull(value.frameGapMs);
+  if (frameGapMs !== null) observed.maxFrameGapMs = observed.maxFrameGapMs === null
+    ? frameGapMs
+    : Math.max(observed.maxFrameGapMs, frameGapMs);
+  const frameGapTicks = numberOrNull(value.frameGapTicks);
+  if (frameGapTicks !== null) observed.maxFrameGapTicks = observed.maxFrameGapTicks === null
+    ? frameGapTicks
+    : Math.max(observed.maxFrameGapTicks, frameGapTicks);
+  const commandDelay = numberOrNull(value.commandVisibilityDelayMs);
+  if (commandDelay !== null) observed.maxCommandVisibilityDelayMs = observed.maxCommandVisibilityDelayMs === null
+    ? commandDelay
+    : Math.max(observed.maxCommandVisibilityDelayMs, commandDelay);
+}
+
+function summarizeHpLossAttribution(observed) {
+  const value = observed || createHpLossAttributionObservations();
+  return {
+    segmentHpLossAttributionEventCount: Math.max(0, Number(value.eventCount || 0)),
+    segmentHpLossAttributionTotalDamage: Number(Number(value.totalDamage || 0).toFixed(3)),
+    segmentHpLossAttributionCandidateCount: Math.max(0, Number(value.totalCandidates || 0)),
+    segmentHpLossAttributionCompleteDirectionSamples: Math.max(0, Number(value.totalCompleteDirections || 0)),
+    segmentHpLossAttributionClassCounts: { ...value.classCounts },
+    segmentHpLossAttributionEvidenceStatusCounts: { ...value.evidenceStatusCounts },
+    segmentHpLossAttributionSelectedDirectionCounts: { ...value.selectedDirectionCounts },
+    segmentHpLossAttributionMaxFrameGapMs: numberOrNull(value.maxFrameGapMs),
+    segmentHpLossAttributionMaxFrameGapTicks: numberOrNull(value.maxFrameGapTicks),
+    segmentHpLossAttributionMaxCommandVisibilityDelayMs: numberOrNull(value.maxCommandVisibilityDelayMs)
   };
 }
 
@@ -514,7 +633,8 @@ function createBattleObservations(options = {}) {
     routeCoverageCandidateFrames: 0,
     trajectoryCoverageAppliedFrames: 0,
     trajectoryCoverageReasonCounts: boundedCounter(TRAJECTORY_COVERAGE_REASON_KEYS),
-    trajectoryCoverageShots: createTrajectoryCoverageShotObservations(options.acceptedShotFloor)
+    trajectoryCoverageShots: createTrajectoryCoverageShotObservations(options.acceptedShotFloor),
+    hpLossAttribution: createHpLossAttributionObservations()
   };
 }
 
@@ -679,7 +799,7 @@ function stableShotEventId(event, targetId) {
   return `tick:${String(targetId || '')}:${String(createdTick)}`;
 }
 
-function observeBattleDetail(observations, detail) {
+function observeBattleDetail(observations, detail, atMs = null) {
   const next = observations || createBattleObservations();
   const frame = detail && typeof detail === 'object' ? detail : {};
   const target = frame.target && typeof frame.target === 'object' ? frame.target : {};
@@ -718,6 +838,7 @@ function observeBattleDetail(observations, detail) {
     next.trajectoryCoverageReasonCounts[normalizeTrajectoryCoverageReason(trajectoryCoverage.reason)] += 1;
   }
   observeTrajectoryCoverageShots(next.trajectoryCoverageShots, metrics);
+  observeHpLossAttribution(next.hpLossAttribution, metrics.combatHpLossAttribution, frame, targetId, atMs);
   return next;
 }
 
@@ -733,6 +854,7 @@ function summarizeBattleObservations(observations) {
     routeCoverageCandidateFrames: Number(observed.routeCoverageCandidateFrames || 0),
     trajectoryCoverageAppliedFrames: Number(observed.trajectoryCoverageAppliedFrames || 0),
     trajectoryCoverageReasonCounts: { ...observed.trajectoryCoverageReasonCounts },
+    ...summarizeHpLossAttribution(observed.hpLossAttribution),
     ...summarizeTrajectoryCoverageShots(observed.trajectoryCoverageShots, 'segment')
   };
 }
@@ -1124,7 +1246,7 @@ function createCombatBattleLog(options = {}) {
         touchedAtMs: atMs
       });
     }
-    observeBattleDetail(active.observations, detail);
+    observeBattleDetail(active.observations, detail, atMs);
     if (!active.targetName && active.lastMetrics) active.targetName = String(active.lastMetrics.targetName || '');
     framesWritten += 1;
     return { recorded: true, file: active.rawFile, engagementId };
@@ -1343,6 +1465,21 @@ function runCombatBattleLogSelfTest() {
       movementStaminaSpent: 500,
       lastObservedAt: nowMs,
       threatBulletIds: ['bullet-a'],
+      combatHpLossAttribution: {
+        type: 'combat-hp-loss-attribution',
+        classification: 'matched-collision',
+        evidenceStatus: 'complete',
+        lossAtMs: nowMs + 50,
+        lossTick: 11,
+        hpLoss: 6,
+        frameGapMs: 50,
+        frameGapTicks: 1,
+        movementDirection: { dx: 1, dy: 0 },
+        movementGeneration: 'movement:test:1',
+        candidateCount: 1,
+        completeDirectionCount: 9,
+        commandVisibilityDelayMs: 42
+      },
       coverageShotAttribution: [{
         bulletId: 'coverage-2',
         acceptedShotOrdinal: 2,
@@ -1383,6 +1520,21 @@ function runCombatBattleLogSelfTest() {
       lastExecutionSequence: 6,
       sessionToken: 'leak-token',
       threatBulletIds: ['bullet-a', 'bullet-b'],
+      combatHpLossAttribution: {
+        type: 'combat-hp-loss-attribution',
+        classification: 'matched-collision',
+        evidenceStatus: 'complete',
+        lossAtMs: nowMs,
+        lossTick: 11,
+        hpLoss: 6,
+        frameGapMs: 50,
+        frameGapTicks: 1,
+        movementDirection: { dx: 1, dy: 0 },
+        movementGeneration: 'movement:test:1',
+        candidateCount: 1,
+        completeDirectionCount: 9,
+        commandVisibilityDelayMs: 42
+      },
       coverageShotAttribution: [{
         bulletId: 'coverage-2',
         acceptedShotOrdinal: 2,
@@ -1403,7 +1555,8 @@ function runCombatBattleLogSelfTest() {
         mode: 'retreat-kite',
         metrics: { shotEvents: [{ bulletId: 'bullet-a', createdTick: 10 }, { bulletId: 'bullet-b', createdTick: 12 }] }
       },
-      aim: { trajectoryCoverage: { applied: false, reason: 'coverage-evidence-not-ready' } }
+      aim: { trajectoryCoverage: { applied: false, reason: 'coverage-evidence-not-ready' } },
+      tick: 11
     }));
     recordExecutionBatch('control:test:100:1', 100, 6, 5, 'a1');
     nowMs += 1;
@@ -1512,6 +1665,16 @@ function runCombatBattleLogSelfTest() {
       && first.opponentUniqueBulletCount === 2 && first.opponentShotEventCount === 2);
     assert('index summary counts bounded behavior modes', first.behaviorModeFrameCounts['zigzag-strafe'] === 1
       && first.behaviorModeFrameCounts['retreat-kite'] === 1);
+    assert('index summary counts bounded HP-loss attribution', first.segmentHpLossAttributionEventCount === 1
+      && first.segmentHpLossAttributionTotalDamage === 6
+      && first.segmentHpLossAttributionCandidateCount === 1
+      && first.segmentHpLossAttributionCompleteDirectionSamples === 9
+      && first.segmentHpLossAttributionClassCounts['matched-collision'] === 1
+      && first.segmentHpLossAttributionEvidenceStatusCounts.complete === 1
+      && first.segmentHpLossAttributionSelectedDirectionCounts['1,0'] === 1
+      && first.segmentHpLossAttributionMaxFrameGapMs === 50
+      && first.segmentHpLossAttributionMaxFrameGapTicks === 1
+      && first.segmentHpLossAttributionMaxCommandVisibilityDelayMs === 42);
     assert('index summary counts route and trajectory coverage', first.routeCoverageCandidateFrames === 1
       && first.trajectoryCoverageAppliedFrames === 1
       && first.trajectoryCoverageReasonCounts['live-single-applied'] === 1
