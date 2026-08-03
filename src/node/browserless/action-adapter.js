@@ -441,6 +441,7 @@ function createInitialActionState() {
     shootRepeatWaitReason: '',
     shootRepeatStamina5s: null,
     shootRepeatRequiredStaminaMs: null,
+    shootRepeatStaminaPlan: null,
     shootRepeatOutstandingCommandId: null,
     shootRepeatAckRetryAtMs: null,
     shootRepeatAimOffsetX: null,
@@ -1422,6 +1423,7 @@ function createBrowserlessActionAdapter(options = {}) {
     state.shootRepeatWaitReason = '';
     state.shootRepeatStamina5s = null;
     state.shootRepeatRequiredStaminaMs = null;
+    state.shootRepeatStaminaPlan = null;
     state.shootRepeatOutstandingCommandId = null;
     state.shootRepeatAckRetryAtMs = null;
     state.shootRepeatAimOffsetX = null;
@@ -1648,15 +1650,63 @@ function createBrowserlessActionAdapter(options = {}) {
     return null;
   }
 
-  function afkShootGate(self, target, commandShooting = null) {
+  function afkShootStaminaPlan(self, target, staminaMode = 'configured-reserve') {
+    const mode = staminaMode === 'afk-attack' ? 'afk-attack' : 'configured-reserve';
+    const shotCostMs = Math.ceil(afkShootStaminaCostMs);
+    const fallback = {
+      mode,
+      source: 'configured-dodge-reserve',
+      distanceCm: null,
+      fullAttackRangeCm: null,
+      movementReserveMs: mode === 'afk-attack' ? null : 0,
+      shotCostMs,
+      requiredStaminaMs: Math.ceil(afkShootRequiredStaminaMs)
+    };
+    if (mode !== 'afk-attack') return fallback;
+
+    const selfX = numberOrNull(self?.x);
+    const selfY = numberOrNull(self?.y);
+    const targetX = numberOrNull(target?.x);
+    const targetY = numberOrNull(target?.y);
+    if (selfX === null || selfY === null || targetX === null || targetY === null) return fallback;
+
+    const attackRange = Math.max(0, Number(
+      options.attackRangeCm ?? options.attackRange ?? DEFAULT_ATTACK_RANGE_CM
+    ));
+    const commitRange = afkAttackCommitRangeCm(options);
+    const shootRange = commitRange > 0 ? Math.min(attackRange, commitRange) : attackRange;
+    const fullAttackRange = Math.min(shootRange, afkAttackFullRangeCm(options));
+    const movementStaminaPerCm = Math.max(0, Number(
+      options.afkShootMoveStaminaPerCm
+        ?? options.opportunityMoveStaminaPerCm
+        ?? BROWSER_RUNTIME_DEFAULTS.opportunityMoveStaminaPerCm
+        ?? 1
+    ));
+    const distance = Math.hypot(targetX - selfX, targetY - selfY);
+    const movementReserveMs = Math.max(0, distance - fullAttackRange) * movementStaminaPerCm;
+    return {
+      mode,
+      source: distance <= fullAttackRange ? 'full-attack' : 'approach',
+      distanceCm: Math.round(distance),
+      fullAttackRangeCm: Math.round(fullAttackRange),
+      movementReserveMs: Math.ceil(movementReserveMs),
+      shotCostMs,
+      requiredStaminaMs: Math.ceil(movementReserveMs + afkShootStaminaCostMs)
+    };
+  }
+
+  function afkShootGate(self, target, commandShooting = null, gateOptions = {}) {
     const stamina5s = stamina5sRemaining(self);
+    const staminaPlan = afkShootStaminaPlan(self, target, gateOptions.staminaMode);
+    const requiredStaminaMs = staminaPlan.requiredStaminaMs;
     const outstanding = afkOutstandingShot(target, commandShooting);
     if (outstanding) {
       return {
         ok: false,
         reason: 'afk-shoot-awaiting-ack',
         stamina5s,
-        requiredStaminaMs: afkShootRequiredStaminaMs,
+        requiredStaminaMs,
+        staminaPlan,
         outstanding,
         retryAtMs: outstanding.retryAtMs,
         retryInMs: outstanding.retryAtMs === null || outstanding.retryAtMs === undefined
@@ -1664,12 +1714,13 @@ function createBrowserlessActionAdapter(options = {}) {
           : Math.max(0, outstanding.retryAtMs - now())
       };
     }
-    if (stamina5s !== null && stamina5s < afkShootRequiredStaminaMs) {
+    if (stamina5s !== null && stamina5s < requiredStaminaMs) {
       return {
         ok: false,
         reason: 'afk-shoot-stamina-reserve',
         stamina5s,
-        requiredStaminaMs: afkShootRequiredStaminaMs,
+        requiredStaminaMs,
+        staminaPlan,
         outstanding: null
       };
     }
@@ -1677,7 +1728,8 @@ function createBrowserlessActionAdapter(options = {}) {
       ok: true,
       reason: 'afk-shoot-ready',
       stamina5s,
-      requiredStaminaMs: afkShootRequiredStaminaMs,
+      requiredStaminaMs,
+      staminaPlan,
       outstanding: null
     };
   }
@@ -1686,6 +1738,7 @@ function createBrowserlessActionAdapter(options = {}) {
     state.shootRepeatWaitReason = gate?.ok ? '' : String(gate?.reason || '');
     state.shootRepeatStamina5s = optionalNumber(gate?.stamina5s);
     state.shootRepeatRequiredStaminaMs = optionalNumber(gate?.requiredStaminaMs);
+    state.shootRepeatStaminaPlan = gate?.staminaPlan ? { ...gate.staminaPlan } : null;
     state.shootRepeatOutstandingCommandId = gate?.outstanding?.commandId ?? null;
     state.shootRepeatAckRetryAtMs = optionalNumber(gate?.retryAtMs ?? gate?.outstanding?.retryAtMs);
   }
@@ -1698,6 +1751,7 @@ function createBrowserlessActionAdapter(options = {}) {
       reason: gate.reason,
       stamina5s: gate.stamina5s,
       requiredStaminaMs: gate.requiredStaminaMs,
+      staminaPlan: gate.staminaPlan || null,
       outstanding: gate.outstanding,
       retryAtMs: gate.retryAtMs ?? null,
       retryInMs: gate.retryInMs ?? null,
@@ -1711,7 +1765,9 @@ function createBrowserlessActionAdapter(options = {}) {
 
   function sendAfkShoot(stateSnapshot, self, target, reason, cadenceMs, sendOptions = {}) {
     expirePendingShootCommands();
-    const gate = afkShootGate(self, target, stateSnapshot?.command?.shooting || null);
+    const gate = afkShootGate(self, target, stateSnapshot?.command?.shooting || null, {
+      staminaMode: sendOptions.staminaMode
+    });
     if (state.shootRepeat) updateShootRepeatGate(gate);
     if (!gate.ok) return blockedAfkShootResult(gate, target, sendOptions.recordSkip !== false);
     const startX = numberOrNull(self?.x);
@@ -1730,6 +1786,9 @@ function createBrowserlessActionAdapter(options = {}) {
         ok: skipReason !== 'missing-shoot-coordinates',
         skipped: true,
         reason: skipReason,
+        stamina5s: gate.stamina5s,
+        requiredStaminaMs: gate.requiredStaminaMs,
+        staminaPlan: gate.staminaPlan || null,
         execution: sendOptions.recordSkip === false
           ? null
           : skippedShootExecution(skipReason, target, {}, {
@@ -1748,6 +1807,9 @@ function createBrowserlessActionAdapter(options = {}) {
       targetX,
       targetY
     };
+    sent.stamina5s = gate.stamina5s;
+    sent.requiredStaminaMs = gate.requiredStaminaMs;
+    sent.staminaPlan = gate.staminaPlan || null;
     if (state.shootRepeat && !sent.skipped && sent.command) {
       state.shootRepeatWaitReason = 'afk-shoot-awaiting-ack';
       state.shootRepeatOutstandingCommandId = sent.command.id ?? null;
@@ -1834,7 +1896,9 @@ function createBrowserlessActionAdapter(options = {}) {
       cancelShootRepeat();
       return null;
     }
-    const gate = afkShootGate(repeat.self, repeat.target, repeat.commandShooting);
+    const gate = afkShootGate(repeat.self, repeat.target, repeat.commandShooting, {
+      staminaMode: repeat.staminaMode
+    });
     updateShootRepeatGate(gate);
     if (!gate.ok) {
       clearShootRepeatTimer();
@@ -1865,7 +1929,8 @@ function createBrowserlessActionAdapter(options = {}) {
       };
     }
     const sent = sendAfkShoot({ command: { shooting: repeat.commandShooting } }, repeat.self, repeat.target, repeat.reason, repeat.cadenceMs, {
-      recordSkip: false
+      recordSkip: false,
+      staminaMode: repeat.staminaMode
     });
     if (!sent.ok) {
       cancelShootRepeat(sent.error || sent.reason || 'shoot-repeat-failed', { error: true });
@@ -1882,7 +1947,7 @@ function createBrowserlessActionAdapter(options = {}) {
     return sent;
   }
 
-  function scheduleShootRepeat(stateSnapshot, self, target, reason, cadenceMs = shootRepeatMs) {
+  function scheduleShootRepeat(stateSnapshot, self, target, reason, cadenceMs = shootRepeatMs, repeatOptions = {}) {
     cancelShootRepeat();
     if (!shootRepeatEnabled) return null;
     if (!transport || typeof transport.sendShoot !== 'function') return null;
@@ -1893,12 +1958,16 @@ function createBrowserlessActionAdapter(options = {}) {
     if (startX === null || startY === null || targetX === null || targetY === null) return null;
     const targetKey = targetRepeatKey(target);
     const repeatCadenceMs = Math.max(afkShootMinIntervalMs, Number(cadenceMs || 0), afkShootRepeatMs);
+    const staminaMode = repeatOptions.staminaMode === 'afk-attack'
+      ? 'afk-attack'
+      : 'configured-reserve';
     const repeat = {
       self,
       reason,
       target,
       targetKey,
       cadenceMs: repeatCadenceMs,
+      staminaMode,
       commandShooting: stateSnapshot?.command?.shooting || null,
       observedTick: optionalNumber(stateSnapshot?.realtime?.tick)
     };
@@ -1909,12 +1978,14 @@ function createBrowserlessActionAdapter(options = {}) {
     state.shootRepeatUntilMs = now() + shootRepeatHoldMs;
     state.lastShootRepeatError = '';
     dispatchShootRepeat();
+    const staminaPlan = afkShootStaminaPlan(self, target, staminaMode);
     return {
       repeatMs: repeatCadenceMs,
       holdMs: shootRepeatHoldMs,
       targetKey,
       mode: 'ack-paced',
-      requiredStaminaMs: afkShootRequiredStaminaMs
+      requiredStaminaMs: staminaPlan.requiredStaminaMs,
+      staminaPlan
     };
   }
 
@@ -2539,6 +2610,7 @@ function createBrowserlessActionAdapter(options = {}) {
           cadenceMs: shoot.cadenceMs || null,
           stamina5s: shoot.stamina5s ?? null,
           requiredStaminaMs: shoot.requiredStaminaMs ?? null,
+          staminaPlan: shoot.staminaPlan || null,
           outstanding: shoot.outstanding || null,
           retryAtMs: shoot.retryAtMs ?? null,
           retryInMs: shoot.retryInMs ?? null,
@@ -2604,6 +2676,7 @@ function createBrowserlessActionAdapter(options = {}) {
         cadenceMs: shoot.cadenceMs || null,
         stamina5s: shoot.stamina5s ?? null,
         requiredStaminaMs: shoot.requiredStaminaMs ?? null,
+        staminaPlan: shoot.staminaPlan || null,
         outstanding: shoot.outstanding || null,
         retryAtMs: shoot.retryAtMs ?? null,
         retryInMs: shoot.retryInMs ?? null,
@@ -2849,15 +2922,24 @@ function createBrowserlessActionAdapter(options = {}) {
     const movement = fullAttack
       ? sendVelocity(0, 0, 'profit-afk-attack-hold', target)
       : sendVelocity(vector.dx, vector.dy, 'profit-afk-attack-approach', target);
+    const staminaMode = 'afk-attack';
     const shoot = sendAfkShoot(
       stateSnapshot,
       self,
       target,
       decision?.action?.reason || decision?.reason || 'profit-afk-attack',
-      combatShootMinIntervalMs
+      combatShootMinIntervalMs,
+      { staminaMode }
     );
     const repeat = canScheduleShootRepeat(shoot)
-      ? scheduleShootRepeat(stateSnapshot, self, target, decision?.action?.reason || decision?.reason || 'profit-afk-attack', shoot.cadenceMs)
+      ? scheduleShootRepeat(
+          stateSnapshot,
+          self,
+          target,
+          decision?.action?.reason || decision?.reason || 'profit-afk-attack',
+          shoot.cadenceMs,
+          { staminaMode }
+        )
       : null;
     return {
       ok: Boolean(movement.ok && shoot.ok),
@@ -2880,6 +2962,7 @@ function createBrowserlessActionAdapter(options = {}) {
         cadenceMs: shoot.cadenceMs || null,
         stamina5s: shoot.stamina5s ?? null,
         requiredStaminaMs: shoot.requiredStaminaMs ?? null,
+        staminaPlan: shoot.staminaPlan || null,
         outstanding: shoot.outstanding || null,
         retryAtMs: shoot.retryAtMs ?? null,
         retryInMs: shoot.retryInMs ?? null,
@@ -3092,6 +3175,7 @@ function createBrowserlessActionAdapter(options = {}) {
       shootRepeatWaitReason: state.shootRepeatWaitReason,
       shootRepeatStamina5s: state.shootRepeatStamina5s,
       shootRepeatRequiredStaminaMs: state.shootRepeatRequiredStaminaMs,
+      shootRepeatStaminaPlan: state.shootRepeatStaminaPlan ? { ...state.shootRepeatStaminaPlan } : null,
       shootRepeatOutstandingCommandId: state.shootRepeatOutstandingCommandId,
       shootRepeatAckRetryAtMs: state.shootRepeatAckRetryAtMs,
       shootRepeatAimOffsetX: state.shootRepeatAimOffsetX,

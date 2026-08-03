@@ -23744,7 +23744,7 @@ async function runSelfTest() {
       want: 'afk-shoot-awaiting-ack|1|2|1|1|24|1024|0|shoot 1000 0 0 0,shoot 1024 0 0 0'
     },
     {
-      name: 'browserless AFK shooting preserves Dodge reserve and resumes at the exact stamina boundary',
+      name: 'browserless AFK attack uses only the current shot cost in full-attack range',
       got: (() => {
         let t = 1000;
         const commands = [];
@@ -23765,7 +23765,7 @@ async function runSelfTest() {
         });
         const action = adapter.applyDecision({
           realtime: {
-            self: { x: 0, y: 0, stamina_5s_remaining_milli: 2200 },
+            self: { x: 0, y: 0, stamina_5s_remaining_milli: 499 },
             entities: [target],
             tick: 1
           },
@@ -23778,7 +23778,7 @@ async function runSelfTest() {
         t = 1100;
         adapter.observeState({
           realtime: {
-            self: { x: 0, y: 0, stamina_5s_remaining_milli: 2299 },
+            self: { x: 0, y: 0, stamina_5s_remaining_milli: 499 },
             entities: [target],
             tick: 2
           },
@@ -23788,7 +23788,7 @@ async function runSelfTest() {
         t = 1200;
         adapter.observeState({
           realtime: {
-            self: { x: 0, y: 0, stamina_5s_remaining_milli: 2300 },
+            self: { x: 0, y: 0, stamina_5s_remaining_milli: 500 },
             entities: [target],
             tick: 3
           },
@@ -23805,7 +23805,71 @@ async function runSelfTest() {
           commands.join(',')
         ].join('|');
       })(),
-      want: 'afk-shoot-stamina-reserve|2300|0|1|1|afk-shoot-awaiting-ack|vel 0 0,shoot 1000 0 0 0'
+      want: 'afk-shoot-stamina-reserve|500|0|1|1|afk-shoot-awaiting-ack|vel 0 0,shoot 1000 0 0 0'
+    },
+    {
+      name: 'browserless AFK attack lowers the repeat reserve after approaching full-attack range',
+      got: (() => {
+        let t = 1000;
+        const commands = [];
+        const target = { type: 'enemy', userId: 8, x: 4900, y: 0, active: false };
+        const adapter = createBrowserlessActionAdapter({
+          now: () => t,
+          commandIntervalMs: 1,
+          decisionIntervalMs: 1000,
+          combatShootMinIntervalMs: 160,
+          afkShootMinIntervalMs: 160,
+          combatShootPassiveRunnerDodgeReserveMs: 1800,
+          opportunityMoveStaminaPerCm: 1,
+          opportunityShotStaminaCostMs: 500,
+          shootRepeatEnabled: true,
+          attackRangeCm: 14500,
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`),
+            sendShoot: (targetX, targetY, startX, startY) => commands.push(`shoot ${targetX} ${targetY} ${startX} ${startY}`)
+          }
+        });
+        const action = adapter.applyDecision({
+          realtime: {
+            self: { x: 0, y: 0, stamina_5s_remaining_milli: 4400 },
+            entities: [target],
+            tick: 1
+          },
+          command: { shooting: { pendingShots: [], expiredShots: [] } }
+        }, {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: { kind: 'attack', band: 'profit', target }
+        });
+        const firstCommandId = action.shoot.command.id;
+        t = 1200;
+        adapter.observeState({
+          realtime: {
+            self: { x: 4000, y: 0, stamina_5s_remaining_milli: 500 },
+            entities: [target],
+            tick: 2
+          },
+          command: {
+            lastAck: {
+              bullet_id: 47,
+              receivedAtMs: t,
+              matchedShot: { commandId: firstCommandId, targetId: '8' }
+            },
+            shooting: { pendingShots: [], expiredShots: [] }
+          }
+        });
+        const state = adapter.getState();
+        return [
+          action.shoot.requiredStaminaMs,
+          action.shoot.staminaPlan.movementReserveMs,
+          state.shootSentCount,
+          state.shootRepeatSentCount,
+          state.shootRepeatStaminaPlan.source,
+          state.shootRepeatRequiredStaminaMs,
+          commands.filter(command => command.startsWith('shoot ')).join(',')
+        ].join('|');
+      })(),
+      want: '4400|3900|2|1|full-attack|500|shoot 4900 0 0 0,shoot 4900 0 4000 0'
     },
     {
       name: 'browserless shoot repeat pauses at websocket high water and resumes without catch-up burst',
