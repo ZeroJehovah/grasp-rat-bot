@@ -23808,7 +23808,7 @@ async function runSelfTest() {
       want: 'afk-shoot-stamina-reserve|500|0|1|1|afk-shoot-awaiting-ack|vel 0 0,shoot 1000 0 0 0'
     },
     {
-      name: 'browserless AFK attack lowers the repeat reserve after approaching full-attack range',
+      name: 'browserless AFK attack keeps the shot-only gate while approaching full-attack range',
       got: (() => {
         let t = 1000;
         const commands = [];
@@ -23831,7 +23831,7 @@ async function runSelfTest() {
         });
         const action = adapter.applyDecision({
           realtime: {
-            self: { x: 0, y: 0, stamina_5s_remaining_milli: 4400 },
+            self: { x: 0, y: 0, stamina_5s_remaining_milli: 500 },
             entities: [target],
             tick: 1
           },
@@ -23869,7 +23869,7 @@ async function runSelfTest() {
           commands.filter(command => command.startsWith('shoot ')).join(',')
         ].join('|');
       })(),
-      want: '4400|3900|2|1|full-attack|500|shoot 4900 0 0 0,shoot 4900 0 4000 0'
+      want: '500|0|2|1|full-attack|500|shoot 4900 0 0 0,shoot 4900 0 4000 0'
     },
     {
       name: 'browserless shoot repeat pauses at websocket high water and resumes without catch-up burst',

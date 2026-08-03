@@ -1676,14 +1676,10 @@ function createBrowserlessActionAdapter(options = {}) {
     const commitRange = afkAttackCommitRangeCm(options);
     const shootRange = commitRange > 0 ? Math.min(attackRange, commitRange) : attackRange;
     const fullAttackRange = Math.min(shootRange, afkAttackFullRangeCm(options));
-    const movementStaminaPerCm = Math.max(0, Number(
-      options.afkShootMoveStaminaPerCm
-        ?? options.opportunityMoveStaminaPerCm
-        ?? BROWSER_RUNTIME_DEFAULTS.opportunityMoveStaminaPerCm
-        ?? 1
-    ));
     const distance = Math.hypot(targetX - selfX, targetY - selfY);
-    const movementReserveMs = Math.max(0, distance - fullAttackRange) * movementStaminaPerCm;
+    // Movement remains available while short-window stamina is nonzero; only
+    // the next shot's cost belongs in this firing gate.
+    const movementReserveMs = 0;
     return {
       mode,
       source: distance <= fullAttackRange ? 'full-attack' : 'approach',
