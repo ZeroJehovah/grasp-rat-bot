@@ -6174,7 +6174,6 @@ function distanceAwareShootExecutionLedger(allRows = []) {
 function shootDispatchStateStepCore(previous = {}, input = {}, options = {}) {
   const nowMs = Number(input.nowMs || 0);
   const timeoutMs = Math.max(500, Number(options.shootAckTimeoutMs ?? 3000));
-  const maximumPending = Math.max(1, Number(options.maxPendingShootCommands ?? 3));
   const state = {
     lastDispatchAt: optionalNumberOrNull(previous.lastDispatchAt),
     pending: (previous.pending || []).filter(item => (
@@ -6186,10 +6185,6 @@ function shootDispatchStateStepCore(previous = {}, input = {}, options = {}) {
   };
   if (!input.intent) return { state, outcome: 'no-intent', legal: false, dispatched: false };
   const cadenceMs = Math.max(1, Number(input.cadenceMs || 160));
-  if (state.pending.length >= maximumPending) {
-    state.skipCounts.backpressure = Number(state.skipCounts.backpressure || 0) + 1;
-    return { state, outcome: 'backpressure', legal: false, dispatched: false };
-  }
   if (state.lastDispatchAt !== null && nowMs - state.lastDispatchAt < cadenceMs) {
     state.skipCounts.cooldown = Number(state.skipCounts.cooldown || 0) + 1;
     return { state, outcome: 'cooldown', legal: false, dispatched: false };
@@ -6271,7 +6266,7 @@ function replayDistanceAwareDispatch(allRows, rows, options = {}) {
     }
     if (!previousProductionReachable && productionReachable && baseEligible) {
       recoveryWindows += 1;
-      if (currentStep.dispatched || currentStep.outcome === 'cooldown' || currentStep.outcome === 'backpressure') {
+      if (currentStep.dispatched || currentStep.outcome === 'cooldown') {
         recoveryDispatches += 1;
       }
     }
@@ -6785,6 +6780,25 @@ function runDistanceAwareReplaySelfTest() {
     name: 'dispatch-state-recovers-on-first-legal-window-after-unreachable-frame',
     passed: dispatchOutcomes.join(',') === 'dispatch,cooldown,no-intent,dispatch'
       && dispatchState.dispatchCount === 2
+  });
+  let noAckDispatchState = {};
+  const noAckOutcomes = [];
+  for (let index = 0; index < 4; index += 1) {
+    const step = shootDispatchStateStepCore(noAckDispatchState, {
+      nowMs: index * 160,
+      intent: true,
+      cadenceMs: 160,
+      ackLatencyMs: 100000
+    }, { maxPendingShootCommands: 3 });
+    noAckDispatchState = step.state;
+    noAckOutcomes.push(step.outcome);
+  }
+  checks.push({
+    name: 'dispatch-state-keeps-cadence-when-ACKs-are-missing',
+    passed: noAckOutcomes.join(',') === 'dispatch,dispatch,dispatch,dispatch'
+      && noAckDispatchState.dispatchCount === 4
+      && noAckDispatchState.pending.length === 4
+      && !Object.prototype.hasOwnProperty.call(noAckDispatchState.skipCounts, 'backpressure')
   });
   const baseDodgeInput = {
     nowMs: 1000,

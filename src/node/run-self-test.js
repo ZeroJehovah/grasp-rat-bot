@@ -23627,7 +23627,7 @@ async function runSelfTest() {
       want: '450|1|shoot-command-throttled|250|2|1|vel 0 0,shoot 1000 0 0 0,shoot 1000 0 0 0'
     },
     {
-      name: 'browserless action adapter waits for late AFK ACK before the next same-coordinate shot',
+      name: 'browserless action adapter keeps AFK fire moving while a late ACK is pending',
       got: (() => {
         let t = 1000;
         const commands = [];
@@ -23702,20 +23702,21 @@ async function runSelfTest() {
         const state = adapter.getState();
         return [
           action.kind,
+          second.shoot.skipped,
           second.shoot.reason,
-          second.shoot.outstanding.source,
           afterExpired.pendingShootCount,
           state.shootSentCount,
           state.shootRepeatSentCount,
           commands.filter(command => command.startsWith('shoot ')).length,
+          state.lastShootAck.matchedShot.commandId,
           state.shootRepeatOutstandingCommandId,
           commands.join(',')
         ].join('|');
       })(),
-      want: 'profit-attack|afk-shoot-awaiting-ack|state-expired|0|2|1|2|4|vel 0 0,shoot 1000 0 0 0,vel 0 0,shoot 1100 100 100 50'
+      want: 'profit-attack|true|shoot-command-throttled|1|3|2|3|2|5|vel 0 0,shoot 1000 0 0 0,shoot 1024 0 0 0,vel 0 0,shoot 1100 100 100 50'
     },
     {
-      name: 'browserless AFK shooting recovers from a missing ACK with a distinct bounded retry aim',
+      name: 'browserless AFK shooting continues after a missing ACK with a distinct retry aim',
       got: (() => {
         let t = 1000;
         const commands = [];
@@ -23727,7 +23728,7 @@ async function runSelfTest() {
           commandIntervalMs: 1,
           decisionIntervalMs: 7000,
           combatShootMinIntervalMs: 160,
-          shootRepeatEnabled: true,
+          shootRepeatEnabled: false,
           attackRangeCm: 14500,
           setTimeout: (fn, ms) => {
             const timer = { fn, ms, canceled: false };
@@ -23779,18 +23780,58 @@ async function runSelfTest() {
         });
         const state = adapter.getState();
         return [
-          blocked.shoot.reason,
-          blocked.shoot.retryInMs,
+          blocked.shoot.skipped,
+          blocked.shoot.reason || 'dispatch',
+          blocked.shoot.reason === 'afk-shoot-awaiting-ack',
+          blocked.shoot.aimCorrelation.offsetX,
           state.shootSentCount,
-          state.shootRepeatSentCount,
-          state.shootRepeatCorrelationSlot,
-          state.shootRepeatAimOffsetX,
+          commands.filter(command => command.startsWith('shoot ')).length,
           state.lastShootCommand.targetX,
           state.lastShootCommand.targetY,
           commands.filter(command => command.startsWith('shoot ')).join(',')
         ].join('|');
       })(),
-      want: 'afk-shoot-awaiting-ack|1|2|1|1|24|1024|0|shoot 1000 0 0 0,shoot 1024 0 0 0'
+      want: 'false|dispatch|false|24|2|2|1024|0|shoot 1000 0 0 0,shoot 1024 0 0 0'
+    },
+    {
+      name: 'browserless AFK fire ignores a partial pending ACK record for marker selection',
+      got: (() => {
+        const commands = [];
+        const target = { type: 'enemy', userId: 8, x: 1000, y: 0, active: false };
+        const adapter = createBrowserlessActionAdapter({
+          now: () => 1000,
+          commandIntervalMs: 1,
+          combatShootMinIntervalMs: 160,
+          afkShootMinIntervalMs: 450,
+          shootRepeatEnabled: false,
+          attackRangeCm: 14500,
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`),
+            sendShoot: (targetX, targetY, startX, startY) => commands.push(`shoot ${targetX} ${targetY} ${startX} ${startY}`)
+          }
+        });
+        const action = adapter.applyDecision({
+          realtime: { self: { x: 0, y: 0, stamina5s: 10000 }, entities: [target], tick: 1 },
+          command: {
+            shooting: {
+              pendingShots: [{ commandId: 99, targetId: '8', requestedAtMs: 900 }],
+              expiredShots: []
+            }
+          }
+        }, {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: { kind: 'attack', band: 'profit', target }
+        });
+        return [
+          action.shoot.skipped,
+          action.shoot.reason || 'dispatch',
+          action.shoot.aimCorrelation.slot,
+          commands.filter(command => command.startsWith('shoot ')).length,
+          commands.filter(command => command.startsWith('shoot ')).join(',')
+        ].join('|');
+      })(),
+      want: 'false|dispatch|0|1|shoot 1000 0 0 0'
     },
     {
       name: 'browserless AFK attack allows zero stamina in full-attack range',
@@ -23966,7 +24007,7 @@ async function runSelfTest() {
       want: 'vel 0 0,shoot 1000 0 0 0,shoot 1000 0 0 0|2|1|1|0'
     },
     {
-      name: 'browserless action adapter keeps ACK-paced AFK repeat across a decision boundary',
+      name: 'browserless action adapter keeps AFK repeat cadence across a decision boundary',
       got: (() => {
         let t = 1000;
         const commands = [];
@@ -24043,7 +24084,7 @@ async function runSelfTest() {
           commands[commands.length - 1]
         ].join('|');
       })(),
-      want: 'profit-attack|afk-shoot-awaiting-ack|repeat|2|1|4|none|10000|shoot 1000 0 0 0'
+      want: 'profit-attack||repeat|2|0|4|none|10000|shoot 1024 0 0 0'
     },
     {
       name: 'browserless action adapter cancels AFK shot repeat when target turns active',
@@ -24246,7 +24287,7 @@ async function runSelfTest() {
       want: 'opportunistic-shot|opportunistic-afk-drop-shot|opportunistic-shot|shoot|vel 0 0,shoot 1000 0 0 0'
     },
     {
-      name: 'browserless opportunistic shot hold repeats only after ACK',
+      name: 'browserless opportunistic shot hold repeats on cadence without ACK gating',
       got: (() => {
         let t = 1000;
         const commands = [];
@@ -24311,7 +24352,7 @@ async function runSelfTest() {
           commands[commands.length - 1]
         ].join('|');
       })(),
-      want: 'opportunistic-shot|2|1|3|160|ack-paced|vel 0 0|shoot 1000 0 0 0'
+      want: 'opportunistic-shot|2|1|3|160|cadence-repeat|vel 0 0|shoot 1000 0 0 0'
     },
     {
       name: 'browserless opportunistic shot is suppressed during recovery',
@@ -24621,24 +24662,24 @@ async function runSelfTest() {
             }
           }
         });
-        const first = adapter.applyDecision({
-          realtime: { self: { x: 0, y: 0 }, tick: 1 }
-        }, decision(1));
-        t = 1160;
-        const second = adapter.applyDecision({
-          realtime: { self: { x: 0, y: 0 }, tick: 2 }
-        }, decision(2));
+        const results = [];
+        for (let index = 0; index < 6; index += 1) {
+          t = 1000 + index * 160;
+          results.push(adapter.applyDecision({
+            realtime: { self: { x: 0, y: 0 }, tick: index + 1 }
+          }, decision(index + 1)));
+        }
         const state = adapter.getState();
         return [
-          first.shoot.command.reason,
-          second.shoot.command.reason,
+          results.every(result => result.shoot.skipped === false),
           state.shootSentCount,
           state.pendingShootCount,
+          state.shootPendingTrackingEvictedCount,
           state.shootRepeatSentCount,
           commands.filter(command => command.startsWith('shoot ')).length
         ].join('|');
       })(),
-      want: 'normal-fire|normal-fire|2|2|0|2'
+      want: 'true|6|3|3|0|6'
     },
     {
       name: 'browserless leave pending cover avoids a trajectory that only hits the old movement direction',

@@ -1143,7 +1143,10 @@ function createBrowserlessStateStore(options = {}) {
     };
     state.command.requestedShots += 1;
     state.command.pendingShots.push(shot);
-    state.command.pendingShots = state.command.pendingShots.slice(-16);
+    // Keep enough recent requests to correlate a normal cadence during a
+    // delayed-ACK window. Pending ACKs are diagnostic ownership state, not a
+    // fire-rate gate; the bounded ledger still expires and trims old entries.
+    state.command.pendingShots = state.command.pendingShots.slice(-64);
     return optionsForRecord.returnInternal === true ? shot : cloneJson(shot);
   }
 

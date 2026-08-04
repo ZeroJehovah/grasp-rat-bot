@@ -20,6 +20,7 @@ const DEFAULT_COMBAT_SHOOT_MIN_INTERVAL_MS = 160;
 const DEFAULT_AFK_SHOOT_MIN_INTERVAL_MS = 450;
 const DEFAULT_AFK_SHOOT_ACK_RECOVERY_MS = 6500;
 const DEFAULT_AFK_SHOOT_CORRELATION_OFFSET_CM = 24;
+const DEFAULT_SHOOT_PENDING_TRACKING_LIMIT = 64;
 const AFK_SHOOT_ACK_MATCH_TOLERANCE_CM = 5;
 const DEFAULT_AFK_SHOOT_DODGE_RESERVE_MS = Math.max(
   0,
@@ -403,6 +404,7 @@ function createInitialActionState() {
     shootSentCount: 0,
     shootAcceptedCount: 0,
     shootUnackedCount: 0,
+    shootPendingTrackingEvictedCount: 0,
     pendingShootCommands: [],
     latestObservedTick: null,
     latestObservedAtMs: null,
@@ -563,7 +565,13 @@ function createBrowserlessActionAdapter(options = {}) {
       ?? DEFAULT_AFK_SHOOT_STAMINA_COST_MS
   ));
   const afkShootRequiredStaminaMs = afkShootDodgeReserveMs + afkShootStaminaCostMs;
-  const maxPendingShootCommands = Math.max(1, Math.round(Number(options.maxPendingShootCommands ?? 3)));
+  // ACKs confirm ownership and damage; they must not throttle the normal fire
+  // cadence. Keep only a bounded local correlation ledger for diagnostics and
+  // late-ACK matching while allowing the wire request stream to continue.
+  const maxPendingShootCommands = Math.max(
+    1,
+    Math.round(Number(options.maxPendingShootCommands ?? DEFAULT_SHOOT_PENDING_TRACKING_LIMIT))
+  );
   const initialShootAckTimeoutMs = Math.max(500, Number(options.shootAckTimeoutMs ?? 3000));
   const afkShootAckRecoveryMs = Math.max(
     initialShootAckTimeoutMs,
@@ -1653,34 +1661,73 @@ function createBrowserlessActionAdapter(options = {}) {
     return null;
   }
 
+  function afkTrackedShots(target, commandShooting = null) {
+    const candidates = [
+      ...state.pendingShootCommands,
+      ...(Array.isArray(commandShooting?.pendingShots) ? commandShooting.pendingShots : []),
+      ...(Array.isArray(commandShooting?.expiredShots) ? commandShooting.expiredShots : [])
+    ];
+    const seen = new Set();
+    return candidates.filter(shot => {
+      if (!shotMatchesAfkTarget(shot, target)) return false;
+      const key = [
+        shot?.commandId ?? shot?.id ?? '',
+        shot?.requestId ?? '',
+        shot?.requestedAtMs ?? shot?.sentAtMs ?? '',
+        shot?.targetX ?? shot?.target_x ?? '',
+        shot?.targetY ?? shot?.target_y ?? ''
+      ].join('|');
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
   function selectAfkShootAim(target, commandShooting = null) {
     const baseX = numberOrNull(target?.x);
     const baseY = numberOrNull(target?.y);
     if (baseX === null || baseY === null) return null;
-    const expired = Array.isArray(commandShooting?.expiredShots)
-      ? commandShooting.expiredShots.filter(shot => shotMatchesAfkTarget(shot, target))
-      : [];
+    const tracked = afkTrackedShots(target, commandShooting);
     const reserved = [];
-    for (const shot of expired) {
+    for (const shot of tracked) {
       const targetX = numberOrNull(shot?.targetX ?? shot?.target_x);
       const targetY = numberOrNull(shot?.targetY ?? shot?.target_y);
-      if (targetX === null || targetY === null) return null;
+      // An old/partial pending record is useful for ACK diagnostics but has
+      // no coordinate that can safely reserve a correlation marker. It must
+      // not turn a valid target into a non-firing hold.
+      if (targetX === null || targetY === null) continue;
       reserved.push({ x: targetX, y: targetY });
     }
-    for (let slot = 0; slot < afkShootAimOffsets.length; slot += 1) {
-      const offset = afkShootAimOffsets[slot];
-      const candidate = {
-        x: Math.round(baseX + offset.x),
-        y: Math.round(baseY + offset.y),
-        offsetX: offset.x,
-        offsetY: offset.y,
-        slot
-      };
-      if (reserved.every(point => (
-        Math.hypot(point.x - candidate.x, point.y - candidate.y) > AFK_SHOOT_ACK_MATCH_TOLERANCE_CM
-      ))) return candidate;
-    }
-    return null;
+    const candidates = afkShootAimOffsets.map((offset, slot) => ({
+      x: Math.round(baseX + offset.x),
+      y: Math.round(baseY + offset.y),
+      offsetX: offset.x,
+      offsetY: offset.y,
+      slot
+    }));
+    const available = candidates.filter(candidate => reserved.every(point => (
+      Math.hypot(point.x - candidate.x, point.y - candidate.y) > AFK_SHOOT_ACK_MATCH_TOLERANCE_CM
+    )));
+    if (available.length) return available[0];
+
+    // A missing ACK must not turn a valid AFK target into a silent hold after
+    // all correlation markers are occupied. Reuse the least-recently-used
+    // in-radius marker; the request and late-ACK ledgers still retain the
+    // ambiguity for diagnostics and ownership accounting.
+    const usedAt = candidate => tracked.reduce((latest, shot) => {
+      const shotX = numberOrNull(shot?.targetX ?? shot?.target_x);
+      const shotY = numberOrNull(shot?.targetY ?? shot?.target_y);
+      if (shotX === null || shotY === null) return latest;
+      if (Math.hypot(shotX - candidate.x, shotY - candidate.y) > AFK_SHOOT_ACK_MATCH_TOLERANCE_CM) {
+        return latest;
+      }
+      return Math.max(latest, Number(shot?.requestedAtMs ?? shot?.sentAtMs ?? 0) || 0);
+    }, 0);
+    candidates.sort((left, right) => usedAt(left) - usedAt(right));
+    return {
+      ...candidates[0],
+      correlationReused: true
+    };
   }
 
   function afkShootStaminaPlan(self, target, staminaMode = 'configured-reserve') {
@@ -1733,20 +1780,6 @@ function createBrowserlessActionAdapter(options = {}) {
     const staminaPlan = afkShootStaminaPlan(self, target, gateOptions.staminaMode);
     const requiredStaminaMs = staminaPlan.requiredStaminaMs;
     const outstanding = afkOutstandingShot(target, commandShooting);
-    if (outstanding) {
-      return {
-        ok: false,
-        reason: 'afk-shoot-awaiting-ack',
-        stamina5s,
-        requiredStaminaMs,
-        staminaPlan,
-        outstanding,
-        retryAtMs: outstanding.retryAtMs,
-        retryInMs: outstanding.retryAtMs === null || outstanding.retryAtMs === undefined
-          ? null
-          : Math.max(0, outstanding.retryAtMs - now())
-      };
-    }
     if (stamina5s !== null && stamina5s < requiredStaminaMs) {
       return {
         ok: false,
@@ -1763,7 +1796,12 @@ function createBrowserlessActionAdapter(options = {}) {
       stamina5s,
       requiredStaminaMs,
       staminaPlan,
-      outstanding: null
+      outstanding,
+      ackPending: Boolean(outstanding),
+      retryAtMs: outstanding?.retryAtMs ?? null,
+      retryInMs: outstanding?.retryAtMs === null || outstanding?.retryAtMs === undefined
+        ? null
+        : Math.max(0, outstanding.retryAtMs - now())
     };
   }
 
@@ -1790,7 +1828,7 @@ function createBrowserlessActionAdapter(options = {}) {
       retryInMs: gate.retryInMs ?? null,
       execution: recordSkip
         ? skippedShootExecution(gate.reason, target, {}, {
-            outcome: gate.reason === 'afk-shoot-awaiting-ack' ? 'awaiting-ack' : 'stamina-reserve'
+            outcome: 'stamina-reserve'
           })
         : null
     };
@@ -1838,13 +1876,14 @@ function createBrowserlessActionAdapter(options = {}) {
       offsetX: aim.offsetX,
       offsetY: aim.offsetY,
       targetX,
-      targetY
+      targetY,
+      reused: aim.correlationReused === true
     };
     sent.stamina5s = gate.stamina5s;
     sent.requiredStaminaMs = gate.requiredStaminaMs;
     sent.staminaPlan = gate.staminaPlan || null;
     if (state.shootRepeat && !sent.skipped && sent.command) {
-      state.shootRepeatWaitReason = 'afk-shoot-awaiting-ack';
+      state.shootRepeatWaitReason = '';
       state.shootRepeatOutstandingCommandId = sent.command.id ?? null;
       state.shootRepeatAckRetryAtMs = now() + afkShootAckRecoveryMs;
       state.shootRepeatAimOffsetX = aim.offsetX;
@@ -1973,7 +2012,7 @@ function createBrowserlessActionAdapter(options = {}) {
       state.shootRepeatSentCount += 1;
       return sent;
     }
-    if (sent.reason === 'shoot-command-throttled' || sent.reason === 'shoot-unacked-backpressure') {
+    if (sent.reason === 'shoot-command-throttled') {
       state.shootRepeatWaitReason = sent.reason;
       armShootRepeatTimer(repeat.cadenceMs);
     }
@@ -2016,7 +2055,7 @@ function createBrowserlessActionAdapter(options = {}) {
       repeatMs: repeatCadenceMs,
       holdMs: shootRepeatHoldMs,
       targetKey,
-      mode: 'ack-paced',
+      mode: 'cadence-repeat',
       requiredStaminaMs: staminaPlan.requiredStaminaMs,
       staminaPlan
     };
@@ -2195,6 +2234,14 @@ function createBrowserlessActionAdapter(options = {}) {
     if (retainedCount !== pending.length) pending.length = retainedCount;
   }
 
+  function retainPendingShootCommand(command) {
+    state.pendingShootCommands.push(command);
+    const overflow = state.pendingShootCommands.length - maxPendingShootCommands;
+    if (overflow <= 0) return;
+    state.pendingShootCommands.splice(0, overflow);
+    state.shootPendingTrackingEvictedCount += overflow;
+  }
+
   function sendShoot(targetX, targetY, startX, startY, reason, target = null, cadenceMs = combatShootMinIntervalMs, shotMeta = {}) {
     const atMs = now();
     const requestId = `${controlGeneration || 'control'}:shoot-attempt:${nextShootAttemptSequence++}`;
@@ -2254,23 +2301,6 @@ function createBrowserlessActionAdapter(options = {}) {
           skipReason: 'missing-transport',
           outcome: 'skipped'
         })
-      };
-    }
-    if (state.pendingShootCommands.length >= maxPendingShootCommands) {
-      state.skippedCount += 1;
-      const execution = emitShootExecution({
-        ...executionContext,
-        type: 'shoot-skip',
-        skipReason: 'shoot-unacked-backpressure',
-        outcome: 'skipped'
-      });
-      return {
-        ok: true,
-        skipped: true,
-        reason: 'shoot-unacked-backpressure',
-        pendingCount: state.pendingShootCommands.length,
-        maxPendingShootCommands,
-        execution
       };
     }
     const last = state.lastShootCommand;
@@ -2380,7 +2410,7 @@ function createBrowserlessActionAdapter(options = {}) {
     state.sentCount += 1;
     state.shootSentCount += 1;
     state.lastShootCommand = command;
-    state.pendingShootCommands.push(command);
+    retainPendingShootCommand(command);
     if (onShootRequest) {
       try {
         const telemetry = onShootRequest(shootRequestUsesCommandObject ? command : {
@@ -2680,7 +2710,6 @@ function createBrowserlessActionAdapter(options = {}) {
     return Boolean(shoot?.ok && (
       shoot.command
       || shoot.reason === 'shoot-command-throttled'
-      || shoot.reason === 'afk-shoot-awaiting-ack'
       || shoot.reason === 'afk-shoot-stamina-reserve'
       || shoot.reason === 'afk-shoot-correlation-slots-exhausted'
     ));
@@ -3190,6 +3219,7 @@ function createBrowserlessActionAdapter(options = {}) {
       shootSentCount: state.shootSentCount,
       shootAcceptedCount: state.shootAcceptedCount,
       shootUnackedCount: state.shootUnackedCount,
+      shootPendingTrackingEvictedCount: state.shootPendingTrackingEvictedCount,
       pendingShootCount: state.pendingShootCommands.length,
       shootAckTimeoutMs: state.shootAckTimeoutMs,
       stopCount: state.stopCount,
@@ -3265,6 +3295,7 @@ function createBrowserlessActionAdapter(options = {}) {
       shootSentCount: state.shootSentCount,
       shootAcceptedCount: state.shootAcceptedCount,
       shootUnackedCount: state.shootUnackedCount,
+      shootPendingTrackingEvictedCount: state.shootPendingTrackingEvictedCount,
       pendingShootCount: state.pendingShootCommands.length,
       velocityRepeatSentCount: state.velocityRepeatSentCount,
       shootRepeatSentCount: state.shootRepeatSentCount,
