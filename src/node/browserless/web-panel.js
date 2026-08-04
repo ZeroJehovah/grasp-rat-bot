@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.03.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.04.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -699,6 +699,7 @@ function renderBrowserlessWebPanel() {
       if (phase === 'deferred') return '已保留 3 个 IP，等待下一个登录时点';
       if (phase === 'insufficient') return '可用出口不足 3 个，冷却中';
       if (phase === 'login-attempt') return '正在使用主 IP 登录';
+      if (phase === 'snapshot-wait') return '正在等待新的登录点快照';
       if (phase === 'active') return '本局三 IP 生命周期已生效';
       if (phase === 'login-failed') return '登录失败，等待重新预检';
       if (phase === 'interrupted') return '预检被停止/重启打断';
@@ -1560,25 +1561,67 @@ function renderBrowserlessWebPanel() {
       streak = Math.min(required, Math.max(0, streak));
       return String(streak) + '/' + String(required);
     }
+    function loginPointSafetyCheckInFlight(status) {
+      const action = status.action || status.decision || {};
+      const kind = String(action.kind || '');
+      const reason = String(action.reason || '');
+      const nextRunAt = String(action.nextRunAt || '');
+      const preflightPhase = String(status.network?.sourceIpPreflight?.phase || '');
+      if (kind === 'snapshot-wait') return true;
+      if (nextRunAt) return false;
+      return /pending-snapshot-safety/i.test(reason)
+        || (kind === 'loop-wait' && preflightPhase === 'snapshot-wait');
+    }
     function loginPointDisplay(status) {
       if (status.game?.inGame) return { state: 'none', text: '--' };
       const reconnectRemainingMs = number(status.stats?.offline?.reconnectRemainingMs);
-      if (reconnectRemainingMs !== null && reconnectRemainingMs > 1000) {
-        return { state: 'cooldown', text: '重登冷却中，冷却结束后再检查' };
-      }
+      const cooldownActive = reconnectRemainingMs !== null && reconnectRemainingMs > 1000;
       const detail = status.loginPointSafety?.detail || {};
       const reason = String(status.loginPointSafety?.reason || '');
       const detailReason = String(detail.reason || '');
       const originalReason = String(detail.originalReason || '');
       const reasonText = [reason, detailReason, originalReason].join(' ');
+      const checkInFlight = loginPointSafetyCheckInFlight(status);
+      const pendingResult = /pending-snapshot-safety|snapshot-safety-streak-pending/i.test(reasonText);
+      const checkedAt = String(status.loginPointSafety?.checkedAt || detail.checkedAt || '');
+      const completedResult = Boolean(checkedAt && !pendingResult);
+      const withCooldown = display => {
+        if (!cooldownActive || display.state === 'reentry') return display;
+        return {
+          ...display,
+          cooldown: true,
+          text: display.text + '（重登冷却中）'
+        };
+      };
+      if (cooldownActive && !checkInFlight && !completedResult) {
+        return { state: 'cooldown', text: '重登冷却中，冷却结束后再检查' };
+      }
       if (/confirmed-leave-snapshot-quarantine|stale-confirmed-leave-snapshot-tick/i.test(reasonText)) {
-        return { state: 'pending', text: '等待退出后的快照刷新' };
+        return withCooldown({ state: 'pending', text: '等待退出后的快照刷新' });
       }
       if (/self-present-reentry/i.test(reasonText) || (detail.selfPresent === true && detail.bypassedPreLoginSafety)) {
         return { state: 'reentry', text: '检测到角色仍在线，正在恢复实时连接（不会新登录）' };
       }
       if (/single-blocker-timeout-bypass/i.test(reasonText)) {
-        return { state: 'safe', text: '满血强制登录' };
+        return withCooldown({ state: 'safe', text: '满血强制登录' });
+      }
+      if (checkInFlight) {
+        const currentCheckOk = status.loginPointSafety?.ok ?? detail.ok;
+        const previousCheck = detail.previousCheck || null;
+        const progress = loginPointProgressText(status, false);
+        if (completedResult && currentCheckOk === false) {
+          return { state: 'unsafe', reviewing: true, checking: true, text: '不安全（正在复查 ' + progress + '）' };
+        }
+        if (completedResult && currentCheckOk === true) {
+          return { state: 'safe', reviewing: true, checking: true, text: '上次检查安全，正在复查 ' + progress };
+        }
+        if (previousCheck?.ok === false) {
+          return { state: 'unsafe', reviewing: true, checking: true, text: '不安全（正在复查 ' + progress + '）' };
+        }
+        if (previousCheck?.ok === true) {
+          return { state: 'safe', reviewing: true, checking: true, text: '上次检查安全，正在复查 ' + progress };
+        }
+        return { state: 'pending', checking: true, text: '正在检查登录点安全 ' + progress };
       }
       const pendingSafeReason = /snapshot-safety-streak-pending/i.test(detailReason)
         && /^safe$/i.test(originalReason);
@@ -1590,24 +1633,24 @@ function renderBrowserlessWebPanel() {
           || (streak !== null && streak > 0 && /pending|streak/i.test(reasonText))
       );
       if (safeLike) {
-        return { state: 'safe', text: '安全 ' + loginPointProgressText(status, true) };
+        return withCooldown({ state: 'safe', text: '安全 ' + loginPointProgressText(status, true) });
       }
       if (/pending-snapshot-safety/i.test(reasonText)) {
         const offline = status.stats?.offline || {};
         const afterOffline = Boolean(offline.lastExitAt || offline.lastExitReason || status.recentExit);
         if (afterOffline) {
-          return { state: 'pending', afterOffline: true, text: '离线后等待检查 ' + loginPointProgressText(status, false) };
+          return withCooldown({ state: 'pending', afterOffline: true, text: '离线后等待检查 ' + loginPointProgressText(status, false) });
         }
         const previousCheck = detail.previousCheck || null;
         if (previousCheck?.ok === true) {
-          return { state: 'safe', reviewing: true, text: '上次检查安全，正在复查 ' + loginPointProgressText(status, false) };
+          return withCooldown({ state: 'safe', reviewing: true, text: '上次检查安全，正在复查 ' + loginPointProgressText(status, false) });
         }
         if (previousCheck?.ok === false) {
-          return { state: 'unsafe', reviewing: true, text: '不安全（正在复查 ' + loginPointProgressText(status, false) + '）' };
+          return withCooldown({ state: 'unsafe', reviewing: true, text: '不安全（正在复查 ' + loginPointProgressText(status, false) + '）' });
         }
-        return { state: 'pending', text: '待检查 ' + loginPointProgressText(status, false) };
+        return withCooldown({ state: 'pending', text: '待检查 ' + loginPointProgressText(status, false) });
       }
-      return { state: 'unsafe', text: '不安全' };
+      return withCooldown({ state: 'unsafe', text: '不安全' });
     }
     function loginPointText(status) {
       return loginPointDisplay(status).text;
@@ -1760,6 +1803,7 @@ function renderBrowserlessWebPanel() {
         return sourceIpPreflightPhaseText(status.network);
       }
       if (reason === 'login-point-safe-connecting') return '登录点已安全，正在连接游戏';
+      if (loginPointSafetyCheckInFlight(status)) return '正在检查登录点安全';
       const loginState = loginPointDisplay(status).state;
       if (/snapshot|login-point|prelogin|edge/i.test(reason) || loginState === 'pending') {
         return '等待登录点快照安全检查';
@@ -2704,7 +2748,7 @@ function renderBrowserlessWebPanel() {
       addRow(rowsOut, '状态', online ? actionTitleText(status) : offlineActionTitleText(status), true);
       const preflight = status.network?.sourceIpPreflight || null;
       const preflightPhase = String(preflight?.phase || '');
-      if (!online && preflight && ['testing', 'retry-wait', 'deferred', 'insufficient', 'ready', 'login-attempt', 'login-failed'].includes(preflightPhase)) {
+      if (!online && preflight && ['testing', 'retry-wait', 'deferred', 'insufficient', 'ready', 'login-attempt', 'login-failed', 'snapshot-wait'].includes(preflightPhase)) {
         addRow(rowsOut, '出口预检', sourceIpPreflightPhaseText(status.network), true,
           preflightPhase === 'insufficient' ? classAttrs('bad') : classAttrs('info'));
         addRow(rowsOut, '预检进度', sourceIpPreflightProgressText(status.network));

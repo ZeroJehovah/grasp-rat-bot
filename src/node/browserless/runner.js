@@ -5938,6 +5938,78 @@ async function runBrowserlessRunnerSelfTest() {
       satisfied: true
     });
     const panelNeverCheckedCompact = panelLoginPointRecheckState(null);
+    const panelCooldownUnsafeCompact = buildCompactBrowserlessStatus({
+      session: { userId: 7, sessionToken: 'panel-self-test-token' },
+      runner: {
+        running: true,
+        currentAction: {
+          kind: 'loop-wait',
+          reason: 'snapshot-safety-retry',
+          nextRunAt: '2026-07-27T08:31:00.000Z'
+        }
+      },
+      loginPointSafety: {
+        ok: false,
+        reason: 'damage-actor-near-login-point',
+        checkedAt: '2026-07-27T08:30:00.000Z',
+        point: { x: 5999, y: 66268, hp: 100, source: 'snapshot' },
+        detail: {
+          ok: false,
+          reason: 'damage-actor-near-login-point',
+          checkedAt: '2026-07-27T08:30:00.000Z',
+          required: 1,
+          streak: 0,
+          satisfied: false
+        }
+      },
+      stats: {
+        currentSession: { online: false },
+        lastExit: {
+          at: '2026-07-27T08:20:00.000Z',
+          reason: 'frame-gap',
+          nextRunAt: '2026-07-27T08:31:00.000Z'
+        }
+      }
+    }, { nowMs: Date.parse('2026-07-27T08:30:30.000Z') });
+    const panelSnapshotWaitCompact = buildCompactBrowserlessStatus({
+      session: { userId: 7, sessionToken: 'panel-self-test-token' },
+      runner: {
+        running: true,
+        currentAction: {
+          kind: 'loop-wait',
+          reason: 'next-login-point-pending-snapshot-safety',
+          nextRunAt: ''
+        }
+      },
+      network: {
+        sourceIpPreflight: {
+          phase: 'snapshot-wait',
+          reuseWithoutRetest: true
+        }
+      },
+      loginPointSafety: {
+        ok: false,
+        reason: 'damage-actor-near-login-point',
+        checkedAt: '2026-07-27T08:24:05.000Z',
+        point: { x: 5999, y: 66268, hp: 100, source: 'snapshot' },
+        detail: {
+          ok: false,
+          reason: 'damage-actor-near-login-point',
+          checkedAt: '2026-07-27T08:24:05.000Z',
+          required: 1,
+          streak: 0,
+          satisfied: false
+        }
+      },
+      stats: {
+        currentSession: { online: false },
+        lastExit: {
+          at: '2026-07-27T08:19:41.000Z',
+          reason: 'frame-gap',
+          nextRunAt: '2026-07-27T08:24:35.000Z'
+        }
+      }
+    }, { nowMs: Date.parse('2026-07-27T08:25:40.000Z') });
     const panelOfflineTransitionCompact = buildCompactBrowserlessStatus(
       mergeState(panelOfflineTransitionState, panelOfflineTransitionPatch),
       { nowMs: panelOfflineTransitionAt }
@@ -6379,7 +6451,12 @@ async function runBrowserlessRunnerSelfTest() {
           && pageHtml.includes('id="lastExitPanel"')
           && pageHtml.includes("return '等待重登冷却时间'")
           && pageHtml.includes("return { state: 'cooldown', text: '重登冷却中，冷却结束后再检查' }")
-          && pageHtml.includes("return { state: 'pending', afterOffline: true, text: '离线后等待检查 ' + loginPointProgressText(status, false) }")
+          && pageHtml.includes("return withCooldown({ state: 'pending', afterOffline: true, text: '离线后等待检查 ' + loginPointProgressText(status, false) });")
+          && pageHtml.includes('function loginPointSafetyCheckInFlight(status)')
+          && pageHtml.includes("text: display.text + '（重登冷却中）'")
+          && pageHtml.includes("if (phase === 'snapshot-wait') return '正在等待新的登录点快照';")
+          && pageHtml.includes("if (loginPointSafetyCheckInFlight(status)) return '正在检查登录点安全';")
+          && pageHtml.includes("checking: true, text: '不安全（正在复查 ' + progress + '）'")
           && pageHtml.includes('if (!loginDisplay.afterOffline)')
           && pageHtml.includes("return '等待登录点快照安全检查'")
           && pageHtml.includes("if (reason === 'login-point-safe-connecting') return '登录点已安全，正在连接游戏'")
@@ -6431,6 +6508,12 @@ async function runBrowserlessRunnerSelfTest() {
           && panelPreLoginCompact.game.inGame === false
           && panelPreLoginCompact.action.kind === 'loop-wait'
           && panelPreLoginCompact.action.reason === 'next-login-point-pending-snapshot-safety'
+          && panelCooldownUnsafeCompact.stats.offline.reconnectRemainingMs === 30000
+          && panelCooldownUnsafeCompact.loginPointSafety.reason === 'damage-actor-near-login-point'
+          && panelSnapshotWaitCompact.stats.offline.nextReconnectAt === ''
+          && panelSnapshotWaitCompact.stats.offline.scheduledReconnectAt === ''
+          && panelSnapshotWaitCompact.stats.offline.reconnectRemainingMs === null
+          && panelSnapshotWaitCompact.action.reason === 'next-login-point-pending-snapshot-safety'
           && panelUnsafeRecheckCompact.loginPointSafety.detail.previousCheck?.ok === false
           && panelUnsafeRecheckCompact.loginPointSafety.detail.previousCheck?.reason === 'damage-actor-near-login-point'
           && panelUnsafeRecheckCompact.loginPointSafety.detail.previousCheck?.checkedAt === '2026-07-27T08:22:21.694Z'

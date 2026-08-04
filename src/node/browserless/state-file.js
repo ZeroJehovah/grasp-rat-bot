@@ -751,6 +751,16 @@ function browserlessStatsReadyForLiveUpdate(stats) {
   );
 }
 
+function browserlessSnapshotSafetyCheckInFlight(action = {}) {
+  const kind = String(action?.kind || '');
+  const reason = String(action?.reason || '');
+  const nextRunAt = String(action?.nextRunAt || '');
+  if (kind === 'snapshot-wait') return true;
+  if (nextRunAt) return false;
+  return /pending-snapshot-safety/i.test(reason)
+    || (kind === 'loop-wait' && /snapshot-safety/i.test(reason));
+}
+
 function cloneBrowserlessStatsForLiveUpdate(stats) {
   return {
     ...stats,
@@ -1424,7 +1434,11 @@ function compactBrowserlessStats(normalized, game, action, options = {}, lastKno
   const summedTodayStaminaSpentMs = Math.max(0, Math.round(Number(stats.today.staminaSpentMs || 0) + activeDelta.staminaSpentMs));
   const actualTodayStaminaSpentMs = actualBrowserlessDailyStaminaSpentMs(stats);
   const todayCoinsGained = Math.max(0, Math.round(Number(stats.today.coinsGained || 0) + activeDelta.coinsGained));
-  const rawNextRunAt = action?.nextRunAt || stats.lastExit.nextRunAt || '';
+  // Do not project a completed wait deadline while a new snapshot safety check is in flight.
+  const snapshotSafetyCheckInFlight = browserlessSnapshotSafetyCheckInFlight(action);
+  const rawNextRunAt = snapshotSafetyCheckInFlight
+    ? ''
+    : (action?.nextRunAt || stats.lastExit.nextRunAt || '');
   const offlineBlocker = compactOfflineBlocker(normalized, lastKnown, options, nowMs);
   const rawNextRunAtMs = parseTimeMs(rawNextRunAt);
   const blockerReadyAtMs = parseTimeMs(offlineBlocker?.nextReadyAt);
