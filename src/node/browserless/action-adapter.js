@@ -60,6 +60,39 @@ function optionalNumber(value) {
   return numberOrNull(value);
 }
 
+const SELF_STAMINA_METADATA_FIELDS = [
+  'stamina_5s_remaining_milli',
+  'stamina5sRemainingMilli',
+  'stamina5s',
+  'stamina_5s',
+  'stamina_5s_limit_milli',
+  'stamina5sLimitMilli',
+  'stamina5sLimit',
+  'stamina_5s_limit_ms',
+  'stamina5sLimitMs',
+  'stamina_5s_limit'
+];
+
+function mergeRealtimeSelfStaminaMetadata(realtimeSelf, metadataSelf) {
+  if (!realtimeSelf || typeof realtimeSelf !== 'object') return metadataSelf || null;
+  if (!metadataSelf || typeof metadataSelf !== 'object') return realtimeSelf;
+  if (stamina5sRemaining(realtimeSelf) !== null) return realtimeSelf;
+  if (stamina5sRemaining(metadataSelf) === null) return realtimeSelf;
+
+  const merged = { ...realtimeSelf };
+  for (const field of SELF_STAMINA_METADATA_FIELDS) {
+    if (numberOrNull(merged[field]) !== null) continue;
+    if (numberOrNull(metadataSelf[field]) !== null) merged[field] = metadataSelf[field];
+  }
+  if (merged.staminaMetadataAuthority === undefined && metadataSelf.staminaMetadataAuthority) {
+    merged.staminaMetadataAuthority = metadataSelf.staminaMetadataAuthority;
+  }
+  if (merged.staminaMetadataDistance === undefined && metadataSelf.staminaMetadataDistance !== undefined) {
+    merged.staminaMetadataDistance = metadataSelf.staminaMetadataDistance;
+  }
+  return merged;
+}
+
 function afkShootCorrelationOffsets(offsetCm) {
   // The default 24cm marker stays well inside the measured 90cm hit radius,
   // while remaining far enough apart for the state store's 5cm ACK matcher.
@@ -1677,9 +1710,13 @@ function createBrowserlessActionAdapter(options = {}) {
     const shootRange = commitRange > 0 ? Math.min(attackRange, commitRange) : attackRange;
     const fullAttackRange = Math.min(shootRange, afkAttackFullRangeCm(options));
     const distance = Math.hypot(targetX - selfX, targetY - selfY);
-    // Movement remains available while short-window stamina is nonzero; only
-    // the next shot's cost belongs in this firing gate.
-    const movementReserveMs = 0;
+    const movementStaminaPerCm = Math.max(0, Number(
+      options.afkShootMoveStaminaPerCm
+        ?? options.opportunityMoveStaminaPerCm
+        ?? BROWSER_RUNTIME_DEFAULTS.opportunityMoveStaminaPerCm
+        ?? 1
+    ));
+    const movementReserveMs = Math.max(0, distance - fullAttackRange) * movementStaminaPerCm;
     return {
       mode,
       source: distance <= fullAttackRange ? 'full-attack' : 'approach',
@@ -1687,7 +1724,7 @@ function createBrowserlessActionAdapter(options = {}) {
       fullAttackRangeCm: Math.round(fullAttackRange),
       movementReserveMs: Math.ceil(movementReserveMs),
       shotCostMs,
-      requiredStaminaMs: Math.ceil(movementReserveMs + afkShootStaminaCostMs)
+      requiredStaminaMs: Math.ceil(movementReserveMs)
     };
   }
 
@@ -1849,7 +1886,7 @@ function createBrowserlessActionAdapter(options = {}) {
       }
       repeat.target = { ...repeat.target, ...entity };
     }
-    repeat.self = realtime.self;
+    repeat.self = mergeRealtimeSelfStaminaMetadata(realtime.self, repeat.self);
     repeat.commandShooting = stateSnapshot?.command?.shooting || repeat.commandShooting || null;
     repeat.observedTick = optionalNumber(realtime.tick);
     return true;
@@ -2527,7 +2564,10 @@ function createBrowserlessActionAdapter(options = {}) {
     if (controlAction) {
       return applyControlDecision(controlAction);
     }
-    const self = stateSnapshot?.realtime?.self || decision?.input?.self || null;
+    const self = mergeRealtimeSelfStaminaMetadata(
+      stateSnapshot?.realtime?.self || null,
+      decision?.input?.self || null
+    );
     if (!profitAction) {
       clearCoinFeedbackGate();
       const diagnostics = unsupportedActionDiagnostics(decision);
@@ -2647,7 +2687,10 @@ function createBrowserlessActionAdapter(options = {}) {
   }
 
   function applyOpportunisticShotDecision(stateSnapshot, target, decision) {
-    const self = stateSnapshot?.realtime?.self || decision?.input?.self || null;
+    const self = mergeRealtimeSelfStaminaMetadata(
+      stateSnapshot?.realtime?.self || null,
+      decision?.input?.self || null
+    );
     const stopped = stop('opportunistic-shot-hold');
     const shoot = sendOpportunisticShot(stateSnapshot, self, target, decision);
     const repeat = canScheduleShootRepeat(shoot)
