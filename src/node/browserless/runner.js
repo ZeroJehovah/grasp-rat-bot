@@ -3699,6 +3699,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         useDecisionWorker: deps.useDecisionWorker !== false,
         onDecision: decision => publishDecisionLiveState(decision),
         onCombatControl: decision => publishDecisionLiveState(decision),
+        deferCombatControlStatus: true,
         onAction: (action, context = {}) => {
           const currentBeforeAction = liveState || stateBeforeCanary;
           const actionSnapshot = {

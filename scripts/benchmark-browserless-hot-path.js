@@ -599,6 +599,7 @@ async function runCompleteCallbackScenario(options, combatLearning, activeCombat
       useDecisionWorker: true,
       wsFrameCoalescing: true,
       mainThreadBudgetMs: options.maxMs,
+      deferCombatControlStatus: true,
       logStore,
       combatBattleLog,
       easyKillPlayerTracker,

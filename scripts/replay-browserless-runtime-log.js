@@ -38,6 +38,7 @@ const {
 const {
   buildTrajectoryCoveragePlanCore,
   dynamicBehaviorTrajectoryEligibilityCore,
+  movingTargetStopRouteRejectedCore,
   shouldApplyTrajectoryCoverageCore
 } = require('../src/strategy/combat-shot-coverage');
 const {
@@ -1068,7 +1069,7 @@ function replayCombat(options) {
     const coverageRecentShotCount = Number(row.detail.shooting?.recentAcceptedShotCount || 0);
     const coverageRecentHitRate = Number(row.detail.shooting?.recentAcceptedHitRate || 0);
     const coverageSuccessfulAimProtected = coverageRecentShotCount >= 10 && coverageRecentHitRate >= 0.12;
-    const coverageApplied = shouldApplyTrajectoryCoverageCore({
+    const coverageQualified = shouldApplyTrajectoryCoverageCore({
       mode: 'live-single',
       highEntropy: Boolean(improved.fireRiskClassification?.highEntropy
         || /^high-entropy-/.test(String(improved.routeCoverage?.style || ''))),
@@ -1080,6 +1081,12 @@ function replayCombat(options) {
         ? true
         : coveragePlan?.selected?.improvementQualified === true
     });
+    const coverageStopRouteRejected = movingTargetStopRouteRejectedCore({
+      hypothesis: coveragePlan?.selected?.hypothesis,
+      moving: Boolean(improved.intercept),
+      targetSpeed: Math.hypot(Number(replayTarget?.vx || 0), Number(replayTarget?.vy || 0))
+    });
+    const coverageApplied = coverageQualified && !coverageStopRouteRejected;
     const coverageAim = coverageApplied
       ? { x: coveragePlan.selected.aimX, y: coveragePlan.selected.aimY }
       : improved;

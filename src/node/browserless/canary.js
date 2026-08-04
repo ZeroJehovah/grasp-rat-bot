@@ -2941,12 +2941,24 @@ async function runReadOnlyCanary(config, options = {}) {
     const urgent = summary?.band === 'safety' || summary?.action?.shouldLeave === true;
     if (!force && !urgent && key === lastCombatControlStatusKey
       && atMs - lastCombatControlStatusAtMs < combatControlStatusPublishMs) return;
+    // High-frequency combat control must finish the realtime decision and
+    // action path before updating the diagnostic/live-state projection. The
+    // projection is observability state and does not affect aim, fire, move,
+    // or exit arbitration for this frame.
+    lastCombatControlStatusKey = key;
+    lastCombatControlStatusAtMs = atMs;
+    const publish = () => {
+      try {
+        options.onCombatControl(summary, { state: currentState, control });
+      } catch (err) {
+        log('canary-combat-status-error', { error: errorMessage(err) });
+      }
+    };
     try {
-      options.onCombatControl(summary, { state: currentState, control });
-      lastCombatControlStatusKey = key;
-      lastCombatControlStatusAtMs = atMs;
+      if (options.deferCombatControlStatus === true) setImmediate(publish);
+      else publish();
     } catch (err) {
-      log('canary-combat-status-error', { error: errorMessage(err) });
+      log('canary-combat-status-schedule-error', { error: errorMessage(err) });
     }
   };
   const publishRealtimeControl = (control, currentState, atMs, outerStages = null) => {

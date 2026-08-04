@@ -55,6 +55,8 @@ const {
 const {
   buildTrajectoryCoveragePlanCore,
   dynamicBehaviorTrajectoryEligibilityCore,
+  evaluateTrajectoryAimCore,
+  movingTargetStopRouteRejectedCore,
   normalizeTrajectoryCoverageMode,
   normalizedDynamicRouteSelectionMode,
   selectDynamicRouteCandidateCore,
@@ -1210,6 +1212,54 @@ function summarizeCombatTarget(target) {
   };
 }
 
+function evaluateRealtimeTrajectoryAim(aim, options = {}) {
+  const routeCandidates = Array.isArray(aim?.routeCoverage?.candidates)
+    ? aim.routeCoverage.candidates
+    : [];
+  const executionDelayTicks = numberOrNull(
+    aim?.timing?.executionDelayTicks
+      ?? options.executionTiming?.medianTicks
+      ?? 5
+  ) ?? 5;
+  const createdTick = numberOrNull(
+    aim?.timing?.createdTickEstimate
+      ?? (numberOrNull(options.observedTick) ?? 0) + executionDelayTicks
+  ) ?? 0;
+  const flightTicks = numberOrNull(aim?.flightTicks);
+  const bulletLifetimeTicks = Math.max(
+    1,
+    Number(options.combatBulletLifetimeTicks
+      ?? Math.round(COMBAT_CONSTANTS.BULLET_RANGE_CM / COMBAT_CONSTANTS.BULLET_SPEED_CM_PER_TICK))
+  );
+  // A proof only needs to cover the bullet's arrival window.  Extending every
+  // route to the full bullet lifetime multiplies the realtime control cost
+  // without improving whether this aim can hit at its intercept tick.
+  const trajectoryHorizonTicks = Math.max(
+    1,
+    Math.min(
+      bulletLifetimeTicks,
+      flightTicks === null ? bulletLifetimeTicks : Math.ceil(flightTicks) + 1
+    )
+  );
+  return evaluateTrajectoryAimCore({
+    aimPoint: aim && Number.isFinite(Number(aim.x)) && Number.isFinite(Number(aim.y))
+      ? { x: Number(aim.x), y: Number(aim.y) }
+      : null,
+    createdTick,
+    flightTicks,
+    controlIntervalTicks: Math.max(1, Math.ceil(Number(options.combatControlIntervalMs ?? 50) / 50)),
+    predictedShooterOrigin: aim?.predictedShooterOrigin || null,
+    predictedTargetAtCreation: aim?.predictedTargetAtCreation || null,
+    routeCandidates
+  }, {
+    bulletSpeedCmPerTick: Number(options.combatBulletSpeedPerTick ?? COMBAT_CONSTANTS.BULLET_SPEED_CM_PER_TICK),
+    bulletLifetimeTicks,
+    hitRadiusCm: Number(options.combatBulletHitRadiusCm ?? COMBAT_CONSTANTS.BULLET_HIT_RADIUS_CM),
+    maxRouteClusters: 4,
+    maxTrajectoryTicks: trajectoryHorizonTicks
+  });
+}
+
 function estimateAim(self, target, options = {}) {
   if (!self || !target) return { ok: false, reason: 'missing-self-or-target' };
   const distance = distanceBetween(self, target);
@@ -1381,6 +1431,10 @@ function estimateAim(self, target, options = {}) {
   const flightTicks = intercept?.flightTicks
     ?? creationOracle.interceptTicks
     ?? Math.max(0, distance / bulletSpeed);
+  const trajectoryHorizonTicks = Math.max(
+    1,
+    Math.min(bulletLifetimeTicks, Math.ceil(Number(flightTicks) || 0) + 1)
+  );
   const leadTicks = flightTicks + observationToExecutionTicks;
   const fallbackPredictedShooterOrigin = {
     x: Number(self.x) + shooterVx * observationToExecutionTicks,
@@ -1588,13 +1642,16 @@ function estimateAim(self, target, options = {}) {
           bulletRangeCm: bulletRange,
           hitRadiusCm: hitRadius,
           maxRouteClusters: 4,
-          maxShotCandidates: 12
+          maxShotCandidates: 12,
+          maxTrajectoryTicks: trajectoryHorizonTicks
         })
       : null;
     const robustSelected = robustTrajectorySelection?.selected || null;
-    const robustApplied = Boolean(robustSelected
+    const robustCandidateAvailable = Boolean(robustSelected
       && robustSelected.physicallyReachable === true
       && profile.sampleCount >= 4);
+    const robustApplied = Boolean(robustCandidateAvailable
+      && robustSelected.improvementQualified === true);
     const routePriorHypothesis = {
       'charge-close': 'continue',
       'steady-linear': 'stop',
@@ -1645,25 +1702,79 @@ function estimateAim(self, target, options = {}) {
       : (highEntropyCoverage
           ? (highEntropyExplore ? explorationCandidate : primaryCandidate)
           : coverageSequence[shotIndex % coverageSequence.length]);
+    if (robustCandidateAvailable && !robustApplied) selected = null;
+    let stopRouteRejected = false;
     if (robustApplied) {
+      // A currently moving target is not a stationary-target observation just
+      // because the bounded route solver found a geometrically valid stop
+      // shot.  Keep stop as a diagnostic hypothesis, but never let it become
+      // the final wire aim while realtime velocity still proves movement.
+      stopRouteRejected = movingTargetStopRouteRejectedCore({
+        hypothesis: robustSelected.hypothesis,
+        moving,
+        targetSpeed
+      }, { stationarySpeed });
+      const robustAim = stopRouteRejected
+        ? null
+        : robustSelected;
+      if (!robustAim) {
+        selected = null;
+      }
       const routeCandidate = candidates.find(candidate => (
-        String(candidate.hypothesis || '') === String(robustSelected.hypothesis || '')
+        robustAim && String(candidate.hypothesis || '') === String(robustAim.hypothesis || '')
       ));
-      const selectedRoute = routePriorCandidate || routeCandidate;
-      selected = {
-        ...(selectedRoute || {}),
-        hypothesis: selectedRoute?.hypothesis || robustSelected.hypothesis,
-        variant: routePriorCandidate ? 'causal-route-prior' : robustSelected.variant,
-        x: routePriorCandidate ? routePriorCandidate.x : robustSelected.aimX,
-        y: routePriorCandidate ? routePriorCandidate.y : robustSelected.aimY,
-        interceptTick: routePriorCandidate?.interceptTick ?? robustSelected.interceptTick,
-        radialGapCm: routePriorCandidate?.radialGapCm ?? robustSelected.radialGapCm,
-        routeProbability: routePriorCandidate?.probability ?? robustSelected.routeProbability,
-        routePriorHypothesis,
-        robustTrajectorySelection
-      };
-      x = selected.x;
-      y = selected.y;
+      // The route prior is an explanatory prior only. It is not proof that a
+      // moving target will occupy that point at bullet arrival; robust
+      // trajectory selection owns the wire aim.
+      const selectedRoute = routeCandidate;
+      if (robustAim) {
+        selected = {
+          ...(selectedRoute || {}),
+          hypothesis: selectedRoute?.hypothesis || robustAim.hypothesis,
+          variant: robustAim.variant,
+          x: robustAim.aimX,
+          y: robustAim.aimY,
+          interceptTick: robustAim.interceptTick,
+          radialGapCm: robustAim.radialGapCm,
+          routeProbability: robustAim.routeProbability,
+          routePriorHypothesis,
+          routePriorCandidateAvailable: Boolean(routePriorCandidate),
+          stopRouteRejected,
+          robustTrajectorySelection
+        };
+        x = selected.x;
+        y = selected.y;
+      }
+    }
+    if (selected
+      && movingTargetStopRouteRejectedCore({
+        hypothesis: selected.hypothesis,
+        moving,
+        targetSpeed
+      }, { stationarySpeed })) {
+      const nonStopFallback = [
+        ...(dynamicSelection?.ranked || []),
+        ...rankedCandidates,
+        ...candidates
+      ].find(candidate => (
+        candidate
+          && String(candidate.hypothesis || '') !== 'stop'
+          && candidate.physicallyReachable === true
+      ));
+      stopRouteRejected = true;
+      if (nonStopFallback) {
+        selected = {
+          ...nonStopFallback,
+          variant: nonStopFallback.variant || 'route-candidate-fallback',
+          routePriorHypothesis,
+          routePriorCandidateAvailable: Boolean(routePriorCandidate),
+          stopRouteRejected
+        };
+        x = Number(selected.x);
+        y = Number(selected.y);
+      } else {
+        selected = null;
+      }
     }
     if (selected && (robustApplied || dynamicBehaviorCoverage || highEntropyCoverage || noDamageWidened || scriptTransitionCoverage)) {
       const persistedCandidates = dynamicBehaviorCoverage ? coverageSequence.slice(0, 4) : rankedCandidates.slice(0, 4);
@@ -1704,6 +1815,7 @@ function estimateAim(self, target, options = {}) {
         } : null,
         contextKey: routeContextKey,
         phase: routePhase,
+        stopRouteRejected,
         candidates: persistedCandidates.map(item => ({
           hypothesis: item.hypothesis,
           probability: item.probability,
@@ -1748,6 +1860,65 @@ function estimateAim(self, target, options = {}) {
       };
     }
   }
+  const creationAimPoint = creationOracle.interceptPoint || (intercept
+    ? { x: intercept.x, y: intercept.y }
+    : null);
+  const hasTrajectoryCandidates = Boolean(routeCoverage?.candidates?.length);
+  let trajectoryAimProof = moving
+    ? evaluateRealtimeTrajectoryAim({
+        ok: true,
+        x,
+        y,
+        flightTicks,
+        predictedShooterOrigin: creationOracle.predictedShooterOrigin || fallbackPredictedShooterOrigin,
+        predictedTargetAtCreation: creationOracle.predictedTargetAtCreation || fallbackPredictedTargetAtCreation,
+        routeCoverage,
+        timing: {
+          createdTickEstimate: numberOrNull(options.observedTick) === null
+            ? null
+            : Number(options.observedTick) + observationToExecutionTicks,
+          executionDelayTicks: observationToExecutionTicks
+        }
+      }, options)
+    : {
+        valid: true,
+        reason: 'static-target',
+        pathCount: 0,
+        matchedPathCount: 0,
+        hardCoverageMass: 1,
+        minMissCm: 0,
+        expectedMissCm: 0,
+        hitRadiusCm: hitRadius
+      };
+  let trajectoryAimFallback = false;
+  let trajectoryAimFallbackReason = '';
+  if (moving && creationAimPoint && (!hasTrajectoryCandidates || trajectoryAimProof.valid !== true)) {
+    const changedAim = Math.hypot(
+      Number(x) - Number(creationAimPoint.x),
+      Number(y) - Number(creationAimPoint.y)
+    ) > 1;
+    x = Number(creationAimPoint.x);
+    y = Number(creationAimPoint.y);
+    trajectoryAimFallback = changedAim;
+    trajectoryAimFallbackReason = !hasTrajectoryCandidates
+      ? 'no-dynamic-trajectory-evidence'
+      : (trajectoryAimProof.reason || 'dynamic-cpa-unproven');
+    trajectoryAimProof = evaluateRealtimeTrajectoryAim({
+      ok: true,
+      x,
+      y,
+      flightTicks,
+      predictedShooterOrigin: creationOracle.predictedShooterOrigin || fallbackPredictedShooterOrigin,
+      predictedTargetAtCreation: creationOracle.predictedTargetAtCreation || fallbackPredictedTargetAtCreation,
+      routeCoverage,
+      timing: {
+        createdTickEstimate: numberOrNull(options.observedTick) === null
+          ? null
+          : Number(options.observedTick) + observationToExecutionTicks,
+        executionDelayTicks: observationToExecutionTicks
+      }
+    }, options);
+  }
   const finalAimPointReachability = evaluateAimPointReachabilityCore(
     creationOracle.predictedShooterOrigin || fallbackPredictedShooterOrigin,
     { x, y },
@@ -1771,6 +1942,9 @@ function estimateAim(self, target, options = {}) {
     y: Math.round(y),
     ...finalAimPointReachability
   };
+  fireReachability.trajectoryAimProof = trajectoryAimProof;
+  fireReachability.trajectoryAimFallback = trajectoryAimFallback;
+  fireReachability.trajectoryAimFallbackReason = trajectoryAimFallbackReason;
   const leadDistance = distanceBetween({ x: tx, y: ty }, { x, y });
   const confidence = Math.max(0.2, Math.min(1, (moving ? Number(intercept?.confidence || 0.55) * profile.aimConfidenceScale : 1) - Math.min(0.25, noDamageLevel * 0.04)));
   if (routeCoverage?.candidates?.length) {
@@ -1825,6 +1999,9 @@ function estimateAim(self, target, options = {}) {
       y: (vy - shooterVy) * observationToExecutionTicks
     },
     fireReachability,
+    trajectoryAimProof,
+    trajectoryAimFallback,
+    trajectoryAimFallbackReason,
     ackShooterOrigin: options.latestConfirmedShot?.ackShooterOrigin || null,
     shooterOriginErrorCm: numberOrNull(options.latestConfirmedShot?.shooterOriginErrorCm),
     shooterOriginErrorSummary: options.shooterOriginErrorSummary || null,
@@ -2035,6 +2212,27 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   const reactionRange = closePressureState?.range || combatPressureTargetRangeCore(options);
   const closePressureRange = closePressureState ? reactionRange : null;
   const closePressureActive = Boolean(closePressureState?.active !== false && closePressureRange);
+  const combatHardReserveMs = Math.max(
+    0,
+    Number(options.combatShootHardReserveMs ?? COMBAT_CONSTANTS.SHOOT_HARD_RESERVE_MS)
+  );
+  const normalDodgeReserveMs = Math.max(
+    combatHardReserveMs,
+    Number(options.combatShootDodgeReserveMs ?? COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS)
+  );
+  const pressureDodgeReserveMs = Math.max(
+    combatHardReserveMs,
+    Number(options.combatClosePressureReserveMs
+      ?? options.combatShootPressureDodgeReserveMs
+      ?? normalDodgeReserveMs)
+  );
+  const activeDodgeReserveMs = closePressureActive && closePressureState?.pressureAttackCommitted
+    ? pressureDodgeReserveMs
+    : normalDodgeReserveMs;
+  const preDodgeStaminaCostMs = Math.max(
+    0,
+    Number(options.combatPreDodgeStaminaCostMs ?? 1000)
+  );
   const targetPressure = (bullets || []).some(bullet => Number(bullet.ownerId) === Number(target.user_id));
   const attackRange = Math.max(0, Number(options.combatAttackRange || options.attackRange || COMBAT_CONSTANTS.ATTACK_RANGE));
   const outOfRange = Number(target.distance || Infinity) > attackRange;
@@ -2149,7 +2347,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   let preDodgeBlockedReason = '';
   if (shootingPhaseState !== 'preparing') preDodgeBlockedReason = 'shooting-phase-not-preparing';
   else if (!lowVariationCadence) preDodgeBlockedReason = 'cycle-unstable';
-  else if (selfStamina5s !== null && selfStamina5s < COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS + 1000) preDodgeBlockedReason = 'stamina-insufficient';
+  else if (selfStamina5s !== null && selfStamina5s < activeDodgeReserveMs + preDodgeStaminaCostMs) preDodgeBlockedReason = 'stamina-insufficient';
   else if (!moving) preDodgeBlockedReason = 'self-stationary';
   else if (urgentOldBulletThreat) preDodgeBlockedReason = 'old-bullet-threat';
   else if (latestSafeCommandTick !== null && currentTick !== null && currentTick > latestSafeCommandTick) preDodgeBlockedReason = 'flight-time-insufficient';
@@ -2159,7 +2357,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     !preDodgeBlockedReason
       && nextShotInMs !== null
   );
-  const preDodgeStaminaCost = Math.max(0, Number(options.combatPreDodgeStaminaCostMs ?? 1000));
+  const preDodgeStaminaCost = preDodgeStaminaCostMs;
   const preDodgeDirectionThreat = currentDirectionThreats.slice().sort((a, b) =>
     Number(a?.directHits || 0) - Number(b?.directHits || 0)
       || Number(b?.minCPA || 0) - Number(a?.minCPA || 0))[0] || null;
@@ -2176,7 +2374,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     currentStamina5s: selfStamina5s,
     projectedStamina5s: selfStamina5s === null ? null : Math.max(0, selfStamina5s - preDodgeStaminaCost),
     staminaCost: preDodgeStaminaCost,
-    reserveMs: COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS,
+    reserveMs: activeDodgeReserveMs,
     direction: currentDirection,
     predictedMinimumCpaCm: numberOrNull(preDodgeDirectionThreat?.minCPA),
     predictedDirectHits: numberOrNull(preDodgeDirectionThreat?.directHits),
@@ -2386,10 +2584,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
             || burstSampleCount >= 2
         ),
         lowStamina: selfStamina5s !== null
-          && selfStamina5s < Math.max(
-            COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS,
-            Number(options.combatShootDodgeReserveMs || COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS)
-          ) + Math.max(0, Number(options.combatPreDodgeStaminaCostMs ?? 1000)),
+          && selfStamina5s < activeDodgeReserveMs + preDodgeStaminaCostMs,
         exitActive: options.leaveActive === true,
         collisionRisk: options.collisionRisk === true,
         boundary: options.combatBoundary || options.boundary,
@@ -2590,7 +2785,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       phase: 'induce-hold',
       nextShotInMs: Math.round(nextShotInMs),
       shotIntervalCv,
-      reserveMs: COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS,
+      reserveMs: activeDodgeReserveMs,
       predictedCreatedTick,
       latestSafeCommandTick,
       burstSampleCount,
@@ -2599,6 +2794,14 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     } : null,
     preDodgeCandidate,
     preDodgeBlockedReason: preDodge ? '' : preDodgeBlockedReason,
+    combatStaminaBudget: {
+      hardReserveMs: combatHardReserveMs,
+      normalDodgeReserveMs,
+      pressureDodgeReserveMs,
+      activeDodgeReserveMs,
+      preDodgeStaminaCostMs,
+      distanceAwareLowStaminaThresholdMs: activeDodgeReserveMs + preDodgeStaminaCostMs
+    },
     contactEntryGuard: options.contactEntryGuard || null,
     shootingPhaseSource: shootingPhase?.shootingPhaseSource || '',
     oldBulletPressure: Boolean((bullets || []).length)
@@ -3476,6 +3679,19 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     const coverageSessionId = targetId && combatStartedAtMs !== null
       ? `${targetId}:${Math.round(combatStartedAtMs)}`
       : '';
+    const coverageBulletLifetimeTicks = Math.max(
+      1,
+      Math.round(COMBAT_CONSTANTS.BULLET_RANGE_CM / COMBAT_CONSTANTS.BULLET_SPEED_CM_PER_TICK)
+    );
+    const coverageHorizonTicks = Math.max(
+      1,
+      Math.min(
+        coverageBulletLifetimeTicks,
+        Number.isFinite(Number(aim.flightTicks))
+          ? Math.ceil(Number(aim.flightTicks)) + 1
+          : coverageBulletLifetimeTicks
+      )
+    );
     const plan = coverageEligible
       ? buildTrajectoryCoveragePlanCore({
           targetId,
@@ -3495,7 +3711,8 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
           ]
         }, {
           bulletSpeedCmPerTick: COMBAT_CONSTANTS.BULLET_SPEED_CM_PER_TICK,
-          bulletLifetimeTicks: Math.round(COMBAT_CONSTANTS.BULLET_RANGE_CM / COMBAT_CONSTANTS.BULLET_SPEED_CM_PER_TICK),
+          bulletLifetimeTicks: coverageBulletLifetimeTicks,
+          maxTrajectoryTicks: coverageHorizonTicks,
           hitRadiusCm: COMBAT_CONSTANTS.BULLET_HIT_RADIUS_CM,
           minimumMarginalCoverage: 0.02
         })
@@ -3517,7 +3734,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
           clusters: [],
           candidates: []
         };
-    const applied = shouldApplyTrajectoryCoverageCore({
+    const coverageQualified = shouldApplyTrajectoryCoverageCore({
       mode: effectiveCoverageMode,
       highEntropy: highEntropyCoverage,
       dynamicBehaviorEligible: dynamicBehaviorCoverage,
@@ -3526,11 +3743,19 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       hasSelection: Boolean(plan.selected),
       improvementQualified: plan.selected?.improvementQualified === true
     });
-    if (applied) {
+    const coverageStopRouteRejected = movingTargetStopRouteRejectedCore({
+      hypothesis: plan.selected?.hypothesis,
+      moving: Boolean(aim.intercept),
+      targetSpeed: Math.hypot(Number(target?.vx || 0), Number(target?.vy || 0))
+    });
+    const coverageCanApply = coverageQualified && !coverageStopRouteRejected;
+    let applied = coverageCanApply;
+    let coverageAimProof = null;
+    if (coverageCanApply) {
       const selectedCandidate = aim.routeCoverage?.candidates?.find(candidate => (
         String(candidate.hypothesis || '') === String(plan.selected.hypothesis || '')
       ));
-      aim = {
+      const coverageAim = {
         ...aim,
         x: plan.selected.aimX,
         y: plan.selected.aimY,
@@ -3557,7 +3782,43 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
         },
         trajectoryCoverage: null
       };
-      if (selectedCandidate?.expectedHitProbability !== undefined) {
+      coverageAimProof = evaluateRealtimeTrajectoryAim(coverageAim, {
+        ...options,
+        observedTick: realtime.tick
+      });
+      applied = coverageAimProof.valid === true;
+      if (applied) {
+        const coverageReachability = evaluateAimPointReachabilityCore(
+          coverageAim.predictedShooterOrigin,
+          { x: coverageAim.x, y: coverageAim.y },
+          {
+            bulletSpeedCmPerTick: COMBAT_CONSTANTS.BULLET_SPEED_CM_PER_TICK,
+            bulletRangeCm: COMBAT_CONSTANTS.BULLET_RANGE_CM,
+            bulletLifetimeTicks: Math.round(
+              COMBAT_CONSTANTS.BULLET_RANGE_CM / COMBAT_CONSTANTS.BULLET_SPEED_CM_PER_TICK
+            ),
+            hitRadiusCm: COMBAT_CONSTANTS.BULLET_HIT_RADIUS_CM
+          }
+        );
+        aim = {
+          ...coverageAim,
+          fireReachability: {
+            ...coverageAim.fireReachability,
+            actualAimPoint: {
+              x: Math.round(coverageAim.x),
+              y: Math.round(coverageAim.y),
+              ...coverageReachability
+            },
+            trajectoryAimProof: coverageAimProof,
+            trajectoryAimFallback: false,
+            trajectoryAimFallbackReason: ''
+          },
+          trajectoryAimProof: coverageAimProof,
+          trajectoryAimFallback: false,
+          trajectoryAimFallbackReason: ''
+        };
+      }
+      if (applied && selectedCandidate?.expectedHitProbability !== undefined) {
         aim.expectedHitProbability = selectedCandidate.expectedHitProbability;
       }
     }
@@ -3571,15 +3832,19 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       successfulAimHitRate: coverageHitSummary.hitRate,
       reason: applied
         ? 'live-single-applied'
+        : (coverageStopRouteRejected
+        ? 'moving-target-stop-route-rejected'
+        : (coverageQualified && coverageAimProof
+        ? 'dynamic-cpa-unproven-fallback'
         : (requestedCoverageMode === 'live-volley'
         ? 'live-volley-awaits-live-single-acceptance'
         : (effectiveCoverageMode === 'live-single' && plan.active && coverageSuccessfulAimProtected
             ? 'live-single-successful-aim-protected'
             : (effectiveCoverageMode === 'live-single' && plan.active && !highEntropyCoverage && !dynamicBehaviorCoverage
                 ? 'live-single-requires-coverage-qualification'
-                : (effectiveCoverageMode === 'live-single' && plan.active && plan.selected?.improvementQualified !== true
-                    ? 'live-single-insufficient-aim-improvement'
-                    : plan.reason)))),
+                    : (effectiveCoverageMode === 'live-single' && plan.active && plan.selected?.improvementQualified !== true
+                        ? 'live-single-insufficient-aim-improvement'
+                    : plan.reason)))))),
       sessionId: coverageSessionId,
       slot: 1,
       selected: plan.selected,
@@ -3590,6 +3855,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       trajectoryCount: plan.trajectoryCount,
       clusters: plan.clusters,
       candidates: plan.candidates,
+      trajectoryAimProof: coverageAimProof,
       actualAim: { x: aim.x, y: aim.y }
     };
   }
@@ -3884,13 +4150,46 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     closePressureActive
       && (combatPhase?.pressureAttackCommitted || combatTargetState?.closePressure?.pressureAttackCommitted)
   );
+  const movementDodgeApplied = Boolean(
+    (Array.isArray(movement?.modifiers) && movement.modifiers.includes('dodge'))
+      && (Number(movement?.dx || 0) || Number(movement?.dy || 0))
+  );
+  const dodgeActionCostMs = movementDodgeApplied
+    ? Math.max(0, Number(options.combatPreDodgeStaminaCostMs ?? 1000))
+    : 0;
+  const runtimeHardReserveMs = Math.max(
+    0,
+    Number(options.combatShootHardReserveMs ?? COMBAT_CONSTANTS.SHOOT_HARD_RESERVE_MS)
+  );
+  const runtimeDodgeReserveMs = Math.max(
+    runtimeHardReserveMs,
+    Number(options.combatShootDodgeReserveMs ?? COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS)
+  );
+  const runtimePressureReserveMs = Math.max(
+    runtimeHardReserveMs,
+    Number(options.combatShootPressureDodgeReserveMs ?? runtimeDodgeReserveMs)
+  );
+  const fireDodgeReserveMs = closePressureActive && pressureAttackActive
+    ? Math.max(
+        runtimeHardReserveMs,
+        Number(options.combatClosePressureReserveMs ?? runtimePressureReserveMs)
+      )
+    : runtimeDodgeReserveMs;
   const fireState = target ? determineCombatFireState(self || {}, target, {
     targetPressureFire: bullets.some(bullet => Number(bullet.ownerId) === Number(target.user_id)),
     closePressure: closePressureActive,
     closePressureAttack: pressureAttackActive,
     closePressureCadenceMs: options.combatClosePressureShootEveryMs ?? 520,
     closePressureReserveMs: options.combatClosePressureReserveMs ?? 2600,
+    hardReserveMs: runtimeHardReserveMs,
+    dodgeReserveMs: fireDodgeReserveMs,
+    pressureReserveMs: runtimePressureReserveMs,
+    opponentProbeReserveMs: options.combatOpponentProbeReserveMs ?? COMBAT_CONSTANTS.OPPONENT_PROBE_RESERVE_MS,
+    opponentProbeEveryMs: options.combatOpponentProbeEveryMs ?? COMBAT_CONSTANTS.OPPONENT_PROBE_EVERY_MS,
+    finishReserveMs: options.combatShootFinishLowThreatDodgeReserveMs ?? COMBAT_CONSTANTS.FINISH_LOW_THREAT_RESERVE_MS,
+    passiveReserveMs: options.combatShootPassiveRunnerDodgeReserveMs ?? COMBAT_CONSTANTS.PASSIVE_RUNNER_DODGE_RESERVE_MS,
     shotCostMs: options.combatShotStaminaCostMs ?? 500,
+    dodgeActionCostMs,
     passiveRunner: Boolean(movement.passiveRunner?.active),
     finishLowThreat: Boolean(
       target
@@ -4241,6 +4540,12 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       cadenceMs: Number.isFinite(Number(fireState.cadenceMs)) ? Number(fireState.cadenceMs) : null,
       reserve: numberOrNull(fireState.reserve),
       stamina5s: fireState.stamina5s === null ? null : numberOrNull(fireState.stamina5s),
+      requiredStaminaMs: numberOrNull(fireState.requiredStaminaMs),
+      hardReserveMs: numberOrNull(fireState.hardReserve),
+      dodgeReserveMs: numberOrNull(fireState.dodgeReserve),
+      shotCostMs: numberOrNull(fireState.shotCostMs),
+      dodgeActionCostMs: numberOrNull(fireState.dodgeActionCostMs),
+      movementDodgeApplied,
       lowConfidenceThrottle: Boolean(lowConfidence.throttle),
       behaviorSuppressed: behaviorSuppressFire,
       behaviorSuppressionApplied: false,

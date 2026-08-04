@@ -48,14 +48,31 @@ function stamina5sRemaining(self) {
  */
 function determineCombatFireState(self, target, context = {}) {
   const stamina5s = stamina5sRemaining(self);
-  const hardReserve = COMBAT_CONSTANTS.SHOOT_HARD_RESERVE_MS;
-  const dodgeReserve = COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS;
+  const hardReserve = Math.max(
+    0,
+    Number(context.hardReserveMs ?? COMBAT_CONSTANTS.SHOOT_HARD_RESERVE_MS)
+  );
+  const dodgeReserve = Math.max(
+    hardReserve,
+    Number(context.dodgeReserveMs ?? COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS)
+  );
+  const shotCostMs = Math.max(0, Number(context.shotCostMs ?? 500));
+  const dodgeActionCostMs = Math.max(0, Number(context.dodgeActionCostMs ?? 0));
+  const requiredForShot = reserve => Math.max(0, Number(reserve || 0))
+    + shotCostMs
+    + dodgeActionCostMs;
+  const requiredForReserve = reserve => Math.max(0, Number(reserve || 0)) + dodgeActionCostMs;
   const result = (state, cadenceMs, reserve, reason) => ({
     state,
     cadenceMs,
     reserve,
     reason,
-    stamina5s
+    stamina5s,
+    hardReserve,
+    dodgeReserve,
+    shotCostMs,
+    dodgeActionCostMs,
+    requiredStaminaMs: requiredForShot(reserve)
   });
 
   // Hard floor - never fire below this
@@ -67,17 +84,28 @@ function determineCombatFireState(self, target, context = {}) {
 
   // Opponent probe (early engagement without target bullet evidence)
   if (context.opponentProbe) {
-    const probeReserve = COMBAT_CONSTANTS.OPPONENT_PROBE_RESERVE_MS;
-    if (stamina5s !== null && stamina5s < probeReserve) {
+    const probeReserve = Math.max(
+      hardReserve,
+      Number(context.opponentProbeReserveMs ?? COMBAT_CONSTANTS.OPPONENT_PROBE_RESERVE_MS)
+    );
+    if (stamina5s !== null && stamina5s < requiredForShot(probeReserve)) {
       return result(FIRE_STATE.PAUSED, Infinity, probeReserve, 'probe-reserve');
     }
-    return result(FIRE_STATE.PROBE, COMBAT_CONSTANTS.OPPONENT_PROBE_EVERY_MS, probeReserve, 'opponent-probe');
+    return result(
+      FIRE_STATE.PROBE,
+      Number(context.opponentProbeEveryMs ?? COMBAT_CONSTANTS.OPPONENT_PROBE_EVERY_MS),
+      probeReserve,
+      'opponent-probe'
+    );
   }
 
   // Finish low threat (low HP target, high HP self, no pressure)
   if (context.finishLowThreat) {
-    const finishReserve = COMBAT_CONSTANTS.FINISH_LOW_THREAT_RESERVE_MS;
-    if (stamina5s !== null && stamina5s < finishReserve) {
+    const finishReserve = Math.max(
+      hardReserve,
+      Number(context.finishReserveMs ?? COMBAT_CONSTANTS.FINISH_LOW_THREAT_RESERVE_MS)
+    );
+    if (stamina5s !== null && stamina5s < requiredForShot(finishReserve)) {
       return result(FIRE_STATE.PAUSED, Infinity, finishReserve, 'finish-reserve');
     }
     return result(FIRE_STATE.FINISH, COMBAT_CONSTANTS.SHOOT_EVERY_MS, finishReserve, 'finish-low-threat');
@@ -90,9 +118,8 @@ function determineCombatFireState(self, target, context = {}) {
       hardReserve,
       Number(context.closePressureReserveMs ?? COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS)
     );
-    const shotCost = Math.max(1, Number(context.shotCostMs ?? 500));
     if (context.closePressureAttack) {
-      if (stamina5s !== null && stamina5s < closePressureReserve + shotCost) {
+      if (stamina5s !== null && stamina5s < requiredForShot(closePressureReserve)) {
         return result(FIRE_STATE.PAUSED, Infinity, closePressureReserve, 'close-pressure-movement-reserve');
       }
       return result(FIRE_STATE.PRESSURE, COMBAT_CONSTANTS.SHOOT_EVERY_MS, closePressureReserve, 'close-pressure-full-attack');
@@ -101,7 +128,7 @@ function determineCombatFireState(self, target, context = {}) {
       COMBAT_CONSTANTS.SHOOT_EVERY_MS,
       Number(context.closePressureCadenceMs ?? COMBAT_CONSTANTS.SHOOT_RESERVE_BAND_MS)
     );
-    if (stamina5s !== null && stamina5s < closePressureReserve) {
+    if (stamina5s !== null && stamina5s < requiredForReserve(closePressureReserve)) {
       return result(
         FIRE_STATE.RESERVE_BAND,
         Math.max(closePressureCadence, COMBAT_CONSTANTS.SHOOT_RESERVE_BAND_MS),
@@ -114,8 +141,11 @@ function determineCombatFireState(self, target, context = {}) {
 
   // Passive runner (no threat, safe to fire)
   if (context.passiveRunner) {
-    const passiveReserve = COMBAT_CONSTANTS.PASSIVE_RUNNER_DODGE_RESERVE_MS;
-    if (stamina5s !== null && stamina5s < passiveReserve) {
+    const passiveReserve = Math.max(
+      hardReserve,
+      Number(context.passiveReserveMs ?? COMBAT_CONSTANTS.PASSIVE_RUNNER_DODGE_RESERVE_MS)
+    );
+    if (stamina5s !== null && stamina5s < requiredForShot(passiveReserve)) {
       return result(FIRE_STATE.PAUSED, Infinity, passiveReserve, 'passive-reserve');
     }
     return result(FIRE_STATE.NORMAL, COMBAT_CONSTANTS.SHOOT_EVERY_MS, passiveReserve, 'passive-runner');
@@ -123,14 +153,18 @@ function determineCombatFireState(self, target, context = {}) {
 
   // Target pressure fire (real incoming bullets, but winning fight)
   if (context.targetPressureFire) {
-    if (stamina5s !== null && stamina5s < dodgeReserve) {
-      return result(FIRE_STATE.PAUSED, Infinity, dodgeReserve, 'pressure-dodge-reserve');
+    const pressureReserve = Math.max(
+      hardReserve,
+      Number(context.pressureReserveMs ?? dodgeReserve)
+    );
+    if (stamina5s !== null && stamina5s < requiredForShot(pressureReserve)) {
+      return result(FIRE_STATE.PAUSED, Infinity, pressureReserve, 'pressure-dodge-reserve');
     }
-    return result(FIRE_STATE.PRESSURE, COMBAT_CONSTANTS.SHOOT_EVERY_MS, dodgeReserve, 'target-pressure-fire');
+    return result(FIRE_STATE.PRESSURE, COMBAT_CONSTANTS.SHOOT_EVERY_MS, pressureReserve, 'target-pressure-fire');
   }
 
   // Normal combat fire discipline
-  if (stamina5s !== null && stamina5s < dodgeReserve) {
+  if (stamina5s !== null && stamina5s < requiredForShot(dodgeReserve)) {
     return result(FIRE_STATE.PAUSED, Infinity, dodgeReserve, 'dodge-reserve');
   }
 

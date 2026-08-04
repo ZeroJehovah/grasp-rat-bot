@@ -44,6 +44,19 @@ function dynamicBehaviorTrajectoryEligibilityCore(behavior = {}, options = {}) {
     && durationMs >= Math.max(0, Number(options.minimumDurationMs ?? 2500));
 }
 
+function movingTargetStopRouteRejectedCore(input = {}, options = {}) {
+  const stationarySpeed = Math.max(0, Number(options.stationarySpeed ?? 5));
+  const targetSpeed = Math.max(0, Number(input.targetSpeed ?? Math.hypot(
+    Number(input.vx || 0),
+    Number(input.vy || 0)
+  )));
+  return Boolean(
+    String(input.hypothesis || '') === 'stop'
+      && input.moving === true
+      && targetSpeed >= stationarySpeed
+  );
+}
+
 function finiteNumber(value, fallback = null) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
@@ -366,17 +379,24 @@ function shotCorridorMissCore(shot, path, input = {}, options = {}) {
   const expireTick = Number.isFinite(Number(shot.expireTick))
     ? Number(shot.expireTick)
     : startTick + Math.max(1, Number(options.bulletLifetimeTicks || DEFAULT_BULLET_LIFETIME_TICKS));
-  const rawDirectionX = Number.isFinite(Number(shot.directionX)) && Number.isFinite(Number(shot.directionY))
+  const hasDirection = Number.isFinite(Number(shot.directionX)) && Number.isFinite(Number(shot.directionY));
+  const rawDirectionX = hasDirection
     ? Number(shot.directionX)
     : Number(shot.aimX) - Number(shot.startX);
-  const rawDirectionY = Number.isFinite(Number(shot.directionX)) && Number.isFinite(Number(shot.directionY))
+  const rawDirectionY = hasDirection
     ? Number(shot.directionY)
     : Number(shot.aimY) - Number(shot.startY);
-  const directionLength = Math.hypot(rawDirectionX, rawDirectionY);
-  if (!(directionLength > 0)) return Infinity;
-  const directionX = rawDirectionX / directionLength;
-  const directionY = rawDirectionY / directionLength;
-  let minimum = Infinity;
+  const directionLengthSquared = rawDirectionX * rawDirectionX + rawDirectionY * rawDirectionY;
+  if (!(directionLengthSquared > 0)) return Infinity;
+  // Generated candidate shots already carry a unit direction. Avoid a
+  // per-candidate/per-path hypot in the realtime corridor loop, while still
+  // normalizing externally supplied or persisted directions.
+  const directionScale = Math.abs(directionLengthSquared - 1) <= 1e-6
+    ? 1
+    : 1 / Math.sqrt(directionLengthSquared);
+  const directionX = rawDirectionX * directionScale;
+  const directionY = rawDirectionY * directionScale;
+  let minimumSquared = Infinity;
   for (let relativeTick = 0; relativeTick < path.points.length - 1; relativeTick += 1) {
     const segmentStartTick = planCreatedTick + relativeTick;
     const segmentEndTick = segmentStartTick + 1;
@@ -402,12 +422,89 @@ function shotCorridorMissCore(shot, path, input = {}, options = {}) {
     const closestOffset = velocitySquared > 1e-9
       ? clamp(-(relativeX * relativeVx + relativeY * relativeVy) / velocitySquared, 0, duration)
       : 0;
-    minimum = Math.min(minimum, Math.hypot(
-      relativeX + relativeVx * closestOffset,
-      relativeY + relativeVy * closestOffset
-    ));
+    const closestX = relativeX + relativeVx * closestOffset;
+    const closestY = relativeY + relativeVy * closestOffset;
+    const distanceSquared = closestX * closestX + closestY * closestY;
+    minimumSquared = Math.min(minimumSquared, distanceSquared);
   }
-  return minimum;
+  return Number.isFinite(minimumSquared) ? Math.sqrt(minimumSquared) : Infinity;
+}
+
+function evaluateTrajectoryAimCore(input = {}, options = {}) {
+  const aim = input.aimPoint || input.baselineAim;
+  const origin = input.predictedShooterOrigin;
+  const paths = buildTrajectoryPathsCore(input, options);
+  const hitRadius = Math.max(1, Number(options.hitRadiusCm ?? DEFAULT_HIT_RADIUS_CM));
+  const bulletSpeed = Math.max(1, Number(options.bulletSpeedCmPerTick ?? DEFAULT_BULLET_SPEED_CM_PER_TICK));
+  const lifetime = Math.max(1, Math.min(
+    Number(options.bulletLifetimeTicks ?? DEFAULT_BULLET_LIFETIME_TICKS),
+    Number(options.maxTrajectoryTicks ?? DEFAULT_BULLET_LIFETIME_TICKS)
+  ));
+  if (!aim || !origin || !paths.length) {
+    return {
+      valid: false,
+      reason: !aim || !origin ? 'missing-aim-or-origin' : 'no-trajectory-paths',
+      pathCount: paths.length,
+      matchedPathCount: 0,
+      hardCoverageMass: 0,
+      minMissCm: null,
+      expectedMissCm: null,
+      hitRadiusCm: hitRadius
+    };
+  }
+  const direction = normalizeVector(
+    Number(aim.x) - Number(origin.x),
+    Number(aim.y) - Number(origin.y)
+  );
+  if (!(direction.length > 0)) {
+    return {
+      valid: false,
+      reason: 'zero-length-aim',
+      pathCount: paths.length,
+      matchedPathCount: 0,
+      hardCoverageMass: 0,
+      minMissCm: null,
+      expectedMissCm: null,
+      hitRadiusCm: hitRadius
+    };
+  }
+  const startTick = Number(input.createdTick || 0);
+  const shot = {
+    id: 'actual-aim-proof',
+    startX: Number(origin.x),
+    startY: Number(origin.y),
+    directionX: direction.x,
+    directionY: direction.y,
+    startTick,
+    expireTick: startTick + lifetime,
+    speedPerTick: bulletSpeed
+  };
+  const rows = paths.map(path => ({
+    missCm: shotCorridorMissCore(shot, path, input, options),
+    weight: Number(path.weight || 0)
+  }));
+  const finiteRows = rows.filter(row => Number.isFinite(row.missCm) && row.weight > 0);
+  const minMissCm = finiteRows.length
+    ? Math.min(...finiteRows.map(row => row.missCm))
+    : null;
+  const matchedRows = finiteRows.filter(row => row.missCm <= hitRadius);
+  const totalWeight = finiteRows.reduce((sum, row) => sum + row.weight, 0);
+  const hardCoverageMass = totalWeight > 0
+    ? matchedRows.reduce((sum, row) => sum + row.weight, 0) / totalWeight
+    : 0;
+  const expectedMissCm = totalWeight > 0
+    ? finiteRows.reduce((sum, row) => sum + row.missCm * row.weight, 0) / totalWeight
+    : null;
+  return {
+    valid: matchedRows.length > 0,
+    reason: matchedRows.length > 0 ? 'dynamic-cpa-proven' : 'dynamic-cpa-unproven',
+    pathCount: paths.length,
+    matchedPathCount: matchedRows.length,
+    hardCoverageMass: Number(hardCoverageMass.toFixed(4)),
+    minMissCm: minMissCm === null ? null : Math.round(minMissCm),
+    expectedMissCm: expectedMissCm === null ? null : Math.round(expectedMissCm),
+    hitRadiusCm: hitRadius
+  };
 }
 
 function coverageScoreForMiss(miss, path, options = {}) {
@@ -494,32 +591,59 @@ function candidateCoverageMetrics(before, shot, paths, input, options) {
   return { mass, hardMass };
 }
 
-function weightedPercentile(rows = [], ratio = 0.75) {
+function weightedPercentiles(rows = []) {
   const sorted = rows
     .filter(row => Number.isFinite(Number(row.value)) && Number(row.weight) > 0)
     .sort((a, b) => Number(a.value) - Number(b.value));
-  if (!sorted.length) return Infinity;
-  const total = sorted.reduce((sum, row) => sum + Number(row.weight), 0);
-  const threshold = total * Math.max(0, Math.min(1, Number(ratio)));
-  let cumulative = 0;
-  for (const row of sorted) {
-    cumulative += Number(row.weight);
-    if (cumulative >= threshold) return Number(row.value);
+  if (!sorted.length) {
+    return {
+      medianMissCm: Infinity,
+      robustMissCm: Infinity,
+      tailMissCm: Infinity
+    };
   }
-  return Number(sorted.at(-1).value);
+  const total = sorted.reduce((sum, row) => sum + Number(row.weight), 0);
+  const percentile = ratio => {
+    const threshold = total * Math.max(0, Math.min(1, Number(ratio)));
+    let cumulative = 0;
+    for (const row of sorted) {
+      cumulative += Number(row.weight);
+      if (cumulative >= threshold) return Number(row.value);
+    }
+    return Number(sorted.at(-1).value);
+  };
+  return {
+    medianMissCm: percentile(0.5),
+    robustMissCm: percentile(0.75),
+    tailMissCm: percentile(0.9)
+  }
 }
 
 function robustShotMissCore(shot, paths, input, options = {}) {
-  if (!shot) return { expectedMissCm: Infinity, robustMissCm: Infinity };
+  if (!shot) {
+    return {
+      expectedMissCm: Infinity,
+      medianMissCm: Infinity,
+      robustMissCm: Infinity,
+      tailMissCm: Infinity,
+      hardCoverageMass: 0
+    };
+  }
   const rows = paths.map(path => ({
     value: shotCorridorMissCore(shot, path, input, options),
     weight: path.weight
   }));
+  const hitRadius = Math.max(1, Number(options.hitRadiusCm ?? DEFAULT_HIT_RADIUS_CM));
+  const hardCoverageWeight = rows.reduce((sum, row) => (
+    sum + (Number(row.weight) > 0 && Number.isFinite(row.value) && row.value <= hitRadius
+      ? Number(row.weight)
+      : 0)
+  ), 0);
+  const percentiles = weightedPercentiles(rows);
   return {
     expectedMissCm: rows.reduce((sum, row) => sum + Number(row.weight || 0) * Number(row.value || 0), 0),
-    medianMissCm: weightedPercentile(rows, 0.5),
-    robustMissCm: weightedPercentile(rows, 0.75),
-    tailMissCm: weightedPercentile(rows, 0.9)
+    ...percentiles,
+    hardCoverageMass: hardCoverageWeight
   };
 }
 
@@ -538,14 +662,9 @@ function selectRobustTrajectoryAimCore(input = {}, options = {}) {
     options
   ).map(shot => {
     const miss = robustShotMissCore(shot, paths, input, options);
-    const hitRadius = Math.max(1, Number(options.hitRadiusCm ?? DEFAULT_HIT_RADIUS_CM));
-    const hardCoverageMass = paths.reduce((sum, path) => (
-      sum + (shotCorridorMissCore(shot, path, input, options) <= hitRadius ? path.weight : 0)
-    ), 0);
     return {
       ...shot,
       ...miss,
-      hardCoverageMass,
       // A route that asks the target to travel a long distance from the
       // creation-time observation carries more unmodelled turn/stop risk.
       // Keep that uncertainty in the candidate ordering without making it a
@@ -569,6 +688,19 @@ function selectRobustTrajectoryAimCore(input = {}, options = {}) {
     || String(left.id || '').localeCompare(String(right.id || '')));
   const selected = candidates[0] || null;
   const baseline = robustShotMissCore(baselineShotCore(input, options), paths, input, options);
+  const baselineExtrapolationCm = input.baselineAim && input.predictedTargetAtCreation
+    ? Math.max(0, Math.hypot(
+        Number(input.baselineAim.x) - Number(input.predictedTargetAtCreation.x || 0),
+        Number(input.baselineAim.y) - Number(input.predictedTargetAtCreation.y || 0)
+      ))
+    : 0;
+  const baselineRobustScore = [baseline.tailMissCm, baseline.robustMissCm, baseline.expectedMissCm]
+    .every(Number.isFinite)
+    ? baseline.tailMissCm
+      + baseline.robustMissCm * 0.35
+      + baseline.expectedMissCm * 0.15
+      + Math.max(0, baselineExtrapolationCm - Math.max(1, Number(options.hitRadiusCm ?? DEFAULT_HIT_RADIUS_CM))) * 0.80
+    : Infinity;
   const summarize = candidate => candidate ? {
     hypothesis: candidate.hypothesis,
     variant: candidate.variant,
@@ -583,6 +715,7 @@ function selectRobustTrajectoryAimCore(input = {}, options = {}) {
     robustMissCm: Math.round(candidate.robustMissCm),
     tailMissCm: Math.round(candidate.tailMissCm),
     robustScore: Math.round(candidate.robustScore),
+    improvementQualified: candidate.robustScore <= baselineRobustScore + 1e-6,
     routeExtrapolationCm: Math.round(candidate.routeExtrapolationCm),
     hardCoverageMass: Number(candidate.hardCoverageMass.toFixed(4)),
     physicallyReachable: candidate.physicallyReachable === true,
@@ -594,7 +727,9 @@ function selectRobustTrajectoryAimCore(input = {}, options = {}) {
       expectedMissCm: Number.isFinite(baseline.expectedMissCm) ? Math.round(baseline.expectedMissCm) : null,
       medianMissCm: Number.isFinite(baseline.medianMissCm) ? Math.round(baseline.medianMissCm) : null,
       robustMissCm: Number.isFinite(baseline.robustMissCm) ? Math.round(baseline.robustMissCm) : null,
-      tailMissCm: Number.isFinite(baseline.tailMissCm) ? Math.round(baseline.tailMissCm) : null
+      tailMissCm: Number.isFinite(baseline.tailMissCm) ? Math.round(baseline.tailMissCm) : null,
+      robustScore: Number.isFinite(baselineRobustScore) ? Math.round(baselineRobustScore) : null,
+      routeExtrapolationCm: Math.round(baselineExtrapolationCm)
     },
     reason: selected ? 'robust-trajectory-medoid' : 'no-shot-candidates',
     candidateCount: candidates.length,
@@ -815,6 +950,8 @@ module.exports = {
   buildTrajectoryPathsCore,
   dynamicRouteCandidateWeight,
   dynamicBehaviorTrajectoryEligibilityCore,
+  evaluateTrajectoryAimCore,
+  movingTargetStopRouteRejectedCore,
   normalizeTrajectoryCoverageMode,
   normalizedDynamicRouteSelectionMode,
   rankedDynamicRouteCandidates,

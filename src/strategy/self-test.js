@@ -21,6 +21,7 @@ const {
   buildTrajectoryCoveragePlanCore,
   buildTrajectoryPathsCore,
   dynamicBehaviorTrajectoryEligibilityCore,
+  movingTargetStopRouteRejectedCore,
   selectRobustTrajectoryAimCore,
   shouldApplyTrajectoryCoverageCore,
   shotCorridorMissCore
@@ -6035,6 +6036,7 @@ function runStrategyModuleSelfTests() {
     flightTicks: 16,
     predictedShooterOrigin: { x: 0, y: 0 },
     predictedTargetAtCreation: { x: 8000, y: 0, vx: 0, vy: 50 },
+    baselineAim: { x: 8000, y: 800 },
     target: { x: 7750, y: 0, vx: 0, vy: 50 },
     routeCandidates: [
       { hypothesis: 'stop', probability: 0.4, x: 8000, y: 0, uncertaintyCm: 800 },
@@ -6117,6 +6119,8 @@ function runStrategyModuleSelfTests() {
       && robustSelection.candidateCount > 0
       && robustSelection.candidateCount <= 12
       && Number.isFinite(robustSelection.selected?.robustScore)
+      && typeof robustSelection.selected?.improvementQualified === 'boolean'
+      && Number.isFinite(robustSelection.baseline?.robustScore)
       && firstCoverage.candidates.every(candidate => candidate.physicallyReachable === true
         && candidate.reachabilityReason === 'reachable')
       && unreachableCoverage.active === false
@@ -6227,6 +6231,29 @@ function runStrategyModuleSelfTests() {
         mode: 'stationary',
         confidence: 0.95,
         metrics: { sampleCount: 20, durationMs: 5000 }
+      }) === false
+  });
+  results.push({
+    name: 'combat-shot-coverage-moving-target-stop-route-is-rejected-only-with-realtime-motion',
+    passed: movingTargetStopRouteRejectedCore({
+      hypothesis: 'stop',
+      moving: true,
+      targetSpeed: 50
+    }) === true
+      && movingTargetStopRouteRejectedCore({
+        hypothesis: 'continue',
+        moving: true,
+        targetSpeed: 50
+      }) === false
+      && movingTargetStopRouteRejectedCore({
+        hypothesis: 'stop',
+        moving: false,
+        targetSpeed: 50
+      }) === false
+      && movingTargetStopRouteRejectedCore({
+        hypothesis: 'stop',
+        moving: true,
+        targetSpeed: 2
       }) === false
   });
   let switchGate = null;
