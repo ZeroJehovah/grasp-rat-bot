@@ -3697,6 +3697,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         restartDrainCoordinator: restartDrain,
         onRestartDrainStatus: status => publishRestartDrainStatus(status),
         useDecisionWorker: deps.useDecisionWorker !== false,
+        useRealtimeControlWorker: deps.useRealtimeControlWorker !== false,
         onDecision: decision => publishDecisionLiveState(decision),
         onCombatControl: decision => publishDecisionLiveState(decision),
         deferCombatControlStatus: true,
@@ -4101,6 +4102,7 @@ async function runComplexCombatMainThreadBudgetSelfTest(tmp) {
       mainThreadBudgetMs: SELF_TEST_MAIN_THREAD_BUDGET_MS,
       wsFrameCoalescing: true,
       useDecisionWorker: true,
+      useRealtimeControlWorker: false,
       targetWhitelist,
       precheckedSnapshotSafety: { ok: true, reason: 'self-test-prechecked', satisfied: true },
       persistedState: {

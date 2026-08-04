@@ -48,6 +48,7 @@ const {
 const { createBrowserlessTargetWhitelist } = require('./target-whitelist');
 const { browserlessRuntimeRevision, browserlessRuntimeRevisionStatus } = require('./runtime-revision');
 const { createBrowserlessDecisionWorker } = require('./decision-worker');
+const { createBrowserlessRealtimeControlWorker } = require('./realtime-control-worker');
 const {
   actionTargetKey,
   evaluateRestartReadiness,
@@ -68,6 +69,8 @@ const DEFAULT_READONLY_PROBE_MS = 30000;
 const DEFAULT_FRAME_GAP_ALERT_MS = 2000;
 const DEFAULT_MAIN_THREAD_BUDGET_MS = 50;
 const DEFAULT_REALTIME_CONTROL_WARMUP_ITERATIONS = 6;
+const DEFAULT_REALTIME_CONTROL_WORKER_MAX_STALE_TICKS = 2;
+const DEFAULT_REALTIME_CONTROL_WORKER_PERSISTENCE_INTERVAL_MS = 1000;
 const DEFAULT_LOGIN_POINT_SINGLE_BLOCKER_BYPASS_MS = 60 * 60 * 1000;
 const DEFAULT_LOGIN_POINT_FULL_HP = 100;
 const DEFAULT_ACTION_SKIP_PUBLICATION_WINDOW_MS = 500;
@@ -1711,10 +1714,29 @@ async function runReadOnlyCanary(config, options = {}) {
         creatorUserIds
       })
     : null);
+  const realtimeControlWorker = options.realtimeControlWorker || (
+    options.useRealtimeControlWorker === true && combatLiveEnabled
+      ? createBrowserlessRealtimeControlWorker({
+        ...decisionAdapterOptions,
+        targetWhitelistNames: legacyStaticWhitelistNames,
+        targetWhitelistUserIds: staticWhitelistUserIds,
+        creatorUserIds
+      })
+      : null
+  );
   const persistCombatLearning = atMs => {
-    const decisionState = decisionAdapter.getCombatPersistenceState?.()
-      || decisionAdapter.getState?.()
-      || {};
+    const realtimeState = realtimeControlWorkerPersistenceState || null;
+    const decisionState = realtimeState
+      ? {
+          combatMetrics: realtimeState.combatMetrics || null,
+          combatTarget: realtimeState.combatTarget || null,
+          combatEngagements: realtimeState.combatEngagements || {},
+          combatMetricsByTarget: realtimeState.combatMetricsByTarget || {},
+          combatLearning: realtimeState.combatLearning || null
+        }
+      : (decisionAdapter.getCombatPersistenceState?.()
+        || decisionAdapter.getState?.()
+        || {});
     const metrics = decisionState.combatMetrics || null;
     if (metrics?.targetId !== null && metrics?.targetId !== undefined && metrics?.targetId !== '') {
       options.combatCompletionTracker?.observeCombatSample?.({
@@ -1800,6 +1822,7 @@ async function runReadOnlyCanary(config, options = {}) {
       loggedCount: 0,
       last: null,
       worker: null,
+      realtimeWorker: null,
       realtimeControlWarmup,
       realtimeControlSchedule: {
         serverTickMs: combatServerTickMs,
@@ -1887,6 +1910,14 @@ async function runReadOnlyCanary(config, options = {}) {
   let lastRealtimeControlScale = null;
   let realtimeControlActive = false;
   let realtimeFinalActionPreemptionActive = false;
+  let realtimeControlWorkerDisabled = false;
+  let realtimeControlWorkerInFlight = false;
+  let realtimeControlWorkerQueued = null;
+  let realtimeControlWorkerPersistenceState = null;
+  let realtimeControlWorkerStatusSummary = null;
+  let realtimeControlWorkerLastPersistenceAtMs = 0;
+  let realtimeControlWorkerContext = null;
+  let realtimeControlWorkerContextAtMs = 0;
   let plannerInFlight = false;
   let combatPersistenceScheduled = false;
   let combatPersistenceAtMs = 0;
@@ -1933,10 +1964,13 @@ async function runReadOnlyCanary(config, options = {}) {
   const applyRestartDrainDecisionGate = decision => {
     const status = restartDrain?.status?.() || null;
     if (!status?.requested || restartDrainAllowsDecision(decision, status)) return decision;
-    const state = decisionAdapter.getState?.() || {};
+    const state = realtimeDecisionState();
     const combatTargetKey = state.combatTarget?.id ? `player:${state.combatTarget.id}` : '';
     if (combatTargetKey && combatTargetKey !== status.commitmentKey) {
       decisionAdapter.patchState?.({ combatTarget: null, combatAim: null });
+      if (realtimeControlWorker && !realtimeControlWorkerDisabled) {
+        realtimeControlWorker.patchState?.({ combatTarget: null, combatAim: null });
+      }
     }
     return {
       ...(decision || {}),
@@ -2067,7 +2101,7 @@ async function runReadOnlyCanary(config, options = {}) {
     const restored = whitelist.observeBattles(currentState, {
       atMs,
       disengageRangeCm: runtimeDefaults.combatDisengageRange,
-      decisionState: decisionAdapter.getState?.() || null
+      decisionState: realtimeDecisionState()
     });
     logDynamicWhitelistRestores(restored);
     return restored;
@@ -2827,6 +2861,29 @@ async function runReadOnlyCanary(config, options = {}) {
       combatCompletionByUserId: completionContext(currentState, atMs)
     };
   };
+  const buildRealtimeControlWorkerContext = (currentState, atMs) => {
+    // Tracker snapshots are much cheaper and safer to reuse for a few
+    // realtime frames than to rebuild on every 20Hz message. Combat target,
+    // bullets, coordinates, and HP still come from the current frame sent to
+    // the worker; only auxiliary tracker metadata is bounded to 250ms.
+    if (realtimeControlWorkerContext
+      && Number(atMs) - realtimeControlWorkerContextAtMs <= 250) {
+      return realtimeControlWorkerContext;
+    }
+    realtimeControlWorkerContext = buildDecisionWorkerContext(currentState, atMs);
+    realtimeControlWorkerContextAtMs = Number(atMs) || now();
+    return realtimeControlWorkerContext;
+  };
+  const realtimePersistenceState = () => (
+    realtimeControlWorkerPersistenceState
+      || decisionAdapter.getRealtimePersistenceState?.()
+      || null
+  );
+  const realtimeDecisionState = () => {
+    const base = decisionAdapter.getState?.() || {};
+    const current = realtimeControlWorkerPersistenceState;
+    return current && typeof current === 'object' ? { ...base, ...current } : base;
+  };
   const applyDecisionWorkerEffects = effects => {
     for (const effect of effects || []) {
       if (effect?.tracker !== 'easy-kill') continue;
@@ -2881,6 +2938,9 @@ async function runReadOnlyCanary(config, options = {}) {
       return actionResult;
     }
     decisionAdapter.observeActionResult?.(actionResult, decision, { nowMs: atMs });
+    if (realtimeControlWorker && !realtimeControlWorkerDisabled) {
+      realtimeControlWorker.observeActionResult?.(actionResult, decision, { nowMs: atMs });
+    }
     markActionStage('observe-result');
     if (detail.notifyDecisionWorker) {
       decisionWorker?.observeActionResult?.(actionResult, decision, { nowMs: atMs });
@@ -3009,6 +3069,9 @@ async function runReadOnlyCanary(config, options = {}) {
     if (!realtimeFinalActionPreemptionActive
       && ['exit', 'safety', 'combat', 'recover'].includes(String(gatedAction?.band || ''))) {
       decisionAdapter.noteRealtimeFinalActionPreemption?.(gatedAction, atMs);
+      if (realtimeControlWorker && !realtimeControlWorkerDisabled) {
+        realtimeControlWorker.noteRealtimeFinalActionPreemption?.(gatedAction, atMs);
+      }
       realtimeFinalActionPreemptionActive = true;
     }
     realtimeControlActive = true;
@@ -3062,10 +3125,162 @@ async function runReadOnlyCanary(config, options = {}) {
     markPublishStage('action');
     return true;
   };
+  const realtimeControlWorkerMaxAgeMs = Math.max(
+    combatControlIntervalMs * 3,
+    Number(options.realtimeControlWorkerMaxAgeMs ?? DEFAULT_REALTIME_CONTROL_WORKER_MAX_STALE_TICKS * combatServerTickMs)
+  );
+  const realtimeControlWorkerPersistenceIntervalMs = Math.max(
+    250,
+    Number(options.realtimeControlWorkerPersistenceIntervalMs
+      ?? DEFAULT_REALTIME_CONTROL_WORKER_PERSISTENCE_INTERVAL_MS)
+  );
+  const finishRealtimeControlWorkerRequest = (request, workerResult, workerError = null) => {
+    const taskStarted = performance.now();
+    const taskCpuStarted = startMainThreadCpuUsage();
+    const stages = {};
+    const queued = realtimeControlWorkerQueued;
+    realtimeControlWorkerQueued = null;
+    try {
+      const responseAtMs = now();
+      const latestState = stateStore.getDecisionState?.(responseAtMs) || stateStore.getState(responseAtMs);
+      const requestAgeMs = Math.max(0, responseAtMs - Number(request.atMs || responseAtMs));
+      stages['worker-response-state'] = performance.now() - taskStarted;
+      if (workerResult?.persistenceState) {
+        realtimeControlWorkerPersistenceState = workerResult.persistenceState;
+        realtimeControlWorkerStatusSummary = workerResult.statusSummary || realtimeControlWorkerStatusSummary;
+        realtimeControlWorkerLastPersistenceAtMs = responseAtMs;
+      }
+      if (workerError) {
+        realtimeControlWorkerDisabled = true;
+        log('canary-realtime-control-worker-failed', { error: errorMessage(workerError) });
+        stages['worker-error'] = performance.now() - taskStarted;
+        // Safety has priority over keeping the worker enabled. Fall back to
+        // the existing synchronous path if the auxiliary worker disappears.
+        if (realtimeControlWorkerPersistenceState) {
+          decisionAdapter.patchState?.(realtimeControlWorkerPersistenceState);
+        }
+        let realtimeStages = null;
+        const fallbackControl = decisionAdapter.evaluateRealtime?.(request.state, {
+          nowMs: responseAtMs,
+          controlMode,
+          combatEnabled: config.combatEnabled,
+          onRealtimeStageTimings: (timings, scale) => {
+            realtimeStages = timings;
+            lastRealtimeControlScale = scale || null;
+          }
+        }) || decisionAdapter.evaluateCombat?.(request.state, {
+          nowMs: responseAtMs,
+          controlMode,
+          combatEnabled: config.combatEnabled
+        });
+        if (realtimeStages) {
+          for (const [name, durationMs] of Object.entries(realtimeStages)) stages[`realtime-${name}`] = durationMs;
+        }
+        stages['worker-fallback-evaluate'] = performance.now() - taskStarted;
+        publishRealtimeControl(fallbackControl || {}, latestState, responseAtMs, stages);
+      } else if (ending || result.safety.event) {
+        stages['worker-result-ignored'] = performance.now() - taskStarted;
+      } else if (requestAgeMs > realtimeControlWorkerMaxAgeMs) {
+        log('canary-realtime-control-worker-stale', {
+          requestAtMs: request.atMs,
+          responseAtMs,
+          requestAgeMs,
+          maxAgeMs: realtimeControlWorkerMaxAgeMs,
+          requestTick: request.inputTick,
+          latestTick: latestState?.realtime?.tick ?? null
+        });
+        stages['worker-stale'] = performance.now() - taskStarted;
+      } else {
+        applyDecisionWorkerEffects(workerResult?.effects || []);
+        lastRealtimeControlScale = workerResult?.inputScale || lastRealtimeControlScale;
+        result.decisions.realtimeWorker = {
+          computeMs: Math.round(Number(workerResult.computeMs || 0) * 1000) / 1000,
+          postMs: Math.round(Number(workerResult.postMs || 0) * 1000) / 1000,
+          roundTripMs: Math.round(Number(workerResult.roundTripMs || 0) * 1000) / 1000,
+          requestAtMs: request.atMs,
+          responseAtMs,
+          requestTick: request.inputTick,
+          responseTick: workerResult.tick ?? null,
+          requestAgeMs,
+          stageTimings: workerResult.stageTimings || null
+        };
+        const previousProcessedTick = request.previousProcessedTick;
+        const control = workerResult.control || {};
+        const tickDelta = request.inputTick !== null && previousProcessedTick !== null
+          ? Math.max(0, request.inputTick - previousProcessedTick)
+          : null;
+        if (control.combat && typeof control.combat === 'object') {
+          control.combat.controlSchedule = {
+            inputTick: request.inputTick,
+            tickDelta,
+            configuredIntervalMs: combatControlIntervalMs,
+            minimumTickStride: combatControlMinimumTickStride,
+            previousCompleteMs: result.decisions.realtimeControlSchedule.lastCompleteMs,
+            skippedTicks: result.decisions.realtimeControlSchedule.skippedTicks
+          };
+        }
+        stages['worker-control'] = performance.now() - taskStarted;
+        if (!(control?.action?.kind === 'wait' && !realtimeControlActive)) {
+          const publishStarted = performance.now();
+          publishRealtimeControl(control, latestState, responseAtMs, stages);
+          stages['realtime-publish'] = performance.now() - publishStarted;
+        }
+      }
+      const completeMs = Math.max(
+        0,
+        Number(workerResult?.roundTripMs || 0) || performance.now() - taskStarted
+      );
+      nextCombatControlTick = nextCombatControlTickCore(request.inputTick, completeMs, {
+        tickMs: combatServerTickMs,
+        intervalMs: combatControlIntervalMs
+      });
+      const schedule = result.decisions.realtimeControlSchedule;
+      result.decisions.realtimeControlSchedule = {
+        ...schedule,
+        lastProcessedTick: request.inputTick,
+        lastTickDelta: request.inputTick !== null && schedule.lastProcessedTick !== null
+          ? Math.max(0, request.inputTick - Number(schedule.lastProcessedTick))
+          : null,
+        nextEligibleTick: nextCombatControlTick,
+        lastCompleteMs: completeMs,
+        maxCompleteMs: Math.max(Number(schedule.maxCompleteMs || 0), completeMs)
+      };
+    } catch (error) {
+      log('canary-realtime-control-worker-response-error', { error: errorMessage(error) });
+    } finally {
+      const taskDurationMs = performance.now() - taskStarted;
+      const entry = recordMainThreadTask(
+        result.hotPath,
+        'realtime-control-worker-response',
+        taskDurationMs,
+        stages,
+        {
+          tick: request.inputTick,
+          workProfile: mainThreadWorkProfile(taskCpuStarted, taskDurationMs),
+          responseScale: workerResult?.responseScale || null
+        }
+      );
+      logMainThreadTiming(entry);
+    }
+    if (queued && !ending && !result.safety.event) {
+      setImmediate(() => evaluateRealtimeControl(queued.state, queued.atMs, queued.force));
+    }
+  };
   const evaluateRealtimeControl = (currentState, atMs, force = false, outerStages = null) => {
     if (!actionAdapter || !combatLiveEnabled) return false;
     const inputTickValue = Number(currentState?.realtime?.tick);
     const inputTick = Number.isFinite(inputTickValue) ? inputTickValue : null;
+    if (realtimeControlWorker && !realtimeControlWorkerDisabled) {
+      if (realtimeControlWorkerInFlight) {
+        const previous = realtimeControlWorkerQueued;
+        const previousTick = Number(previous?.state?.realtime?.tick);
+        if (!previous || force || inputTick === null || !Number.isFinite(previousTick) || inputTick > previousTick) {
+          realtimeControlWorkerQueued = { state: currentState, atMs, force };
+        }
+        if (outerStages) outerStages['realtime-worker-queued'] = 0;
+        return realtimeControlActive;
+      }
+    }
     if (!force && inputTick !== null) {
       if (lastCombatControlTick !== null && inputTick < lastCombatControlTick) {
         lastCombatControlTick = null;
@@ -3080,6 +3295,43 @@ async function runReadOnlyCanary(config, options = {}) {
       }
     } else if (!force && atMs - lastCombatControlAtMs < combatControlIntervalMs) {
       return realtimeControlActive;
+    }
+    if (realtimeControlWorker && !realtimeControlWorkerDisabled) {
+      const request = {
+        state: currentState,
+        atMs,
+        force,
+        inputTick,
+        previousProcessedTick: result.decisions.realtimeControlSchedule.lastProcessedTick
+      };
+      realtimeControlWorkerInFlight = true;
+      lastCombatControlAtMs = atMs;
+      lastCombatControlTick = inputTick;
+      const includePersistence = !realtimeControlWorkerPersistenceState
+        || atMs - realtimeControlWorkerLastPersistenceAtMs >= realtimeControlWorkerPersistenceIntervalMs;
+      const statePatch = realtimeControlWorkerPersistenceState
+        ? null
+        : decisionAdapter.getRealtimePersistenceState?.() || null;
+      const workerOptions = {
+        nowMs: atMs,
+        controlMode,
+        combatEnabled: config.combatEnabled
+      };
+      realtimeControlWorker.evaluate(
+        currentState,
+        workerOptions,
+        buildRealtimeControlWorkerContext(currentState, atMs),
+        statePatch,
+        includePersistence
+      ).then(workerResult => {
+        realtimeControlWorkerInFlight = false;
+        finishRealtimeControlWorkerRequest(request, workerResult);
+      }).catch(error => {
+        realtimeControlWorkerInFlight = false;
+        finishRealtimeControlWorkerRequest(request, null, error);
+      });
+      if (outerStages) outerStages['realtime-worker-post'] = 0;
+      return true;
     }
     const completeStarted = performance.now();
     const previousProcessedTick = lastCombatControlTick;
@@ -3149,7 +3401,7 @@ async function runReadOnlyCanary(config, options = {}) {
     const assessment = evaluateRestartReadiness({
       online: true,
       decision: result.decisions.last,
-      decisionState: decisionAdapter.getState?.() || null,
+      decisionState: realtimeDecisionState(),
       realtime: currentState?.realtime || null,
       leavePending: publicLeavePending(leavePending),
       commitmentKey: pendingStatus.commitmentKey || ''
@@ -3192,7 +3444,7 @@ async function runReadOnlyCanary(config, options = {}) {
       dynamicWhitelistEnabledUserIds: dynamicWhitelistStatus.userIds || [],
       dailyDamageUserIds: context.damageStatus?.userIds || []
     };
-    const statePatch = decisionAdapter.getRealtimePersistenceState?.() || null;
+    const statePatch = realtimePersistenceState();
     decisionWorker.decide(currentState, workerOptions, context, statePatch)
       .then(workerResult => {
         const taskStarted = performance.now();
@@ -3224,7 +3476,7 @@ async function runReadOnlyCanary(config, options = {}) {
             return;
           }
           stages['planner-response-stale'] = performance.now() - stageStarted;
-          const currentPersistenceState = decisionAdapter.getRealtimePersistenceState?.() || null;
+          const currentPersistenceState = realtimePersistenceState();
           if (plannerResponseHasNewerPreemption(statePatch, currentPersistenceState)) {
             lastDecisionAtMs = 0;
             log('canary-decision-worker-preempted', {
@@ -3238,6 +3490,9 @@ async function runReadOnlyCanary(config, options = {}) {
           }
           stageStarted = performance.now();
           decisionAdapter.syncPlannerDecision?.(workerResult.decision);
+          if (realtimeControlWorker && !realtimeControlWorkerDisabled) {
+            realtimeControlWorker.syncPlannerDecision?.(workerResult.decision);
+          }
           stages['planner-response-sync'] = performance.now() - stageStarted;
           stageStarted = performance.now();
           if (evaluateRealtimeControl(latestState, responseAtMs, true, stages)) {
@@ -3532,6 +3787,9 @@ async function runReadOnlyCanary(config, options = {}) {
       try {
         await decisionWorker?.close?.();
       } catch (_) {}
+      try {
+        await realtimeControlWorker?.close?.();
+      } catch (_) {}
       return result;
     }
   }
@@ -3562,6 +3820,14 @@ async function runReadOnlyCanary(config, options = {}) {
       }
     }
     if (decisionWorker) await decisionWorker.ready();
+    if (realtimeControlWorker) {
+      try {
+        await realtimeControlWorker.ready();
+      } catch (error) {
+        realtimeControlWorkerDisabled = true;
+        log('canary-realtime-control-worker-unavailable', { error: errorMessage(error) });
+      }
+    }
     const open = options.openBrowserlessWs || openBrowserlessWs;
     const wsFrameCoalescingEnabled = options.wsFrameCoalescing === true
       || (!options.openBrowserlessWs && options.wsFrameCoalescing !== false);
@@ -4447,6 +4713,25 @@ async function runReadOnlyCanary(config, options = {}) {
     if (transport && (transport.isOpen?.() || isWsOpen(transport.ws))) transport.close();
   } catch (_) {}
 
+  if (realtimeControlWorker && !realtimeControlWorkerDisabled) {
+    realtimeControlWorkerQueued = null;
+    try {
+      await realtimeControlWorker.flush();
+      const finalRealtimeState = await realtimeControlWorker.requestPersistence();
+      if (finalRealtimeState?.persistenceState) {
+        realtimeControlWorkerPersistenceState = finalRealtimeState.persistenceState;
+        realtimeControlWorkerStatusSummary = finalRealtimeState.statusSummary || realtimeControlWorkerStatusSummary;
+      }
+      await realtimeControlWorker.finalize(
+        result.safety.event?.reason || result.error || 'canary-ended',
+        { nowMs: now() }
+      );
+      await realtimeControlWorker.flush();
+    } catch (error) {
+      log('canary-realtime-control-worker-close-error', { error: errorMessage(error) });
+    }
+  }
+
   const noFrames = Number(stats.decodedFrameCount || 0) <= 0;
   const noSelf = Number(stats.selfPresent.true || 0) <= 0;
   const frameGap = Number(frameHealth.maxFrameGapMs || 0) > frameGapAlertMs;
@@ -4473,6 +4758,13 @@ async function runReadOnlyCanary(config, options = {}) {
     );
   }
   flushScheduledCombatPersistence();
+  if (realtimeControlWorker) {
+    try {
+      await realtimeControlWorker.close();
+    } catch (err) {
+      log('canary-realtime-control-worker-terminate-error', { error: errorMessage(err) });
+    }
+  }
   if (decisionWorker) {
     try {
       await decisionWorker.close();
@@ -4494,9 +4786,8 @@ async function runReadOnlyCanary(config, options = {}) {
     }
   }
   result.state = stateStore.getState(now());
-  if (typeof decisionAdapter.getStatusSummary === 'function') {
-    result.decisionState = decisionAdapter.getStatusSummary();
-  }
+  if (realtimeControlWorkerStatusSummary) result.decisionState = realtimeControlWorkerStatusSummary;
+  else if (typeof decisionAdapter.getStatusSummary === 'function') result.decisionState = decisionAdapter.getStatusSummary();
   if (actionAdapter) {
     const adapterState = actionAdapter.getState();
     result.actions.sentCount = Number(adapterState.sentCount || 0);

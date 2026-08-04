@@ -597,6 +597,7 @@ async function runCompleteCallbackScenario(options, combatLearning, activeCombat
       wsTracePayload: false
     }, {
       useDecisionWorker: true,
+      useRealtimeControlWorker: true,
       wsFrameCoalescing: true,
       mainThreadBudgetMs: options.maxMs,
       deferCombatControlStatus: true,
@@ -973,11 +974,13 @@ async function runBenchmark(options) {
   const productionHotTasks = {
     idleWsMessageIngress: idleScenario.hotPath?.tasks?.['ws-message-ingress'] || null,
     idleWsMessage: idleScenario.hotPath?.tasks?.['ws-message'] || null,
+    idleRealtimeControlWorkerResponse: idleScenario.hotPath?.tasks?.['realtime-control-worker-response'] || null,
     idlePlannerResponse: idleScenario.hotPath?.tasks?.['planner-response'] || null,
     idleSnapshotObserverUpdate: idleScenario.hotPath?.tasks?.['snapshot-observer-update'] || null,
     idleSnapshotObservationRefresh: idleScenario.hotPath?.tasks?.['snapshot-observation-refresh'] || null,
     combatWsMessageIngress: combatScenario.hotPath?.tasks?.['ws-message-ingress'] || null,
     combatWsMessage: combatScenario.hotPath?.tasks?.['ws-message'] || null,
+    combatRealtimeControlWorkerResponse: combatScenario.hotPath?.tasks?.['realtime-control-worker-response'] || null,
     combatPlannerResponse: combatScenario.hotPath?.tasks?.['planner-response'] || null,
     combatSnapshotObserverUpdate: combatScenario.hotPath?.tasks?.['snapshot-observer-update'] || null,
     combatSnapshotObservationRefresh: combatScenario.hotPath?.tasks?.['snapshot-observation-refresh'] || null,
