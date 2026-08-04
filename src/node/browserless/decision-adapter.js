@@ -2233,6 +2233,20 @@ function profitCoinEligible(coin, thresholdContext, options = {}, rewardOverride
   return profitRewardAndCostEligible(reward, opportunityCoinStaminaCost(coin, options), thresholdContext);
 }
 
+function profitRouteThresholdEligible(route, thresholdContext) {
+  if (!thresholdContext?.active) return true;
+  const reward = Number(route?.value
+    ?? route?.totalValue
+    ?? route?.routeValue
+    ?? route?.coinRoute?.value
+    ?? route?.amount);
+  const staminaCost = Number(route?.staminaCost
+    ?? route?.totalStaminaCost
+    ?? route?.opportunityStaminaCost
+    ?? route?.coinRoute?.staminaCost);
+  return profitRewardAndCostEligible(reward, staminaCost, thresholdContext);
+}
+
 function profitOpportunityThresholdReward(item) {
   if (String(item?.type || '') === 'enemy') {
     return Number(item?.effectiveProfitReward?.expectedReward ?? item?.expectedReward ?? item?.reward);
@@ -5182,6 +5196,12 @@ function currentHeldCoinRouteChoice(stateful = {}, nowMs = 0) {
 
 function coinRouteCoreOptions(input, stateful = {}, options = {}) {
   const self = input?.self || null;
+  const routeEligible = options.profitThresholdContext?.active
+    ? route => profitRouteThresholdEligible(route, options.profitThresholdContext)
+    : undefined;
+  const closerCoinEligible = options.profitThresholdContext?.active
+    ? coin => profitCoinEligible(coin, options.profitThresholdContext, options)
+    : undefined;
   return {
     dist: distanceBetween,
     moveStaminaCost: distance => opportunityMoveStaminaCost(distance, options),
@@ -5222,6 +5242,9 @@ function coinRouteCoreOptions(input, stateful = {}, options = {}) {
     maxDistance: Math.max(0, Number(options.coinRouteMaxDistance ?? options.globalCoinMaxDistance ?? BROWSER_RUNTIME_DEFAULTS.coinRouteMaxDistance)),
     poolLimit: options.coinRoutePoolLimit ?? BROWSER_RUNTIME_DEFAULTS.coinRoutePoolLimit,
     anchorLimit: options.coinRouteAnchorLimit ?? BROWSER_RUNTIME_DEFAULTS.coinRouteAnchorLimit,
+    routeEligible,
+    closerCoinEligible,
+    heldCoinEligible: closerCoinEligible,
     safeCoinCandidates: (coins, routeThreats, maxDistance, routeSelf = self) => (coins || [])
       .filter(coin => {
         const limit = Number(maxDistance);
@@ -5550,6 +5573,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
   const coinMaxDistance = Math.max(0, Number(options.coinMaxDistance || BROWSER_RUNTIME_DEFAULTS.coinMaxDistance));
   const globalCoinMaxDistance = Math.max(0, Number(options.globalCoinMaxDistance || DEFAULT_GLOBAL_COIN_MAX_DISTANCE));
   const opportunityThreats = input.avoidanceThreats || input.activeThreats || [];
+  const routeSelectionOptions = { ...options, profitThresholdContext: thresholdContext };
   clearDangerousOpportunityState(stateful, input.nowMs);
   const fieldMigrationCoin = pickFieldMigrationCoin(input, opportunityThreats, thresholdContext, options);
   const coinGroups = input.profitCoins.length
@@ -5567,7 +5591,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
           coinKey: coinRouteKey
         }),
         opportunityThreats,
-        coinRouteCoreOptions(input, stateful, options)
+        coinRouteCoreOptions(input, stateful, routeSelectionOptions)
       )
     : null;
   const opportunityOptions = {
@@ -5612,6 +5636,9 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       recentCombatMetrics: stateful.combatMetrics
     }),
     opportunityStaminaAffordable: staminaCost => opportunityStaminaAffordable(input.self, staminaCost, options),
+    routeEligible: thresholdContext.active
+      ? route => profitRouteThresholdEligible(route, thresholdContext)
+      : undefined,
     isAfkProfitTarget: target => input.afkTargets.includes(target),
     priorityTier: item => opportunityPriorityTierCore(item, {
       visibleDistance: opportunityVisibleDistance(options),

@@ -9706,6 +9706,55 @@ async function runSelfTest() {
       want: 'best-opportunity-coin-route|3|16000|3|2'
     },
     {
+      name: 'browserless dynamic profit threshold keeps aggregate route behind ineligible closer coin',
+      got: (() => {
+        const nowMs = Date.parse('2026-07-12T00:00:00.000Z');
+        const store = createBrowserlessStateStore({ userId: 7 });
+        const self = { entity_id: 1, user_id: 7, name: 'self', x: 41555, y: 66012, hp: 100, max_hp: 100 };
+        const coins = [
+          [6930, 31131, 69918],
+          [6942, 32975, 55742],
+          [6959, 20822, 52277],
+          [6983, 19746, 48029],
+          [6991, 13965, 73278],
+          [6968, 16066, 79084],
+          [6913, 11853, 78170],
+          [6935, 9775, 79565],
+          [6828, 5955, 81328]
+        ].map(([drop_id, x, y]) => ({ drop_id, amount: 1, x, y }));
+        store.ingestFrame({
+          type: 'pos',
+          tick: 56,
+          entities: [self],
+          bullets: [],
+          coin_drops: coins
+        }, { receivedAtMs: nowMs });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 57,
+          entities: [{ ...self, stamina_1h_remaining_milli: 3000000, stamina_1d_remaining_milli: 20000000 }],
+          bullets: [],
+          coin_drops: [],
+          messages: []
+        }, { receivedAtMs: nowMs + 10 });
+        const decision = buildBrowserlessDecision(store.getState(nowMs + 20), {}, {
+          nowMs,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: true,
+          singleCoinBaitEnabled: false
+        });
+        return [
+          decision.reason === 'best-opportunity-coin-route',
+          decision.action.coinRoute?.value,
+          decision.action.coinRoute?.ids?.join(','),
+          decision.profit.threshold.eligibleCount,
+          decision.profit.threshold.filteredCount
+        ].join('|');
+      })(),
+      want: 'true|5|6991,6968,6913,6935,6828|1|8'
+    },
+    {
       name: 'browserless dynamic profit threshold rejects low ROI field migration before AFK pursuit',
       got: (() => {
         const nowMs = Date.parse('2026-07-12T00:00:00.000Z');

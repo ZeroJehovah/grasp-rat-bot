@@ -81,9 +81,20 @@ function buildCoinOpportunityCandidatesCore(self, coinGroups, activeThreats, rou
     const id = String(routeCoin.drop_id);
     const score = scoreCoinOpportunity(routeCoin);
     const previous = byId.get(id);
+    const routeEligible = typeof options.routeEligible === 'function'
+      ? Boolean(options.routeEligible(routeCoin))
+      : false;
+    const previousEligible = typeof options.routeEligible === 'function'
+      ? Boolean(previous && options.routeEligible(previous))
+      : false;
+    const routeScoreWins = routeEligible === previousEligible && (
+      score > Number(previous?.opportunitySortScore || -Infinity)
+      || (score === Number(previous?.opportunitySortScore || -Infinity)
+        && Number(routeCoin.routeValue || 0) > Number(previous?.amount || 0))
+    );
     if (!previous
-      || score > Number(previous.opportunitySortScore || -Infinity)
-      || (score === Number(previous.opportunitySortScore || -Infinity) && Number(routeCoin.routeValue || 0) > Number(previous.amount || 0))) {
+      || (routeEligible && !previousEligible)
+      || routeScoreWins) {
       byId.set(id, {
         ...routeCoin,
         opportunitySortScore: score,

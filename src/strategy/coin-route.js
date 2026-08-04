@@ -162,6 +162,9 @@ function buildCoinRouteFromAnchorCore(self, anchor, candidates, activeThreats, o
   const linkDistance = Math.max(0, Number(options.linkDistance || 0));
   const maxLinkDistance = Math.max(linkDistance, Number(options.maxLinkDistance || linkDistance || 0));
   const beamWidth = Math.max(1, Math.round(Number(options.beamWidth || 4)));
+  const routeEligible = typeof options.routeEligible === 'function' ? options.routeEligible : () => true;
+  let bestEligibleState = null;
+  let bestEligibleScore = -Infinity;
   const stateSort = (a, b) => b.rankScore - a.rankScore
     || b.prefixScore - a.prefixScore
     || b.totalValue - a.totalValue
@@ -209,17 +212,40 @@ function buildCoinRouteFromAnchorCore(self, anchor, candidates, activeThreats, o
           bestScore = prefixScore;
           bestState = nextState;
         }
+        if (nextState.route.length >= 3 && routeEligible({
+          route: nextState.route,
+          value: nextValue,
+          totalValue: nextValue,
+          staminaCost: nextStaminaCost,
+          totalStaminaCost: nextStaminaCost,
+          totalDistance: nextDistance,
+          legCount: nextState.route.length,
+          score: prefixScore,
+          first: anchor
+        })) {
+          const eligibleScore = Number(prefixScore);
+          if (!bestEligibleState
+            || eligibleScore > bestEligibleScore
+            || (eligibleScore === bestEligibleScore
+              && (Number(nextState.totalValue || 0) > Number(bestEligibleState.totalValue || 0)
+                || (Number(nextState.totalValue || 0) === Number(bestEligibleState.totalValue || 0)
+                  && Number(nextState.totalDistance || Infinity) < Number(bestEligibleState.totalDistance || Infinity))))) {
+            bestEligibleState = nextState;
+            bestEligibleScore = eligibleScore;
+          }
+        }
       }
     }
     if (!expanded.length) break;
     states = expanded.sort(stateSort).slice(0, beamWidth);
   }
   if (!bestState) return null;
-  const bestRoute = bestState.route;
+  const selectedState = bestEligibleState || bestState;
+  const bestRoute = selectedState.route;
   const summary = {
-    totalValue: bestState.totalValue,
-    totalStaminaCost: bestState.totalStaminaCost,
-    totalDistance: bestState.totalDistance
+    totalValue: selectedState.totalValue,
+    totalStaminaCost: selectedState.totalStaminaCost,
+    totalDistance: selectedState.totalDistance
   };
   if (!staminaAffordable(summary.totalStaminaCost)) {
     recordDiagnostic(bestRoute[0], 'route-stamina-unaffordable', { staminaCost: Math.round(summary.totalStaminaCost) });
@@ -265,6 +291,7 @@ function coinRouteSkipsCloserFirstCoinCore(self, route, candidates, options = {}
   const firstKey = coinRouteKey(route);
   const nearest = (candidates || [])
     .filter(coin => coinRouteKey(coin) !== firstKey)
+    .filter(coin => typeof options.closerCoinEligible !== 'function' || options.closerCoinEligible(coin))
     .map(coin => ({ ...coin, distance: Number.isFinite(Number(coin.distance)) ? Number(coin.distance) : dist(self, coin) }))
     .filter(coin => Number.isFinite(coin.distance) && coin.distance <= nearbyLimit)
     .sort((a, b) => a.distance - b.distance || Number(b.amount || 0) - Number(a.amount || 0))[0] || null;
@@ -306,6 +333,7 @@ function coinRouteSkipsHeldSingleCoinCore(self, route, choice, options = {}) {
   const choiceIdFrom = typeof options.choiceId === 'function' ? options.choiceId : value => String(value?.id ?? '');
   if (!self || !route || !choice || choiceType(choice) !== 'coin') return false;
   if (String(choice.reason || '') === 'best-opportunity-coin-route' || coinRouteIdsFrom(choice).length) return false;
+  if (typeof options.heldCoinEligible === 'function' && !options.heldCoinEligible(choice)) return false;
   const choiceId = choiceIdFrom(choice);
   if (!choiceId && choiceId !== '0') return false;
   if (coinRouteKey(route) === String(choiceId)) return false;
@@ -472,7 +500,9 @@ function pickCoinRouteOpportunityCore(self, coins, activeThreats, options = {}) 
     return bCount - aCount || Number(a.distance || Infinity) - Number(b.distance || Infinity);
   }).slice(0, 8).forEach(addAnchor);
   let best = null;
+  let bestEligible = null;
   let heldRoute = null;
+  let heldRouteEligible = null;
   const viableRoutes = [];
   for (const anchor of anchors.slice(0, Math.max(1, Number(options.anchorLimit || 22)))) {
     if (!legClear(self, anchor)) continue;
@@ -482,7 +512,13 @@ function pickCoinRouteOpportunityCore(self, coins, activeThreats, options = {}) 
     if (coinRouteSkipsCloserRoutePointCore(self, route, routeOptions)) continue;
     if (coinRouteSkipsHeldSingleCoinCore(self, route, heldChoice, routeOptions)) continue;
     viableRoutes.push(route);
-    if (coinRouteMatchesHeldChoiceCore(route, heldRouteChoice || heldChoice, options)) heldRoute = route;
+    const routeEligible = typeof options.routeEligible === 'function'
+      ? Boolean(options.routeEligible(route))
+      : true;
+    if (coinRouteMatchesHeldChoiceCore(route, heldRouteChoice || heldChoice, options)) {
+      heldRoute = route;
+      if (routeEligible) heldRouteEligible = route;
+    }
     const score = Number(route.opportunityScore || -Infinity);
     if (!best
       || score > Number(best.opportunityScore || -Infinity)
@@ -490,26 +526,39 @@ function pickCoinRouteOpportunityCore(self, coins, activeThreats, options = {}) 
       || (score === Number(best.opportunityScore || -Infinity) && Number(route.distance || Infinity) < Number(best.distance || Infinity))) {
       best = route;
     }
+    if (routeEligible && (!bestEligible
+      || score > Number(bestEligible.opportunityScore || -Infinity)
+      || (score === Number(bestEligible.opportunityScore || -Infinity) && Number(route.routeValue || 0) > Number(bestEligible.routeValue || 0))
+      || (score === Number(bestEligible.opportunityScore || -Infinity)
+        && Number(route.routeValue || 0) === Number(bestEligible.routeValue || 0)
+        && Number(route.distance || Infinity) < Number(bestEligible.distance || Infinity)))) {
+      bestEligible = route;
+    }
   }
-  const closerRoute = closerCoinRouteForFirstTargetCore(best, viableRoutes, routeOptions);
+  const selectedBest = bestEligible || best;
+  const selectedRoutes = bestEligible
+    ? viableRoutes.filter(route => typeof options.routeEligible !== 'function' || options.routeEligible(route))
+    : viableRoutes;
+  const selectedHeldRoute = bestEligible ? heldRouteEligible : heldRoute;
+  const closerRoute = closerCoinRouteForFirstTargetCore(selectedBest, selectedRoutes, routeOptions);
   if (closerRoute) {
-    if (heldRoute && coinRouteKey(heldRoute) === coinRouteKey(closerRoute)) {
+    if (selectedHeldRoute && coinRouteKey(selectedHeldRoute) === coinRouteKey(closerRoute)) {
       return {
         ...closerRoute,
         routeHeld: true,
-        competingRouteScore: best ? Number(best.opportunityScore || 0) : null
+        competingRouteScore: selectedBest ? Number(selectedBest.opportunityScore || 0) : null
       };
     }
     return closerRoute;
   }
-  if (heldCoinRouteBeatsSwitchCore(heldRoute, best, routeOptions)) {
+  if (heldCoinRouteBeatsSwitchCore(selectedHeldRoute, selectedBest, routeOptions)) {
     return {
-      ...heldRoute,
+      ...selectedHeldRoute,
       routeHeld: true,
-      competingRouteScore: best ? Number(best.opportunityScore || 0) : null
+      competingRouteScore: selectedBest ? Number(selectedBest.opportunityScore || 0) : null
     };
   }
-  return best;
+  return selectedBest;
 }
 
 module.exports = {

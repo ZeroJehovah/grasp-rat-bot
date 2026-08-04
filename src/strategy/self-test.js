@@ -4307,6 +4307,19 @@ function runStrategyModuleSelfTests() {
       && builtRoute.routeKind === 'short'
   });
 
+  const eligibleRoute = buildCoinRouteFromAnchorCore(routeSelf, routeCoins[0], [
+    ...routeCoins,
+    { drop_id: '4', amount: 1, x: 4000, y: 0, distance: 4000 }
+  ], [], {
+    ...routeOptions,
+    valueScore: (value, cost) => value === 3 ? 100 : (value === 4 ? 50 : value * 100000 / cost),
+    routeEligible: route => Number(route.value || 0) >= 4
+  });
+  results.push({
+    name: 'coin-route-prefers-eligible-route-over-higher-score-ineligible-route',
+    passed: eligibleRoute?.coinRoute?.ids?.join(',') === '1,2,3,4'
+  });
+
   const routeActionMeta = coinRouteActionMetaCore({
     ids: ['a', 'b'],
     points: [{ id: 'a' }],
@@ -4340,6 +4353,15 @@ function runStrategyModuleSelfTests() {
       [{ drop_id: 'near', amount: 1, x: 10000, y: 0, distance: 10000 }],
       routeOptions
     ) === true
+  });
+  results.push({
+    name: 'coin-route-closer-first-ignores-ineligible-near-coin',
+    passed: coinRouteSkipsCloserFirstCoinCore(
+      routeSelf,
+      { drop_id: 'far-route', amount: 3, x: 30000, y: 0, distance: 30000, coinRoute: { firstDistance: 30000 } },
+      [{ drop_id: 'near', amount: 1, x: 10000, y: 0, distance: 10000 }],
+      { ...routeOptions, closerCoinEligible: coin => Number(coin.amount || 0) >= 2 }
+    ) === false
   });
 
   const beamRoute = buildCoinRouteFromAnchorCore(routeSelf, { drop_id: 'a', amount: 1, x: 10000, y: 0, distance: 10000 }, [
