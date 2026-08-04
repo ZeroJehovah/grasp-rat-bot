@@ -15,6 +15,7 @@ const {
   parseBrowserlessRunnerArgs,
   usage
 } = require('../src/node/browserless/config');
+const path = require('path');
 const {
   CONFIRMED_LEAVE_SNAPSHOT_IGNORE_MS,
   browserlessTerminalStopRequestsRuntimeClose,
@@ -36,6 +37,9 @@ const {
 const {
   startLogRetentionScheduler
 } = require('../src/node/browserless/log-retention');
+const {
+  createSourceIpProbeScheduler
+} = require('../src/node/browserless/source-ip-probe');
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -292,6 +296,45 @@ async function main() {
       }));
     }
   });
+  const sourceIpProbe = createSourceIpProbeScheduler({
+    gameOrigin: config.gameOrigin,
+    interfaceName: config.sourceIpInterface,
+    file: path.join(config.dataDir, 'source-ip-probe-results.json'),
+    timeoutMs: config.sourceIpProbeTimeoutMs,
+    onResult(result) {
+      console.log(JSON.stringify({
+        type: 'source-ip-probe-result',
+        ip: result.ip,
+        sequence: result.sequence,
+        sourceCount: result.sourceCount,
+        status: result.status,
+        elapsedMs: result.elapsedMs,
+        ok: result.ok,
+        errorCategory: result.errorCategory
+      }));
+    },
+    onRound(summary) {
+      console.log(JSON.stringify({
+        type: 'source-ip-probe-round',
+        roundStartedAt: summary.roundStartedAt,
+        roundCompletedAt: summary.roundCompletedAt,
+        elapsedMs: summary.elapsedMs,
+        discoveredCount: summary.discoveredCount,
+        requestCount: summary.requestCount,
+        successCount: summary.successCount,
+        failureCount: summary.failureCount,
+        nextRoundAt: sourceIpProbe?.status?.().nextRoundAt || ''
+      }));
+    },
+    onError(error, detail) {
+      console.error(JSON.stringify({
+        type: 'source-ip-probe-error',
+        operation: detail?.operation || 'source-ip-probe',
+        error: error?.message || String(error)
+      }));
+    }
+  });
+  if (!config.once) sourceIpProbe.start();
   try {
     while (true) {
       try {
@@ -304,7 +347,8 @@ async function main() {
           },
           onLifecycleControlReady: control => {
             activeLifecycleControl = control || null;
-          }
+          },
+          sourceIpProbe
         });
         console.log(JSON.stringify({ type: 'runner-result', ...summarizeBrowserlessRunnerResult(result) }));
         exitAfterSignalStop = exitAfterSignalStop
@@ -323,6 +367,7 @@ async function main() {
       await sleep(Math.max(1000, Number(config.loopDelayMs || 30000)));
     }
   } finally {
+    sourceIpProbe.stop();
     retentionScheduler.stop();
     const current = activeBackgroundIo;
     activeBackgroundIo = null;

@@ -1,0 +1,644 @@
+'use strict';
+
+const fs = require('fs');
+const net = require('net');
+const os = require('os');
+const path = require('path');
+const { performance } = require('perf_hooks');
+const {
+  DEFAULT_SOURCE_IP_INTERFACE,
+  compareIpv4Numeric,
+  discoverInterfaceIpv4,
+  requestAnonymousGameRoot,
+  sourceIpPreflightErrorCategory,
+  uniqueIpv4
+} = require('./source-ip-preflight');
+
+const SOURCE_IP_PROBE_SCHEMA_VERSION = 1;
+const SOURCE_IP_PROBE_RETENTION_MS = 24 * 60 * 60 * 1000;
+const SOURCE_IP_PROBE_HALF_LIFE_MS = 6 * 60 * 60 * 1000;
+const SOURCE_IP_PROBE_REQUIRED_COUNT = 3;
+const SOURCE_IP_PROBE_TIMEOUT_MS = 60 * 1000;
+const SOURCE_IP_PROBE_BETWEEN_IP_MIN_MS = 5 * 1000;
+const SOURCE_IP_PROBE_BETWEEN_IP_MAX_MS = 10 * 1000;
+const SOURCE_IP_PROBE_BETWEEN_ROUND_MIN_MS = 30 * 60 * 1000;
+const SOURCE_IP_PROBE_BETWEEN_ROUND_MAX_MS = 60 * 60 * 1000;
+const SOURCE_IP_PROBE_MIN_SUCCESS_RATE = 0.5;
+const SOURCE_IP_PROBE_MAX_SAMPLES = 10000;
+
+function cloneJson(value) {
+  return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+}
+
+function numberOrNull(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function isProbeSuccessStatus(status) {
+  return Number(status) === 200;
+}
+
+function randomIntegerInclusive(min, max, random = Math.random) {
+  const lower = Math.ceil(Number(min));
+  const upper = Math.floor(Number(max));
+  if (!Number.isFinite(lower) || !Number.isFinite(upper) || upper <= lower) return Math.max(0, lower || 0);
+  const value = Number(random());
+  const ratio = Number.isFinite(value) ? Math.min(0.999999999, Math.max(0, value)) : 0;
+  return lower + Math.floor(ratio * (upper - lower + 1));
+}
+
+function normalizeProbeSample(value, nowMs = Date.now()) {
+  const input = value && typeof value === 'object' ? value : {};
+  const ip = String(input.ip || '').trim();
+  const observedAtMs = Date.parse(String(input.observedAt || ''));
+  if (net.isIP(ip) !== 4 || !Number.isFinite(observedAtMs)) return null;
+  const status = numberOrNull(input.status);
+  const elapsedMs = numberOrNull(input.elapsedMs);
+  const errorCategory = String(input.errorCategory || '').slice(0, 48);
+  return {
+    ip,
+    observedAt: new Date(observedAtMs).toISOString(),
+    status: status === null || status <= 0 ? null : Math.round(status),
+    elapsedMs: elapsedMs === null ? null : Math.max(0, Math.round(elapsedMs)),
+    ok: isProbeSuccessStatus(status),
+    errorCategory
+  };
+}
+
+function normalizeProbeHistory(value = {}, nowMs = Date.now(), retentionMs = SOURCE_IP_PROBE_RETENTION_MS) {
+  const input = value && typeof value === 'object' ? value : {};
+  const currentMs = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  const keepMs = Math.max(1, Number(retentionMs) || SOURCE_IP_PROBE_RETENTION_MS);
+  const cutoffMs = currentMs - keepMs;
+  const samples = [];
+  for (const rawSample of Array.isArray(input.samples) ? input.samples : []) {
+    const sample = normalizeProbeSample(rawSample, currentMs);
+    if (!sample) continue;
+    const observedAtMs = Date.parse(sample.observedAt);
+    if (observedAtMs < cutoffMs) continue;
+    samples.push(sample);
+  }
+  samples.sort((left, right) => Date.parse(left.observedAt) - Date.parse(right.observedAt));
+  return {
+    schemaVersion: SOURCE_IP_PROBE_SCHEMA_VERSION,
+    updatedAt: new Date(currentMs).toISOString(),
+    retentionMs: keepMs,
+    samples: samples.slice(-SOURCE_IP_PROBE_MAX_SAMPLES)
+  };
+}
+
+function readSourceIpProbeHistory(file, options = {}) {
+  const now = typeof options.now === 'function' ? options.now : Date.now;
+  const retentionMs = options.retentionMs || SOURCE_IP_PROBE_RETENTION_MS;
+  let value = {};
+  try {
+    value = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (_) {}
+  return normalizeProbeHistory(value, now(), retentionMs);
+}
+
+function writeSourceIpProbeHistory(file, value, options = {}) {
+  const now = typeof options.now === 'function' ? options.now : Date.now;
+  const retentionMs = options.retentionMs || SOURCE_IP_PROBE_RETENTION_MS;
+  const history = normalizeProbeHistory(value, now(), retentionMs);
+  const directory = path.dirname(file);
+  fs.mkdirSync(directory, { recursive: true });
+  const temporaryFile = `${file}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    fs.writeFileSync(temporaryFile, `${JSON.stringify(history, null, 2)}\n`, { mode: 0o600 });
+    fs.chmodSync(temporaryFile, 0o600);
+    fs.renameSync(temporaryFile, file);
+  } catch (error) {
+    try { fs.unlinkSync(temporaryFile); } catch (_) {}
+    throw error;
+  }
+  return history;
+}
+
+function createSourceIpProbeStore(options = {}) {
+  const file = path.resolve(String(options.file || 'source-ip-probe-results.json'));
+  const now = typeof options.now === 'function' ? options.now : Date.now;
+  const retentionMs = Math.max(1, Number(options.retentionMs || SOURCE_IP_PROBE_RETENTION_MS));
+  let history = readSourceIpProbeHistory(file, { now, retentionMs });
+
+  function persist() {
+    history = writeSourceIpProbeHistory(file, history, { now, retentionMs });
+    return cloneJson(history);
+  }
+
+  function prune() {
+    const current = normalizeProbeHistory(history, now(), retentionMs);
+    const changed = JSON.stringify(current) !== JSON.stringify(history);
+    history = current;
+    if (changed) persist();
+    return cloneJson(history);
+  }
+
+  return {
+    file,
+    snapshot() {
+      return prune();
+    },
+    record(sample) {
+      const normalized = normalizeProbeSample(sample, now());
+      if (!normalized) throw new Error('invalid source IP probe sample');
+      history = normalizeProbeHistory({
+        ...history,
+        samples: [...history.samples, normalized]
+      }, now(), retentionMs);
+      persist();
+      return cloneJson(normalized);
+    },
+    prune,
+    status() {
+      const current = prune();
+      return {
+        file,
+        updatedAt: current.updatedAt,
+        retentionMs,
+        sampleCount: current.samples.length,
+        sourceIpCount: new Set(current.samples.map(sample => sample.ip)).size
+      };
+    }
+  };
+}
+
+function weightedQuantile(values, quantile) {
+  if (!values.length) return null;
+  const sorted = values.slice().sort((left, right) => left.value - right.value);
+  const totalWeight = sorted.reduce((sum, item) => sum + item.weight, 0);
+  if (!(totalWeight > 0)) return null;
+  const target = totalWeight * Math.min(1, Math.max(0, Number(quantile) || 0));
+  let cumulative = 0;
+  for (const item of sorted) {
+    cumulative += item.weight;
+    if (cumulative >= target) return item.value;
+  }
+  return sorted[sorted.length - 1].value;
+}
+
+function sourceIpProbeMetrics(samples, nowMs = Date.now(), options = {}) {
+  const halfLifeMs = Math.max(1, Number(options.halfLifeMs || SOURCE_IP_PROBE_HALF_LIFE_MS));
+  const currentMs = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  const ordered = (Array.isArray(samples) ? samples : [])
+    .map(sample => normalizeProbeSample(sample, currentMs))
+    .filter(Boolean)
+    .sort((left, right) => Date.parse(left.observedAt) - Date.parse(right.observedAt));
+  let totalWeight = 0;
+  let successWeight = 0;
+  let weightedLatencyTotal = 0;
+  let successCount = 0;
+  let lastSuccessAtMs = 0;
+  const latencies = [];
+  for (const sample of ordered) {
+    const observedAtMs = Date.parse(sample.observedAt);
+    const ageMs = Math.max(0, currentMs - observedAtMs);
+    const weight = Math.exp(-ageMs / halfLifeMs);
+    totalWeight += weight;
+    if (isProbeSuccessStatus(sample.status)) {
+      successCount += 1;
+      successWeight += weight;
+      lastSuccessAtMs = Math.max(lastSuccessAtMs, observedAtMs);
+      if (Number.isFinite(sample.elapsedMs)) {
+        weightedLatencyTotal += sample.elapsedMs * weight;
+        latencies.push({ value: sample.elapsedMs, weight });
+      }
+    }
+  }
+  const latest = ordered[ordered.length - 1] || null;
+  const weightedMeanMs = latencies.length && successWeight > 0
+    ? weightedLatencyTotal / latencies.reduce((sum, item) => sum + item.weight, 0)
+    : null;
+  const weightedP90Ms = weightedQuantile(latencies, 0.9);
+  const latencyMetricMs = weightedMeanMs === null
+    ? null
+    : (weightedMeanMs * 0.7) + ((weightedP90Ms ?? weightedMeanMs) * 0.3);
+  return {
+    sampleCount: ordered.length,
+    successCount,
+    failureCount: Math.max(0, ordered.length - successCount),
+    weightedSampleWeight: totalWeight,
+    weightedSuccessRate: totalWeight > 0 ? successWeight / totalWeight : 0,
+    weightedMeanMs,
+    weightedP90Ms,
+    latencyMetricMs,
+    confidence: Math.min(1, totalWeight / 4),
+    latestAt: latest?.observedAt || '',
+    latestAtMs: latest ? Date.parse(latest.observedAt) : 0,
+    latestStatus: latest?.status ?? null,
+    latestErrorCategory: latest?.errorCategory || '',
+    lastSuccessAtMs,
+    latestWas403: Number(latest?.status) === 403
+  };
+}
+
+function selectSourceIpsFromProbeHistory(history, discoveredIps, options = {}) {
+  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const requiredCount = Math.max(1, Math.round(Number(options.requiredCount || SOURCE_IP_PROBE_REQUIRED_COUNT)));
+  const retentionMs = Math.max(1, Number(options.retentionMs || SOURCE_IP_PROBE_RETENTION_MS));
+  const normalized = normalizeProbeHistory(history, nowMs, retentionMs);
+  const discovered = uniqueIpv4(discoveredIps).sort(compareIpv4Numeric);
+  const samplesByIp = new Map();
+  for (const sample of normalized.samples) {
+    if (!discovered.includes(sample.ip)) continue;
+    const bucket = samplesByIp.get(sample.ip) || [];
+    bucket.push(sample);
+    samplesByIp.set(sample.ip, bucket);
+  }
+  const metrics = discovered.map(ip => ({
+    ip,
+    ...sourceIpProbeMetrics(samplesByIp.get(ip) || [], nowMs, options)
+  }));
+  const eligible = metrics.filter(item => (
+    item.successCount > 0
+      && item.lastSuccessAtMs > 0
+      && item.weightedSuccessRate >= SOURCE_IP_PROBE_MIN_SUCCESS_RATE
+      && !item.latestWas403
+      && item.latencyMetricMs !== null
+  ));
+  const latencyReference = eligible.length
+    ? eligible.map(item => item.latencyMetricMs).sort((left, right) => left - right)[Math.floor(eligible.length / 2)]
+    : null;
+  for (const item of eligible) {
+    const speedScore = latencyReference > 0
+      ? Math.min(1, latencyReference / item.latencyMetricMs)
+      : 0;
+    item.speedScore = speedScore;
+    item.score = (item.weightedSuccessRate * 0.65) + (speedScore * 0.25) + (item.confidence * 0.1);
+  }
+  eligible.sort((left, right) => (
+    right.score - left.score
+      || right.weightedSuccessRate - left.weightedSuccessRate
+      || left.latencyMetricMs - right.latencyMetricMs
+      || right.latestAtMs - left.latestAtMs
+      || compareIpv4Numeric(left.ip, right.ip)
+  ));
+  const selected = eligible.slice(0, requiredCount).map(item => item.ip);
+  const diagnostics = {
+    selectedAt: new Date(nowMs).toISOString(),
+    discoveredCount: discovered.length,
+    sampleCount: normalized.samples.length,
+    eligibleCount: eligible.length,
+    requiredCount,
+    blockedCount: metrics.filter(item => item.latestWas403).length,
+    candidates: metrics.map(item => ({
+      ip: item.ip,
+      sampleCount: item.sampleCount,
+      successCount: item.successCount,
+      weightedSuccessRate: Math.round(item.weightedSuccessRate * 1000) / 1000,
+      weightedMeanMs: item.weightedMeanMs === null ? null : Math.round(item.weightedMeanMs * 10) / 10,
+      weightedP90Ms: item.weightedP90Ms === null ? null : Math.round(item.weightedP90Ms * 10) / 10,
+      confidence: Math.round(item.confidence * 1000) / 1000,
+      score: Number.isFinite(item.score) ? Math.round(item.score * 1000) / 1000 : null,
+      latestAt: item.latestAt,
+      latestStatus: item.latestStatus,
+      latestErrorCategory: item.latestErrorCategory,
+      eligible: eligible.some(candidate => candidate.ip === item.ip)
+    }))
+  };
+  const completedAt = new Date(nowMs).toISOString();
+  const sourceIpPreflight = {
+    phase: selected.length === requiredCount ? 'ready' : 'insufficient',
+    reason: selected.length === requiredCount
+      ? 'source-ip-probe-selected'
+      : 'source-ip-probe-insufficient',
+    queuePhase: 'cached-history',
+    startedAt: '',
+    completedAt,
+    elapsedMs: 0,
+    discoveredCount: discovered.length,
+    ordinaryQueueCount: discovered.length,
+    riskQueueCount: diagnostics.blockedCount,
+    testedCount: 0,
+    requestCount: 0,
+    currentIp: selected[selected.length - 1] || '',
+    currentAttempt: 0,
+    lastStatus: null,
+    lastErrorCategory: '',
+    availableIps: selected,
+    availableCount: selected.length,
+    requiredCount,
+    riskCount: diagnostics.blockedCount,
+    nextRetryAt: '',
+    deferredForNextLoginPoint: false,
+    deferredAt: '',
+    reuseWithoutRetest: false,
+    reusedAt: ''
+  };
+  return {
+    ok: selected.length === requiredCount,
+    insufficient: selected.length < requiredCount,
+    cached: true,
+    reason: sourceIpPreflight.reason,
+    availableIps: selected,
+    sourceIpPreflight,
+    diagnostics
+  };
+}
+
+function createSourceIpProbeScheduler(options = {}) {
+  const now = typeof options.now === 'function' ? options.now : Date.now;
+  const monotonicNow = typeof options.monotonicNow === 'function' ? options.monotonicNow : () => performance.now();
+  const random = typeof options.random === 'function' ? options.random : Math.random;
+  const sleep = typeof options.sleep === 'function'
+    ? options.sleep
+    : ms => new Promise(resolve => setTimeout(resolve, ms));
+  const setTimer = typeof options.setTimeout === 'function' ? options.setTimeout : setTimeout;
+  const clearTimer = typeof options.clearTimeout === 'function' ? options.clearTimeout : clearTimeout;
+  const interfaceName = String(options.interfaceName || DEFAULT_SOURCE_IP_INTERFACE);
+  const timeoutMs = Math.max(1000, Number(options.timeoutMs || SOURCE_IP_PROBE_TIMEOUT_MS));
+  const retentionMs = Math.max(1, Number(options.retentionMs || SOURCE_IP_PROBE_RETENTION_MS));
+  const store = options.store || createSourceIpProbeStore({
+    file: options.file,
+    now,
+    retentionMs
+  });
+  const discoverIps = typeof options.discoverIps === 'function'
+    ? options.discoverIps
+    : () => discoverInterfaceIpv4(interfaceName, options.networkInterfaces || os.networkInterfaces);
+  const request = typeof options.request === 'function'
+    ? options.request
+    : (gameOrigin, ip, requestOptions) => requestAnonymousGameRoot(gameOrigin, ip, requestOptions);
+  const gameOrigin = String(options.gameOrigin || '');
+  let stopped = true;
+  let timer = null;
+  let activeRoundPromise = null;
+  let lastRound = null;
+  let nextRoundAtMs = 0;
+
+  const safeCallback = (callback, ...args) => {
+    if (typeof callback !== 'function') return;
+    try { callback(...args); } catch (_) {}
+  };
+
+  function scheduleNextRound() {
+    if (stopped) return 0;
+    const delayMs = randomIntegerInclusive(
+      SOURCE_IP_PROBE_BETWEEN_ROUND_MIN_MS,
+      SOURCE_IP_PROBE_BETWEEN_ROUND_MAX_MS,
+      random
+    );
+    nextRoundAtMs = now() + delayMs;
+    if (timer) clearTimer(timer);
+    timer = setTimer(() => {
+      timer = null;
+      void runRound();
+    }, delayMs);
+    timer?.unref?.();
+    return delayMs;
+  }
+
+  async function executeRound(scheduleNext = true) {
+    const startedAtMs = now();
+    const startedMonotonicMs = monotonicNow();
+    let ips;
+    try {
+      ips = uniqueIpv4(discoverIps()).sort(compareIpv4Numeric);
+    } catch (error) {
+      const summary = {
+        ok: false,
+        roundStartedAt: new Date(startedAtMs).toISOString(),
+        roundCompletedAt: new Date(now()).toISOString(),
+        discoveredCount: 0,
+        requestCount: 0,
+        errorCategory: 'discovery',
+        error: error?.message || String(error)
+      };
+      lastRound = summary;
+      safeCallback(options.onError, error, { operation: 'source-ip-probe-discovery' });
+      if (scheduleNext) scheduleNextRound();
+      return summary;
+    }
+    let requestCount = 0;
+    const results = [];
+    safeCallback(options.onRoundStart, {
+      roundStartedAt: new Date(startedAtMs).toISOString(),
+      discoveredIps: ips.slice()
+    });
+    for (let index = 0; index < ips.length; index += 1) {
+      if (stopped) break;
+      const ip = ips[index];
+      const requestStartedAtMs = now();
+      const requestStartedMonotonicMs = monotonicNow();
+      let response = null;
+      let error = null;
+      try {
+        requestCount += 1;
+        response = await request(gameOrigin, ip, { timeoutMs });
+      } catch (requestError) {
+        error = requestError;
+      }
+      const status = error ? null : numberOrNull(response?.status ?? response?.statusCode);
+      const sample = {
+        ip,
+        observedAt: new Date(now()).toISOString(),
+        status,
+        elapsedMs: Math.max(0, Math.round(monotonicNow() - requestStartedMonotonicMs)),
+        errorCategory: error ? sourceIpPreflightErrorCategory(error) : ''
+      };
+      try {
+        store.record(sample);
+      } catch (storeError) {
+        safeCallback(options.onError, storeError, { operation: 'source-ip-probe-persist', ip });
+      }
+      const result = {
+        ...sample,
+        ok: isProbeSuccessStatus(status),
+        sequence: index + 1,
+        sourceCount: ips.length,
+        requestStartedAt: new Date(requestStartedAtMs).toISOString(),
+        error: error ? String(error?.message || error).slice(0, 160) : ''
+      };
+      results.push(result);
+      safeCallback(options.onResult, result);
+      if (index < ips.length - 1 && !stopped) {
+        await sleep(randomIntegerInclusive(
+          SOURCE_IP_PROBE_BETWEEN_IP_MIN_MS,
+          SOURCE_IP_PROBE_BETWEEN_IP_MAX_MS,
+          random
+        ));
+      }
+    }
+    const completedAtMs = now();
+    const summary = {
+      ok: !stopped && ips.length > 0 && results.length === ips.length,
+      stopped,
+      roundStartedAt: new Date(startedAtMs).toISOString(),
+      roundCompletedAt: new Date(completedAtMs).toISOString(),
+      elapsedMs: Math.max(0, Math.round(monotonicNow() - startedMonotonicMs)),
+      discoveredCount: ips.length,
+      requestCount,
+      successCount: results.filter(result => result.ok).length,
+      failureCount: results.filter(result => !result.ok).length,
+      results: results.map(result => ({
+        ip: result.ip,
+        status: result.status,
+        elapsedMs: result.elapsedMs,
+        ok: result.ok,
+        errorCategory: result.errorCategory
+      }))
+    };
+    lastRound = summary;
+    if (scheduleNext && !stopped) scheduleNextRound();
+    safeCallback(options.onRound, summary);
+    return summary;
+  }
+
+  function runRound(runOptions = {}) {
+    if (activeRoundPromise) return activeRoundPromise;
+    if (stopped && runOptions.force !== true) return Promise.resolve({ ok: false, skipped: true, reason: 'stopped' });
+    const promise = executeRound(runOptions.scheduleNext !== false);
+    activeRoundPromise = promise.finally(() => {
+      activeRoundPromise = null;
+    });
+    return activeRoundPromise;
+  }
+
+  return {
+    file: store.file,
+    store,
+    start() {
+      if (!stopped) return activeRoundPromise || Promise.resolve(lastRound);
+      stopped = false;
+      return runRound();
+    },
+    stop() {
+      stopped = true;
+      nextRoundAtMs = 0;
+      if (timer) clearTimer(timer);
+      timer = null;
+    },
+    runRound,
+    selectSourceIps(discoveredIps, selectOptions = {}) {
+      const nowMs = Number.isFinite(Number(selectOptions.nowMs)) ? Number(selectOptions.nowMs) : now();
+      const result = selectSourceIpsFromProbeHistory(
+        store.snapshot(),
+        discoveredIps,
+        { ...selectOptions, nowMs, retentionMs }
+      );
+      if (!result.ok && nextRoundAtMs > nowMs) {
+        result.sourceIpPreflight.nextRetryAt = new Date(nextRoundAtMs).toISOString();
+      }
+      return result;
+    },
+    status() {
+      return {
+        interfaceName,
+        file: store.file,
+        timeoutMs,
+        retentionMs,
+        stopped,
+        inFlight: Boolean(activeRoundPromise),
+        nextRoundAt: nextRoundAtMs ? new Date(nextRoundAtMs).toISOString() : '',
+        lastRound,
+        store: store.status()
+      };
+    }
+  };
+}
+
+async function runSourceIpProbeSelfTest() {
+  const tmp = fs.mkdtempSync(path.join(require('os').tmpdir(), 'grasp-rat-source-ip-probe-'));
+  try {
+    const nowMs = Date.parse('2026-08-04T10:00:00.000Z');
+    const file = path.join(tmp, 'results.json');
+    const store = createSourceIpProbeStore({ file, now: () => nowMs });
+    store.record({ ip: '10.0.0.1', observedAt: new Date(nowMs - 60 * 60 * 1000).toISOString(), status: 200, elapsedMs: 100 });
+    store.record({ ip: '10.0.0.1', observedAt: new Date(nowMs - 1000).toISOString(), status: 200, elapsedMs: 130 });
+    store.record({ ip: '10.0.0.2', observedAt: new Date(nowMs - 60 * 60 * 1000).toISOString(), status: 200, elapsedMs: 500 });
+    store.record({ ip: '10.0.0.2', observedAt: new Date(nowMs - 1000).toISOString(), status: 403, elapsedMs: 90 });
+    store.record({ ip: '10.0.0.3', observedAt: new Date(nowMs - 60 * 60 * 1000).toISOString(), status: 200, elapsedMs: 300 });
+    store.record({ ip: '10.0.0.5', observedAt: new Date(nowMs - 30 * 60 * 1000).toISOString(), status: 200, elapsedMs: 220 });
+    store.record({ ip: '10.0.0.4', observedAt: new Date(nowMs - 25 * 60 * 60 * 1000).toISOString(), status: 200, elapsedMs: 10 });
+    const selection = selectSourceIpsFromProbeHistory(
+      store.snapshot(),
+      ['10.0.0.1', '10.0.0.2', '10.0.0.3', '10.0.0.4', '10.0.0.5'],
+      { nowMs }
+    );
+    const selectionOk = Boolean(
+      selection.ok
+        && selection.availableIps.length === 3
+        && selection.availableIps.includes('10.0.0.1')
+        && selection.availableIps.includes('10.0.0.3')
+        && selection.availableIps.includes('10.0.0.5')
+        && !selection.availableIps.includes('10.0.0.4')
+        && !selection.availableIps.includes('10.0.0.2')
+        && store.snapshot().samples.every(sample => sample.ip !== '10.0.0.4')
+        && ((fs.statSync(file).mode & 0o777) === 0o600)
+    );
+
+    const requestOrder = [];
+    const waits = [];
+    let activeRequests = 0;
+    let maxActiveRequests = 0;
+    const scheduler = createSourceIpProbeScheduler({
+      gameOrigin: 'https://game.example',
+      file: path.join(tmp, 'scheduler.json'),
+      now: () => nowMs,
+      monotonicNow: () => 0,
+      random: () => 0,
+      discoverIps: () => ['10.0.0.13', '10.0.0.11', '10.0.0.12'],
+      request: async (_origin, ip) => {
+        activeRequests += 1;
+        maxActiveRequests = Math.max(maxActiveRequests, activeRequests);
+        requestOrder.push(ip);
+        await Promise.resolve();
+        activeRequests -= 1;
+        return { status: 200 };
+      },
+      sleep: async delayMs => { waits.push(delayMs); },
+      onResult: result => { if (result.sequence !== requestOrder.length) throw new Error('unexpected probe sequence'); }
+    });
+    const round = await scheduler.start();
+    const scheduledDelay = Date.parse(scheduler.status().nextRoundAt) - nowMs;
+    scheduler.stop();
+    const schedulerOk = Boolean(
+      round.ok
+        && JSON.stringify(requestOrder) === JSON.stringify(['10.0.0.11', '10.0.0.12', '10.0.0.13'])
+        && waits.length === 2
+        && waits.every(delayMs => delayMs >= SOURCE_IP_PROBE_BETWEEN_IP_MIN_MS && delayMs <= SOURCE_IP_PROBE_BETWEEN_IP_MAX_MS)
+        && scheduledDelay >= SOURCE_IP_PROBE_BETWEEN_ROUND_MIN_MS
+        && scheduledDelay <= SOURCE_IP_PROBE_BETWEEN_ROUND_MAX_MS
+        && maxActiveRequests === 1
+    );
+    return {
+      ok: selectionOk && schedulerOk,
+      selection: {
+        ok: selectionOk,
+        selected: selection.availableIps,
+        candidateCount: selection.diagnostics.candidates.length,
+        retainedSamples: store.snapshot().samples.length
+      },
+      scheduler: {
+        ok: schedulerOk,
+        requestOrder,
+        waits,
+        scheduledDelay,
+        maxActiveRequests
+      }
+    };
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+module.exports = {
+  SOURCE_IP_PROBE_BETWEEN_IP_MAX_MS,
+  SOURCE_IP_PROBE_BETWEEN_IP_MIN_MS,
+  SOURCE_IP_PROBE_BETWEEN_ROUND_MAX_MS,
+  SOURCE_IP_PROBE_BETWEEN_ROUND_MIN_MS,
+  SOURCE_IP_PROBE_HALF_LIFE_MS,
+  SOURCE_IP_PROBE_REQUIRED_COUNT,
+  SOURCE_IP_PROBE_RETENTION_MS,
+  SOURCE_IP_PROBE_TIMEOUT_MS,
+  createSourceIpProbeScheduler,
+  createSourceIpProbeStore,
+  normalizeProbeHistory,
+  normalizeProbeSample,
+  readSourceIpProbeHistory,
+  runSourceIpProbeSelfTest,
+  selectSourceIpsFromProbeHistory,
+  sourceIpProbeMetrics,
+  writeSourceIpProbeHistory
+};

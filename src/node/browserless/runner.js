@@ -80,6 +80,7 @@ const {
   DEFAULT_SOURCE_IP_INTERFACE,
   SOURCE_IP_PREFLIGHT_INSUFFICIENT_COOLDOWN_MS,
   SOURCE_IP_PREFLIGHT_REQUIRED_COUNT,
+  discoverInterfaceIpv4,
   ensureSourceIpPreflight,
   normalizeSourceIpPreflight,
   requestAnonymousGameRoot,
@@ -110,6 +111,7 @@ const {
   summarizeSnapshotPayload
 } = require('./session-client');
 const { runCloudflareChallengeSelfTest } = require('./cloudflare-challenge');
+const { runSourceIpProbeSelfTest } = require('./source-ip-probe');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
@@ -157,6 +159,7 @@ function publicConfig(config) {
     leaveRetryMs: Number(config.leaveRetryMs || 0),
     leaveHedgeMs: Number(config.leaveHedgeMs || 0),
     leaveDangerHedgeMs: Number(config.leaveDangerHedgeMs || 0),
+    sourceIpProbeTimeoutMs: Number(config.sourceIpProbeTimeoutMs || 0),
     decisionIntervalMs: Number(config.decisionIntervalMs || 0),
     loopDelayMs: Number(config.loopDelayMs || 0),
     actionSettlementRecoveryMaxMs: actionSettlementRecoveryMaxMs(config),
@@ -1966,6 +1969,56 @@ async function runBrowserlessRunner(config, deps = {}) {
 
   const runLoginSourceIpPreflight = async () => {
     const stateBefore = readBrowserlessStateFile(stateFile);
+    if (deps.sourceIpProbe && typeof deps.sourceIpProbe.selectSourceIps === 'function') {
+      const reusable = reusableSourceIpPreflight(stateBefore);
+      if (reusable) {
+        const reusedAt = new Date(now()).toISOString();
+        const sourceIpPreflight = normalizeSourceIpPreflight({
+          ...reusable.sourceIpPreflight,
+          phase: 'ready',
+          reason: 'source-ip-probe-reused-without-retest',
+          deferredForNextLoginPoint: false,
+          reuseWithoutRetest: false,
+          reusedAt
+        }, reusable.sourceIpPreflight.riskCount);
+        publishSourceIpNetwork({ sourceIpPreflight });
+        logStore.append('runner', 'source-ip-probe-reused', {
+          sourceIps: reusable.lifecycleSourceIps.slice(),
+          originalCompletedAt: reusable.sourceIpPreflight.completedAt || '',
+          reusedAt
+        });
+        return {
+          ok: true,
+          reused: true,
+          availableIps: reusable.lifecycleSourceIps.slice(),
+          sourceIpPreflight
+        };
+      }
+      const discoveredIps = typeof deps.discoverSourceIps === 'function'
+        ? deps.discoverSourceIps()
+        : discoverInterfaceIpv4(config.sourceIpInterface || DEFAULT_SOURCE_IP_INTERFACE, deps.networkInterfaces);
+      const result = deps.sourceIpProbe.selectSourceIps(discoveredIps, {
+        nowMs: now(),
+        requiredCount: SOURCE_IP_PREFLIGHT_REQUIRED_COUNT
+      });
+      logStore.append('runner', 'source-ip-probe-selection', {
+        availableIps: result.availableIps || [],
+        ok: Boolean(result.ok),
+        reason: result.reason || '',
+        diagnostics: result.diagnostics || null
+      });
+      if (result.ok) {
+        await commitSourceIpLifecycle(result.availableIps, {
+          sourceIpPreflight: result.sourceIpPreflight
+        });
+      } else {
+        await clearSourceIpLifecycle({
+          sourceIpPreflight: result.sourceIpPreflight,
+          reason: result.reason || 'source-ip-probe-insufficient'
+        });
+      }
+      return result;
+    }
     const result = await ensureSourceIpPreflight({
       gameOrigin: config.gameOrigin,
       interfaceName: DEFAULT_SOURCE_IP_INTERFACE,
@@ -3378,26 +3431,33 @@ async function runBrowserlessRunner(config, deps = {}) {
       }
       if (loginPreflightResult?.insufficient || loginPreflightResult?.reason === 'source-ip-preflight-insufficient') {
         const insufficientStatus = loginPreflightResult.sourceIpPreflight || readBrowserlessStateFile(stateFile).network?.sourceIpPreflight || {};
+        const cachedProbeWait = loginPreflightResult.cached === true;
+        const cachedRetryAtMs = Date.parse(String(insufficientStatus.nextRetryAt || ''));
+        const cachedDelayMs = cachedRetryAtMs > now()
+          ? cachedRetryAtMs - now()
+          : Math.max(1000, Number(config.loopDelayMs || 30000));
+        const cooldownReason = cachedProbeWait ? 'source-ip-probe-waiting' : 'source-ip-preflight-insufficient';
+        const cooldownMs = cachedProbeWait ? cachedDelayMs : SOURCE_IP_PREFLIGHT_INSUFFICIENT_COOLDOWN_MS;
         const cooldownPlan = {
           continue: true,
-          reason: 'source-ip-preflight-insufficient',
-          safetyReason: 'source-ip-preflight-insufficient',
-          delayMs: SOURCE_IP_PREFLIGHT_INSUFFICIENT_COOLDOWN_MS,
+          reason: cooldownReason,
+          safetyReason: cooldownReason,
+          delayMs: cooldownMs,
           explicitDelay: true,
-          explicitCooldown: true,
+          explicitCooldown: !cachedProbeWait,
           sourceIpPreflight: insufficientStatus,
-          error: 'source-ip-preflight-insufficient'
+          error: cooldownReason
         };
         updateState({
           runner: {
             currentAction: sourceIpPreflightAction(insufficientStatus, {
-              nextRunAt: new Date(now() + SOURCE_IP_PREFLIGHT_INSUFFICIENT_COOLDOWN_MS).toISOString()
+              nextRunAt: new Date(now() + cooldownMs).toISOString()
             }),
             gameplayDeadline: {
-              type: 'source-ip-preflight-insufficient',
-              reason: 'source-ip-preflight-insufficient',
-              explicit: true,
-              until: new Date(now() + SOURCE_IP_PREFLIGHT_INSUFFICIENT_COOLDOWN_MS).toISOString()
+              type: cooldownReason,
+              reason: cooldownReason,
+              explicit: !cachedProbeWait,
+              until: new Date(now() + cooldownMs).toISOString()
             }
           }
         }, { updatedAt: new Date(now()).toISOString() });
@@ -4605,6 +4665,69 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
     };
   })();
 
+  const cachedProbeSelection = await (async () => {
+    const config = buildConfig('cached-probe-selection');
+    let nowMs = Date.UTC(2026, 7, 2, 8, 0, 0);
+    let requestCount = 0;
+    let canarySourceIps = [];
+    const selectedIps = ['10.0.0.61', '10.0.0.62', '10.0.0.63'];
+    const sourceIpProbe = {
+      selectSourceIps: discoveredIps => {
+        if (JSON.stringify(discoveredIps) !== JSON.stringify(selectedIps)) {
+          throw new Error('cached source IP probe received unexpected discovery');
+        }
+        return {
+          ok: true,
+          cached: true,
+          reason: 'source-ip-probe-selected',
+          availableIps: selectedIps.slice(),
+          sourceIpPreflight: {
+            phase: 'ready',
+            reason: 'source-ip-probe-selected',
+            queuePhase: 'cached-history',
+            completedAt: new Date(nowMs).toISOString(),
+            discoveredCount: selectedIps.length,
+            ordinaryQueueCount: selectedIps.length,
+            availableIps: selectedIps.slice(),
+            availableCount: selectedIps.length,
+            requiredCount: 3,
+            riskCount: 0
+          },
+          diagnostics: { selectedAt: new Date(nowMs).toISOString(), candidates: [] }
+        };
+      }
+    };
+    const result = await runBrowserlessRunner(config, {
+      ...baseDeps,
+      now: () => nowMs,
+      monotonicNow: () => 0,
+      sourceIpProbe,
+      discoverSourceIps: () => selectedIps.slice(),
+      sourceIpPreflightRequest: async () => {
+        requestCount += 1;
+        throw new Error('cached source IP selection performed an anonymous request');
+      },
+      runReadOnlyOnce: async (_runtimeConfig, options) => {
+        canarySourceIps = _runtimeConfig.sourceIps.slice();
+        return successfulCanary(nowMs, options, 'source-ip-cached-selection');
+      }
+    });
+    const state = readBrowserlessStateFile(stateFilePath(config));
+    return {
+      ok: Boolean(
+        result.ok
+          && requestCount === 0
+          && JSON.stringify(canarySourceIps) === JSON.stringify(selectedIps)
+          && JSON.stringify(state.network.lifecycleSourceIps) === JSON.stringify(selectedIps)
+          && state.network.sourceIpPreflight.phase === 'active'
+      ),
+      requestCount,
+      canarySourceIps,
+      lifecycleSourceIps: state.network.lifecycleSourceIps,
+      phase: state.network.sourceIpPreflight.phase
+    };
+  })();
+
   return {
     ok: Boolean(
       immediate.ok
@@ -4614,6 +4737,7 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
         && insufficientRestartCooldown.ok
         && genericFailureGate.ok
         && confirmedLeaveClears.ok
+        && cachedProbeSelection.ok
     ),
     immediate,
     deferredRestartReuse,
@@ -4621,7 +4745,8 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
     loginFailureRetest,
     insufficientRestartCooldown,
     genericFailureGate,
-    confirmedLeaveClears
+    confirmedLeaveClears,
+    cachedProbeSelection
   };
 }
 
@@ -4779,6 +4904,7 @@ async function runCriticalLatencyExitRegressionSelfTest() {
 async function runBrowserlessRunnerSelfTest() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-browserless-runner-'));
   try {
+    const sourceIpProbe = await runSourceIpProbeSelfTest();
     const sourceIpPreflight = await runSourceIpPreflightSelfTest();
     const sourceIpPreflightRunner = await runSourceIpPreflightRunnerIntegrationSelfTest(tmp);
     const criticalLatencyExitRegression = await runCriticalLatencyExitRegressionSelfTest();
@@ -6763,7 +6889,8 @@ async function runBrowserlessRunnerSelfTest() {
     const text = fs.readFileSync(runnerLog, 'utf8');
     return {
       ok: Boolean(
-        dryRun.ok
+        sourceIpProbe.ok
+        && dryRun.ok
         && sourceIpPreflight.ok
         && sourceIpPreflightRunner.ok
         && criticalLatencyExitRegression.ok
@@ -6831,6 +6958,7 @@ async function runBrowserlessRunnerSelfTest() {
         && complexCombatMainThreadBudget.canaryOk
       ),
       establishedCombatLootPriority: establishedCombatLootPriorityTest,
+      sourceIpProbe,
       sourceIpPreflight,
       sourceIpPreflightRunner,
       criticalLatencyExitRegression,

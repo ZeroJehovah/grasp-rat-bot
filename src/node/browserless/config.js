@@ -45,6 +45,7 @@ const DEFAULTS = {
   leaveHedgeMs: 1000,
   leaveDangerHedgeMs: 350,
   httpTimeoutMs: 10000,
+  sourceIpProbeTimeoutMs: 60000,
   decisionIntervalMs: 1000,
   loopDelayMs: 30000,
   actionSettlementRecoveryMaxMs: 10000,
@@ -210,6 +211,7 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     leaveHedgeMs: numberEnv(env.GRASP_RAT_BROWSERLESS_LEAVE_HEDGE_MS, DEFAULTS.leaveHedgeMs),
     leaveDangerHedgeMs: numberEnv(env.GRASP_RAT_BROWSERLESS_LEAVE_DANGER_HEDGE_MS, DEFAULTS.leaveDangerHedgeMs),
     httpTimeoutMs: numberEnv(env.GRASP_RAT_BROWSERLESS_HTTP_TIMEOUT_MS, DEFAULTS.httpTimeoutMs),
+    sourceIpProbeTimeoutMs: numberEnv(env.GRASP_RAT_BROWSERLESS_SOURCE_IP_PROBE_TIMEOUT_MS, DEFAULTS.sourceIpProbeTimeoutMs),
     decisionIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_DECISION_INTERVAL_MS, DEFAULTS.decisionIntervalMs),
     loopDelayMs: numberEnv(env.GRASP_RAT_BROWSERLESS_LOOP_DELAY_MS, DEFAULTS.loopDelayMs),
     actionSettlementRecoveryMaxMs: Math.min(30000, Math.max(3000, numberEnv(
@@ -555,6 +557,8 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.sourceIps = listEnv(argv[++i] || '', []);
     } else if (arg === '--source-ip-interface') {
       config.sourceIpInterface = String(argv[++i] || config.sourceIpInterface).trim() || config.sourceIpInterface;
+    } else if (arg === '--source-ip-probe-timeout-ms') {
+      config.sourceIpProbeTimeoutMs = numberEnv(argv[++i], config.sourceIpProbeTimeoutMs);
     } else if (arg === '--login-point-x') {
       config.loginPointX = numberEnv(argv[++i], config.loginPointX);
     } else if (arg === '--login-point-y') {
@@ -695,6 +699,7 @@ function usage() {
     '  --source-ip <ip>        Bind browserless HTTP/WS outbound sockets to this local source IP',
     '  --source-ips <list>     Legacy compatibility pool; new login candidates come from the enp0s6 interface',
     '  --source-ip-interface <name>  Fixed login-preflight interface; only enp0s6 is accepted',
+    '  --source-ip-probe-timeout-ms <ms>  Anonymous homepage probe timeout. Default: 60000',
     '  --login-point-x <cm>      Manual login point x for canary safety',
     '  --login-point-y <cm>      Manual login point y for canary safety',
     '  --login-point-hp <hp>     Manual login point HP context for canary safety',
