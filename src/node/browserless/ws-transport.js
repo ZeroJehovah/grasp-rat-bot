@@ -109,9 +109,14 @@ function isWebSocketConnectAbortError(error) {
 
 function createWebSocket(runtime, wsUrl, options = {}) {
   if (!runtime.supportsOptions) return new runtime.WebSocket(wsUrl);
+  const localAddress = String(options.localAddress || '').trim();
+  const family = localAddress
+    ? (localAddress.includes(':') ? 6 : 4)
+    : undefined;
   return new runtime.WebSocket(wsUrl, [], {
     headers: { Origin: options.gameOrigin || DEFAULT_GAME_ORIGIN },
-    localAddress: options.localAddress || undefined,
+    localAddress: localAddress || undefined,
+    ...(family ? { family } : {}),
     perMessageDeflate: false
   });
 }
