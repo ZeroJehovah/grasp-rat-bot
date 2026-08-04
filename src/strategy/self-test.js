@@ -2463,12 +2463,13 @@ function runStrategyModuleSelfTests() {
     emergencyDirection: { dx: -1, dy: 0 }
   }, { minimumCpaCm: 200 });
   results.push({
-    name: 'combat-movement-prefers-safe-strategy-then-safe-current-and-only-uses-emergency-dodge-for-real-risk',
+    name: 'combat-movement-prefers-safe-strategy-over-stale-pending-hold-and-only-uses-emergency-dodge-for-real-risk',
     passed: strategicMove.source === 'strategic-safe'
       && strategicMove.dx === 1 && strategicMove.dy === 0
       && heldMove.source === 'current-safe-hold'
       && heldMove.dx === 0 && heldMove.dy === 1
-      && pendingMove.source === 'pending-safe-hold'
+      && pendingMove.source === 'strategic-safe'
+      && pendingMove.dx === 1 && pendingMove.dy === 0
       && emergencyMove.source === 'emergency-dodge'
       && emergencyMove.dx === -1 && emergencyMove.dy === 0
   });

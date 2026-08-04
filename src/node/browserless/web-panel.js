@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.04.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.04.2';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -113,6 +113,16 @@ function missCloseExitReasonTextCore(missClose = {}) {
   }
   if (evidence.length) text += `（${evidence.join('，')}）`;
   return `${text}，为避免继续低效追击而主动退出`;
+}
+
+function recoveryContactExitReasonTextCore(status = {}, reason = '') {
+  if (String(reason || '') !== 'recovery-low-hp-contact-leave') return '';
+  const trigger = String(status?.recentExit?.recoveryContact?.evidence?.trigger || '');
+  if (trigger === 'real-collision-bullet') return '低血量恢复时检测到碰撞路径来弹，主动退出';
+  if (trigger === 'target-firing') return '低血量恢复时检测到活动玩家开火，主动退出';
+  if (trigger === 'entered-attack-range') return '低血量恢复时活动玩家进入攻击范围，主动退出';
+  if (trigger === 'direct-closing-confirmed') return '低血量恢复时确认活动玩家持续接近，主动退出';
+  return '';
 }
 
 function restartDrainBlockedReasonTextCore(input = {}) {
@@ -584,6 +594,7 @@ function renderBrowserlessWebPanel() {
     const panelSessionFlags = ${panelSessionFlagsCore.toString()};
     const lastExitPanelVisible = ${lastExitPanelVisibleCore.toString().replace('panelSessionFlagsCore', 'panelSessionFlags')};
     const missCloseExitReasonText = ${missCloseExitReasonTextCore.toString()};
+    const recoveryContactExitReasonText = ${recoveryContactExitReasonTextCore.toString()};
     const restartDrainBlockedReasonText = ${restartDrainBlockedReasonTextCore.toString()};
     const mapMarkerKey = ${mapMarkerKeyCore.toString()};
     const mapAnimationProgress = ${mapAnimationProgressCore.toString()};
@@ -1405,6 +1416,8 @@ function renderBrowserlessWebPanel() {
     }
     function dangerousPlayerExitReasonText(status, reason) {
       const raw = String(reason || '');
+      const recoveryContactText = recoveryContactExitReasonText(status, raw);
+      if (recoveryContactText) return recoveryContactText;
       if (raw === 'combat-miss-close-timeout-leave') {
         const detail = missCloseExitReasonText(status.recentExit?.missClose || status.combat?.exit?.missClose || {});
         if (detail) return detail;
@@ -3467,6 +3480,7 @@ module.exports = {
   mapAnimationProgressCore,
   mapMarkerKeyCore,
   missCloseExitReasonTextCore,
+  recoveryContactExitReasonTextCore,
   nearbyCoinIconCore,
   panelSessionFlagsCore,
   restartDrainBlockedReasonTextCore,

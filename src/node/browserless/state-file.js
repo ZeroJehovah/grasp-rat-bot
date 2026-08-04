@@ -447,6 +447,32 @@ function compactString(value, maxLength = 160) {
   return text.length > maxLength ? text.slice(0, maxLength - 1) + '...' : text;
 }
 
+function compactRecoveryContact(value) {
+  if (!value || typeof value !== 'object') return null;
+  const evidence = value.evidence && typeof value.evidence === 'object'
+    ? value.evidence
+    : {};
+  if (!Object.keys(evidence).length && !Object.keys(value).length) return null;
+  return {
+    retained: compactBoolean(value.retained),
+    evidence: {
+      trigger: compactString(evidence.trigger, 48),
+      firing: compactBoolean(evidence.firing),
+      realBullet: compactBoolean(evidence.realBullet),
+      inRange: compactBoolean(evidence.inRange),
+      directClosing: compactBoolean(evidence.directClosing),
+      velocityDirect: compactBoolean(evidence.velocityDirect),
+      historyDirect: compactBoolean(evidence.historyDirect),
+      closingSpeed: compactNumber(evidence.closingSpeed),
+      closingAlignment: compactNumber(evidence.closingAlignment),
+      closingConfirmations: compactNumber(evidence.closingConfirmations),
+      confirmationsRequired: compactNumber(evidence.confirmationsRequired),
+      selfHp: compactNumber(evidence.selfHp),
+      lowHpThreshold: compactNumber(evidence.lowHpThreshold)
+    }
+  };
+}
+
 function compactTransportHealth(value) {
   if (!value || typeof value !== 'object') return null;
   const activity = value.activity && typeof value.activity === 'object' ? value.activity : {};
@@ -2592,6 +2618,17 @@ function compactExit(event) {
   const missClose = combatExit.missClose && typeof combatExit.missClose === 'object'
     ? combatExit.missClose
     : {};
+  const recoveryContact = event.recoveryContact && typeof event.recoveryContact === 'object'
+    ? event.recoveryContact
+    : (event.action?.recoveryContact && typeof event.action.recoveryContact === 'object'
+        ? event.action.recoveryContact
+        : (decision.action?.recoveryContact && typeof decision.action.recoveryContact === 'object'
+            ? decision.action.recoveryContact
+            : (detail.action?.recoveryContact && typeof detail.action.recoveryContact === 'object'
+                ? detail.action.recoveryContact
+                : (combatExit.recoveryContact && typeof combatExit.recoveryContact === 'object'
+                    ? combatExit.recoveryContact
+                    : {}))));
   const sourceSelf = decision.self || detail.self || decision.input?.self || combat.self || null;
   const sourceTarget = event.target || detail.target || decision.target || combatExit.target || combat.target || null;
   const combatTarget = combat.target || combat.dryRun?.target || null;
@@ -2784,6 +2821,7 @@ function compactExit(event) {
     minHpGap: compactNumber(event.minHpGap ?? detail.minHpGap ?? combatExit.minHpGap),
     targetHpSource: compactString(combatExit.targetHpSource, 80),
     engagedTargets: compactEngagedExitTargets(combatExit.engagedTargets),
+    recoveryContact: compactRecoveryContact(recoveryContact),
     missClose: Object.keys(missClose).length
       ? {
           timeoutMs: compactNumber(missClose.timeoutMs),

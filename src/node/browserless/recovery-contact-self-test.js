@@ -9,6 +9,9 @@ const {
 const {
   updateRecoveryContactGuardCore
 } = require('../../strategy/recovery-contact-guard');
+const {
+  recoveryContactExitReasonTextCore
+} = require('./web-panel');
 
 function recoveryAction() {
   return {
@@ -330,6 +333,25 @@ function runRecoveryContactSelfTest() {
     assert.strictEqual(synced, true);
     assert.strictEqual(adapter.getState().recoveryContactGuard.observedAt, 2000);
     cases.push('worker-state-patch-preserves-newer-realtime-guard');
+  }
+
+  {
+    const status = {
+      recentExit: {
+        recoveryContact: {
+          evidence: { trigger: 'real-collision-bullet' }
+        }
+      }
+    };
+    assert.strictEqual(
+      recoveryContactExitReasonTextCore(status, 'recovery-low-hp-contact-leave'),
+      '低血量恢复时检测到碰撞路径来弹，主动退出'
+    );
+    assert.strictEqual(
+      recoveryContactExitReasonTextCore({ recentExit: { recoveryContact: { evidence: { trigger: 'direct-closing-confirmed' } } } }, 'recovery-low-hp-contact-leave'),
+      '低血量恢复时确认活动玩家持续接近，主动退出'
+    );
+    cases.push('panel-recovery-contact-reason-follows-structured-trigger');
   }
 
   return { ok: true, cases };

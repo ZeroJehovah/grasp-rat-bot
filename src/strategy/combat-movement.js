@@ -363,18 +363,11 @@ function selectCombatMovementArbitrationCore(input = {}, options = {}) {
   const baselineSafe = movementThreatSafeCore(baselineThreat, minimumCpaCm);
   const pendingActive = Boolean(input.pendingActive && pendingDirection);
 
-  if (pendingActive && baselineSafe) {
-    return {
-      ...baselineDirection,
-      source: 'pending-safe-hold',
-      strategicSafe,
-      baselineSafe,
-      minimumCpaCm,
-      selectedThreat: baselineThreat,
-      strategicThreat,
-      baselineThreat
-    };
-  }
+  // A pending command is only a safety fallback.  It may be the tail of a
+  // lateral Dodge generation, so preferring it over an equally safe strategic
+  // direction can keep a stale side/retreat vector alive until the target is
+  // out of range.  Realtime threat safety still wins below when the strategic
+  // direction is unsafe.
   if (strategicSafe) {
     return {
       ...strategicDirection,
@@ -383,6 +376,18 @@ function selectCombatMovementArbitrationCore(input = {}, options = {}) {
       baselineSafe,
       minimumCpaCm,
       selectedThreat: strategicThreat,
+      strategicThreat,
+      baselineThreat
+    };
+  }
+  if (pendingActive && baselineSafe) {
+    return {
+      ...baselineDirection,
+      source: 'pending-safe-hold',
+      strategicSafe,
+      baselineSafe,
+      minimumCpaCm,
+      selectedThreat: baselineThreat,
       strategicThreat,
       baselineThreat
     };
