@@ -1483,6 +1483,7 @@ async function runBrowserlessRunner(config, deps = {}) {
   let closeRuntimeHandlesOnReturn = false;
   try {
   let liveState = null;
+  let liveStatePersistencePending = false;
   if (publishLiveState) {
     try {
       publishLiveState(() => liveState);
@@ -1906,17 +1907,35 @@ async function runBrowserlessRunner(config, deps = {}) {
     const runnerPatch = preflightPatch
       ? { currentAction: sourceIpPreflightAction(preflightPatch) }
       : {};
-    const updated = updateState({
+    const statePatch = {
       network: patch,
       ...(Object.keys(runnerPatch).length ? { runner: runnerPatch } : {})
-    }, { updatedAt: new Date(now()).toISOString() });
-    persisted = updated;
+    };
+    const updatedAt = new Date(now()).toISOString();
     if (liveState) {
-      patchLiveState({
-        network: patch,
-        ...(Object.keys(runnerPatch).length ? { runner: runnerPatch } : {})
-      }, { updatedAt: new Date(now()).toISOString() });
+      // The realtime frame callback already owns a complete in-memory state
+      // snapshot.  Updating state.json synchronously here can block the
+      // WebSocket callback for more than the main-thread CPU budget.  Keep
+      // the small lifecycle patch visible to external readers by queueing it
+      // on the background IO worker; the self-test fallback remains
+      // synchronous when that worker is intentionally disabled.
+      const updated = patchLiveState(statePatch, { updatedAt });
+      if (backgroundIo?.writeJsonPatchAtomic) {
+        if (backgroundIo.writeJsonPatchAtomic(stateFile, {
+          ...statePatch,
+          updatedAt
+        })) {
+          liveStatePersistencePending = true;
+        } else {
+          updateState(statePatch, { updatedAt });
+        }
+      } else {
+        updateState(statePatch, { updatedAt });
+      }
+      return updated;
     }
+    const updated = updateState(statePatch, { updatedAt });
+    persisted = updated;
     return updated;
   };
 
@@ -2050,7 +2069,7 @@ async function runBrowserlessRunner(config, deps = {}) {
   };
 
   const markSourceIpLoginAttempt = () => {
-    const current = readBrowserlessStateFile(stateFile);
+    const current = liveState || readBrowserlessStateFile(stateFile);
     const preflight = normalizeSourceIpPreflight(
       current.network?.sourceIpPreflight,
       Object.keys(current.network?.sourceIpRisk || {}).length
@@ -2095,7 +2114,7 @@ async function runBrowserlessRunner(config, deps = {}) {
   };
 
   const markSourceIpLoginSuccess = canary => {
-    const current = readBrowserlessStateFile(stateFile);
+    const current = liveState || readBrowserlessStateFile(stateFile);
     const preflight = normalizeSourceIpPreflight(
       current.network?.sourceIpPreflight,
       Object.keys(current.network?.sourceIpRisk || {}).length
@@ -3853,6 +3872,15 @@ async function runBrowserlessRunner(config, deps = {}) {
       }
     });
     finalState.updatedAt = new Date(now()).toISOString();
+    if (liveStatePersistencePending && backgroundIo?.flush) {
+      try {
+        await backgroundIo.flush();
+      } catch (err) {
+        recordSupervisorError(err, { operation: 'live-state-persistence-flush' });
+        logStore.append('runner', 'live-state-persistence-flush-error', { error: errorMessage(err) });
+      }
+      liveStatePersistencePending = false;
+    }
     writeState(finalState);
     liveState = null;
     logStore.append('runner', result.ok ? 'runner-finish' : 'runner-stop', summarizeBrowserlessRunnerResult(result));
