@@ -340,6 +340,7 @@ function coinRouteSkipsHeldSingleCoinCore(self, route, choice, options = {}) {
   const choiceType = typeof options.choiceType === 'function' ? options.choiceType : value => String(value?.type || '');
   const choiceIdFrom = typeof options.choiceId === 'function' ? options.choiceId : value => String(value?.id ?? '');
   if (!self || !route || !choice || choiceType(choice) !== 'coin') return false;
+  if (typeof options.routeEligible === 'function' && options.routeEligible(route)) return false;
   if (String(choice.reason || '') === 'best-opportunity-coin-route' || coinRouteIdsFrom(choice).length) return false;
   if (typeof options.heldCoinEligible === 'function' && !options.heldCoinEligible(choice)) return false;
   const choiceId = choiceIdFrom(choice);
@@ -516,9 +517,13 @@ function pickCoinRouteOpportunityCore(self, coins, activeThreats, options = {}) 
     if (!legClear(self, anchor)) continue;
     const route = buildCoinRouteFromAnchorCore(self, anchor, candidates, activeThreats, routeOptions);
     if (!route) continue;
-    if (coinRouteSkipsCloserFirstCoinCore(self, route, candidates, routeOptions)) continue;
+    const routeThresholdEligible = typeof options.routeEligible === 'function'
+      && Boolean(options.routeEligible(route));
+    if (!routeThresholdEligible && coinRouteSkipsCloserFirstCoinCore(self, route, candidates, routeOptions)) continue;
     if (coinRouteSkipsCloserRoutePointCore(self, route, routeOptions)) continue;
-    if (coinRouteSkipsHeldSingleCoinCore(self, route, heldChoice, routeOptions)) continue;
+    // A nearby one-coin bait may wait for a better route, but it must not
+    // suppress a route that already clears the active profit threshold.
+    if (!routeThresholdEligible && coinRouteSkipsHeldSingleCoinCore(self, route, heldChoice, routeOptions)) continue;
     viableRoutes.push(route);
     const routeEligible = typeof options.routeEligible === 'function'
       ? Boolean(options.routeEligible(route))

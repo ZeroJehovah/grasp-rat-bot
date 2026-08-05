@@ -115,6 +115,7 @@ const {
   coinRouteActionMetaCore,
   coinRouteSkipsCloserFirstCoinCore,
   coinRouteSkipsCloserRoutePointCore,
+  coinRouteSkipsHeldSingleCoinCore,
   closerCoinRouteForFirstTargetCore,
   pickCoinRouteOpportunityCore
 } = require('./coin-route');
@@ -4387,6 +4388,52 @@ function runStrategyModuleSelfTests() {
       [{ drop_id: 'near', amount: 1, x: 10000, y: 0, distance: 10000 }],
       { ...routeOptions, closerCoinEligible: coin => Number(coin.amount || 0) >= 2 }
     ) === false
+  });
+
+  const heldSingleCoin = {
+    type: 'coin',
+    id: 'bait',
+    distance: 500,
+    amount: 1
+  };
+  const farEligibleRoute = {
+    drop_id: 'route-a',
+    amount: 1,
+    x: 10000,
+    y: 0,
+    distance: 10000,
+    value: 2,
+    staminaCost: 15000,
+    coinRoute: {
+      firstDistance: 10000,
+      value: 2,
+      staminaCost: 15000,
+      ids: ['route-a', 'route-b']
+    }
+  };
+  results.push({
+    name: 'coin-route-held-single-yields-to-eligible-route',
+    passed: coinRouteSkipsHeldSingleCoinCore(routeSelf, farEligibleRoute, heldSingleCoin, {
+      ...routeOptions,
+      nearbyFirstCoinDistance: 22000,
+      routeEligible: () => true
+    }) === false
+  });
+
+  const pickedRouteAroundHeldSingle = pickCoinRouteOpportunityCore(routeSelf, [
+    { drop_id: 'bait', amount: 1, x: 500, y: 0, distance: 500 },
+    { drop_id: 'route-a', amount: 1, x: 10000, y: 0, distance: 10000 },
+    { drop_id: 'route-b', amount: 1, x: 12000, y: 0, distance: 12000 }
+  ], [], {
+    ...routeOptions,
+    nearbyFirstCoinDistance: 22000,
+    staminaAffordable: cost => cost <= 20000,
+    routeEligible: route => Number(route.routeValue || route.totalValue || route.coinRoute?.value || 0) >= 2,
+    heldChoice: heldSingleCoin
+  });
+  results.push({
+    name: 'coin-route-pick-keeps-eligible-route-with-held-single',
+    passed: pickedRouteAroundHeldSingle?.coinRoute?.ids?.join(',') === 'route-a,route-b'
   });
 
   const beamRoute = buildCoinRouteFromAnchorCore(routeSelf, { drop_id: 'a', amount: 1, x: 10000, y: 0, distance: 10000 }, [
