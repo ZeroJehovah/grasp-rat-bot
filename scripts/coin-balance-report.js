@@ -14,11 +14,14 @@ const DEFAULT_DELAY_MS = 4000;
 const DEFAULT_TIMEOUT_MS = 20000;
 const BALANCE_LOG_TYPE = '1';
 const COIN_QUOTA_UNIT = 500000;
+const MONTHLY_KILL_STATS_LIMIT = 10;
 
 function parseArgs(args) {
   const out = {
     apiUrl: process.env.ELYSIVER_LOG_API_URL || DEFAULT_API_URL,
     month: '',
+    updateMonth: '',
+    updateDay: '',
     day: '',
     out: '',
     json: false,
@@ -31,6 +34,8 @@ function parseArgs(args) {
     const arg = args[i];
     if (arg === '--api-url') out.apiUrl = args[++i] || out.apiUrl;
     else if (arg === '--month') out.month = args[++i] || '';
+    else if (arg === '--update-month') out.updateMonth = args[++i] || '';
+    else if (arg === '--update-day') out.updateDay = args[++i] || '';
     else if (arg === '--day') out.day = args[++i] || '';
     else if (arg === '--out') out.out = path.resolve(args[++i] || out.out);
     else if (arg === '--json') out.json = true;
@@ -54,7 +59,7 @@ function positiveInt(value, fallback) {
 }
 
 function printHelp() {
-  console.log(`Usage: node scripts/coin-balance-report.js --month YYYY-MM [options]
+  console.log(`Usage: node scripts/coin-balance-report.js (--month YYYY-MM | --update-month YYYY-MM | --update-day YYYY-MM-DD | --day YYYY-MM-DD) [options]
 
 Fetches game coin balance-change logs from Elysiver and writes a monthly Markdown report.
 A local .env file is loaded automatically when present.
@@ -69,6 +74,8 @@ Auth environment variables:
 
 Options:
   --month YYYY-MM          Generate a natural-month report.
+  --update-month YYYY-MM   Fetch only dates missing from an existing monthly report.
+  --update-day YYYY-MM-DD  Fetch one missing date and merge it into its monthly report.
   --day YYYY-MM-DD         Fetch and summarize one day instead.
   --out <file>             Output Markdown path. Default: docs/reports/YYYY-MM/monthly-YYYY-MM.md
   --json                   Print JSON to stdout instead of Markdown.
@@ -248,6 +255,8 @@ function fetchPageWithCurl(url, auth, timeoutMs) {
     '--silent',
     '--show-error',
     '--location',
+    '--noproxy',
+    '*',
     '--max-time',
     String(Math.max(1, Math.ceil(numberOr(timeoutMs, DEFAULT_TIMEOUT_MS) / 1000))),
     '--connect-timeout',
@@ -525,6 +534,240 @@ function sumMonth(days) {
   });
 }
 
+function detailCount(day) {
+  return day.detailCount === undefined ? day.details.length : day.detailCount;
+}
+
+function renderSummaryRow(day) {
+  return `| ${day.day} | ${formatCoin(day.systemCoinGain)} | ${formatCoin(day.playerDropPickupGain)} | ${formatCoin(day.deathLoss)} | ${signedCoin(day.netCoinChange)} | ${detailCount(day)} | ${day.fetchedRecords} |`;
+}
+
+function renderDayDetailSection(day) {
+  const lines = [];
+  lines.push(`### ${day.day}`);
+  lines.push('');
+  lines.push(`拾取系统金币收益：${formatCoin(day.systemCoinGain)}；拾取玩家掉落金币收益：${formatCoin(day.playerDropPickupGain)}；死亡损失金币：${formatCoin(day.deathLoss)}；净金币变化：${signedCoin(day.netCoinChange)}。`);
+  lines.push('');
+  if (!day.details.length) {
+    lines.push('无拾取玩家掉落金币或死亡损失明细。');
+    return lines.join('\n');
+  }
+  lines.push('| 时间 | 玩家名 | 类型 | 金币变动 |');
+  lines.push('|---|---|---|---:|');
+  for (const detail of day.details) {
+    lines.push(`| ${detail.time} | ${escapeMarkdown(detail.playerName)} | ${detail.type} | ${signedCoin(detail.coinDelta)} |`);
+  }
+  return lines.join('\n');
+}
+
+function renderUnknownDaySection(day) {
+  const lines = [`### ${day.day}`, '', '| 时间 | event | 金币 | 额度变化 | 内容 |', '|---|---|---:|---:|---|'];
+  for (const item of day.unknownRecords) {
+    lines.push(`| ${item.time} | ${escapeMarkdown(item.event)} | ${formatCoin(item.amount)} | ${item.quotaDelta} | ${escapeMarkdown(item.content)} |`);
+  }
+  return lines.join('\n');
+}
+
+function aggregatePlayerStats(details, type) {
+  const players = new Map();
+  for (const detail of details.filter(item => item.type === type)) {
+    const playerName = String(detail.playerName || 'unknown');
+    const existing = players.get(playerName) || { playerName, coinTotal: 0, killCount: 0 };
+    existing.coinTotal += Math.abs(Number(detail.coinDelta || 0));
+    existing.killCount += 1;
+    players.set(playerName, existing);
+  }
+  return [...players.values()].sort((left, right) => (
+    right.coinTotal - left.coinTotal
+    || right.killCount - left.killCount
+    || left.playerName.localeCompare(right.playerName, 'zh-CN')
+  ));
+}
+
+function renderMonthlyPlayerStats(details) {
+  const deathStats = aggregatePlayerStats(details, '死亡');
+  const killStats = aggregatePlayerStats(details, '拾取').slice(0, MONTHLY_KILL_STATS_LIMIT);
+  const lines = [];
+  if (deathStats.length) {
+    lines.push('## 本月死亡统计');
+    lines.push('');
+    lines.push('| 玩家名称 | 损失金币 | 击杀次数 |');
+    lines.push('|---|---:|---:|');
+    for (const row of deathStats) {
+      lines.push(`| ${escapeMarkdown(row.playerName)} | ${formatCoin(row.coinTotal)} | ${row.killCount} |`);
+    }
+    lines.push('');
+  }
+  lines.push('## 本月击杀统计');
+  lines.push('');
+  if (!killStats.length) {
+    lines.push('无击杀记录。');
+    return lines.join('\n');
+  }
+  lines.push('| 玩家名称 | 收获金币 | 击杀次数 |');
+  lines.push('|---|---:|---:|');
+  for (const row of killStats) {
+    lines.push(`| ${escapeMarkdown(row.playerName)} | ${formatCoin(row.coinTotal)} | ${row.killCount} |`);
+  }
+  return lines.join('\n');
+}
+
+function parseMonthlyDetailRows(markdown) {
+  const details = [];
+  const rowPattern = /^\| \d{2}:\d{2}:\d{2} \| (.*) \| (拾取|死亡) \| ([+-]?(?:\d+(?:\.\d+)?|\.\d+)) \|$/gm;
+  for (const match of markdown.matchAll(rowPattern)) {
+    details.push({
+      playerName: match[1].replace(/\\\|/g, '|'),
+      type: match[2],
+      coinDelta: Number(match[3])
+    });
+  }
+  return details;
+}
+
+function removeTopLevelSection(markdown, heading) {
+  const marker = `## ${heading}`;
+  const markerIndex = markdown.indexOf(marker);
+  if (markerIndex < 0) return markdown;
+  const nextHeading = markdown.indexOf('\n## ', markerIndex + marker.length);
+  const suffixStart = nextHeading < 0 ? markdown.length : nextHeading + 1;
+  const prefix = markdown.slice(0, markerIndex).trimEnd();
+  const suffix = markdown.slice(suffixStart).trimStart();
+  return suffix ? `${prefix}\n\n${suffix}` : `${prefix}\n`;
+}
+
+function refreshMonthlyPlayerStats(markdown) {
+  let refreshed = removeTopLevelSection(markdown, '本月死亡统计');
+  refreshed = removeTopLevelSection(refreshed, '本月击杀统计');
+  const detailHeading = '## 拾取玩家掉落金币和死亡损失明细';
+  const detailIndex = refreshed.indexOf(detailHeading);
+  if (detailIndex < 0) throw new Error(`Cannot refresh monthly player stats: missing heading ${detailHeading}`);
+  const stats = renderMonthlyPlayerStats(parseMonthlyDetailRows(refreshed));
+  return `${refreshed.slice(0, detailIndex).trimEnd()}\n\n${stats}\n\n${refreshed.slice(detailIndex).trimStart()}`.trimEnd() + '\n';
+}
+
+function parseMonthlySummaryRows(markdown, month) {
+  const rows = new Map();
+  const rowPattern = /^\| (\d{4}-\d{2}-\d{2}) \| ([^|]+) \| ([^|]+) \| ([^|]+) \| ([^|]+) \| (\d+) \| (\d+) \|$/gm;
+  for (const match of markdown.matchAll(rowPattern)) {
+    const day = match[1];
+    if (!day.startsWith(`${month}-`)) continue;
+    rows.set(day, {
+      day,
+      systemCoinGain: Number(match[2].trim()),
+      playerDropPickupGain: Number(match[3].trim()),
+      deathLoss: Number(match[4].trim()),
+      netCoinChange: Number(match[5].trim()),
+      detailCount: Number(match[6]),
+      fetchedRecords: Number(match[7])
+    });
+  }
+  return rows;
+}
+
+function replaceLine(markdown, pattern, replacement) {
+  if (!pattern.test(markdown)) throw new Error(`Cannot merge monthly report: missing line ${pattern}`);
+  return markdown.replace(pattern, replacement);
+}
+
+function parseDatedSections(body) {
+  const sections = new Map();
+  for (const part of body.split(/(?=^### \d{4}-\d{2}-\d{2}$)/m)) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const match = trimmed.match(/^### (\d{4}-\d{2}-\d{2})$/m);
+    if (!match) throw new Error('Cannot merge monthly report: malformed dated section.');
+    sections.set(match[1], trimmed);
+  }
+  return sections;
+}
+
+function replaceDatedSectionArea(markdown, heading, newSections) {
+  const marker = `## ${heading}`;
+  const markerIndex = markdown.indexOf(marker);
+  if (markerIndex < 0) throw new Error(`Cannot merge monthly report: missing heading ${marker}`);
+  const bodyStart = markerIndex + marker.length;
+  const nextHeading = markdown.indexOf('\n## ', bodyStart);
+  const bodyEnd = nextHeading < 0 ? markdown.length : nextHeading;
+  const existing = parseDatedSections(markdown.slice(bodyStart, bodyEnd));
+  for (const [day, section] of newSections) {
+    if (existing.has(day)) throw new Error(`Cannot merge monthly report: date already covered: ${day}`);
+    existing.set(day, section);
+  }
+  const body = [...existing.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([, section]) => section)
+    .join('\n\n');
+  return `${markdown.slice(0, bodyStart)}\n\n${body}\n${markdown.slice(bodyEnd).replace(/^\n+/, '')}`;
+}
+
+function mergeMonthlyMarkdown(existing, month, newDays, generatedAt = new Date()) {
+  if (!existing.trim()) return renderMonthlyMarkdown(month, newDays, generatedAt);
+  if (!existing.startsWith(`# ${month} 金币余额变化记录\n`)) {
+    throw new Error(`Cannot merge monthly report: unexpected report heading for ${month}.`);
+  }
+  const rows = parseMonthlySummaryRows(existing, month);
+  if (!rows.size) throw new Error('Cannot merge monthly report: no daily summary rows found.');
+  for (const day of newDays) {
+    if (rows.has(day.day)) throw new Error(`Cannot merge monthly report: date already covered: ${day.day}`);
+    rows.set(day.day, day);
+  }
+  const sortedRows = [...rows.values()].sort((left, right) => left.day.localeCompare(right.day));
+  const totals = sortedRows.reduce((acc, day) => {
+    acc.systemCoinGain += day.systemCoinGain;
+    acc.playerDropPickupGain += day.playerDropPickupGain;
+    acc.deathLoss += day.deathLoss;
+    acc.netCoinChange += day.netCoinChange;
+    acc.detailCount += detailCount(day);
+    acc.fetchedRecords += day.fetchedRecords;
+    return acc;
+  }, { systemCoinGain: 0, playerDropPickupGain: 0, deathLoss: 0, netCoinChange: 0, detailCount: 0, fetchedRecords: 0 });
+  const existingUnknownMatch = existing.match(/^- 未识别记录数：(\d+)$/m);
+  const unknownCount = Number(existingUnknownMatch ? existingUnknownMatch[1] : 0)
+    + newDays.reduce((sum, day) => sum + day.unknownRecords.length, 0);
+
+  let merged = existing;
+  merged = replaceLine(merged, /^生成时间：.*$/m, `生成时间：${formatDateTime(Math.floor(generatedAt.getTime() / 1000))}（北京时间）`);
+  merged = replaceLine(merged, /^数据范围：.*$/m, `数据范围：${month}-01 00:00:00 到 ${sortedRows[sortedRows.length - 1].day} 23:59:59（北京时间；当天未结束时只统计到请求时刻）`);
+  merged = replaceLine(merged, /^- 拾取系统金币收益（总计）：.*$/m, `- 拾取系统金币收益（总计）：${formatCoin(totals.systemCoinGain)}`);
+  merged = replaceLine(merged, /^- 拾取玩家掉落金币收益（总计）：.*$/m, `- 拾取玩家掉落金币收益（总计）：${formatCoin(totals.playerDropPickupGain)}`);
+  merged = replaceLine(merged, /^- 死亡损失金币（总计）：.*$/m, `- 死亡损失金币（总计）：${formatCoin(totals.deathLoss)}`);
+  merged = replaceLine(merged, /^- 净金币变化：.*$/m, `- 净金币变化：${signedCoin(totals.netCoinChange)}`);
+  merged = replaceLine(merged, /^- API 记录数：.*$/m, `- API 记录数：${totals.fetchedRecords}`);
+  merged = replaceLine(merged, /^- 明细记录数：.*$/m, `- 明细记录数：${totals.detailCount}`);
+  if (existingUnknownMatch) {
+    merged = merged.replace(/^- 未识别记录数：.*$/m, `- 未识别记录数：${unknownCount}`);
+  } else if (unknownCount) {
+    merged = merged.replace(/(^- 明细记录数：.*$)/m, `$1\n- 未识别记录数：${unknownCount}`);
+  }
+
+  const summaryHeader = '|---|---:|---:|---:|---:|---:|---:|';
+  const summaryStart = merged.indexOf(summaryHeader);
+  if (summaryStart < 0) throw new Error('Cannot merge monthly report: missing daily summary table.');
+  const rowsStart = summaryStart + summaryHeader.length;
+  const rowsEnd = merged.indexOf('\n\n', rowsStart);
+  if (rowsEnd < 0) throw new Error('Cannot merge monthly report: malformed daily summary table.');
+  merged = `${merged.slice(0, rowsStart)}\n${sortedRows.map(renderSummaryRow).join('\n')}${merged.slice(rowsEnd)}`;
+
+  merged = replaceDatedSectionArea(
+    merged,
+    '拾取玩家掉落金币和死亡损失明细',
+    new Map(newDays.map(day => [day.day, renderDayDetailSection(day)]))
+  );
+  const newUnknownSections = new Map(newDays
+    .filter(day => day.unknownRecords.length)
+    .map(day => [day.day, renderUnknownDaySection(day)]));
+  if (newUnknownSections.size) {
+    if (merged.includes('\n## 未识别记录\n')) {
+      merged = replaceDatedSectionArea(merged, '未识别记录', newUnknownSections);
+    } else {
+      const body = [...newUnknownSections.values()].join('\n\n');
+      merged = `${merged.trimEnd()}\n\n## 未识别记录\n\n${body}\n`;
+    }
+  }
+  return refreshMonthlyPlayerStats(merged);
+}
+
 function renderMonthlyMarkdown(month, days, generatedAt = new Date()) {
   const totals = sumMonth(days);
   const lines = [];
@@ -548,8 +791,10 @@ function renderMonthlyMarkdown(month, days, generatedAt = new Date()) {
   lines.push('| 日期 | 拾取系统金币收益 | 拾取玩家掉落金币收益 | 死亡损失金币 | 净金币变化 | 明细数 | API记录数 |');
   lines.push('|---|---:|---:|---:|---:|---:|---:|');
   for (const day of days) {
-    lines.push(`| ${day.day} | ${formatCoin(day.systemCoinGain)} | ${formatCoin(day.playerDropPickupGain)} | ${formatCoin(day.deathLoss)} | ${signedCoin(day.netCoinChange)} | ${day.details.length} | ${day.fetchedRecords} |`);
+    lines.push(renderSummaryRow(day));
   }
+  lines.push('');
+  lines.push(renderMonthlyPlayerStats(days.flatMap(day => day.details)));
   lines.push('');
   lines.push('## 拾取玩家掉落金币和死亡损失明细');
   lines.push('');
@@ -597,10 +842,30 @@ async function run(options) {
     runSelfTest();
     return;
   }
-  if (!options.month && !options.day) throw new Error('Provide --month YYYY-MM or --day YYYY-MM-DD.');
-  if (options.month && options.day) throw new Error('Use either --month or --day, not both.');
+  const selectedModes = [options.month, options.updateMonth, options.updateDay, options.day].filter(Boolean);
+  if (!selectedModes.length) throw new Error('Provide --month YYYY-MM, --update-month YYYY-MM, --update-day YYYY-MM-DD, or --day YYYY-MM-DD.');
+  if (selectedModes.length > 1) throw new Error('Use only one report mode.');
   const auth = buildAuth(process.env);
   const client = new ApiClient(options, auth);
+  if (options.updateDay) {
+    assertDate(options.updateDay);
+    const month = options.updateDay.slice(0, 7);
+    const outPath = options.out || defaultMonthlyReportPath(month);
+    const existing = fs.existsSync(outPath) ? fs.readFileSync(outPath, 'utf8') : '';
+    if (existing) {
+      const covered = parseMonthlySummaryRows(existing, month);
+      if (covered.has(options.updateDay)) {
+        console.log(JSON.stringify({ outPath, fetchedDays: [], requests: 0, unchanged: true }, null, 2));
+        return;
+      }
+    }
+    const summary = await fetchDay(client, options.updateDay);
+    const report = mergeMonthlyMarkdown(existing, month, [summary]);
+    fs.mkdirSync(path.dirname(outPath), { recursive: true });
+    fs.writeFileSync(outPath, report, 'utf8');
+    console.log(JSON.stringify({ outPath, fetchedDays: [options.updateDay], requests: client.requestCount }, null, 2));
+    return;
+  }
   if (options.day) {
     const summary = await fetchDay(client, options.day);
     if (options.json) {
@@ -608,6 +873,27 @@ async function run(options) {
       return;
     }
     console.log(renderMonthlyMarkdown(options.day.slice(0, 7), [summary]));
+    return;
+  }
+  if (options.updateMonth) {
+    assertMonth(options.updateMonth);
+    const outPath = options.out || defaultMonthlyReportPath(options.updateMonth);
+    const existing = fs.existsSync(outPath) ? fs.readFileSync(outPath, 'utf8') : '';
+    const covered = existing ? new Set(parseMonthlySummaryRows(existing, options.updateMonth).keys()) : new Set();
+    const missingDays = reportDaysForMonth(options.updateMonth).filter(day => !covered.has(day));
+    const days = [];
+    for (const day of missingDays) days.push(await fetchDay(client, day));
+    if (!missingDays.length) {
+      const report = refreshMonthlyPlayerStats(existing);
+      const derivedUpdated = report !== existing;
+      if (derivedUpdated) fs.writeFileSync(outPath, report, 'utf8');
+      console.log(JSON.stringify({ outPath, fetchedDays: [], requests: 0, derivedUpdated, unchanged: !derivedUpdated }, null, 2));
+      return;
+    }
+    const report = mergeMonthlyMarkdown(existing, options.updateMonth, days);
+    fs.mkdirSync(path.dirname(outPath), { recursive: true });
+    fs.writeFileSync(outPath, report, 'utf8');
+    console.log(JSON.stringify({ outPath, fetchedDays: missingDays, requests: client.requestCount }, null, 2));
     return;
   }
   const days = [];
@@ -689,6 +975,44 @@ function runSelfTest() {
   assert(markdown.includes('| 00:00:02 | Alice | 拾取 | +12 |'));
   assert(markdown.includes('| 00:00:03 | Bob | 死亡 | -7 |'));
   assert(markdown.includes('死亡损失金币（总计）：7'));
+  assert(markdown.includes('## 本月死亡统计'));
+  assert(markdown.includes('| Bob | 7 | 1 |'));
+  assert(markdown.includes('## 本月击杀统计'));
+  assert(markdown.includes('| Alice | 12 | 1 |'));
+  assert(markdown.indexOf('## 本月击杀统计') < markdown.indexOf('## 拾取玩家掉落金币和死亡损失明细'));
+  assert(!renderMonthlyPlayerStats([summary.details[0]]).includes('## 本月死亡统计'));
+  const topTen = renderMonthlyPlayerStats(Array.from({ length: 11 }, (_, index) => ({
+    playerName: `Player${index + 1}`,
+    type: '拾取',
+    coinDelta: index + 1
+  })));
+  assert.strictEqual((topTen.match(/^\| Player\d+ \|/gm) || []).length, MONTHLY_KILL_STATS_LIMIT);
+  assert(topTen.includes('| Player11 | 11 | 1 |'));
+  assert(!topTen.includes('| Player1 | 1 | 1 |'));
+  const nextDay = {
+    ...summary,
+    day: '2026-06-30',
+    systemCoinGain: 2,
+    playerDropPickupGain: 3,
+    deathLoss: 1,
+    netCoinChange: 4,
+    fetchedRecords: 5,
+    details: [
+      { timestamp: 1782748801, time: '00:00:01', playerName: 'Alice', type: '拾取', coinDelta: 3 },
+      { timestamp: 1782748802, time: '00:00:02', playerName: 'Bob', type: '死亡', coinDelta: -1 }
+    ],
+    unknownRecords: []
+  };
+  const merged = mergeMonthlyMarkdown(markdown, '2026-06', [nextDay], new Date('2026-07-01T00:00:00Z'));
+  assert(merged.includes('| 2026-06-30 | 2 | 3 | 1 | +4 | 2 | 5 |'));
+  assert(merged.includes('- 净金币变化：+10'));
+  assert(merged.includes('| Bob | 8 | 2 |'));
+  assert(merged.includes('| Alice | 15 | 2 |'));
+  assert(merged.includes('### 2026-06-30'));
+  assert.strictEqual((merged.match(/^\| 2026-06-29 /gm) || []).length, 1);
+  const initial = mergeMonthlyMarkdown('', '2026-08', [{ ...summary, day: '2026-08-01' }], new Date('2026-08-02T00:00:00Z'));
+  assert(initial.startsWith('# 2026-08 金币余额变化记录\n'));
+  assert(initial.includes('| 2026-08-01 | 1 | 12 | 7 | +6 | 2 | 4 |'));
   assert.strictEqual(defaultMonthlyReportPath('2026-06'), path.join(ROOT, 'docs', 'reports', '2026-06', 'monthly-2026-06.md'));
   console.log('coin-balance-report self-test passed');
 }

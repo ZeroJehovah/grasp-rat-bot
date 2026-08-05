@@ -3,7 +3,11 @@
 This document records the stable method for generating Elysiver natural-month
 actual-revenue reports.
 
-## Standard Command
+## Full-Month Command
+
+Use the full-month command only when no local report exists for the month, or
+when the user explicitly requests a full refetch or whole-month verification.
+Do not use it for a normal update when any dates are already covered.
 
 ```bash
 node scripts/coin-balance-report.js --month YYYY-MM --timeout-ms 60000
@@ -17,6 +21,29 @@ docs/reports/YYYY-MM/monthly-YYYY-MM.md
 
 For the current month, the script queries only Beijing calendar days up to today.
 It does not query future days.
+
+## Default Incremental Update
+
+For a normal "update monthly report" request, use the incremental update mode.
+It inspects the existing monthly report and fetches only missing Beijing
+calendar dates:
+
+```bash
+node scripts/coin-balance-report.js --update-month YYYY-MM --timeout-ms 60000
+```
+
+The mode merges only those newly fetched dates into the existing monthly
+report. When the user explicitly identifies one missing date, fetch and merge
+only that date:
+
+```bash
+node scripts/coin-balance-report.js --update-day YYYY-MM-DD --timeout-ms 60000
+```
+
+Never refetch a date already covered by the local report merely to regenerate,
+merge, or validate the monthly Markdown. If the current tooling cannot merge
+safely, improve the local merge path or report the limitation; do not fall back
+to a full-month refetch without explicit user authorization.
 
 ## Authentication
 
@@ -58,14 +85,28 @@ generated reports.
 - Requests paginate from page 1 using the API `total` and `page_size`.
 - Requests have a default four-second interval.
 - The script uses `curl` with browser-like headers, redirect handling, timeouts,
-  and retries. Node `fetch` is intentionally not used because Cloudflare may
-  challenge it while the same authenticated curl request succeeds.
+  retries, and `--noproxy *`, which forcefully bypasses all proxy environment
+  settings for every data request. Data fetching must use a direct connection;
+  do not remove this no-proxy constraint. Node `fetch` is intentionally not
+  used because Cloudflare may challenge it while the same authenticated curl
+  request succeeds.
 - Progress is written to stderr as
   `[coin-report] YYYY-MM-DD page N curl request M`.
 
 The API balance-change records are the authoritative source for the report.
 Monthly Markdown contains per-day totals, whole-month totals, API record counts,
-and classified detail rows.
+classified detail rows, and player rankings before the dated detail sections:
+
+- `本月死亡统计` groups death-loss rows by killer, showing total coin loss and
+  kill count sorted by coin loss descending. The section is omitted when the
+  month has no death-loss rows.
+- `本月击杀统计` groups player-drop pickup rows by defeated player, showing
+  collected coins and kill count sorted by collected coins descending, limited
+  to the top 10 players.
+
+Incremental merges recompute both ranking sections from the complete local
+detail rows. This derived-content refresh does not authorize refetching dates
+already covered by the report.
 
 ## Obsidian Synchronization
 
