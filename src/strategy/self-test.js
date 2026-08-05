@@ -4307,6 +4307,31 @@ function runStrategyModuleSelfTests() {
       && builtRoute.routeKind === 'short'
   });
 
+  const twoCoinAggregateRoute = buildCoinRouteFromAnchorCore(
+    { x: -45369, y: -58449 },
+    { drop_id: '823', amount: 1, x: -45410, y: -45344, distance: 13105 },
+    [
+      { drop_id: '823', amount: 1, x: -45410, y: -45344, distance: 13105 },
+      { drop_id: '748', amount: 1, x: -45671, y: -43953, distance: 14499 }
+    ],
+    [],
+    {
+      ...routeOptions,
+      linkDistance: 1500,
+      maxLinkDistance: 2500,
+      staminaAffordable: cost => cost <= 20000,
+      routeEligible: route => Number(route.totalValue || 0) / Number(route.totalStaminaCost || Infinity) >= 1 / 10000
+    }
+  );
+  results.push({
+    name: 'coin-route-accepts-two-coin-aggregate-profit-route',
+    passed: twoCoinAggregateRoute?.coinRoute?.ids?.join(',') === '823,748'
+      && twoCoinAggregateRoute.coinRoute.legCount === 2
+      && twoCoinAggregateRoute.coinRoute.value === 2
+      && twoCoinAggregateRoute.coinRoute.staminaCost > 14500
+      && twoCoinAggregateRoute.coinRoute.staminaCost < 14600
+  });
+
   const eligibleRoute = buildCoinRouteFromAnchorCore(routeSelf, routeCoins[0], [
     ...routeCoins,
     { drop_id: '4', amount: 1, x: 4000, y: 0, distance: 4000 }

@@ -13,7 +13,7 @@ const OPPORTUNITY_CONSTANTS = {
   GLOBAL_COIN_MAX_DISTANCE: 200000,       // globalCoinMaxDistance - far coin limit
 
   // Coin routing
-  COIN_ROUTE_MIN_COINS: 3,                // Minimum coins to form a route
+  COIN_ROUTE_MIN_COINS: 2,                // Minimum coins to form a route
   COIN_ROUTE_FIRST_COIN_DISTANCE_RATIO: 1.45, // coinRouteFirstCoinDistanceRatio
   COIN_ROUTE_FIRST_COIN_DISTANCE_SLACK: 6000, // coinRouteFirstCoinDistanceSlack
   COIN_ROUTE_NEARBY_FIRST_COIN_DISTANCE: 22000, // coinRouteNearbyFirstCoinDistance

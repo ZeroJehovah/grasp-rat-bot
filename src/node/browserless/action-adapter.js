@@ -535,17 +535,25 @@ function createBrowserlessActionAdapter(options = {}) {
   const velocityRepeatEnabled = options.velocityRepeatEnabled === true;
   const velocityRepeatMs = Math.max(20, Number(options.velocityRepeatMs ?? options.directWsVelocityRepeatMs ?? BROWSER_RUNTIME_DEFAULTS.directWsVelocityRepeatMs ?? 50));
   const configuredRepeatHoldMs = Math.max(0, Number(options.velocityRepeatHoldMs ?? options.directWsVelocityRepeatHoldMs ?? BROWSER_RUNTIME_DEFAULTS.directWsVelocityRepeatHoldMs ?? 220));
+  const movementSettlementStallMs = Math.max(1000, Number(
+    options.movementSettlementStallMs ?? DEFAULT_MOVEMENT_SETTLEMENT_STALL_MS
+  ));
+  // Keep a moving command alive longer than the stall watchdog. A planner
+  // result can take more than one nominal decision interval; if the repeat
+  // lease expires first, the resulting idle period is mistaken for a failed
+  // movement. Safety/stop/ownership changes still cancel it immediately.
+  const movementRepeatGraceMs = movementSettlementStallMs
+    + Math.max(commandIntervalMs, decisionIntervalMs)
+    + velocityRepeatMs;
   const velocityRepeatHoldMs = Math.max(
     velocityRepeatMs,
     configuredRepeatHoldMs,
     commandIntervalMs + velocityRepeatMs,
-    decisionIntervalMs + velocityRepeatMs
+    decisionIntervalMs + velocityRepeatMs,
+    movementRepeatGraceMs
   );
   const velocityStopRepeatCount = Math.max(0, Math.round(Number(options.velocityStopRepeatCount ?? options.directWsStopRepeatCount ?? BROWSER_RUNTIME_DEFAULTS.directWsStopRepeatCount ?? 0)));
   const settlementFrames = Math.max(1, Number(options.settlementFrames ?? DEFAULT_SETTLEMENT_FRAMES));
-  const movementSettlementStallMs = Math.max(1000, Number(
-    options.movementSettlementStallMs ?? DEFAULT_MOVEMENT_SETTLEMENT_STALL_MS
-  ));
   const movementSettlementMinDistanceCm = Math.max(1, Number(
     options.movementSettlementMinDistanceCm ?? DEFAULT_MOVEMENT_SETTLEMENT_MIN_DISTANCE_CM
   ));

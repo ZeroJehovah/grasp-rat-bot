@@ -7112,7 +7112,7 @@ async function runSelfTest() {
           loginPointSafetySuccessRequired: 1,
           loginPointSafetyProbeIntervalMs: 0
         }, {
-          loginPointSafety: { point: { x: 0, y: 0, hp: 100, source: 'test' } }
+          loginPointSafety: { point: { x: 0, y: 0, hp: 79, source: 'test' } }
         }, {
           now: () => nowMs,
           damagePlayerTracker: { status: () => ({ players: [{ userId: 8, name: 'known-damager' }] }) },
@@ -7209,7 +7209,7 @@ async function runSelfTest() {
           loginPointSafetySuccessRequired: 3,
           loginPointSafetyProbeIntervalMs: 0
         };
-        const state = { loginPointSafety: { point: { x: 0, y: 0, hp: 100, source: 'test' } } };
+        const state = { loginPointSafety: { point: { x: 0, y: 0, hp: 79, source: 'test' } } };
         const run = async (ticks, dangerousAt = -1) => {
           let index = 0;
           return runPreLoginSnapshotSafety(config, state, {
@@ -7271,7 +7271,7 @@ async function runSelfTest() {
           loginPointSafetySuccessRequired: 3,
           loginPointSafetyProbeIntervalMs: 0
         }, {
-          loginPointSafety: { point: { x: 0, y: 0, hp: 100, source: 'test' } }
+          loginPointSafety: { point: { x: 0, y: 0, hp: 79, source: 'test' } }
         }, {
           fetchWithTimeout: async () => {
             calls += 1;
@@ -7305,7 +7305,7 @@ async function runSelfTest() {
           snapshotEdgeMaxWaitMs: 60000,
           snapshotEdgeMaxErrors: 3
         }, {
-          loginPointSafety: { point: { x: 0, y: 0, hp: 100, source: 'test' } }
+          loginPointSafety: { point: { x: 0, y: 0, hp: 79, source: 'test' } }
         }, {
           now: () => nowMs,
           sleep: async ms => { nowMs += ms; },
@@ -7342,7 +7342,7 @@ async function runSelfTest() {
         let calls = 0;
         let state = {
           loginPointSafety: {
-            point: { x: 0, y: 0, hp: 100, maxHp: 100, source: 'test' }
+            point: { x: 0, y: 0, hp: 79, maxHp: 100, source: 'test' }
           }
         };
         const published = [];
@@ -7439,7 +7439,7 @@ async function runSelfTest() {
           snapshotEdgeMaxWaitMs: 60000,
           snapshotEdgeMaxErrors: 3
         }, {
-          loginPointSafety: { point: { x: 0, y: 0, hp: 100, source: 'test' } }
+          loginPointSafety: { point: { x: 0, y: 0, hp: 79, source: 'test' } }
         }, {
           now: () => nowMs,
           sleep: async ms => { nowMs += ms; },
@@ -7478,7 +7478,7 @@ async function runSelfTest() {
           snapshotEdgeIntervalMs: 30000,
           snapshotEdgeMaxWaitMs: 60000
         }, {
-          loginPointSafety: { point: { x: 0, y: 0, hp: 100, source: 'test' } },
+          loginPointSafety: { point: { x: 0, y: 0, hp: 79, source: 'test' } },
           runner: {
             confirmedLeave: {
               confirmedAt: new Date(nowMs).toISOString(),
@@ -7523,7 +7523,7 @@ async function runSelfTest() {
           loginPointSafetyProbeIntervalMs: 0
         };
         const state = {
-          loginPointSafety: { point: { x: 0, y: 0, hp: 100, source: 'test' } },
+          loginPointSafety: { point: { x: 0, y: 0, hp: 79, source: 'test' } },
           runner: {
             confirmedLeave: {
               confirmedAt: new Date(baseMs).toISOString(),
@@ -7577,7 +7577,7 @@ async function runSelfTest() {
           loginPointSafetySuccessRequired: 1,
           loginPointSafetyProbeIntervalMs: 0
         }, {
-          loginPointSafety: { point: { x: 0, y: 0, hp: 100, source: 'test' } },
+          loginPointSafety: { point: { x: 0, y: 0, hp: 79, source: 'test' } },
           runner: {
             confirmedLeave: {
               confirmedAt: new Date(confirmedAtMs).toISOString(),
@@ -9704,6 +9704,48 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'best-opportunity-coin-route|3|16000|3|2'
+    },
+    {
+      name: 'browserless dynamic profit threshold admits two nearby snapshot coins as one route',
+      got: (() => {
+        const nowMs = Date.parse('2026-08-05T01:47:00.000Z');
+        const self = { entity_id: 1, user_id: 7, name: 'self', x: -45369, y: -58449, hp: 100, max_hp: 100 };
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 56,
+          entities: [self],
+          bullets: [],
+          coin_drops: []
+        }, { receivedAtMs: nowMs });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 57,
+          entities: [{ ...self, stamina_1h_remaining_milli: 3000000, stamina_1d_remaining_milli: 20000000 }],
+          bullets: [],
+          coin_drops: [
+            { drop_id: '823', amount: 1, x: -45410, y: -45344 },
+            { drop_id: '748', amount: 1, x: -45671, y: -43953 }
+          ],
+          messages: []
+        }, { receivedAtMs: nowMs + 10 });
+        const decision = buildBrowserlessDecision(store.getState(nowMs + 20), {}, {
+          nowMs,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: true,
+          singleCoinBaitEnabled: false
+        });
+        return [
+          decision.reason,
+          decision.action.target?.id,
+          decision.action.coinRoute?.ids?.join(','),
+          decision.action.coinRoute?.legCount,
+          Math.round(Number(decision.action.coinRoute?.staminaCost || 0)),
+          decision.action.profitThresholdEligible === true
+        ].join('|');
+      })(),
+      want: 'best-opportunity-coin-route|823|823,748|2|14520|true'
     },
     {
       name: 'browserless dynamic profit threshold keeps aggregate route behind ineligible closer coin',
@@ -22377,6 +22419,7 @@ async function runSelfTest() {
           now: () => t,
           commandIntervalMs: 500,
           decisionIntervalMs: 1000,
+          movementSettlementStallMs: 1000,
           velocityRepeatEnabled: true,
           velocityRepeatMs: 50,
           velocityRepeatHoldMs: 220,
@@ -22404,7 +22447,7 @@ async function runSelfTest() {
           }
         });
         let guard = 0;
-        while (timers.length && guard < 40) {
+        while (timers.length && guard < 50) {
           guard += 1;
           const timer = timers.shift();
           if (!timer || timer.canceled) continue;
@@ -22423,7 +22466,7 @@ async function runSelfTest() {
           state.lastVelocityRepeatError || 'none'
         ].join('|');
       })(),
-      want: 'velocity|1|0|vel 1 0|22|21|1050|none'
+      want: 'velocity|1|0|vel 1 0|42|41|2050|none'
     },
     {
       name: 'browserless velocity telemetry splits frame decision and send stages',
@@ -24976,7 +25019,7 @@ async function runSelfTest() {
           sleep: async ms => { t += ms; },
           safetyController,
           persistedState: {
-            loginPointSafety: { point: { x: 100, y: 200, hp: 90, source: 'test' } }
+            loginPointSafety: { point: { x: 100, y: 200, hp: 79, source: 'test' } }
           },
           onSnapshotPayload: (_payload, detail) => snapshotSources.push(detail.source),
           onLoginSuccess: event => loginSuccessEvents.push({ ...event, observedAtMs: t }),
@@ -25059,7 +25102,7 @@ async function runSelfTest() {
           now: () => t,
           sleep: async ms => { t += ms; },
           persistedState: {
-            loginPointSafety: { point: { x: 100, y: 200, hp: 90, source: 'test' } }
+            loginPointSafety: { point: { x: 100, y: 200, hp: 79, source: 'test' } }
           },
           fetchImpl: async () => fakeResponseForTest({
             body: {
@@ -25114,7 +25157,7 @@ async function runSelfTest() {
         }, {
           now: () => Date.UTC(2026, 6, 8, 1, 0, 0),
           persistedState: {
-            loginPointSafety: { point: { x: 100, y: 200, hp: 90, source: 'test' } }
+            loginPointSafety: { point: { x: 100, y: 200, hp: 79, source: 'test' } }
           },
           fetchImpl: async () => fakeResponseForTest({
             body: {
@@ -25164,7 +25207,7 @@ async function runSelfTest() {
         }, {
           now: () => Date.UTC(2026, 6, 8, 1, 0, 0),
           persistedState: {
-            loginPointSafety: { point: { x: 0, y: 0, hp: 100, source: 'test' } }
+            loginPointSafety: { point: { x: 0, y: 0, hp: 79, source: 'test' } }
           },
           fetchImpl: async () => fakeResponseForTest({
             body: {
@@ -25278,7 +25321,7 @@ async function runSelfTest() {
           now: () => t,
           sleep: async ms => { t += ms; },
           persistedState: {
-            loginPointSafety: { point: { x: 0, y: 0, hp: 100, source: 'test' } }
+            loginPointSafety: { point: { x: 0, y: 0, hp: 79, source: 'test' } }
           },
           fetchImpl: async () => fakeResponseForTest({
             body: {
@@ -25375,7 +25418,7 @@ async function runSelfTest() {
             if (sleepCount === 2) wsOptions.onMessage(snapshotFrame);
           },
           persistedState: {
-            loginPointSafety: { point: { x: 100, y: 200, hp: 90, source: 'test' } }
+            loginPointSafety: { point: { x: 100, y: 200, hp: 79, source: 'test' } }
           },
           fetchImpl: async () => fakeResponseForTest({
             body: {
@@ -25448,7 +25491,7 @@ async function runSelfTest() {
             if (wsOptions && !commands.length) wsOptions.onMessage(posFrame);
           },
           persistedState: {
-            loginPointSafety: { point: { x: 100, y: 200, hp: 90, source: 'test' } }
+            loginPointSafety: { point: { x: 100, y: 200, hp: 79, source: 'test' } }
           },
           fetchImpl: async () => fakeResponseForTest({
             body: {
@@ -25537,7 +25580,7 @@ async function runSelfTest() {
             if (sleepCount === 2) wsOptions.onMessage(ackFrame);
           },
           persistedState: {
-            loginPointSafety: { point: { x: 0, y: 0, hp: 90, source: 'test' } }
+            loginPointSafety: { point: { x: 0, y: 0, hp: 79, source: 'test' } }
           },
           fetchImpl: async () => fakeResponseForTest({
             body: {
@@ -25709,7 +25752,7 @@ async function runSelfTest() {
             t += ms;
           },
           persistedState: {
-            loginPointSafety: { point: { x: 100, y: 200, hp: 90, source: 'test' } }
+            loginPointSafety: { point: { x: 100, y: 200, hp: 79, source: 'test' } }
           },
           onSnapshotSafety: snapshotSafety => {
             progress.push([snapshotSafety.streak, snapshotSafety.required, snapshotSafety.ok].join('/'));
@@ -25793,7 +25836,7 @@ async function runSelfTest() {
             }
           },
           persistedState: {
-            loginPointSafety: { point: { x: 100, y: 200, hp: 90, source: 'test' } }
+            loginPointSafety: { point: { x: 100, y: 200, hp: 79, source: 'test' } }
           },
           fetchImpl: async () => fakeResponseForTest({
             body: {

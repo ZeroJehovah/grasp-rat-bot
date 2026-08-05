@@ -5242,6 +5242,7 @@ function coinRouteCoreOptions(input, stateful = {}, options = {}) {
     maxDistance: Math.max(0, Number(options.coinRouteMaxDistance ?? options.globalCoinMaxDistance ?? BROWSER_RUNTIME_DEFAULTS.coinRouteMaxDistance)),
     poolLimit: options.coinRoutePoolLimit ?? BROWSER_RUNTIME_DEFAULTS.coinRoutePoolLimit,
     anchorLimit: options.coinRouteAnchorLimit ?? BROWSER_RUNTIME_DEFAULTS.coinRouteAnchorLimit,
+    minimumRouteCoins: options.coinRouteMinCoins ?? OPPORTUNITY_CONSTANTS.COIN_ROUTE_MIN_COINS,
     routeEligible,
     closerCoinEligible,
     heldCoinEligible: closerCoinEligible,

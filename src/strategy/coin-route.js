@@ -1,5 +1,7 @@
 'use strict';
 
+const { OPPORTUNITY_CONSTANTS } = require('./opportunity-constants');
+
 function defaultDist(a, b) {
   const dx = Number(a?.x) - Number(b?.x);
   const dy = Number(a?.y) - Number(b?.y);
@@ -156,12 +158,18 @@ function buildCoinRouteFromAnchorCore(self, anchor, candidates, activeThreats, o
   let states = [initialState];
   let bestState = null;
   let bestScore = -Infinity;
-  const pointLimit = typeof options.pointLimitForAnchor === 'function'
-    ? options.pointLimitForAnchor(anchor)
-    : coinRoutePointLimitCore(anchor, candidates, options);
   const linkDistance = Math.max(0, Number(options.linkDistance || 0));
   const maxLinkDistance = Math.max(linkDistance, Number(options.maxLinkDistance || linkDistance || 0));
   const beamWidth = Math.max(1, Math.round(Number(options.beamWidth || 4)));
+  const minimumRouteCoins = Math.max(2, Math.round(Number(
+    options.minimumRouteCoins ?? OPPORTUNITY_CONSTANTS.COIN_ROUTE_MIN_COINS
+  )));
+  const pointLimit = Math.max(
+    minimumRouteCoins,
+    typeof options.pointLimitForAnchor === 'function'
+      ? Number(options.pointLimitForAnchor(anchor))
+      : coinRoutePointLimitCore(anchor, candidates, options)
+  );
   const routeEligible = typeof options.routeEligible === 'function' ? options.routeEligible : () => true;
   let bestEligibleState = null;
   let bestEligibleScore = -Infinity;
@@ -208,11 +216,11 @@ function buildCoinRouteFromAnchorCore(self, anchor, candidates, activeThreats, o
           rankScore: prefixScore * linkPenalty
         };
         expanded.push(nextState);
-        if (nextState.route.length >= 3 && bestStateBeats(nextState, prefixScore)) {
+        if (nextState.route.length >= minimumRouteCoins && bestStateBeats(nextState, prefixScore)) {
           bestScore = prefixScore;
           bestState = nextState;
         }
-        if (nextState.route.length >= 3 && routeEligible({
+        if (nextState.route.length >= minimumRouteCoins && routeEligible({
           route: nextState.route,
           value: nextValue,
           totalValue: nextValue,
