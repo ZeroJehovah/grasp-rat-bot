@@ -309,6 +309,11 @@ async function main() {
         sourceCount: result.sourceCount,
         status: result.status,
         elapsedMs: result.elapsedMs,
+        dnsMs: result.dnsMs,
+        tcpMs: result.tcpMs,
+        tlsMs: result.tlsMs,
+        ttfbMs: result.ttfbMs,
+        totalMs: result.totalMs,
         ok: result.ok,
         errorCategory: result.errorCategory
       }));

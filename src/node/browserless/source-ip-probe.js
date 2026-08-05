@@ -35,6 +35,11 @@ function numberOrNull(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function roundedMetricOrNull(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.round(number * 10) / 10 : null;
+}
+
 function isProbeSuccessStatus(status) {
   return Number(status) === 200;
 }
@@ -54,13 +59,25 @@ function normalizeProbeSample(value, nowMs = Date.now()) {
   const observedAtMs = Date.parse(String(input.observedAt || ''));
   if (net.isIP(ip) !== 4 || !Number.isFinite(observedAtMs)) return null;
   const status = numberOrNull(input.status);
-  const elapsedMs = numberOrNull(input.elapsedMs);
+  const rawElapsedMs = numberOrNull(input.elapsedMs);
+  const rawTotalMs = numberOrNull(input.totalMs);
+  const elapsedMs = rawElapsedMs === null ? rawTotalMs : rawElapsedMs;
+  const totalMs = rawTotalMs === null ? rawElapsedMs : rawTotalMs;
+  const normalizeTiming = key => {
+    const timing = numberOrNull(input[key]);
+    return timing === null ? null : Math.max(0, Math.round(timing * 10) / 10);
+  };
   const errorCategory = String(input.errorCategory || '').slice(0, 48);
   return {
     ip,
     observedAt: new Date(observedAtMs).toISOString(),
     status: status === null || status <= 0 ? null : Math.round(status),
     elapsedMs: elapsedMs === null ? null : Math.max(0, Math.round(elapsedMs)),
+    dnsMs: normalizeTiming('dnsMs'),
+    tcpMs: normalizeTiming('tcpMs'),
+    tlsMs: normalizeTiming('tlsMs'),
+    ttfbMs: normalizeTiming('ttfbMs'),
+    totalMs: totalMs === null ? null : Math.max(0, Math.round(totalMs * 10) / 10),
     ok: isProbeSuccessStatus(status),
     errorCategory
   };
@@ -178,6 +195,34 @@ function weightedQuantile(values, quantile) {
   return sorted[sorted.length - 1].value;
 }
 
+function weightedLatencyMetrics(samples, nowMs, halfLifeMs, valueOf) {
+  const values = [];
+  let weightedValueTotal = 0;
+  let valueWeightTotal = 0;
+  for (const sample of samples) {
+    if (!isProbeSuccessStatus(sample.status)) continue;
+    const value = Number(valueOf(sample));
+    if (!Number.isFinite(value)) continue;
+    const observedAtMs = Date.parse(sample.observedAt);
+    const ageMs = Math.max(0, nowMs - observedAtMs);
+    const weight = Math.exp(-ageMs / halfLifeMs);
+    values.push({ value, weight });
+    weightedValueTotal += value * weight;
+    valueWeightTotal += weight;
+  }
+  const weightedMeanMs = valueWeightTotal > 0 ? weightedValueTotal / valueWeightTotal : null;
+  const weightedP90Ms = weightedQuantile(values, 0.9);
+  const latencyMetricMs = weightedMeanMs === null
+    ? null
+    : (weightedMeanMs * 0.7) + ((weightedP90Ms ?? weightedMeanMs) * 0.3);
+  return {
+    sampleCount: values.length,
+    weightedMeanMs,
+    weightedP90Ms,
+    latencyMetricMs
+  };
+}
+
 function sourceIpProbeMetrics(samples, nowMs = Date.now(), options = {}) {
   const halfLifeMs = Math.max(1, Number(options.halfLifeMs || SOURCE_IP_PROBE_HALF_LIFE_MS));
   const currentMs = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
@@ -187,10 +232,8 @@ function sourceIpProbeMetrics(samples, nowMs = Date.now(), options = {}) {
     .sort((left, right) => Date.parse(left.observedAt) - Date.parse(right.observedAt));
   let totalWeight = 0;
   let successWeight = 0;
-  let weightedLatencyTotal = 0;
   let successCount = 0;
   let lastSuccessAtMs = 0;
-  const latencies = [];
   for (const sample of ordered) {
     const observedAtMs = Date.parse(sample.observedAt);
     const ageMs = Math.max(0, currentMs - observedAtMs);
@@ -200,29 +243,35 @@ function sourceIpProbeMetrics(samples, nowMs = Date.now(), options = {}) {
       successCount += 1;
       successWeight += weight;
       lastSuccessAtMs = Math.max(lastSuccessAtMs, observedAtMs);
-      if (Number.isFinite(sample.elapsedMs)) {
-        weightedLatencyTotal += sample.elapsedMs * weight;
-        latencies.push({ value: sample.elapsedMs, weight });
-      }
     }
   }
   const latest = ordered[ordered.length - 1] || null;
-  const weightedMeanMs = latencies.length && successWeight > 0
-    ? weightedLatencyTotal / latencies.reduce((sum, item) => sum + item.weight, 0)
-    : null;
-  const weightedP90Ms = weightedQuantile(latencies, 0.9);
-  const latencyMetricMs = weightedMeanMs === null
-    ? null
-    : (weightedMeanMs * 0.7) + ((weightedP90Ms ?? weightedMeanMs) * 0.3);
+  const totalMetrics = weightedLatencyMetrics(
+    ordered,
+    currentMs,
+    halfLifeMs,
+    sample => sample.totalMs ?? sample.elapsedMs
+  );
+  const ttfbMetrics = weightedLatencyMetrics(ordered, currentMs, halfLifeMs, sample => sample.ttfbMs);
+  const latencySource = ttfbMetrics.latencyMetricMs === null ? 'total' : 'ttfb';
+  const selectedMetrics = latencySource === 'ttfb' ? ttfbMetrics : totalMetrics;
   return {
     sampleCount: ordered.length,
     successCount,
     failureCount: Math.max(0, ordered.length - successCount),
     weightedSampleWeight: totalWeight,
     weightedSuccessRate: totalWeight > 0 ? successWeight / totalWeight : 0,
-    weightedMeanMs,
-    weightedP90Ms,
-    latencyMetricMs,
+    weightedMeanMs: selectedMetrics.weightedMeanMs,
+    weightedP90Ms: selectedMetrics.weightedP90Ms,
+    latencyMetricMs: selectedMetrics.latencyMetricMs,
+    latencySource,
+    weightedTotalMeanMs: totalMetrics.weightedMeanMs,
+    weightedTotalP90Ms: totalMetrics.weightedP90Ms,
+    totalLatencyMetricMs: totalMetrics.latencyMetricMs,
+    ttfbSampleCount: ttfbMetrics.sampleCount,
+    weightedTtfbMeanMs: ttfbMetrics.weightedMeanMs,
+    weightedTtfbP90Ms: ttfbMetrics.weightedP90Ms,
+    ttfbLatencyMetricMs: ttfbMetrics.latencyMetricMs,
     confidence: Math.min(1, totalWeight / 4),
     latestAt: latest?.observedAt || '',
     latestAtMs: latest ? Date.parse(latest.observedAt) : 0,
@@ -257,24 +306,40 @@ function selectSourceIpsFromProbeHistory(history, discoveredIps, options = {}) {
       && !item.latestWas403
       && item.latencyMetricMs !== null
   ));
-  const latencyReference = eligible.length
-    ? eligible.map(item => item.latencyMetricMs).sort((left, right) => left - right)[Math.floor(eligible.length / 2)]
-    : null;
+  const useTtfbForSelection = eligible.length > 0
+    && eligible.every(item => item.ttfbLatencyMetricMs !== null);
   for (const item of eligible) {
+    item.selectionLatencySource = useTtfbForSelection ? 'ttfb' : 'total';
+    item.selectionLatencyMetricMs = useTtfbForSelection
+      ? item.ttfbLatencyMetricMs
+      : item.totalLatencyMetricMs;
+    item.selectionWeightedMeanMs = useTtfbForSelection
+      ? item.weightedTtfbMeanMs
+      : item.weightedTotalMeanMs;
+    item.selectionWeightedP90Ms = useTtfbForSelection
+      ? item.weightedTtfbP90Ms
+      : item.weightedTotalP90Ms;
+  }
+  const speedEligible = eligible.filter(item => Number.isFinite(item.selectionLatencyMetricMs));
+  const latencyReference = speedEligible.length
+    ? speedEligible.map(item => item.selectionLatencyMetricMs)
+      .sort((left, right) => left - right)[Math.floor(speedEligible.length / 2)]
+    : null;
+  for (const item of speedEligible) {
     const speedScore = latencyReference > 0
-      ? Math.min(1, latencyReference / item.latencyMetricMs)
+      ? Math.min(1, latencyReference / item.selectionLatencyMetricMs)
       : 0;
     item.speedScore = speedScore;
     item.score = (item.weightedSuccessRate * 0.65) + (speedScore * 0.25) + (item.confidence * 0.1);
   }
-  eligible.sort((left, right) => (
+  speedEligible.sort((left, right) => (
     right.score - left.score
       || right.weightedSuccessRate - left.weightedSuccessRate
-      || left.latencyMetricMs - right.latencyMetricMs
+      || left.selectionLatencyMetricMs - right.selectionLatencyMetricMs
       || right.latestAtMs - left.latestAtMs
       || compareIpv4Numeric(left.ip, right.ip)
   ));
-  const selected = eligible.slice(0, requiredCount).map(item => item.ip);
+  const selected = speedEligible.slice(0, requiredCount).map(item => item.ip);
   const diagnostics = {
     selectedAt: new Date(nowMs).toISOString(),
     discoveredCount: discovered.length,
@@ -287,14 +352,23 @@ function selectSourceIpsFromProbeHistory(history, discoveredIps, options = {}) {
       sampleCount: item.sampleCount,
       successCount: item.successCount,
       weightedSuccessRate: Math.round(item.weightedSuccessRate * 1000) / 1000,
-      weightedMeanMs: item.weightedMeanMs === null ? null : Math.round(item.weightedMeanMs * 10) / 10,
-      weightedP90Ms: item.weightedP90Ms === null ? null : Math.round(item.weightedP90Ms * 10) / 10,
+      weightedMeanMs: roundedMetricOrNull(item.selectionWeightedMeanMs),
+      weightedP90Ms: roundedMetricOrNull(item.selectionWeightedP90Ms),
+      latencyMetricMs: roundedMetricOrNull(item.selectionLatencyMetricMs),
+      latencySource: item.selectionLatencySource || 'total',
+      weightedTotalMeanMs: roundedMetricOrNull(item.weightedTotalMeanMs),
+      weightedTotalP90Ms: roundedMetricOrNull(item.weightedTotalP90Ms),
+      totalLatencyMetricMs: roundedMetricOrNull(item.totalLatencyMetricMs),
+      ttfbSampleCount: item.ttfbSampleCount,
+      weightedTtfbMeanMs: roundedMetricOrNull(item.weightedTtfbMeanMs),
+      weightedTtfbP90Ms: roundedMetricOrNull(item.weightedTtfbP90Ms),
+      ttfbLatencyMetricMs: roundedMetricOrNull(item.ttfbLatencyMetricMs),
       confidence: Math.round(item.confidence * 1000) / 1000,
       score: Number.isFinite(item.score) ? Math.round(item.score * 1000) / 1000 : null,
       latestAt: item.latestAt,
       latestStatus: item.latestStatus,
       latestErrorCategory: item.latestErrorCategory,
-      eligible: eligible.some(candidate => candidate.ip === item.ip)
+      eligible: speedEligible.some(candidate => candidate.ip === item.ip)
     }))
   };
   const completedAt = new Date(nowMs).toISOString();
@@ -430,11 +504,17 @@ function createSourceIpProbeScheduler(options = {}) {
         error = requestError;
       }
       const status = error ? null : numberOrNull(response?.status ?? response?.statusCode);
+      const timing = error?.timing || response?.timing || {};
       const sample = {
         ip,
         observedAt: new Date(now()).toISOString(),
         status,
         elapsedMs: Math.max(0, Math.round(monotonicNow() - requestStartedMonotonicMs)),
+        dnsMs: numberOrNull(timing.dnsMs),
+        tcpMs: numberOrNull(timing.tcpMs),
+        tlsMs: numberOrNull(timing.tlsMs),
+        ttfbMs: numberOrNull(timing.ttfbMs),
+        totalMs: numberOrNull(timing.totalMs),
         errorCategory: error ? sourceIpPreflightErrorCategory(error) : ''
       };
       try {
@@ -475,6 +555,11 @@ function createSourceIpProbeScheduler(options = {}) {
         ip: result.ip,
         status: result.status,
         elapsedMs: result.elapsedMs,
+        dnsMs: result.dnsMs,
+        tcpMs: result.tcpMs,
+        tlsMs: result.tlsMs,
+        ttfbMs: result.ttfbMs,
+        totalMs: result.totalMs,
         ok: result.ok,
         errorCategory: result.errorCategory
       }))
@@ -585,7 +670,16 @@ async function runSourceIpProbeSelfTest() {
         requestOrder.push(ip);
         await Promise.resolve();
         activeRequests -= 1;
-        return { status: 200 };
+        return {
+          status: 200,
+          timing: {
+            dnsMs: 1.1,
+            tcpMs: 2.2,
+            tlsMs: 3.3,
+            ttfbMs: 10.4,
+            totalMs: 11.5
+          }
+        };
       },
       sleep: async delayMs => { waits.push(delayMs); },
       onResult: result => { if (result.sequence !== requestOrder.length) throw new Error('unexpected probe sequence'); }
@@ -601,9 +695,34 @@ async function runSourceIpProbeSelfTest() {
         && scheduledDelay >= SOURCE_IP_PROBE_BETWEEN_ROUND_MIN_MS
         && scheduledDelay <= SOURCE_IP_PROBE_BETWEEN_ROUND_MAX_MS
         && maxActiveRequests === 1
+        && round.results.every(result => (
+          result.dnsMs === 1.1
+            && result.tcpMs === 2.2
+            && result.tlsMs === 3.3
+            && result.ttfbMs === 10.4
+            && result.totalMs === 11.5
+        ))
+    );
+
+    const phaseAwareAt = new Date(nowMs - 1000).toISOString();
+    const phaseAwareSelection = selectSourceIpsFromProbeHistory({
+      samples: [
+        { ip: '10.0.0.21', observedAt: phaseAwareAt, status: 200, elapsedMs: 1000, totalMs: 1000, ttfbMs: 50 },
+        { ip: '10.0.0.22', observedAt: phaseAwareAt, status: 200, elapsedMs: 100, totalMs: 100, ttfbMs: 80 },
+        { ip: '10.0.0.23', observedAt: phaseAwareAt, status: 200, elapsedMs: 90, totalMs: 90, ttfbMs: 90 }
+      ]
+    }, ['10.0.0.21', '10.0.0.22', '10.0.0.23'], { nowMs, requiredCount: 2 });
+    const phaseAwareCandidates = phaseAwareSelection.diagnostics.candidates;
+    const phaseAware21 = phaseAwareCandidates.find(candidate => candidate.ip === '10.0.0.21');
+    const phaseAware23 = phaseAwareCandidates.find(candidate => candidate.ip === '10.0.0.23');
+    const phaseAwareOk = Boolean(
+      phaseAwareSelection.ok
+        && JSON.stringify(phaseAwareSelection.availableIps) === JSON.stringify(['10.0.0.21', '10.0.0.22'])
+        && phaseAware21?.latencySource === 'ttfb'
+        && phaseAware21?.latencyMetricMs < phaseAware23?.latencyMetricMs
     );
     return {
-      ok: selectionOk && schedulerOk,
+      ok: selectionOk && schedulerOk && phaseAwareOk,
       selection: {
         ok: selectionOk,
         selected: selection.availableIps,
@@ -615,7 +734,8 @@ async function runSourceIpProbeSelfTest() {
         requestOrder,
         waits,
         scheduledDelay,
-        maxActiveRequests
+        maxActiveRequests,
+        phaseAwareOk
       }
     };
   } finally {

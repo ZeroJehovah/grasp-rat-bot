@@ -14,6 +14,64 @@ const SOURCE_IP_PREFLIGHT_DEFER_THRESHOLD_MS = 10000;
 const SOURCE_IP_PREFLIGHT_INSUFFICIENT_COOLDOWN_MS = 60 * 60 * 1000;
 const SOURCE_IP_PREFLIGHT_RETRY_DELAYS_MS = Object.freeze([10000, 20000, 40000, 80000, 160000]);
 
+function requestTimingNow() {
+  return performance.now();
+}
+
+function roundRequestTimingMs(value) {
+  return Number.isFinite(value) ? Math.max(0, Math.round(value * 10) / 10) : null;
+}
+
+function createRequestTiming(startedAtMs = requestTimingNow()) {
+  return {
+    startedAtMs,
+    lookupAtMs: null,
+    connectAtMs: null,
+    secureConnectAtMs: null,
+    responseAtMs: null,
+    endAtMs: null
+  };
+}
+
+function finiteTimingMark(value) {
+  if (value === null || value === undefined) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function requestTimingSnapshot(timing, endAtMs = null) {
+  const start = Number(timing?.startedAtMs);
+  if (!Number.isFinite(start)) return {};
+  const lookupEndMs = finiteTimingMark(timing.lookupAtMs);
+  const connectEndMs = finiteTimingMark(timing.connectAtMs);
+  const secureConnectEndMs = finiteTimingMark(timing.secureConnectAtMs);
+  const responseStartMs = finiteTimingMark(timing.responseAtMs);
+  const totalEndMs = finiteTimingMark(endAtMs ?? timing.endAtMs);
+  const tcpStartMs = lookupEndMs ?? start;
+  const tlsStartMs = connectEndMs ?? lookupEndMs ?? start;
+  return {
+    dnsMs: lookupEndMs === null ? null : roundRequestTimingMs(lookupEndMs - start),
+    tcpMs: connectEndMs === null ? null : roundRequestTimingMs(connectEndMs - tcpStartMs),
+    tlsMs: secureConnectEndMs === null ? null : roundRequestTimingMs(secureConnectEndMs - tlsStartMs),
+    ttfbMs: responseStartMs === null ? null : roundRequestTimingMs(responseStartMs - start),
+    totalMs: totalEndMs === null ? null : roundRequestTimingMs(totalEndMs - start)
+  };
+}
+
+function attachRequestTiming(request, timing) {
+  request.once?.('socket', socket => {
+    socket.once?.('lookup', () => {
+      if (timing.lookupAtMs === null) timing.lookupAtMs = requestTimingNow();
+    });
+    socket.once?.('connect', () => {
+      if (timing.connectAtMs === null) timing.connectAtMs = requestTimingNow();
+    });
+    socket.once?.('secureConnect', () => {
+      if (timing.secureConnectAtMs === null) timing.secureConnectAtMs = requestTimingNow();
+    });
+  });
+}
+
 function uniqueIpv4(values = []) {
   const seen = new Set();
   const output = [];
@@ -134,10 +192,14 @@ function requestAnonymousGameRoot(gameOrigin, localAddress, options = {}) {
     let settled = false;
     let request = null;
     let hardTimeout = null;
+    const timing = createRequestTiming();
     const finish = (handler, value) => {
       if (settled) return;
       settled = true;
       if (hardTimeout !== null) clearTimer(hardTimeout);
+      if (value && typeof value === 'object' && !value.timing) {
+        value.timing = requestTimingSnapshot(timing, timing.endAtMs ?? requestTimingNow());
+      }
       handler(value);
     };
     const abortForTimeout = () => {
@@ -147,11 +209,16 @@ function requestAnonymousGameRoot(gameOrigin, localAddress, options = {}) {
       request?.destroy?.(error);
     };
     request = requestFactory(requestShape.url, requestShape.options, response => {
+      if (timing.responseAtMs === null) timing.responseAtMs = requestTimingNow();
       const status = Number(response?.statusCode || 0);
       response.on?.('error', error => finish(reject, error));
-      response.on?.('end', () => finish(resolve, { status }));
+      response.on?.('end', () => {
+        if (timing.endAtMs === null) timing.endAtMs = requestTimingNow();
+        finish(resolve, { status });
+      });
       response.resume?.();
     });
+    attachRequestTiming(request, timing);
     request.once?.('error', error => finish(reject, error));
     request.setTimeout?.(timeoutMs, abortForTimeout);
     hardTimeout = setTimer(abortForTimeout, timeoutMs);
@@ -682,10 +749,15 @@ async function runSourceIpPreflightSelfTest() {
         capturedRequestUrl = url.toString();
         capturedRequestOptions = requestOptions;
         const request = new EventEmitter();
+        const socket = new EventEmitter();
         request.setTimeout = () => {};
         request.destroy = error => request.emit('error', error);
         request.end = (...args) => {
           requestEndArgumentCount = args.length;
+          request.emit('socket', socket);
+          socket.emit('lookup');
+          socket.emit('connect');
+          socket.emit('secureConnect');
           const response = new EventEmitter();
           response.statusCode = 302;
           response.resume = () => {};
@@ -706,8 +778,15 @@ async function runSourceIpPreflightSelfTest() {
       && capturedRequestOptions?.method === 'GET'
       && capturedRequestOptions?.localAddress === '10.0.0.9'
       && !Object.keys(capturedRequestOptions?.headers || {}).some(key => /cookie|authorization|token|session|user/i.test(key))
+      && Number.isFinite(redirectResponse.timing?.dnsMs)
+      && Number.isFinite(redirectResponse.timing?.tcpMs)
+      && Number.isFinite(redirectResponse.timing?.tlsMs)
+      && Number.isFinite(redirectResponse.timing?.ttfbMs)
+      && Number.isFinite(redirectResponse.timing?.totalMs)
+      && redirectResponse.timing.totalMs >= redirectResponse.timing.ttfbMs
   );
   let hardTimeoutCategory = '';
+  let hardTimeoutTiming = null;
   try {
     await requestAnonymousGameRoot('https://game.example', '10.0.0.9', {
       timeoutMs: 5,
@@ -721,8 +800,17 @@ async function runSourceIpPreflightSelfTest() {
     });
   } catch (error) {
     hardTimeoutCategory = sourceIpPreflightErrorCategory(error);
+    hardTimeoutTiming = error.timing || null;
   }
   const hardTimeoutOk = hardTimeoutCategory === 'timeout';
+  const hardTimeoutTimingOk = Boolean(
+    hardTimeoutTiming
+      && hardTimeoutTiming.dnsMs === null
+      && hardTimeoutTiming.tcpMs === null
+      && hardTimeoutTiming.tlsMs === null
+      && hardTimeoutTiming.ttfbMs === null
+      && Number.isFinite(hardTimeoutTiming.totalMs)
+  );
   const clearedRiskCountOk = normalizeSourceIpPreflight({ riskCount: 7 }, 0).riskCount === 0;
 
   let wallMs = Date.UTC(2026, 7, 2, 0, 0, 0);
@@ -901,6 +989,7 @@ async function runSourceIpPreflightSelfTest() {
         && requestShapeOk
         && requestExecutionOk
         && hardTimeoutOk
+        && hardTimeoutTimingOk
         && clearedRiskCountOk
         && immediateOk
         && immediateReuseBlocked
@@ -914,6 +1003,7 @@ async function runSourceIpPreflightSelfTest() {
     requestShapeOk,
     requestExecutionOk,
     hardTimeoutOk,
+    hardTimeoutTimingOk,
     clearedRiskCountOk,
     immediate: {
       ok: immediateOk,
