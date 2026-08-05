@@ -4074,14 +4074,23 @@ function singleCoinBaitResidualRouteContinuation(input, opportunity, bait, optio
   const firstFollowUpSummary = coinRouteSummaryCore([firstFollowUp], source, routeOptions);
   const reward = Number(summary.totalValue || 0);
   const staminaCost = Number(summary.totalStaminaCost || 0);
+  const baitReward = Math.max(1, Number(source.amount || 1));
+  const baitStaminaCost = Math.max(0, Number(opportunityCoinStaminaCost(source, options)));
+  const aggregateReward = baitReward + reward;
+  const aggregateStaminaCost = baitStaminaCost + staminaCost;
   const firstFollowUpReward = Number(firstFollowUpSummary.totalValue || 0);
   const firstFollowUpStaminaCost = Number(firstFollowUpSummary.totalStaminaCost || 0);
-  // Once the bait anchor is collected, ordinary planning can act only on the
-  // first remaining leg. Later route value must not subsidize an ineligible
-  // first leg and leave the bot idle immediately after consuming the bait.
-  const profitThresholdEligible = profitRewardAndCostEligible(
+  // The bait is the first leg of this plan. A later route may make the whole
+  // plan profitable even when its first follow-up coin is below the threshold
+  // by itself; the next planner frame will select that remaining route.
+  const firstFollowUpProfitThresholdEligible = profitRewardAndCostEligible(
     firstFollowUpReward,
     firstFollowUpStaminaCost,
+    opportunity?.threshold
+  );
+  const profitThresholdEligible = profitRewardAndCostEligible(
+    aggregateReward,
+    aggregateStaminaCost,
     opportunity?.threshold
   );
   return {
@@ -4089,6 +4098,8 @@ function singleCoinBaitResidualRouteContinuation(input, opportunity, bait, optio
     reward,
     staminaCost: Math.round(staminaCost),
     legCount: remaining.length,
+    aggregateReward,
+    aggregateStaminaCost: Math.round(aggregateStaminaCost),
     evaluationOrigin: {
       id: anchorKey,
       x: Number(source.x),
@@ -4099,10 +4110,11 @@ function singleCoinBaitResidualRouteContinuation(input, opportunity, bait, optio
       reward: firstFollowUpReward,
       staminaCost: Math.round(firstFollowUpStaminaCost)
     },
+    firstFollowUpProfitThresholdEligible,
     profitThresholdEligible,
     suppressionReason: profitThresholdEligible
-      ? 'eligible-first-follow-up-from-bait'
-      : 'first-follow-up-below-profit-threshold'
+      ? 'eligible-aggregate-route-from-bait'
+      : 'aggregate-route-from-bait-below-profit-threshold'
   };
 }
 
@@ -4247,7 +4259,12 @@ function buildSingleCoinBaitDecision(input, opportunity, stateful = {}, options 
     && Number(selectedSource?.amount) === 1
     ? selectedSource
     : null;
-  const baitReference = previous || selectedBaitCandidate;
+  const baitReference = previous && selectedBaitCandidate
+    && singleCoinBaitMatchesCore(previous, selectedBaitCandidate, {
+      sameCoinRadiusCm: options.singleCoinBaitSameCoinRadiusCm ?? BROWSER_RUNTIME_DEFAULTS.singleCoinBaitSameCoinRadiusCm
+    })
+    ? { ...previous, ...selectedBaitCandidate }
+    : (previous || selectedBaitCandidate);
   const anchoredOpportunities = singleCoinBaitAnchoredOpportunities(
     input,
     opportunity,
@@ -4274,12 +4291,23 @@ function buildSingleCoinBaitDecision(input, opportunity, stateful = {}, options 
   const selectedOpportunity = continuation
     ? { ...(opportunity?.choice || {}), residualRouteContinuation: continuation }
     : (opportunity?.choice || null);
+  const policyOpportunities = continuation && baitReference
+    ? anchoredOpportunities.map(candidate => {
+        const source = candidate?.sourceCoin || candidate?.coin || candidate;
+        return String(candidate?.type || '') === 'coin'
+          && singleCoinBaitMatchesCore(source, baitReference, {
+            sameCoinRadiusCm: options.singleCoinBaitSameCoinRadiusCm ?? BROWSER_RUNTIME_DEFAULTS.singleCoinBaitSameCoinRadiusCm
+          })
+          ? { ...candidate, residualRouteContinuation: continuation }
+          : candidate;
+      })
+    : anchoredOpportunities;
   const policy = singleCoinBaitPolicyCore({
     self: input?.self || null,
     nowMs: input?.nowMs,
     previous,
     selectedOpportunity,
-    opportunities: anchoredOpportunities,
+    opportunities: policyOpportunities,
     visibleCoins: singleCoinBaitVisibleCoins(input, previous),
     entryCoins: input?.profitCoins || [],
     allowEnter
