@@ -16950,6 +16950,100 @@ async function runSelfTest() {
       want: 'flee|safety|avoid-invulnerable-target|8|true|5000|1'
     },
     {
+      name: 'browserless high hp ignores undamaging active invulnerable player in planner and realtime control',
+      got: (() => {
+        const stateAt = ({ hp = 100, tick = 100, targetUserId = 8, coin = true } = {}) => {
+          const self = {
+            entity_id: 1,
+            user_id: 7,
+            name: 'self',
+            x: 0,
+            y: 0,
+            hp,
+            max_hp: 100,
+            stamina_5s_remaining_milli: 10000
+          };
+          const target = {
+            entity_id: 2,
+            ...(targetUserId === null ? {} : { user_id: targetUserId }),
+            name: 'invulnerable-active',
+            x: 12000,
+            y: 0,
+            hp: 100,
+            current_join_mode: 'Active',
+            firing: true,
+            invulnerable_remaining_ms: 5000,
+            drop: 5
+          };
+          return {
+            userId: 7,
+            realtime: {
+              tick,
+              frameAgeMs: 0,
+              self,
+              entities: [self, target],
+              bullets: [],
+              coinDrops: coin ? [{ drop_id: 'coin', amount: 1, x: 15000, y: 0 }] : []
+            },
+            fallback: { tick, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+          };
+        };
+        const options = {
+          nowMs: 1000,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dailyDamageUserIds: [],
+          dynamicProfitThresholdEnabled: false,
+          finalActionArbitrationHoldMs: 0,
+          opportunitySwitchHoldMs: 0
+        };
+        const highHp = buildBrowserlessDecision(stateAt(), {}, options);
+        const highHpRealtime = buildBrowserlessRealtimeControlDecision(stateAt(), {}, options);
+        const boundary = buildBrowserlessDecision(stateAt({ hp: 80 }), {}, options);
+        const boundaryRealtime = buildBrowserlessRealtimeControlDecision(stateAt({ hp: 80 }), {}, options);
+        const damaged = buildBrowserlessDecision(stateAt(), {}, { ...options, dailyDamageUserIds: [8] });
+        const damagedRealtime = buildBrowserlessRealtimeControlDecision(
+          stateAt(),
+          {},
+          { ...options, dailyDamageUserIds: [8] }
+        );
+        const unknownId = buildBrowserlessDecision(stateAt({ targetUserId: null }), {}, options);
+
+        const memoryState = {};
+        const remembered = buildBrowserlessDecision(
+          stateAt({ hp: 80, tick: 1, coin: false }),
+          memoryState,
+          options
+        );
+        const rememberedCount = Object.keys(memoryState.recentInvulnerableThreats || {}).length;
+        const released = buildBrowserlessDecision(
+          stateAt({ hp: 100, tick: 2 }),
+          memoryState,
+          { ...options, nowMs: 1050 }
+        );
+        return [
+          highHp.kind,
+          highHp.reason,
+          highHp.action.target?.id,
+          highHp.input.nearby.p.length,
+          highHpRealtime.action === null,
+          highHpRealtime.combat.target === null,
+          highHpRealtime.input.nearby.p.length,
+          boundary.reason,
+          boundaryRealtime.reason,
+          damaged.reason,
+          damagedRealtime.reason,
+          unknownId.reason,
+          remembered.reason,
+          rememberedCount,
+          released.kind,
+          released.action.target?.id,
+          Object.keys(memoryState.recentInvulnerableThreats || {}).length
+        ].join('|');
+      })(),
+      want: 'profit-candidate|visible-coin|coin|1|true|true|1|avoid-invulnerable-target|avoid-invulnerable-target|avoid-invulnerable-target|avoid-invulnerable-target|avoid-invulnerable-target|avoid-invulnerable-target|1|profit-candidate|coin|0'
+    },
+    {
       name: 'browserless invulnerable threat memory requires stable clear evidence before releasing safety',
       got: (() => {
         const stateful = createBrowserlessDecisionState();

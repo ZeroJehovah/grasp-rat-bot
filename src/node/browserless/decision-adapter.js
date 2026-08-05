@@ -511,6 +511,7 @@ function buildWhitelistSafetyIdentityContext(options = {}, nowMs = Date.now()) {
     'dynamicWhitelistEnabledUserIds'
   );
   const damageStatus = dailyDamageTrackerStatus(options, nowMs);
+  const damageTracker = dailyDamagePlayerTracker(options);
   const damagedIds = new Set([
     ...(damageStatus.userIds || []),
     ...(damageStatus.players || []),
@@ -527,6 +528,13 @@ function buildWhitelistSafetyIdentityContext(options = {}, nowMs = Date.now()) {
     dynamicEnabledIds,
     damagedIds,
     damageStatus,
+    damageHistoryAuthoritative: Boolean(
+      typeof options.damagedSelfTodayCheck === 'function'
+        || (damageTracker && typeof damageTracker.status === 'function')
+        || options.damageActorUserIds instanceof Set
+        || Array.isArray(options.damageActorUserIds)
+        || Array.isArray(options.dailyDamageUserIds)
+    ),
     dynamicEnabledAuthority,
     creatorCheck: typeof options.creatorCheck === 'function' ? options.creatorCheck : null,
     dynamicMemberCheck: typeof options.dynamicWhitelistMemberCheck === 'function'
@@ -609,12 +617,29 @@ function refreshDecisionEntityActivity(entity, options = {}, self = null, whitel
     fullStamina5s,
     active: moving || firing || (isActiveEntity(entity) && (!fullStamina5s || isInvulnerableEntity(entity)))
   };
-  return annotateWhitelistSafetyPolicy(
+  const identityContext = whitelistIdentityContext || buildWhitelistSafetyIdentityContext(options, options.nowMs);
+  const annotated = annotateWhitelistSafetyPolicy(
     refreshed,
     self,
-    whitelistIdentityContext || buildWhitelistSafetyIdentityContext(options, options.nowMs),
+    identityContext,
     options
   );
+  const userId = targetStableUserId(annotated);
+  let damagedSelfToday = userId !== null && identityContext.damagedIds?.has(String(userId));
+  if (!damagedSelfToday && typeof identityContext.damagedCheck === 'function') {
+    try {
+      damagedSelfToday = Boolean(identityContext.damagedCheck(annotated));
+    } catch (_) {}
+  }
+  annotated.highHpUndamagedInvulnerableIgnored = Boolean(
+    identityContext.damageHistoryAuthoritative
+      && hpValue(self) > 80
+      && userId !== null
+      && annotated.active
+      && annotated.invulnerable
+      && !damagedSelfToday
+  );
+  return annotated;
 }
 
 function isCurrentlyActiveEntity(entity, options = {}) {
@@ -1045,6 +1070,7 @@ function isBrowserlessAvoidanceThreat(target) {
   if (!target || target.alive === false) return false;
   if (target.whitelisted) return false;
   if (target.easyKillThreatExempt) return false;
+  if (target.highHpUndamagedInvulnerableIgnored) return false;
   return Boolean(target.active && target.invulnerable);
 }
 
@@ -1109,6 +1135,10 @@ function mergeRecentInvulnerableThreats(visibleTargets, liveThreats, self, state
     }
     if (liveById.has(id)) continue;
     const visible = visibleById.get(id) || null;
+    if (visible?.highHpUndamagedInvulnerableIgnored) {
+      delete memory[id];
+      continue;
+    }
     if (visible) {
       const lastTick = numberOrNull(record.lastConfirmationTick);
       const fresh = currentTick !== null && (lastTick === null || currentTick > lastTick);
@@ -2721,6 +2751,7 @@ function panelPlayerTargetKey(target) {
 }
 
 function panelPlayerCandidates(input) {
+  if (Array.isArray(input?.panelVisibleTargets)) return input.panelVisibleTargets;
   return Array.isArray(input?.visibleTargets) ? input.visibleTargets : [];
 }
 
@@ -3012,9 +3043,10 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     self,
     whitelistIdentityContext
   ));
-  const visibleTargets = decisionEntities
+  const panelVisibleTargets = decisionEntities
     .filter(entity => Number(entity.user_id) !== selfUserId)
     .filter(entity => Number.isFinite(Number(entity.x)) && Number.isFinite(Number(entity.y)));
+  const visibleTargets = panelVisibleTargets.filter(entity => !entity.highHpUndamagedInvulnerableIgnored);
   reconcileEconomicStopLossCooldowns({
     nowMs,
     visibleTargets,
@@ -3032,7 +3064,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const activeThreats = visibleTargets.filter(entity => entity.active && entity.alive !== false && !entity.whitelisted && !entity.easyKillThreatExempt);
   const firingThreats = visibleTargets.filter(entity => entity.firing && entity.alive !== false && !entity.whitelisted && !entity.easyKillThreatExempt);
   const avoidanceThreats = mergeRecentInvulnerableThreats(
-    visibleTargets,
+    panelVisibleTargets,
     visibleTargets.filter(isBrowserlessAvoidanceThreat),
     self,
     stateful,
@@ -3170,6 +3202,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
       snapshotFallbackBlockedReasons
     },
     visibleTargets,
+    panelVisibleTargets,
     activeThreats,
     firingThreats,
     avoidanceThreats,
@@ -3299,13 +3332,14 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
   markInputStage('entity-normalize');
   annotateBrowserlessRecentActivity(realtimeEntities, stateful, nowMs, options);
   markInputStage('player-memory');
-  const visibleTargets = [];
+  const panelVisibleTargets = [];
   for (const entity of realtimeEntities) {
     const refreshed = refreshDecisionEntityActivity(entity, options, self, whitelistIdentityContext);
     if (!Number.isFinite(Number(refreshed.x)) || !Number.isFinite(Number(refreshed.y))) continue;
-    visibleTargets.push(refreshed);
+    panelVisibleTargets.push(refreshed);
   }
   markInputStage('visible-targets');
+  const visibleTargets = panelVisibleTargets.filter(entity => !entity.highHpUndamagedInvulnerableIgnored);
   reconcileEconomicStopLossCooldowns({
     nowMs,
     visibleTargets,
@@ -3342,7 +3376,7 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
   let avoidanceThreats;
   try {
     avoidanceThreats = mergeRecentInvulnerableThreats(
-      visibleTargets,
+      panelVisibleTargets,
       liveAvoidanceThreats,
       self,
       stateful,
@@ -3392,6 +3426,7 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
       coinDropCount: realtimeObservedCoins.length
     },
     visibleTargets,
+    panelVisibleTargets,
     activeThreats,
     firingThreats,
     avoidanceThreats,
@@ -3430,6 +3465,7 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
       metadataEntityCount: snapshotEntitiesByUserId.size,
       normalizedEntityCount: realtimeEntities.length + (self ? 1 : 0),
       visibleTargetCount: visibleTargets.length,
+      panelVisibleTargetCount: panelVisibleTargets.length,
       bulletCount: Array.isArray(realtime.bullets) ? realtime.bullets.length : 0
     });
   }
