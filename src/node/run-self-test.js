@@ -25528,6 +25528,104 @@ async function runSelfTest() {
       want: 'true||||2|vel -1 0,vel 0 0|flee|avoid-invulnerable-target'
     },
     {
+      name: 'browserless realtime worker noop does not block profit planner',
+      got: (async () => {
+        let t = Date.UTC(2026, 6, 8, 1, 0, 0);
+        let wsOptions = null;
+        let realtimeEvaluations = 0;
+        let plannerDecisions = 0;
+        const frame = encodeGrzFrameForTest({
+          type: 'pos',
+          tick: 30,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 }],
+          bullets: []
+        });
+        const realtimeWorker = {
+          ready: async () => true,
+          evaluate: async state => {
+            realtimeEvaluations += 1;
+            await Promise.resolve();
+            return {
+              control: {
+                kind: '',
+                band: '',
+                reason: '',
+                action: null,
+                combat: { target: null },
+                input: { self: state?.realtime?.self || null },
+                tick: state?.realtime?.tick ?? null
+              },
+              effects: [],
+              computeMs: 0,
+              roundTripMs: 0,
+              requestAtMs: state?.realtime?.receivedAtMs || t,
+              tick: state?.realtime?.tick ?? null
+            };
+          },
+          syncPlannerDecision: () => true,
+          observeActionResult: () => true,
+          noteRealtimeFinalActionPreemption: () => true,
+          patchState: () => true,
+          flush: async () => true,
+          requestPersistence: async () => ({ persistenceState: null, statusSummary: null }),
+          finalize: async () => null,
+          close: async () => ({ closed: true })
+        };
+        const result = await runReadOnlyCanary({
+          gameOrigin: 'https://grasp-rat-game.h-e.top',
+          snapshotPath: '/snapshot',
+          wsPath: '/ws',
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          readOnlyProbeMs: 1000,
+          decisionIntervalMs: 250,
+          frameGapAlertMs: 5000,
+          userId: 7,
+          sessionToken: 'realtime-noop-planner-token'
+        }, {
+          now: () => t,
+          sleep: async ms => {
+            t += ms;
+            if (wsOptions && !realtimeEvaluations) wsOptions.onMessage(frame);
+            await Promise.resolve();
+          },
+          realtimeControlWorker: realtimeWorker,
+          persistedState: {
+            loginPointSafety: { point: { x: 0, y: 0, hp: 79, source: 'test' } }
+          },
+          onDecision: () => { plannerDecisions += 1; },
+          fetchImpl: async () => fakeResponseForTest({
+            body: {
+              type: 'snapshot',
+              tick: 29,
+              entities: [{ entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100 }],
+              bullets: [],
+              coin_drops: [{ drop_id: 3, amount: 2, x: 1000, y: 0 }],
+              messages: []
+            }
+          }),
+          openBrowserlessWs: async options => {
+            wsOptions = options;
+            return {
+              isOpen: () => true,
+              close: () => {},
+              sendVelocity: () => {},
+              sendShoot: () => {}
+            };
+          },
+          leaveWithVerification: async () => ({ ok: true, attempts: [{ ok: true, summary: { leaveConfirmed: true } }] })
+        });
+        return [
+          result.ok,
+          result.decisions.evaluatedCount,
+          result.decisions.realtimeControlCount,
+          plannerDecisions > 0,
+          realtimeEvaluations > 0
+        ].join('|');
+      })(),
+      want: 'true|1|0|true|true'
+    },
+    {
       name: 'browserless combat-live canary sends guarded shoot only when enabled',
       got: (async () => {
         let t = Date.UTC(2026, 6, 8, 1, 0, 0);

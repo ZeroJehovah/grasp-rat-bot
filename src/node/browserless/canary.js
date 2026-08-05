@@ -3317,6 +3317,9 @@ async function runReadOnlyCanary(config, options = {}) {
           realtimeControlWorkerQueued = { state: currentState, atMs, force };
         }
         if (outerStages) outerStages['realtime-worker-queued'] = 0;
+        // A queued realtime evaluation is not control ownership. When the
+        // worker has no active safety/combat action, the ordinary planner must
+        // remain eligible while the worker evaluates the newest frame.
         return realtimeControlActive;
       }
     }
@@ -3370,7 +3373,9 @@ async function runReadOnlyCanary(config, options = {}) {
         finishRealtimeControlWorkerRequest(request, null, error);
       });
       if (outerStages) outerStages['realtime-worker-post'] = 0;
-      return true;
+      // Posting work only reserves the realtime lane. It must not suppress
+      // profit planning unless realtime control already owns an action.
+      return realtimeControlActive;
     }
     const completeStarted = performance.now();
     const previousProcessedTick = lastCombatControlTick;
