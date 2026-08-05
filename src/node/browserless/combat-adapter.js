@@ -1281,6 +1281,12 @@ function estimateAim(self, target, options = {}) {
   const timing = options.executionTiming || {};
   const timingMedian = Number.isFinite(Number(timing.medianTicks)) ? Number(timing.medianTicks) : 5;
   const timingMad = Number.isFinite(Number(timing.madTicks)) ? Number(timing.madTicks) : 0;
+  const timingSource = String(timing.source || 'startup-default');
+  const timingSampleCount = Number(timing.sampleCount);
+  const confirmedTimingSamples = timingSource === 'confirmed-shoot-rolling'
+    && Number.isFinite(timingSampleCount)
+    ? Math.max(0, timingSampleCount)
+    : 0;
   const fireRiskClassification = combatTargetState?.fireRiskClassification || classifyFireRiskCore(null, {
     targetId: combatTargetId(target),
     nowMs: options.nowMs,
@@ -1295,8 +1301,8 @@ function estimateAim(self, target, options = {}) {
     recentHitRate: behavior?.recentHitRate
   });
   const highEntropy = Boolean(fireRiskClassification.highEntropy);
-  let observationToExecutionTicks = Math.max(3, Math.min(12, Math.round(
-    timingMedian + (highEntropy ? Math.max(1, timingMad * (profile.maneuverScale >= 0.65 ? 2 : 1)) : 0)
+  let observationToExecutionTicks = Math.max(0, Math.min(12, Math.round(
+    timingMedian + (highEntropy ? timingMad * (profile.maneuverScale >= 0.65 ? 2 : 1) : 0)
   )));
   const finishProtection = hpValue(target) !== null && hpValue(self) !== null
     && hpValue(target) <= Number(options.combatFinishLowThreatHp ?? COMBAT_CONSTANTS.FINISH_LOW_THREAT_HP)
@@ -1305,7 +1311,11 @@ function estimateAim(self, target, options = {}) {
     Number(behavior?.recentHitRate || 0),
     Number(combatTargetState?.provenHitRate || 0)
   ) >= 0.12;
-  if (finishProtection || successfulAimProtection) observationToExecutionTicks = 3;
+  const unmeasuredDelayProtection = confirmedTimingSamples === 0
+    && (finishProtection || successfulAimProtection);
+  if (unmeasuredDelayProtection) {
+    observationToExecutionTicks = 3;
+  }
   const responsePolicy = behavior?.responsePolicy || opponentResponsePolicyCore(behavior?.mode || 'mixed/unknown', {
     distance,
     nowMs: options.nowMs
@@ -1323,13 +1333,17 @@ function estimateAim(self, target, options = {}) {
   const creationDelayMinTicks = Math.max(0, numberOrNull(
     options.combatAimCreationDelayMinTicks
       ?? timing.minTicks
-      ?? timing.medianTicks
+      ?? (unmeasuredDelayProtection ? observationToExecutionTicks : timing.medianTicks)
   ) ?? observationToExecutionTicks);
   const creationDelayMaxTicks = Math.max(creationDelayMinTicks, numberOrNull(
     options.combatAimCreationDelayMaxTicks
       ?? timing.maxTicks
-      ?? timing.p90Ticks
+      ?? (unmeasuredDelayProtection ? observationToExecutionTicks : timing.p90Ticks)
   ) ?? observationToExecutionTicks);
+  observationToExecutionTicks = Math.max(
+    creationDelayMinTicks,
+    Math.min(creationDelayMaxTicks, observationToExecutionTicks)
+  );
   const realtimeStateObservedAtMs = numberOrNull(
     options.realtimeStateObservedAtMs
       ?? options.observedAtMs
@@ -2013,9 +2027,12 @@ function estimateAim(self, target, options = {}) {
         ? null
         : Number(options.observedTick) + observationToExecutionTicks,
       executionDelayTicks: observationToExecutionTicks,
-      delaySource: finishProtection
-        ? 'low-hp-finish-protection'
-        : (successfulAimProtection ? 'proven-hit-rate-protection' : String(timing.source || 'startup-default')),
+      delaySource: confirmedTimingSamples > 0
+        ? timingSource
+        : (unmeasuredDelayProtection
+            ? (finishProtection ? 'low-hp-finish-protection' : 'proven-hit-rate-protection')
+            : timingSource),
+      confirmedTimingSamples,
       rollingMedianTicks: timingMedian,
       rollingP90Ticks: Number.isFinite(Number(timing.p90Ticks)) ? Number(timing.p90Ticks) : 5,
       rollingMadTicks: timingMad

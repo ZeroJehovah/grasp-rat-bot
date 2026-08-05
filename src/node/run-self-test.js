@@ -18262,6 +18262,104 @@ async function runSelfTest() {
       want: 'east|4|new|fast|receding|true|true|3|east|true'
     },
     {
+      name: 'browserless combat aim keeps startup delay until shoot ACK timing exists',
+      got: (() => {
+        const aim = estimateAim(
+          { user_id: 7, x: 1000, y: 0, vx: 50, vy: 0, hp: 100 },
+          { user_id: 8, x: 5000, y: 0, vx: -50, vy: 0, hp: 80, moving: true },
+          {
+            observedTick: 100,
+            executionTiming: {
+              sampleCount: 0,
+              medianTicks: 5,
+              p90Ticks: 5,
+              madTicks: 0,
+              source: 'startup-default'
+            }
+          }
+        );
+        return [
+          aim.observationToExecutionTicks,
+          aim.timing.createdTickEstimate,
+          aim.timing.delaySource,
+          aim.timing.confirmedTimingSamples,
+          aim.predictedShooterOrigin.x,
+          aim.predictedTargetAtCreation.x,
+          aim.fireReachability.creationDelayWindowTicks.min,
+          aim.fireReachability.creationDelayWindowTicks.max
+        ].join('|');
+      })(),
+      want: '5|105|startup-default|0|1250|4750|5|5'
+    },
+    {
+      name: 'browserless combat aim uses confirmed ACK creation delay without artificial entropy padding',
+      got: (() => {
+        const aim = estimateAim(
+          { user_id: 7, x: 1000, y: 0, vx: 50, vy: 0, hp: 100 },
+          { user_id: 8, x: 5000, y: 0, vx: -50, vy: 0, hp: 80, moving: true },
+          {
+            observedTick: 100,
+            combatTargetState: {
+              fireRiskClassification: { highEntropy: true },
+              motionSamples: [],
+              opponentBehaviorState: { mode: 'zigzag-strafe' }
+            },
+            executionTiming: {
+              sampleCount: 64,
+              medianTicks: 1,
+              p90Ticks: 2,
+              madTicks: 0,
+              source: 'confirmed-shoot-rolling'
+            }
+          }
+        );
+        return [
+          aim.observationToExecutionTicks,
+          aim.timing.createdTickEstimate,
+          aim.timing.delaySource,
+          aim.timing.confirmedTimingSamples,
+          aim.predictedShooterOrigin.x,
+          aim.predictedTargetAtCreation.x,
+          aim.fireReachability.creationDelayWindowTicks.min,
+          aim.fireReachability.creationDelayWindowTicks.max
+        ].join('|');
+      })(),
+      want: '1|101|confirmed-shoot-rolling|64|1050|4950|1|2'
+    },
+    {
+      name: 'browserless combat aim protections preserve confirmed ACK creation delay',
+      got: (() => {
+        const aim = estimateAim(
+          { user_id: 7, x: 1000, y: 0, vx: 50, vy: 0, hp: 100 },
+          { user_id: 8, x: 5000, y: 0, vx: -50, vy: 0, hp: 10, moving: true },
+          {
+            observedTick: 100,
+            combatTargetState: {
+              provenHitRate: 0.2,
+              motionSamples: [],
+              opponentBehaviorState: { mode: 'steady-linear', recentHitRate: 0.2 }
+            },
+            executionTiming: {
+              sampleCount: 16,
+              medianTicks: 1,
+              p90Ticks: 1,
+              madTicks: 0,
+              source: 'confirmed-shoot-rolling'
+            }
+          }
+        );
+        return [
+          aim.successfulAimProtection,
+          aim.observationToExecutionTicks,
+          aim.timing.delaySource,
+          aim.timing.confirmedTimingSamples,
+          aim.predictedShooterOrigin.x,
+          aim.predictedTargetAtCreation.x
+        ].join('|');
+      })(),
+      want: 'true|1|confirmed-shoot-rolling|16|1050|4950'
+    },
+    {
       name: 'browserless shared route learning selects a bounded conditional route with calibrated hit probability',
       got: (() => {
         const contextKey = 'mode=zigzag-strafe|distance=far|direction=east|dwell=settled|speed=fast|radial=stable|lateral=center';

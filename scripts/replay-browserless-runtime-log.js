@@ -596,6 +596,7 @@ function theoreticalShotMinimumMiss(rows, ack) {
 }
 
 const confirmedShotAckCache = new Map();
+const confirmedShotRunnerCache = new Map();
 
 function confirmedShotAcksForFile(wsFile) {
   const resolved = path.resolve(wsFile);
@@ -611,14 +612,46 @@ function confirmedShotAcksForFile(wsFile) {
   return shots;
 }
 
+function confirmedShotAcksForRunnerFile(runnerFile) {
+  const resolved = path.resolve(runnerFile);
+  if (confirmedShotRunnerCache.has(resolved)) return confirmedShotRunnerCache.get(resolved);
+  const shotsByIdentity = new Map();
+  forEachJsonlEntry(resolved, entry => {
+    const confirmedShots = entry?.detail?.state?.command?.shooting?.confirmedShots;
+    if (!Array.isArray(confirmedShots)) return;
+    for (const ack of confirmedShots) {
+      const at = Number(ack?.acceptedAtMs ?? ack?.receivedAtMs);
+      const identity = String(ack?.bullet_id ?? ack?.ackIdentity ?? '');
+      const createdTick = Number(ack?.created_tick ?? ack?.createdTick);
+      if (!Number.isFinite(at) || !identity || !Number.isFinite(createdTick)) continue;
+      shotsByIdentity.set(identity, {
+        at,
+        ack: {
+          ...ack,
+          created_tick: createdTick,
+          expire_tick: Number(ack.expire_tick ?? ack.expireTick ?? createdTick + 30)
+        }
+      });
+    }
+  });
+  const shots = Array.from(shotsByIdentity.values()).sort((left, right) => left.at - right.at);
+  confirmedShotRunnerCache.set(resolved, shots);
+  return shots;
+}
+
 function confirmedShotsForRows(options, rows) {
   if (!rows.length) return [];
-  const wsFile = options.wsFile || movementReplayLogFiles(options).wsFile;
-  if (!fs.existsSync(wsFile)) return [];
+  const { runnerFile, wsFile } = movementReplayLogFiles(options);
   const firstAt = Date.parse(rows[0].entry.at) - 3000;
   const lastAt = Date.parse(rows[rows.length - 1].entry.at) + 3000;
   const selfId = String(rows[0].detail.self?.userId ?? '');
-  return confirmedShotAcksForFile(wsFile).filter(shot => (
+  const candidates = fs.existsSync(wsFile)
+    ? confirmedShotAcksForFile(wsFile)
+    : [];
+  const fallbackCandidates = candidates.length === 0 && fs.existsSync(runnerFile)
+    ? confirmedShotAcksForRunnerFile(runnerFile)
+    : [];
+  return (candidates.length ? candidates : fallbackCandidates).filter(shot => (
     shot.at >= firstAt
       && shot.at <= lastAt
       && String(shot.ack.owner_user_id ?? '') === selfId
@@ -953,7 +986,8 @@ function replayCombat(options) {
   let improvedFirstHitAt = 0;
   for (const shot of confirmedShots) {
     const createdTick = Number(shot.ack.created_tick);
-    const rowIndex = Math.max(0, rows.findLastIndex(row => Number(row.detail.tick) <= createdTick));
+    const observedTick = numberOrNull(shot.ack.observedTick) ?? createdTick;
+    const rowIndex = Math.max(0, rows.findLastIndex(row => Number(row.detail.tick) <= observedTick));
     const row = rows[rowIndex];
     const history = rows.slice(Math.max(0, rowIndex - 40), rowIndex + 1).map(item => ({
       at: Date.parse(item.entry.at),
@@ -1000,16 +1034,22 @@ function replayCombat(options) {
     state.fireRiskClassification = row.detail.shooting?.fireRiskClassification
       || state.fireRiskClassification
       || null;
-    const replayExecutionDelayTicks = numberOrNull(row.detail.aim?.timing?.executionDelayTicks)
+    const confirmedExecutionDelayTicks = numberOrNull(shot.ack.executionDelayTicks)
+      ?? (Number.isFinite(createdTick) && Number.isFinite(observedTick) ? createdTick - observedTick : null);
+    const replayExecutionDelayTicks = confirmedExecutionDelayTicks
+      ?? numberOrNull(row.detail.aim?.timing?.executionDelayTicks)
       ?? options.executionDelayTicks;
     const recomputedAim = estimateAim(replaySelf, replayTarget, {
       combatTargetState: state,
-      observedTick: row.detail.tick,
+      observedTick,
       executionTiming: {
+        sampleCount: confirmedExecutionDelayTicks === null ? 0 : 1,
         medianTicks: replayExecutionDelayTicks,
         p90Ticks: replayExecutionDelayTicks,
         madTicks: 0,
-        source: 'logged-frame-execution-delay'
+        source: confirmedExecutionDelayTicks === null
+          ? 'logged-frame-execution-delay'
+          : 'confirmed-shoot-rolling'
       },
       actualShots: shotEvaluations.length,
       // The legacy fixed four-route rotation is intentionally available only
