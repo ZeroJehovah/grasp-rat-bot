@@ -137,7 +137,14 @@ async function fetchWithTimeout(url, options = {}) {
   }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const { timeoutMs: _timeoutMs, fetchImpl: _fetchImpl, localAddress, ...fetchOptions } = options;
+  const {
+    timeoutMs: _timeoutMs,
+    fetchImpl: _fetchImpl,
+    localAddress,
+    requestClass: _requestClass,
+    challengePolicy: _challengePolicy,
+    ...fetchOptions
+  } = options;
   if (localAddress) {
     fetchOptions.dispatcher = fetchOptions.dispatcher || dispatcherForLocalAddress(localAddress);
     fetchOptions.localAddress = localAddress;
@@ -237,7 +244,8 @@ function extractAuthUrl(payload) {
 
 async function requestAuthUrl(options = {}) {
   const gameOrigin = String(options.gameOrigin || DEFAULT_GAME_ORIGIN).replace(/\/$/, '');
-  const response = await fetchWithTimeout(`${gameOrigin}/auth/linuxdo/start`, {
+  const request = options.fetchWithTimeout || fetchWithTimeout;
+  const response = await request(`${gameOrigin}/auth/linuxdo/start`, {
     fetchImpl: options.fetchImpl,
     timeoutMs: options.timeoutMs,
     localAddress: options.localAddress,
@@ -468,7 +476,8 @@ async function submitApproveCurl(rawInput, options = {}) {
   if (!request.headers.cookie) {
     throw new Error('approve curl is missing Cookie header; use browser DevTools "Copy as cURL" for the LinuxDO approve request');
   }
-  const approveResponse = await fetchWithTimeout(request.url, {
+  const requestWithTimeout = options.fetchWithTimeout || fetchWithTimeout;
+  const approveResponse = await requestWithTimeout(request.url, {
     fetchImpl: options.fetchImpl,
     timeoutMs: options.timeoutMs,
     localAddress: options.localAddress,
@@ -499,7 +508,8 @@ async function submitApproveCurl(rawInput, options = {}) {
 }
 
 async function submitGameCallbackUrl(url, options = {}) {
-  const response = await fetchWithTimeout(url, {
+  const requestWithTimeout = options.fetchWithTimeout || fetchWithTimeout;
+  const response = await requestWithTimeout(url, {
     fetchImpl: options.fetchImpl,
     timeoutMs: options.timeoutMs,
     localAddress: options.localAddress,

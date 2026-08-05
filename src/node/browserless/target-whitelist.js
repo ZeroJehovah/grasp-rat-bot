@@ -14,6 +14,7 @@ const {
   readResponseBody,
   redactSecrets
 } = require('./session-client');
+const { REQUEST_CLASSES } = require('./request-rate-policy');
 
 const DEFAULT_TARGET_WHITELIST_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/dist/target-whitelist.json';
 const DEFAULT_LOCAL_TARGET_WHITELIST_FILE = path.resolve(__dirname, '../../..', 'dist', 'target-whitelist.json');
@@ -123,6 +124,7 @@ function createBrowserlessTargetWhitelist(options = {}) {
         fetchImpl,
         timeoutMs,
         localAddress,
+        requestClass: REQUEST_CLASSES.LOGIN,
         cache: 'no-store'
       });
       const body = await readResponseBody(response);

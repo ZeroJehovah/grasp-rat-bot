@@ -99,6 +99,10 @@ const {
 const { browserlessRuntimeRevision, browserlessRuntimeRevisionStatus } = require('./runtime-revision');
 const { runSnapshotEdgeSelfTest } = require('./snapshot-edge-wait');
 const {
+  REQUEST_CLASSES,
+  runRequestRatePolicySelfTest
+} = require('./request-rate-policy');
+const {
   normalizePendingExit,
   pendingExitFromCanary,
   pendingExitSnapshotResolution,
@@ -372,6 +376,141 @@ function runLoginPointSingleBlockerSelfTest() {
     lowHpResetReason: lowHp.summary.safety.singleBlockerHold.resetReason,
     staleResetReason: stale.summary.safety.singleBlockerHold.resetReason,
     compactFactorCount: compact.loginPointSafety.detail.blockingFactors.length
+  };
+}
+
+async function runLoginPointHighHpExemptionSelfTest() {
+  const config = {
+    gameOrigin: 'https://snapshot-safety.example',
+    snapshotPath: '/snapshot',
+    userId: 7,
+    sessionToken: 'high-hp-self-test-token',
+    snapshotEdgeEnabled: false,
+    loginPointSafetySuccessRequired: 1
+  };
+  const payload = {
+    tick: 100,
+    entities: [],
+    bullets: [],
+    coin_drops: [],
+    messages: []
+  };
+  const response = {
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    headers: { get: () => '' },
+    text: async () => JSON.stringify(payload)
+  };
+  let fetchCount = 0;
+  const deps = {
+    now: () => Date.UTC(2026, 7, 5, 0, 0, 0),
+    fetchWithTimeout: async () => {
+      fetchCount += 1;
+      return response;
+    }
+  };
+  const highHp = await runPreLoginSnapshotSafety(config, {
+    loginPointSafety: { point: { x: 0, y: 0, hp: 80, source: 'self-test' } }
+  }, deps);
+  const highHpFetchCount = fetchCount;
+  const lowHp = await runPreLoginSnapshotSafety(config, {
+    loginPointSafety: { point: { x: 0, y: 0, hp: 79, source: 'self-test' } }
+  }, deps);
+  const lowHpFetchCount = fetchCount;
+  const recovery = await runPreLoginSnapshotSafety(config, {
+    loginPointSafety: { point: { x: 0, y: 0, hp: 100, source: 'self-test' } },
+    runner: { pendingExit: { exitAttemptId: 'self-test-pending-exit' } }
+  }, deps);
+  const recoveryFetchCount = fetchCount;
+  return {
+    ok: Boolean(
+      highHp.ok
+        && highHp.reason === 'login-point-self-hp-exempt'
+        && highHp.bypassedPreLoginSafety === true
+        && highHp.bypassKind === 'high-self-hp'
+        && highHpFetchCount === 0
+        && lowHpFetchCount === 1
+        && lowHp.bypassedPreLoginSafety !== true
+        && recoveryFetchCount === 2
+        && recovery.bypassedPreLoginSafety !== true
+    ),
+    highHp,
+    lowHp: {
+      reason: lowHp.reason,
+      bypassedPreLoginSafety: Boolean(lowHp.bypassedPreLoginSafety),
+      fetchCount: lowHpFetchCount
+    },
+    recovery: {
+      reason: recovery.reason,
+      bypassedPreLoginSafety: Boolean(recovery.bypassedPreLoginSafety),
+      fetchCount: recoveryFetchCount
+    }
+  };
+}
+
+async function runRequestRateControllerSelfTest() {
+  let nowMs = 0;
+  const waits = [];
+  const requests = [];
+  const controller = createSourceIpController({
+    config: { sourceIp: '10.0.0.1' },
+    now: () => nowMs,
+    sleep: async delayMs => {
+      waits.push(delayMs);
+      nowMs += delayMs;
+    },
+    fetchWithTimeout: async (url, options = {}) => {
+      requests.push({ url: String(url), atMs: nowMs, options });
+      return { ok: true, status: 200 };
+    },
+    requestAuthUrl: async options => {
+      await options.fetchWithTimeout('login-auth', {});
+      return 'https://connect.linux.do/oauth2/authorize/self-test';
+    },
+    submitCallbackInput: async (_input, options) => {
+      await options.fetchWithTimeout('login-callback', {});
+      return { login: { userId: 7, sessionToken: 'self-test' } };
+    },
+    leaveWithVerification: async options => {
+      await options.fetchWithTimeout('exit-leave', {});
+      return { ok: true, attempts: [] };
+    }
+  });
+
+  await Promise.all([
+    controller.fetchWithTimeout('gameplay-snapshot-1', {
+      requestClass: REQUEST_CLASSES.GAMEPLAY_SNAPSHOT
+    }),
+    controller.fetchWithTimeout('gameplay-snapshot-2', {
+      requestClass: REQUEST_CLASSES.GAMEPLAY_SNAPSHOT
+    })
+  ]);
+  await controller.fetchWithTimeout('source-ip-probe', {
+    requestClass: REQUEST_CLASSES.SOURCE_IP_PROBE
+  });
+  await controller.requestAuthUrl();
+  await controller.submitCallbackInput('self-test-callback');
+  await controller.leaveWithVerification();
+
+  const snapshotRequests = requests.filter(item => item.url.startsWith('gameplay-snapshot-'));
+  const snapshotGapMs = snapshotRequests.length === 2
+    ? snapshotRequests[1].atMs - snapshotRequests[0].atMs
+    : 0;
+  const exemptRequests = requests.filter(item => !item.url.startsWith('gameplay-snapshot-'));
+  return {
+    ok: Boolean(
+      snapshotRequests.length === 2
+        && snapshotGapMs >= 30000
+        && waits.length === 1
+        && waits[0] >= 30000
+        && exemptRequests.length === 4
+        && new Set(exemptRequests.map(item => item.atMs)).size === 1
+    ),
+    snapshotGapMs,
+    waits,
+    requests: requests.map(item => ({ url: item.url, atMs: item.atMs })),
+    exemptRequestCount: exemptRequests.length
   };
 }
 
@@ -1842,6 +1981,7 @@ async function runBrowserlessRunner(config, deps = {}) {
     state: persisted,
     logStore,
     now,
+    sleep,
     fetchWithTimeout: deps.fetchWithTimeout,
     openBrowserlessWs: deps.openBrowserlessWs,
     requestAuthUrl: deps.requestAuthUrl,
@@ -1875,6 +2015,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       const response = await sourceIpController.fetchWithTimeout(url, {
         timeoutMs: config.httpTimeoutMs || config.wsConnectTimeoutMs || 10000,
         method: 'GET',
+        requestClass: REQUEST_CLASSES.GAMEPLAY_SNAPSHOT,
         cache: 'no-store'
       });
       const body = await readResponseBody(response);
@@ -4935,6 +5076,9 @@ async function runCriticalLatencyExitRegressionSelfTest() {
 async function runBrowserlessRunnerSelfTest() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-browserless-runner-'));
   try {
+    const requestRatePolicy = await runRequestRatePolicySelfTest();
+    const requestRateController = await runRequestRateControllerSelfTest();
+    const loginPointHighHpExemption = await runLoginPointHighHpExemptionSelfTest();
     const sourceIpProbe = await runSourceIpProbeSelfTest();
     const sourceIpPreflight = await runSourceIpPreflightSelfTest();
     const sourceIpPreflightRunner = await runSourceIpPreflightRunnerIntegrationSelfTest(tmp);
@@ -6921,6 +7065,9 @@ async function runBrowserlessRunnerSelfTest() {
     return {
       ok: Boolean(
         sourceIpProbe.ok
+        && requestRatePolicy.ok
+        && requestRateController.ok
+        && loginPointHighHpExemption.ok
         && dryRun.ok
         && sourceIpPreflight.ok
         && sourceIpPreflightRunner.ok
@@ -6990,6 +7137,9 @@ async function runBrowserlessRunnerSelfTest() {
       ),
       establishedCombatLootPriority: establishedCombatLootPriorityTest,
       sourceIpProbe,
+      requestRatePolicy,
+      requestRateController,
+      loginPointHighHpExemption,
       sourceIpPreflight,
       sourceIpPreflightRunner,
       criticalLatencyExitRegression,

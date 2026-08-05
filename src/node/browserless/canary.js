@@ -46,6 +46,7 @@ const {
   pendingExitSnapshotResolution
 } = require('./pending-exit-recovery');
 const { createBrowserlessTargetWhitelist } = require('./target-whitelist');
+const { REQUEST_CLASSES } = require('./request-rate-policy');
 const { browserlessRuntimeRevision, browserlessRuntimeRevisionStatus } = require('./runtime-revision');
 const { createBrowserlessDecisionWorker } = require('./decision-worker');
 const { createBrowserlessRealtimeControlWorker } = require('./realtime-control-worker');
@@ -73,6 +74,7 @@ const DEFAULT_REALTIME_CONTROL_WORKER_MAX_STALE_TICKS = 2;
 const DEFAULT_REALTIME_CONTROL_WORKER_PERSISTENCE_INTERVAL_MS = 1000;
 const DEFAULT_LOGIN_POINT_SINGLE_BLOCKER_BYPASS_MS = 60 * 60 * 1000;
 const DEFAULT_LOGIN_POINT_FULL_HP = 100;
+const LOGIN_POINT_SAFETY_HP_EXEMPTION_THRESHOLD = 80;
 const DEFAULT_ACTION_SKIP_PUBLICATION_WINDOW_MS = 500;
 const CREATOR_USER_ID = 28886;
 
@@ -982,6 +984,36 @@ function loginPointFromState(state) {
   };
 }
 
+function highHpLoginPointSafetyExemption(state, checkedAtMs = Date.now()) {
+  const loginPoint = loginPointFromState(state);
+  const hp = Number(loginPoint?.hp);
+  const recoveryRequiresSnapshot = Boolean(
+    state?.runner?.pendingExit
+      || state?.runner?.transportRecovery
+      || state?.stats?.currentSession?.online === true
+  );
+  if (
+    recoveryRequiresSnapshot
+      || !loginPoint
+      || !Number.isFinite(hp)
+      || hp < LOGIN_POINT_SAFETY_HP_EXEMPTION_THRESHOLD
+  ) {
+    return null;
+  }
+  return {
+    ok: true,
+    reason: 'login-point-self-hp-exempt',
+    bypassedPreLoginSafety: true,
+    bypassKind: 'high-self-hp',
+    required: 1,
+    streak: 1,
+    satisfied: true,
+    checkedAt: new Date(checkedAtMs).toISOString(),
+    loginPoint,
+    point: loginPoint
+  };
+}
+
 function loginPointSingleBlockerHold(state) {
   const value = state?.loginPointSafety?.detail?.singleBlockerHold;
   return value && typeof value === 'object' ? value : null;
@@ -1098,6 +1130,7 @@ async function fetchPreLoginSnapshot(config, deps = {}) {
     fetchImpl,
     timeoutMs: config.httpTimeoutMs || config.wsConnectTimeoutMs || 10000,
     localAddress: config.sourceIp,
+    requestClass: REQUEST_CLASSES.LOGIN,
     challengePolicy: 'login-stop',
     method: 'GET',
     cache: 'no-store'
@@ -1266,6 +1299,12 @@ async function runSinglePreLoginSnapshotSafetyProbe(config, state, deps = {}, de
 }
 
 async function runPreLoginSnapshotSafety(config, state, deps = {}) {
+  const checkedAtMs = typeof deps.now === 'function' ? deps.now() : Date.now();
+  const highHpExemption = highHpLoginPointSafetyExemption(state, checkedAtMs);
+  if (highHpExemption) {
+    if (typeof deps.onSnapshotSafety === 'function') deps.onSnapshotSafety(highHpExemption);
+    return highHpExemption;
+  }
   if (config.snapshotEdgeEnabled === true) {
     const edge = await waitForSnapshotEdge({
       now: deps.now,
@@ -3732,6 +3771,8 @@ async function runReadOnlyCanary(config, options = {}) {
   }
   if (result.snapshotSafety?.bypassKind === 'single-blocker-timeout') {
     log('canary-snapshot-single-blocker-timeout-bypass', result.snapshotSafety);
+  } else if (result.snapshotSafety?.bypassKind === 'high-self-hp') {
+    log('canary-snapshot-high-hp-login-point-bypass', result.snapshotSafety);
   } else if (result.snapshotSafety?.bypassedPreLoginSafety && result.snapshotSafety?.bypassKind !== 'daily-first-login') {
     log('canary-snapshot-self-present-reentry', result.snapshotSafety);
   } else if (result.snapshotSafety?.bypassKind === 'daily-first-login') {
@@ -4837,6 +4878,7 @@ module.exports = {
   createCanaryRunId,
   createMainThreadTimingStats,
   frameDataToBuffer,
+  highHpLoginPointSafetyExemption,
   inspectCanaryFrame,
   loginPointFromState,
   nextCombatControlTickCore,

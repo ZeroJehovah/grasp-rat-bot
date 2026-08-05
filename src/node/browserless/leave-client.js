@@ -48,7 +48,8 @@ async function leaveOnce(options = {}) {
       hedged: Boolean(options.hedged)
     });
   }
-  const response = await fetchWithTimeout(url, {
+  const requestWithTimeout = options.fetchWithTimeout || fetchWithTimeout;
+  const response = await requestWithTimeout(url, {
     fetchImpl: options.fetchImpl,
     timeoutMs: options.timeoutMs,
     localAddress: options.localAddress,

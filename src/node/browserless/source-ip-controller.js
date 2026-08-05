@@ -19,6 +19,10 @@ const {
   updateBrowserlessStateFile
 } = require('./state-file');
 const {
+  REQUEST_CLASSES,
+  createRequestRatePolicy
+} = require('./request-rate-policy');
+const {
   createCloudflareChallengeError,
   cloudflareChallengeFailure,
   detectCloudflareChallenge
@@ -151,6 +155,11 @@ function createSourceIpController(options = {}) {
   const config = options.config || {};
   const stateFile = options.stateFile || '';
   const now = typeof options.now === 'function' ? options.now : Date.now;
+  const requestRatePolicy = options.requestRatePolicy || createRequestRatePolicy({
+    now,
+    sleep: options.sleep,
+    minimumIntervalMs: options.requestMinIntervalMs
+  });
   const logStore = options.logStore || null;
   let state = options.state || (stateFile ? readBrowserlessStateFile(stateFile) : {});
   const preflightEnabled = options.preflightEnabled === true;
@@ -271,12 +280,19 @@ function createSourceIpController(options = {}) {
 
   async function fetchWithCurrentSourceIp(url, requestOptions = {}) {
     const challengePolicy = String(requestOptions.challengePolicy || '');
-    const { challengePolicy: _challengePolicy, ...forwardOptions } = requestOptions;
+    const requestClass = requestOptions.requestClass || REQUEST_CLASSES.ORDINARY;
+    const {
+      challengePolicy: _challengePolicy,
+      requestClass: _requestClass,
+      ...forwardOptions
+    } = requestOptions;
     const sourceIp = currentSourceIp;
-    const response = await (options.fetchWithTimeout || fetchWithTimeout)(url, {
+    const response = await requestRatePolicy.run(requestClass, () => (
+      options.fetchWithTimeout || fetchWithTimeout
+    )(url, {
       ...forwardOptions,
       localAddress: sourceIp || undefined
-    });
+    }));
     if (challengePolicy === 'login-stop') {
       const challenge = await inspectResponseChallenge(response);
       if (challenge?.detected) {
@@ -524,15 +540,25 @@ function createSourceIpController(options = {}) {
       throw error;
     },
     requestAuthUrl(authOptions = {}) {
+      const fetchForLogin = (url, requestOptions = {}) => fetchWithCurrentSourceIp(url, {
+        ...requestOptions,
+        requestClass: REQUEST_CLASSES.LOGIN
+      });
       return (options.requestAuthUrl || requestAuthUrl)({
         ...authOptions,
-        localAddress: currentSourceIp || undefined
+        localAddress: currentSourceIp || undefined,
+        fetchWithTimeout: fetchForLogin
       });
     },
     submitCallbackInput(input, callbackOptions = {}) {
+      const fetchForLogin = (url, requestOptions = {}) => fetchWithCurrentSourceIp(url, {
+        ...requestOptions,
+        requestClass: REQUEST_CLASSES.LOGIN
+      });
       return (options.submitCallbackInput || submitCallbackInput)(input, {
         ...callbackOptions,
-        localAddress: currentSourceIp || undefined
+        localAddress: currentSourceIp || undefined,
+        fetchWithTimeout: fetchForLogin
       });
     },
     async leaveWithVerification(leaveOptions = {}) {
@@ -549,7 +575,11 @@ function createSourceIpController(options = {}) {
         if (sourceIp) triedSourceIps.add(sourceIp);
         const attemptOptions = {
           ...leaveOptions,
-          localAddress: sourceIp || undefined
+          localAddress: sourceIp || undefined,
+          fetchWithTimeout: (url, requestOptions = {}) => fetchWithCurrentSourceIp(url, {
+            ...requestOptions,
+            requestClass: REQUEST_CLASSES.EXIT
+          })
         };
         if (typeof onRequest === 'function') {
           attemptOptions.onRequest = request => onRequest({
