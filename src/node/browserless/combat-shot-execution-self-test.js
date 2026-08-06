@@ -106,11 +106,19 @@ function runCombatShotExecutionSelfTest() {
   let command = store.getCommandState(nowMs + 20).shooting;
   check('normal ACK keeps request and generation ownership', command.acceptedShots === 1
     && command.confirmedShots[0].requestId === requestA.requestId
+    && requestA.requestSequence === 1
+    && requestA.ownership?.requestSequence === requestA.requestSequence
+    && requestA.ownership?.ownerSelfId === 1
+    && requestA.ownership?.wireTarget?.x === 100
     && command.confirmedShots[0].controlGeneration === controlA
-    && command.confirmedShots[0].engagementGeneration === 'engagement-a');
+    && command.confirmedShots[0].engagementGeneration === 'engagement-a'
+    && command.confirmedShots[0].requestSequence === requestA.requestSequence);
   const acceptedExecution = ackExecutionEvents.find(event => event.type === 'shoot-ack-accepted');
   check('accepted ACK listener carries bounded replay geometry without expanding cached execution state',
-    acceptedExecution?.ack?.bullet_id === 'bullet-a'
+    acceptedExecution?.requestSequence === requestA.requestSequence
+      && acceptedExecution?.ownerSelfId === 1
+      && acceptedExecution?.wireTarget?.x === 100
+      && acceptedExecution?.ack?.bullet_id === 'bullet-a'
       && acceptedExecution.ack.owner_user_id === '1'
       && acceptedExecution.ack.start_x === 0
       && acceptedExecution.ack.target_x === 100
@@ -291,7 +299,8 @@ function runCombatShotExecutionSelfTest() {
       && result.shoot?.cadenceMs === 160);
   }
   check('advisory cadence never reduces dispatch count', wireDispatches === modes.length
-    && executionEvents.filter(event => event.type === 'shoot-dispatch').length === modes.length);
+    && executionEvents.filter(event => event.type === 'shoot-dispatch').length === modes.length
+    && executionEvents.filter(event => event.type === 'shoot-dispatch').every(event => Number(event.requestSequence) > 0));
 
   actionNow += 50;
   const throttled = adapter.applyDecision(stateSnapshot, combatDecision(

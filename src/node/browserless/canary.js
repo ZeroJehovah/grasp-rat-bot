@@ -36,6 +36,7 @@ const {
   realtimeTransportActivityAssessment
 } = require('./transport-health');
 const { createBrowserlessActionAdapter } = require('./action-adapter');
+const { buildCombatAudit } = require('./combat-audit');
 const { buildLeavePendingCover } = require('./leave-pending-control');
 const {
   buildExitRecoveryOutcome,
@@ -2168,7 +2169,14 @@ async function runReadOnlyCanary(config, options = {}) {
   };
   const logCombat = detail => {
     const type = combatLiveEnabled ? 'combat-live' : 'combat-dry-run';
-    const enriched = addRunMeta(detail);
+    const root = detail?.combat && typeof detail.combat === 'object'
+      ? detail
+      : { combat: detail || {} };
+    const combatDetail = {
+      ...(root.combat || {}),
+      combatAudit: root.combatAudit || buildCombatAudit(root)
+    };
+    const enriched = addRunMeta(combatDetail);
     // Combat frames are no longer appended to a single unbounded `combat.jsonl`.
     // Each engagement is written to its own per-battle file and compressed on
     // completion; idle/no-engagement diagnostic frames are discarded there.
@@ -2183,6 +2191,13 @@ async function runReadOnlyCanary(config, options = {}) {
       logStore.append('combat', type, enriched);
     }
   };
+  const attachCombatAudit = summary => {
+    if (!summary?.combat || typeof summary.combat !== 'object') return summary;
+    return {
+      ...summary,
+      combatAudit: buildCombatAudit(summary)
+    };
+  };
   const logBattleTail = (type, detail, atMs = now()) => {
     if (!combatBattleLog?.recordTail) return null;
     try {
@@ -2194,9 +2209,14 @@ async function runReadOnlyCanary(config, options = {}) {
   };
   stateStore.setShootExecutionListener?.(event => {
     const enriched = addRunMeta(event);
-    const { ack: _battleReplayAck, ...runnerEvent } = event;
+    let recorded = enriched;
+    try {
+      recorded = combatBattleLog?.recordShotExecution?.(enriched, { atMs: event.atMs }) || enriched;
+    } catch (err) {
+      log('combat-battle-log-error', { error: errorMessage(err) });
+    }
+    const { ack: _battleReplayAck, ...runnerEvent } = recorded;
     log('shoot-execution', runnerEvent);
-    combatBattleLog?.recordShotExecution?.(enriched, { atMs: event.atMs });
   });
   const invokeVerifiedLeave = async leaveOptions => {
     if (typeof options.leaveWithVerification === 'function') {
@@ -3002,7 +3022,7 @@ async function runReadOnlyCanary(config, options = {}) {
     } catch (err) {
       log('canary-remote-profit-decision-callback-error', { error: errorMessage(err) });
     }
-    const summary = summarizeBrowserlessDecision(appliedDecision);
+    const summary = attachCombatAudit(summarizeBrowserlessDecision(appliedDecision));
     result.decisions.evaluatedCount += 1;
     result.decisions.last = summary;
     scheduleCombatPersistence(atMs);
@@ -3010,7 +3030,7 @@ async function runReadOnlyCanary(config, options = {}) {
     logDecision(summary);
     result.decisions.loggedCount += 1;
     if (controlMode === 'combat-dry-run' || controlMode === 'combat-live' || combatLiveEnabled) {
-      logCombat(summary.combat || {});
+      logCombat(summary);
     }
     if (typeof options.onDecision === 'function') {
       try {
@@ -3134,7 +3154,7 @@ async function runReadOnlyCanary(config, options = {}) {
       combatControlIntervalMs,
       highFrequencyControl: true
     };
-    const summary = {
+    const summary = attachCombatAudit({
       kind: gatedAction?.kind || control.kind || '',
       band: gatedAction?.band || control.band || '',
       reason: gatedAction?.reason || control.reason || '',
@@ -3143,7 +3163,7 @@ async function runReadOnlyCanary(config, options = {}) {
       action: gatedAction,
       combat: combatSummary,
       input: control.input || null
-    };
+    });
     markPublishStage('summary');
     result.decisions.realtimeControlCount += 1;
     result.decisions.last = summary;
@@ -3151,7 +3171,7 @@ async function runReadOnlyCanary(config, options = {}) {
     markPublishStage('persistence');
     observeDynamicWhitelistBattles(currentState, atMs);
     markPublishStage('whitelist');
-    logCombat(combatSummary);
+    logCombat(summary);
     markPublishStage('combat-log');
     const key = realtimeControlKey(summary);
     if (key !== lastRealtimeControlKey || atMs - lastRealtimeControlLogAtMs >= decisionIntervalMs) {
@@ -4450,6 +4470,7 @@ async function runReadOnlyCanary(config, options = {}) {
           now,
           decisionIntervalMs: config.decisionIntervalMs,
           commandIntervalMs: config.movementCommandIntervalMs,
+          userId: config.userId,
           velocityRepeatEnabled: true,
           shootRepeatEnabled: true,
           targetDeadZoneCm: config.movementTargetDeadZoneCm,

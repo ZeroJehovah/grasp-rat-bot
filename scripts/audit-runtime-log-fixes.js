@@ -245,10 +245,20 @@ async function readAndMatchAcks(dayDir, requests, battles) {
     byRun.get(request.runId).push(request);
   }
   for (const rows of byRun.values()) rows.sort((a, b) => a.atMs - b.atMs);
+  const wsFile = path.join(dayDir, 'ws.jsonl');
+  if (!fs.existsSync(wsFile)) {
+    return {
+      ackCount: 0,
+      matchedAckCount: 0,
+      orphanAckCount: 0,
+      source: 'unavailable',
+      file: wsFile
+    };
+  }
   let ackCount = 0;
   let matchedAckCount = 0;
   let orphanAckCount = 0;
-  await readJsonLines(path.join(dayDir, 'ws.jsonl'), row => {
+  await readJsonLines(wsFile, row => {
     const ack = row.detail?.decodedSummary?.ack;
     if (row.detail?.decodedType !== 'shoot_ok' || !ack) return;
     ackCount += 1;
@@ -276,7 +286,7 @@ async function readAndMatchAcks(dayDir, requests, battles) {
     const battle = battles.find(item => item.index.line === matched.battleLine);
     if (battle) battle.matchedAcks.push({ atMs, bulletId: ack.bullet_id, requestAtMs: matched.atMs });
   });
-  return { ackCount, matchedAckCount, orphanAckCount };
+  return { ackCount, matchedAckCount, orphanAckCount, source: 'ws.jsonl', file: wsFile };
 }
 
 function sum(rows, field) {
@@ -347,11 +357,16 @@ function physicalSummaryAudit(battles, executionOwnership) {
       old: {},
       changes: [],
       invariant: {
-        acceptedNotOverRequested: battle.physical.invariant.acceptedNotOverRequested,
+        acceptedNotOverRequested: true,
         selfDamageMatchesAdjacentHp: battle.physical.invariant.selfDamageMatchesAdjacentHp,
         targetDamageMatchesAdjacentHp: battle.physical.invariant.targetDamageMatchesAdjacentHp
       }
     };
+    const correctedRequested = numberOrNull(physicalValues.requestedShots);
+    const correctedAccepted = numberOrNull(physicalValues.acceptedShots);
+    corrected.invariant.acceptedNotOverRequested = correctedRequested === null
+      || correctedAccepted === null
+      || correctedAccepted <= correctedRequested;
     for (const field of fields) {
       const oldValue = numberOrNull(battle.index[field.indexField]);
       const physicalValue = numberOrNull(physicalValues[field.key]);

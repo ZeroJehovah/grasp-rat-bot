@@ -18,6 +18,14 @@ const path = require('path');
 const zlib = require('zlib');
 const { redactStructuredSecrets } = require('./session-client');
 const { utc8DayKey } = require('./utc8-day');
+const {
+  buildCombatAudit,
+  createCombatAuditLedger,
+  observeCombatAudit,
+  observeCombatAuditExecution,
+  observeCombatAuditTail,
+  summarizeCombatAudit
+} = require('./combat-audit');
 
 const DEFAULT_IDLE_FINALIZE_MS = 15000;
 const BATTLES_DIR = 'battles';
@@ -241,7 +249,8 @@ function createPhysicalSegmentLedger() {
     selfDamageEvents: 0,
     targetDamageEvents: 0,
     generationSet: new Set(),
-    eventTypes: Object.create(null)
+    eventTypes: Object.create(null),
+    ownershipAnomalies: []
   };
 }
 
@@ -287,6 +296,17 @@ function recordPhysicalExecution(ledger, event) {
   if (type === 'shoot-dispatch') next.dispatchCount += 1;
   if (type === 'shoot-ack-accepted') next.acceptedCount += 1;
   if (type === 'shoot-skip') next.skipCount += 1;
+  if (type === 'shoot-ack-accepted' && next.acceptedCount > next.dispatchCount) {
+    next.ownershipAnomalies.push({
+      type: 'accepted-over-physical-dispatch',
+      requestSequence: numberOrNull(value.requestSequence),
+      engagementGeneration: String(value.engagementGeneration || ''),
+      originSegmentId: String(value.originSegmentId || ''),
+      acceptedCount: next.acceptedCount,
+      dispatchCount: next.dispatchCount
+    });
+    next.ownershipAnomalies = next.ownershipAnomalies.slice(-8);
+  }
   return next;
 }
 
@@ -367,7 +387,10 @@ function physicalSegmentSummary(ledger, fallbackValues = {}) {
       targetHealing: value.targetHealing,
       selfDamageEvents: value.selfDamageEvents,
       targetDamageEvents: value.targetDamageEvents,
-      eventTypes: { ...value.eventTypes }
+      eventTypes: { ...value.eventTypes },
+      ...(value.ownershipAnomalies.length
+        ? { ownershipAnomalies: value.ownershipAnomalies.slice(-8) }
+        : {})
     }
   };
 }
@@ -941,6 +964,17 @@ function buildBattleSummary(battle, reason, finalizeMs) {
   const cumulativeRequestedShots = numberOrNull(cumulativeMetrics.requestedShots) ?? 0;
   const shotOwnershipInvariantOk = physicalSegment.invariant.acceptedNotOverRequested
     && cumulativeAcceptedShots <= cumulativeRequestedShots;
+  const shotOwnershipAnomalies = shotOwnershipInvariantOk
+    ? []
+    : [{
+        type: 'accepted-over-requested',
+        segmentId: battle.segmentId,
+        engagementGeneration: String(metrics.engagementGeneration || ''),
+        segmentAcceptedShots,
+        segmentRequestedShots,
+        cumulativeAcceptedShots,
+        cumulativeRequestedShots
+      }];
   const exitTail = summarizeBattleExitTail(battle.exitTail);
   const engagementTrajectoryCoverage = mergeTrajectoryCoverageShotObservations(
     battle.trajectoryCoverageLedger,
@@ -975,6 +1009,14 @@ function buildBattleSummary(battle, reason, finalizeMs) {
     segmentMetricSourceFields: physicalSegment.sourceFields,
     segmentInvariant: physicalSegment.invariant,
     physicalSegmentLedger: physicalSegment.raw,
+    ...(([...(physicalSegment.raw.ownershipAnomalies || []), ...shotOwnershipAnomalies].slice(-8).length)
+      ? {
+          shotOwnershipAnomalies: [
+            ...(physicalSegment.raw.ownershipAnomalies || []),
+            ...shotOwnershipAnomalies
+          ].slice(-8)
+        }
+      : {}),
     counterResetFields: segmentMetrics.counterResetFields,
     ...cumulativeMetricSummary(cumulativeMetrics),
     engagementInitialSelfHp: numberOrNull(metrics.initialSelfHp),
@@ -1014,6 +1056,7 @@ function buildBattleSummary(battle, reason, finalizeMs) {
     terminalOutcome: exitTail?.terminalOutcome ?? null,
     exitTail,
     ...summarizeBattleObservations(battle.observations),
+    combatAudit: summarizeCombatAudit(battle.combatAudit),
     ...summarizeTrajectoryCoverageShots(engagementTrajectoryCoverage, 'engagementCumulative'),
     runId: String(battle.runId || ''),
     runtimeRevision: String(battle.runtimeRevision || '')
@@ -1081,20 +1124,80 @@ function createCombatBattleLog(options = {}) {
   const engagementSegments = new Map();
   const executionOrigins = new Map();
   const executionRequestOrigins = new Map();
+  const executionRequestSequenceOrigins = new Map();
+  const requestOriginConflicts = new Set();
 
   function rememberExecutionOrigin(key, origin) {
     const normalized = String(key || '');
     if (!normalized) return;
-    executionOrigins.set(normalized, origin);
+    const existing = executionOrigins.get(normalized);
+    if (!existing) executionOrigins.set(normalized, { ...origin });
+    else if (existing.status === 'ambiguous-generation') return;
+    else if (String(existing.segmentId || '') !== String(origin.segmentId || '')) {
+      executionOrigins.set(normalized, {
+        engagementGeneration: normalized,
+        status: 'ambiguous-generation',
+        candidates: [
+          {
+            segmentId: String(existing.segmentId || ''),
+            engagementId: String(existing.engagementId || ''),
+            file: String(existing.file || ''),
+            status: String(existing.status || '')
+          },
+          {
+            segmentId: String(origin.segmentId || ''),
+            engagementId: String(origin.engagementId || ''),
+            file: String(origin.file || ''),
+            status: String(origin.status || '')
+          }
+        ].slice(-4)
+      });
+    }
     while (executionOrigins.size > 4096) executionOrigins.delete(executionOrigins.keys().next().value);
   }
 
-  function rememberRequestOrigin(key, origin) {
+  function rememberRequestOrigin(key, origin, requestSequence = null) {
     const normalized = String(key || '');
-    if (!normalized) return;
-    executionRequestOrigins.set(normalized, origin);
+    if (normalized) {
+      const existing = executionRequestOrigins.get(normalized);
+      if (!existing) executionRequestOrigins.set(normalized, { ...origin });
+      else if (String(existing.segmentId || '') !== String(origin.segmentId || '')) requestOriginConflicts.add(normalized);
+    }
+    const sequence = numberOrNull(requestSequence);
+    if (sequence !== null) {
+      const sequenceKey = String(sequence);
+      const existing = executionRequestSequenceOrigins.get(sequenceKey);
+      if (!existing) executionRequestSequenceOrigins.set(sequenceKey, { ...origin });
+      else if (String(existing.segmentId || '') !== String(origin.segmentId || '')) requestOriginConflicts.add(`sequence:${sequenceKey}`);
+    }
+    if (!normalized && sequence === null) return;
     while (executionRequestOrigins.size > 4096) {
       executionRequestOrigins.delete(executionRequestOrigins.keys().next().value);
+    }
+    while (executionRequestSequenceOrigins.size > 4096) {
+      executionRequestSequenceOrigins.delete(executionRequestSequenceOrigins.keys().next().value);
+    }
+  }
+
+  function markOriginFinalized(origin, segmentId) {
+    if (!origin || origin.status === 'ambiguous-generation') return origin;
+    if (String(origin.segmentId || '') !== String(segmentId || '')) return origin;
+    return { ...origin, status: 'finalized-segment' };
+  }
+
+  function finalizeOriginMaps(segmentId) {
+    for (const [key, origin] of executionOrigins.entries()) {
+      if (origin.status === 'ambiguous-generation') continue;
+      const finalized = markOriginFinalized(origin, segmentId);
+      if (finalized !== origin) executionOrigins.set(key, finalized);
+    }
+    for (const [key, origin] of executionRequestOrigins.entries()) {
+      const finalized = markOriginFinalized(origin, segmentId);
+      if (finalized !== origin) executionRequestOrigins.set(key, finalized);
+    }
+    for (const [key, origin] of executionRequestSequenceOrigins.entries()) {
+      const finalized = markOriginFinalized(origin, segmentId);
+      if (finalized !== origin) executionRequestSequenceOrigins.set(key, finalized);
     }
   }
 
@@ -1151,11 +1254,7 @@ function createCombatBattleLog(options = {}) {
       io.finalize(battle.rawFile);
       summary = buildBattleSummary(battle, reason, atMs);
       io.appendIndex(path.join(battle.dir, INDEX_FILE), summary);
-      const finalizedGeneration = String(battle.lastMetrics?.engagementGeneration || '');
-      if (finalizedGeneration && executionOrigins.has(finalizedGeneration)) {
-        const origin = executionOrigins.get(finalizedGeneration);
-        executionOrigins.set(finalizedGeneration, { ...origin, status: 'finalized-segment' });
-      }
+      finalizeOriginMaps(battle.segmentId);
       touchEngagementSegment(battle.engagementId, {
         nextOrdinal: battle.segmentOrdinal,
         lastSegmentFile: summary.file,
@@ -1219,6 +1318,7 @@ function createCombatBattleLog(options = {}) {
         acceptedShotFloor: previous ? acceptedShotFloor : 0
       }),
       exitTail: createBattleExitTail(),
+      combatAudit: createCombatAuditLedger(),
       shotExecutionEvents: [],
       lastMetrics: null
     };
@@ -1280,6 +1380,9 @@ function createCombatBattleLog(options = {}) {
         touchedAtMs: atMs
       });
     }
+    if (detail?.combatAudit && typeof detail.combatAudit === 'object') {
+      active.combatAudit = observeCombatAudit(active.combatAudit, detail.combatAudit, atMs);
+    }
     observeBattleDetail(active.observations, detail, atMs);
     if (!active.targetName && active.lastMetrics) active.targetName = String(active.lastMetrics.targetName || '');
     framesWritten += 1;
@@ -1292,21 +1395,49 @@ function createCombatBattleLog(options = {}) {
     io.appendFrame(active.rawFile, atMs, type, detail);
     active.lastFrameAtMs = Math.max(active.lastFrameAtMs, atMs);
     active.exitTail = observeBattleExitTail(active.exitTail, type, detail, atMs);
+    active.combatAudit = observeCombatAuditTail(active.combatAudit, type, detail, atMs);
     framesWritten += 1;
     return { recorded: true, file: active.rawFile, engagementId: active.engagementId, tail: true };
   }
 
   function recordShotExecution(detail, recordOptions = {}) {
     const atMs = Number(recordOptions.atMs || detail?.atMs || now());
+    const wireTarget = detail?.wireTarget && typeof detail.wireTarget === 'object'
+      ? {
+          x: numberOrNull(detail.wireTarget.x ?? detail.wireTarget.targetX),
+          y: numberOrNull(detail.wireTarget.y ?? detail.wireTarget.targetY)
+        }
+      : null;
+    const ownership = detail?.ownership && typeof detail.ownership === 'object'
+      ? {
+          requestSequence: numberOrNull(detail.ownership.requestSequence),
+          controlGeneration: String(detail.ownership.controlGeneration || ''),
+          engagementGeneration: String(detail.ownership.engagementGeneration || ''),
+          segmentGeneration: String(detail.ownership.segmentGeneration || ''),
+          ownerSelfId: detail.ownership.ownerSelfId ?? null,
+          wireTarget: detail.ownership.wireTarget && typeof detail.ownership.wireTarget === 'object'
+            ? {
+                x: numberOrNull(detail.ownership.wireTarget.x),
+                y: numberOrNull(detail.ownership.wireTarget.y)
+              }
+            : null,
+          dispatchTick: numberOrNull(detail.ownership.dispatchTick)
+        }
+      : null;
     const event = {
       sequence: Math.max(0, Number(detail?.sequence || 0)),
       type: String(detail?.type || 'shoot-execution'),
       atMs,
       requestId: detail?.requestId ?? null,
       commandId: detail?.commandId ?? null,
+      requestSequence: numberOrNull(detail?.requestSequence),
       controlGeneration: String(detail?.controlGeneration || ''),
       engagementGeneration: String(detail?.engagementGeneration || ''),
+      segmentGeneration: String(detail?.segmentGeneration || ''),
+      ownerSelfId: detail?.ownerSelfId ?? null,
       targetId: detail?.targetId ?? null,
+      wireTarget,
+      ownership,
       baseCadenceMs: numberOrNull(detail?.baseCadenceMs),
       executionCadenceMs: numberOrNull(detail?.executionCadenceMs),
       advisoryCadenceMs: numberOrNull(detail?.advisoryCadenceMs),
@@ -1323,25 +1454,65 @@ function createCombatBattleLog(options = {}) {
     if (replayAck) event.ack = replayAck;
     const activeGeneration = String(active?.lastMetrics?.engagementGeneration || '');
     const requestKey = event.requestId ?? event.commandId ?? '';
-    const origin = (event.engagementGeneration && executionOrigins.get(event.engagementGeneration))
-      || (requestKey && executionRequestOrigins.get(requestKey))
-      || null;
-    const activeOrigin = active && (
-      (event.engagementGeneration && event.engagementGeneration === activeGeneration)
-        || (origin && String(origin.segmentId) === String(active.segmentId))
+    const normalizedRequestKey = String(requestKey || '');
+    const requestSequenceKey = event.requestSequence === null ? '' : String(event.requestSequence);
+    const requestConflict = (normalizedRequestKey && requestOriginConflicts.has(normalizedRequestKey))
+      || (requestSequenceKey && requestOriginConflicts.has(`sequence:${requestSequenceKey}`));
+    const requestOrigin = requestConflict
+      ? null
+      : (normalizedRequestKey && executionRequestOrigins.get(normalizedRequestKey)) || null;
+    const sequenceOrigin = requestConflict
+      ? null
+      : (requestSequenceKey && executionRequestSequenceOrigins.get(requestSequenceKey)) || null;
+    const explicitRequestOrigin = requestOrigin || sequenceOrigin;
+    const generationOrigin = event.engagementGeneration
+      ? executionOrigins.get(event.engagementGeneration)
+      : null;
+    const origin = requestConflict
+      ? { status: 'ambiguous-request' }
+      : (explicitRequestOrigin || generationOrigin || null);
+    const activeOrigin = active && !requestConflict && (
+      explicitRequestOrigin
+        ? String(explicitRequestOrigin.segmentId || '') === String(active.segmentId)
+        : ((event.engagementGeneration && event.engagementGeneration === activeGeneration)
+          || (origin && String(origin.segmentId || '') === String(active.segmentId)))
     );
     event.originSegmentId = origin?.segmentId ?? (activeOrigin ? active.segmentId : null);
     event.originEngagementId = origin?.engagementId ?? (activeOrigin ? String(active.engagementId || '') : null);
     event.originFile = origin?.file ?? (activeOrigin ? path.basename(active.gzFile) : null);
     event.originStatus = origin?.status ?? (activeOrigin ? 'active-segment' : 'unresolved');
+    event.segmentGeneration = String(event.segmentGeneration || event.originSegmentId || active?.segmentId || '');
+    event.currentSegmentId = active?.segmentId || null;
+    event.currentSegmentFile = active ? path.basename(active.gzFile) : null;
+    if (requestConflict) event.ownershipDisposition = 'ambiguous-request';
+    else if (['shoot-ack-accepted', 'shoot-ack-late'].includes(event.type)
+      && active && origin?.segmentId && String(origin.segmentId) !== String(active.segmentId)) {
+      event.ownershipDisposition = 'cross-segment-ack';
+      event.reconciliation = {
+        type: 'cross-segment-ack',
+        originalSegmentId: String(origin.segmentId),
+        originalFile: String(origin.file || ''),
+        currentSegmentId: String(active.segmentId),
+        currentFile: path.basename(active.gzFile),
+        engagementGeneration: event.engagementGeneration,
+        requestId: event.requestId,
+        requestSequence: event.requestSequence
+      };
+    } else if (!origin || origin.status === 'ambiguous-generation') event.ownershipDisposition = 'unresolved';
+    else if (activeOrigin) event.ownershipDisposition = event.type === 'shoot-ack-late' ? 'late-ack' : 'on-time';
+    else event.ownershipDisposition = origin.status || 'finalized-segment';
     if (activeOrigin) {
       io.appendFrame(active.rawFile, atMs, 'shoot-execution', event);
       active.shotExecutionEvents.push(event);
       active.physicalLedger = recordPhysicalExecution(active.physicalLedger, event);
+      active.combatAudit = observeCombatAuditExecution(active.combatAudit, event);
       active.shotExecutionEvents = active.shotExecutionEvents.slice(-256);
       active.frames += 1;
       active.lastFrameAtMs = Math.max(active.lastFrameAtMs, atMs);
       framesWritten += 1;
+    }
+    if (active && !activeOrigin) {
+      active.combatAudit = observeCombatAuditExecution(active.combatAudit, event);
     }
     if (event.type === 'shoot-dispatch') {
       const eventOrigin = {
@@ -1352,8 +1523,8 @@ function createCombatBattleLog(options = {}) {
         engagementGeneration: event.engagementGeneration,
         status: event.originStatus
       };
-      if (event.engagementGeneration) rememberExecutionOrigin(event.engagementGeneration, eventOrigin);
-      if (requestKey) rememberRequestOrigin(requestKey, eventOrigin);
+      if (event.engagementGeneration && eventOrigin.segmentId) rememberExecutionOrigin(event.engagementGeneration, eventOrigin);
+      if (eventOrigin.segmentId) rememberRequestOrigin(normalizedRequestKey, eventOrigin, event.requestSequence);
     }
     if (!activeOrigin || ['shoot-ack-late', 'shoot-ack-orphan', 'shoot-ack-duplicate'].includes(event.type)) {
       io.appendIndex(path.join(battlesDirFor(atMs), SHOT_AMENDMENTS_FILE), event);
@@ -1912,6 +2083,204 @@ function runCombatBattleLogSelfTest() {
       && resetSummary.segmentTrajectoryCoverageAppliedAcceptedShots === 1
       && resetSummary.counterResetFields.includes('acceptedShots')
       && resetSummary.counterResetFields.includes('targetDamage'));
+
+    // A reused engagement generation must not transfer an ACK from the sealed
+    // segment into the newly active segment. The request identity is the
+    // authoritative fallback when the generation itself is ambiguous.
+    const ownershipRoot = path.join(root, 'ownership');
+    const ownershipDayDir = path.join(ownershipRoot, utc8DayKey(nowMs), BATTLES_DIR);
+    const ownershipLog = createCombatBattleLog({
+      logDir: ownershipRoot,
+      now: () => nowMs,
+      idleFinalizeMs: 15000
+    });
+    const ownershipAudit = (mode, policy, targetId, switchInfo = null) => ({
+      version: 1,
+      mode,
+      policy,
+      authority: 'realtime',
+      authorityIsRealtime: true,
+      target: { id: String(targetId), authority: 'realtime' },
+      firstEligibleAt: nowMs,
+      lastEligibleAt: nowMs,
+      desiredAction: { kind: 'shoot', reason: 'fire-authorized' },
+      finalAction: { kind: 'combat', band: 'combat', reason: 'combat-live' },
+      blockers: { hard: [], advisory: ['response-policy:' + policy] },
+      shooting: { wouldShoot: true, finalFireBlocker: 'none', dodgeReserveMs: 1800 },
+      targetSwitch: switchInfo,
+      stop: { eligibleAt: null, dispatchAt: null, shouldLeave: false }
+    });
+    const explicitNullAudit = buildCombatAudit({
+      combat: {
+        target: { userId: 500, hp: null, distance: null, authority: 'realtime' },
+        metrics: { firstEligibleAt: null, lastEligibleAt: null },
+        shooting: { dodgeReserveMs: null, requiredStaminaMs: null }
+      }
+    });
+    assert('combatAudit preserves explicit null numeric evidence', explicitNullAudit.target.hp === null
+      && explicitNullAudit.target.distance === null
+      && explicitNullAudit.firstEligibleAt === null
+      && explicitNullAudit.shooting.dodgeReserveMs === null
+      && explicitNullAudit.shooting.requiredStaminaMs === null);
+    ownershipLog.record('combat-live', frame('500:5000', {
+      engagementGeneration: 'same-generation',
+      lastObservedAt: nowMs
+    }, {
+      target: { userId: 500, hp: 100, active: true },
+      combatAudit: ownershipAudit('mode-a', 'policy-a', 500)
+    }));
+    nowMs += 1;
+    ownershipLog.recordShotExecution({
+      sequence: 1,
+      requestSequence: 1,
+      type: 'shoot-dispatch',
+      atMs: nowMs,
+      requestId: 'rollover-request',
+      controlGeneration: 'control:rollover',
+      engagementGeneration: 'same-generation',
+      ownerSelfId: 7,
+      targetId: '500',
+      wireTarget: { x: 1000, y: 0 },
+      outcome: 'transport-accepted'
+    });
+    nowMs += 50;
+    ownershipLog.record('combat-live', frame('600:6000', {
+      engagementGeneration: 'same-generation',
+      lastObservedAt: nowMs
+    }, {
+      target: { userId: 600, hp: 100, active: true },
+      combatAudit: ownershipAudit('mode-b', 'policy-b', 600, {
+        type: 'target-switch',
+        oscillating: true,
+        pairSwitchCount: 2,
+        from: { key: 'target:500' },
+        to: { key: 'target:600' }
+      })
+    }));
+    nowMs += 10;
+    ownershipLog.record('combat-live', frame('600:6000', {
+      engagementGeneration: 'same-generation',
+      lastObservedAt: nowMs
+    }, {
+      target: { userId: 600, hp: 100, active: true },
+      combatAudit: ownershipAudit('mode-c', 'policy-c', 600)
+    }));
+    nowMs += 1;
+    ownershipLog.recordShotExecution({
+      sequence: 2,
+      requestSequence: 1,
+      type: 'shoot-ack-accepted',
+      atMs: nowMs,
+      requestId: 'rollover-request',
+      controlGeneration: 'control:rollover',
+      engagementGeneration: 'same-generation',
+      ownerSelfId: 7,
+      targetId: '500',
+      wireTarget: { x: 1000, y: 0 },
+      outcome: 'accepted',
+      ack: { bullet_id: 'rollover-bullet', owner_user_id: 7, target_x: 1000, target_y: 0 }
+    });
+    nowMs += 1;
+    ownershipLog.recordShotExecution({
+      sequence: 3,
+      requestSequence: 2,
+      type: 'shoot-dispatch',
+      atMs: nowMs,
+      requestId: 'current-request',
+      controlGeneration: 'control:rollover',
+      engagementGeneration: 'same-generation',
+      ownerSelfId: 7,
+      targetId: '600',
+      wireTarget: { x: 1100, y: 0 },
+      outcome: 'transport-accepted'
+    });
+    nowMs += 1;
+    ownershipLog.recordShotExecution({
+      sequence: 4,
+      requestSequence: 2,
+      type: 'shoot-ack-accepted',
+      atMs: nowMs,
+      requestId: 'current-request',
+      controlGeneration: 'control:rollover',
+      engagementGeneration: 'same-generation',
+      ownerSelfId: 7,
+      targetId: '600',
+      wireTarget: { x: 1100, y: 0 },
+      outcome: 'accepted',
+      ack: { bullet_id: 'current-bullet', owner_user_id: 7, target_x: 1100, target_y: 0 }
+    });
+    nowMs += 1;
+    ownershipLog.recordShotExecution({
+      sequence: 5,
+      type: 'shoot-skip',
+      atMs: nowMs,
+      controlGeneration: 'control:rollover',
+      engagementGeneration: 'same-generation',
+      targetId: '600',
+      skipReason: 'shoot-command-throttled',
+      outcome: 'skipped'
+    });
+    nowMs += 1;
+    ownershipLog.recordShotExecution({
+      sequence: 6,
+      type: 'shoot-skip',
+      atMs: nowMs,
+      controlGeneration: 'control:rollover',
+      engagementGeneration: 'same-generation',
+      targetId: '600',
+      skipReason: 'shoot-command-throttled',
+      outcome: 'skipped'
+    });
+    nowMs += 1;
+    ownershipLog.recordShotExecution({
+      sequence: 7,
+      type: 'shoot-stop',
+      atMs: nowMs,
+      controlGeneration: 'control:rollover',
+      engagementGeneration: 'same-generation',
+      targetId: '600',
+      outcome: 'stopped'
+    });
+    nowMs += 1;
+    ownershipLog.recordShotExecution({
+      sequence: 8,
+      type: 'shoot-skip',
+      atMs: nowMs,
+      controlGeneration: 'control:rollover',
+      engagementGeneration: 'same-generation',
+      targetId: '600',
+      skipReason: 'shoot-command-throttled',
+      outcome: 'skipped'
+    });
+    nowMs += 1;
+    ownershipLog.recordTail('leave-pending-frame', { stage: 'rollover-test' }, nowMs);
+    nowMs += 1;
+    ownershipLog.recordTail('leave-request-start', { stage: 'rollover-test' }, nowMs);
+    nowMs += 1;
+    ownershipLog.recordTail('leave-request-result', { stage: 'rollover-test' }, nowMs);
+    ownershipLog.flush('rollover-test');
+    const ownershipRows = fs.readFileSync(path.join(ownershipDayDir, INDEX_FILE), 'utf8')
+      .trim().split('\n').filter(Boolean).map(JSON.parse);
+    const ownershipAmendments = fs.readFileSync(path.join(ownershipDayDir, SHOT_AMENDMENTS_FILE), 'utf8')
+      .trim().split('\n').filter(Boolean).map(JSON.parse);
+    const crossSegmentAmendment = ownershipAmendments.find(item => item.reconciliation?.type === 'cross-segment-ack');
+    assert('same-generation rollover keeps the old ACK out of the new physical ledger', ownershipRows.length === 2
+      && ownershipRows[0].segmentAcceptedShots === 0
+      && ownershipRows[1].segmentAcceptedShots === 1
+      && ownershipRows[1].shotOwnershipInvariantOk === true
+      && crossSegmentAmendment?.ownershipDisposition === 'cross-segment-ack'
+      && crossSegmentAmendment.reconciliation.originalSegmentId === '500:5000#1'
+      && crossSegmentAmendment.reconciliation.currentSegmentId === '600:6000#1');
+    assert('combatAudit remains bounded and records transitions, execution ownership, and leave dispatch', ownershipRows[1].combatAudit?.transitions?.length === 1
+      && ownershipRows[1].combatAudit.targetSwitchCount === 1
+      && ownershipRows[1].combatAudit.oscillatingTargetSwitchCount === 1
+      && ownershipRows[1].combatAudit.dispatchCount === 1
+      && ownershipRows[1].combatAudit.acceptedAckCount === 2
+      && ownershipRows[1].combatAudit.crossSegmentAckCount === 1
+      && ownershipRows[1].combatAudit.skipEventCount === 3
+      && ownershipRows[1].combatAudit.skipCount === 2
+      && ownershipRows[1].combatAudit.leaveDispatchCount === 1
+      && Buffer.byteLength(JSON.stringify(ownershipRows[1]), 'utf8') <= MAX_INDEX_LINE_BYTES);
 
     // The background worker may not have created either the raw or gz path by
     // the time the same engagement reopens. In-memory path allocation must

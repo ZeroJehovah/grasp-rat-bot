@@ -651,15 +651,43 @@ function createBrowserlessStateStore(options = {}) {
   }
 
   function recordShootExecution(event = {}, optionsForRecord = {}) {
+    const wireTarget = event.wireTarget && typeof event.wireTarget === 'object'
+      ? {
+          x: numericOrNull(event.wireTarget.x ?? event.wireTarget.targetX),
+          y: numericOrNull(event.wireTarget.y ?? event.wireTarget.targetY)
+        }
+      : (numericOrNull(event.targetX) !== null || numericOrNull(event.targetY) !== null
+          ? { x: numericOrNull(event.targetX), y: numericOrNull(event.targetY) }
+          : null);
     const entry = {
       sequence: state.command.nextExecutionSequence++,
       type: String(event.type || 'shoot-execution'),
       atMs: optionalNumericOrNull(event.atMs) ?? now(),
       requestId: event.requestId ?? null,
       commandId: event.commandId ?? event.requestId ?? null,
+      requestSequence: optionalNumericOrNull(event.requestSequence),
       controlGeneration: String(event.controlGeneration || state.command.controlGeneration || ''),
       engagementGeneration: String(event.engagementGeneration || ''),
+      segmentGeneration: String(event.segmentGeneration || ''),
+      ownerSelfId: event.ownerSelfId ?? state.userId ?? null,
       targetId: event.targetId ?? null,
+      wireTarget,
+      ownership: event.ownership && typeof event.ownership === 'object'
+        ? {
+            requestSequence: optionalNumericOrNull(event.ownership.requestSequence),
+            controlGeneration: String(event.ownership.controlGeneration || ''),
+            engagementGeneration: String(event.ownership.engagementGeneration || ''),
+            segmentGeneration: String(event.ownership.segmentGeneration || ''),
+            ownerSelfId: event.ownership.ownerSelfId ?? state.userId ?? null,
+            wireTarget: event.ownership.wireTarget && typeof event.ownership.wireTarget === 'object'
+              ? {
+                  x: numericOrNull(event.ownership.wireTarget.x),
+                  y: numericOrNull(event.ownership.wireTarget.y)
+                }
+              : null,
+            dispatchTick: optionalNumericOrNull(event.ownership.dispatchTick)
+          }
+        : null,
       baseCadenceMs: optionalNumericOrNull(event.baseCadenceMs),
       executionCadenceMs: optionalNumericOrNull(event.executionCadenceMs),
       advisoryCadenceMs: optionalNumericOrNull(event.advisoryCadenceMs),
@@ -1003,9 +1031,13 @@ function createBrowserlessStateStore(options = {}) {
         type: 'shoot-ack-duplicate',
         atMs: meta.receivedAtMs,
         requestId: duplicate.requestId ?? duplicate.commandId ?? null,
+        requestSequence: duplicate.requestSequence ?? duplicate.sequence,
         controlGeneration: duplicate.controlGeneration,
         engagementGeneration: duplicate.engagementGeneration,
+        segmentGeneration: duplicate.segmentGeneration,
+        ownerSelfId: duplicate.ownerSelfId,
         targetId: duplicate.targetId,
+        wireTarget: duplicate.ownership?.wireTarget,
         outcome: 'duplicate-ack',
         observedTick: meta.tick
       });
@@ -1093,9 +1125,17 @@ function createBrowserlessStateStore(options = {}) {
         type: pending.source === 'expired' ? 'shoot-ack-late' : 'shoot-ack-accepted',
         atMs: meta.receivedAtMs,
         requestId: confirmed.requestId ?? confirmed.commandId ?? null,
+        requestSequence: confirmed.requestSequence ?? confirmed.sequence,
         controlGeneration: confirmed.controlGeneration,
         engagementGeneration: confirmed.engagementGeneration,
+        segmentGeneration: confirmed.segmentGeneration,
+        ownerSelfId: confirmed.ownerSelfId,
         targetId: confirmed.targetId,
+        wireTarget: confirmed.ownership?.wireTarget || {
+          x: confirmed.targetX,
+          y: confirmed.targetY
+        },
+        ownership: confirmed.ownership,
         outcome: pending.source === 'expired' ? 'late-ack' : 'accepted',
         observedTick: meta.tick
       }, {
@@ -1136,12 +1176,30 @@ function createBrowserlessStateStore(options = {}) {
   function recordShootRequest(request = {}, optionsForRecord = {}) {
     const requestedAtMs = Number(request.requestedAtMs || now());
     expirePendingShots(requestedAtMs);
+    const requestSequence = state.command.nextShotSequence++;
+    const ownerSelfId = request.ownerSelfId ?? state.userId ?? null;
+    const wireTarget = {
+      x: numericOrNull(request.targetX),
+      y: numericOrNull(request.targetY)
+    };
     const shot = {
-      sequence: state.command.nextShotSequence++,
+      sequence: requestSequence,
+      requestSequence,
       commandId: request.commandId ?? null,
       requestId: request.requestId ?? request.commandId ?? null,
       controlGeneration: String(request.controlGeneration || state.command.controlGeneration || ''),
       engagementGeneration: String(request.engagementGeneration || ''),
+      segmentGeneration: String(request.segmentGeneration || ''),
+      ownerSelfId,
+      ownership: Object.freeze({
+        requestSequence,
+        controlGeneration: String(request.controlGeneration || state.command.controlGeneration || ''),
+        engagementGeneration: String(request.engagementGeneration || ''),
+        segmentGeneration: String(request.segmentGeneration || ''),
+        ownerSelfId,
+        wireTarget: Object.freeze({ ...wireTarget }),
+        dispatchTick: numericOrNull(request.observedTick)
+      }),
       requestedAtMs,
       targetId: request.targetId ?? null,
       targetX: numericOrNull(request.targetX),

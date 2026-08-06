@@ -517,8 +517,11 @@ function summarizeCommand(command) {
     sentAt: command.sentAt,
     sentAtMs: command.sentAtMs,
     requestId: command.requestId ?? null,
+    requestSequence: command.requestSequence ?? null,
     controlGeneration: command.controlGeneration || '',
     engagementGeneration: command.engagementGeneration || '',
+    segmentGeneration: command.segmentGeneration || '',
+    ownerSelfId: command.ownerSelfId ?? null,
     baseCadenceMs: command.baseCadenceMs ?? null,
     executionCadenceMs: command.executionCadenceMs ?? command.cadenceMs ?? null,
     advisoryCadenceMs: command.advisoryCadenceMs ?? null,
@@ -598,6 +601,7 @@ function createBrowserlessActionAdapter(options = {}) {
   const shootRequestUsesCommandObject = options.shootRequestUsesCommandObject === true;
   const onShootExecution = typeof options.onShootExecution === 'function' ? options.onShootExecution : null;
   const controlGeneration = String(options.controlGeneration || '');
+  const ownerSelfId = optionalNumber(options.userId ?? options.selfId);
   const shootRepeatEnabled = options.shootRepeatEnabled === true;
   const shootRepeatMs = Math.max(
     combatShootMinIntervalMs,
@@ -642,8 +646,17 @@ function createBrowserlessActionAdapter(options = {}) {
       atMs: optionalNumber(event.atMs) ?? now(),
       requestId: event.requestId ?? null,
       commandId: event.commandId ?? null,
+      requestSequence: optionalNumber(event.requestSequence),
       controlGeneration: String(event.controlGeneration || controlGeneration || ''),
       engagementGeneration: String(event.engagementGeneration || ''),
+      segmentGeneration: String(event.segmentGeneration || ''),
+      ownerSelfId: event.ownerSelfId ?? ownerSelfId,
+      wireTarget: event.wireTarget && typeof event.wireTarget === 'object'
+        ? {
+            x: optionalNumber(event.wireTarget.x ?? event.wireTarget.targetX),
+            y: optionalNumber(event.wireTarget.y ?? event.wireTarget.targetY)
+          }
+        : null,
       targetId: event.targetId ?? null,
       baseCadenceMs: optionalNumber(event.baseCadenceMs),
       executionCadenceMs: optionalNumber(event.executionCadenceMs),
@@ -2265,7 +2278,10 @@ function createBrowserlessActionAdapter(options = {}) {
       requestId,
       controlGeneration,
       engagementGeneration: shotMeta.engagementGeneration,
+      segmentGeneration: shotMeta.segmentGeneration,
+      ownerSelfId,
       targetId: targetRepeatKey(target),
+      wireTarget: { x: numberOrNull(targetX), y: numberOrNull(targetY) },
       baseCadenceMs: shotMeta.baseCadenceMs,
       executionCadenceMs: shotMeta.executionCadenceMs ?? cadenceMs,
       advisoryCadenceMs: shotMeta.advisoryCadenceMs,
@@ -2375,6 +2391,10 @@ function createBrowserlessActionAdapter(options = {}) {
       requestId,
       controlGeneration,
       engagementGeneration: String(shotMeta.engagementGeneration || ''),
+      segmentGeneration: String(shotMeta.segmentGeneration || ''),
+      requestSequence: null,
+      ownerSelfId,
+      wireTarget: { x: Math.round(Number(targetX) || 0), y: Math.round(Number(targetY) || 0) },
       sentAtMs: atMs,
       sentAt: new Date(atMs).toISOString(),
       target,
@@ -2431,8 +2451,11 @@ function createBrowserlessActionAdapter(options = {}) {
         const telemetry = onShootRequest(shootRequestUsesCommandObject ? command : {
           commandId: command.id,
           requestId: command.requestId,
+          requestSequence: command.requestSequence,
           controlGeneration: command.controlGeneration,
           engagementGeneration: command.engagementGeneration,
+          segmentGeneration: command.segmentGeneration,
+          ownerSelfId: command.ownerSelfId,
           requestedAtMs: command.sentAtMs,
           targetId: targetRepeatKey(target),
           targetX: command.targetX,
@@ -2474,8 +2497,11 @@ function createBrowserlessActionAdapter(options = {}) {
         });
         if (telemetry && typeof telemetry === 'object') {
           command.requestId = telemetry.requestId ?? command.requestId;
+          command.requestSequence = optionalNumber(telemetry.requestSequence ?? telemetry.sequence);
           command.controlGeneration = String(telemetry.controlGeneration || command.controlGeneration || '');
           command.engagementGeneration = String(telemetry.engagementGeneration || command.engagementGeneration || '');
+          command.segmentGeneration = String(telemetry.segmentGeneration || command.segmentGeneration || '');
+          command.ownerSelfId = telemetry.ownerSelfId ?? command.ownerSelfId;
         }
       } catch (_) {}
     }
@@ -2484,8 +2510,12 @@ function createBrowserlessActionAdapter(options = {}) {
       type: 'shoot-dispatch',
       commandId: command.id,
       requestId: command.requestId,
+      requestSequence: command.requestSequence,
       controlGeneration: command.controlGeneration,
       engagementGeneration: command.engagementGeneration,
+      segmentGeneration: command.segmentGeneration,
+      ownerSelfId: command.ownerSelfId,
+      wireTarget: command.wireTarget,
       executionCadenceMs: intervalMs,
       lastDispatchAt: command.sentAtMs,
       outcome: 'transport-accepted'
