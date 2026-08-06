@@ -4132,9 +4132,14 @@ function singleCoinBaitResidualRouteContinuation(input, opportunity, bait, optio
     firstFollowUpStaminaCost,
     opportunity?.threshold
   );
+  // The bait is not part of the continuation's admission test. It may be
+  // collected only when the remaining route after it is independently
+  // profitable; otherwise the bot should stay beside the bait and wait for
+  // another player/script to collect it. Keep aggregate values for
+  // diagnostics, but do not let the bait's one coin subsidize the tail.
   const profitThresholdEligible = profitRewardAndCostEligible(
-    aggregateReward,
-    aggregateStaminaCost,
+    reward,
+    staminaCost,
     opportunity?.threshold
   );
   return {
@@ -4258,7 +4263,15 @@ function singleCoinBaitReturnPlan(input, opportunity, bait, anchoredOpportunitie
     const reward = 1 + Math.max(0, Number(candidate.reward || 0));
     const staminaCost = Math.max(0, Number(baitCost || 0)) + Math.max(0, Number(candidate.staminaCost || 0));
     const comparableNetROI = reward / Math.max(1, staminaCost + fixedSwitchCost);
-    const planThresholdEligible = profitRewardAndCostEligible(reward, staminaCost, thresholdContext);
+    // Threshold admission belongs to the continuation after the bait. The
+    // bait's own coin must not subsidize a one-coin tail; total reward/cost
+    // remains available below for comparing the complete committed plan.
+    const continuationThresholdEligible = profitRewardAndCostEligible(
+      Number(candidate.reward || 0),
+      Number(candidate.staminaCost || 0),
+      thresholdContext
+    );
+    const planThresholdEligible = continuationThresholdEligible;
     const requiredNetROI = Math.max(
       thresholdFloor,
       currentBestNetROI === null ? 0 : currentBestNetROI * (1 + relativeMargin)
