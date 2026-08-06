@@ -14685,6 +14685,87 @@ async function runSelfTest() {
       want: 'single-coin-bait-hold|wait|bait|hold|foot-coin-priority|bait|true|true|false|single-coin-bait-hold|wait|single-coin-bait-release|coin|bait|release|best-opportunity-coin-route|profit-candidate|route-a|route-a,route-b,route-c'
     },
     {
+      name: 'browserless bait follow-up uses the same ordinary coin threat source',
+      got: (() => {
+        const options = {
+          userId: 7,
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: true,
+          singleCoinBaitHoldRadiusCm: 1000,
+          finalActionArbitrationHoldMs: 0,
+          coinDangerRadius: 25000
+        };
+        const stateFor = coinDrops => {
+          const self = {
+            entity_id: 1,
+            user_id: 7,
+            name: 'self',
+            x: 0,
+            y: 0,
+            hp: 100,
+            max_hp: 100,
+            stamina_1h_remaining_milli: 3000000,
+            stamina_1d_remaining_milli: 20000000
+          };
+          const activeBystander = {
+            entity_id: 2,
+            user_id: 22,
+            name: 'moving-bystander',
+            x: 20000,
+            y: 0,
+            vx: 0,
+            vy: -50,
+            hp: 100,
+            max_hp: 100,
+            current_join_mode: 'Active',
+            stamina_5s_remaining_milli: 5000,
+            stamina_5s_limit_milli: 10000
+          };
+          return {
+            userId: 7,
+            realtime: {
+              tick: 1,
+              frameAgeMs: 100,
+              self,
+              entities: [self, activeBystander],
+              bullets: [],
+              coinDrops
+            },
+            fallback: { frameAgeMs: 100, entities: [], coinDrops: [] }
+          };
+        };
+        const bait = { drop_id: 'bait', amount: 1, x: 900, y: 0 };
+        const next = { drop_id: 'next', amount: 1, x: 1500, y: 0 };
+        const rawInput = buildBrowserlessStrategyInput(stateFor([bait, next]), options, {});
+        const direct = buildBrowserlessDecision(
+          stateFor([bait, next]),
+          {},
+          { ...options, singleCoinBaitEnabled: false }
+        );
+        const adapter = createBrowserlessDecisionAdapter(options);
+        adapter.decide(stateFor([bait]), { nowMs: 1000 });
+        const released = adapter.decide(stateFor([bait, next]), { nowMs: 2000 });
+        const followUp = released.profit.singleCoinBaitOpportunityEvaluations
+          .find(item => item.id === 'next');
+        return [
+          rawInput.activeThreats.length,
+          rawInput.avoidanceThreats.length,
+          direct.reason,
+          direct.action.target.id,
+          direct.action.coinRoute.ids.join(','),
+          released.reason,
+          released.action.target.id,
+          followUp?.originId,
+          followUp?.id,
+          followUp?.pathClear,
+          followUp?.profitThresholdEligible
+        ].join('|');
+      })(),
+      want: '1|0|best-opportunity-coin-route|bait|bait,next|single-coin-bait-release|bait|bait|next|true|true'
+    },
+    {
       name: 'browserless single coin bait releases itself before newly visible ordinary profit',
       got: (() => {
         const adapter = createBrowserlessDecisionAdapter({

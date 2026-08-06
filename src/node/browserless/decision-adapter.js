@@ -2137,7 +2137,7 @@ function easyKillCandidateBaseRejectionReason(target, stateful = {}, input = {},
   if (easyKillTargetSuppressed(stateful, target, input.nowMs)) return 'easy-kill-suppressed';
   if (target.easyKillProfitTarget !== true) return 'not-profit-eligible';
   if (targetDangerousCooldownRecord(stateful, target, input.nowMs)) return 'dangerous-target-cooldown';
-  const opportunityThreats = input.avoidanceThreats || input.activeThreats || [];
+  const opportunityThreats = profitOpportunityThreats(input);
   if (!targetSafeFromOpportunityThreats(target, opportunityThreats, options)) return 'threat-blocked';
   return '';
 }
@@ -3661,6 +3661,10 @@ function coinBlockedByThreat(_origin, coin, threat, options = {}) {
   return !coinSafeFromThreats(coin, [threat], options);
 }
 
+function profitOpportunityThreats(input = {}) {
+  return input.avoidanceThreats || input.activeThreats || [];
+}
+
 function targetSafeFromOpportunityThreats(target, threats = [], options = {}) {
   const dangerRadius = Math.max(0, Number(options.attackDangerRadius ?? BROWSER_RUNTIME_DEFAULTS.attackDangerRadius ?? 0));
   if (!(dangerRadius > 0)) return true;
@@ -4017,10 +4021,11 @@ function singleCoinBaitAnchoredOpportunity(input, candidate, bait, threshold, op
       : null;
     const routePoints = Array.isArray(route?.points) ? route.points : [];
     const routeOptions = coinRouteCoreOptions(input, {}, options);
+    const opportunityThreats = profitOpportunityThreats(input);
     if (routePoints.length) {
       let previous = bait;
       for (const point of routePoints) {
-        if (!coinRouteLegClearCore(previous, point, input?.activeThreats || [], routeOptions)) {
+        if (!coinRouteLegClearCore(previous, point, opportunityThreats, routeOptions)) {
           pathClear = false;
           break;
         }
@@ -4031,7 +4036,7 @@ function singleCoinBaitAnchoredOpportunity(input, candidate, bait, threshold, op
       staminaCost = Number(summary.totalStaminaCost || 0);
       distance = Number(summary.totalDistance || distance);
     } else {
-      pathClear = coinRouteLegClearCore(bait, source, input?.activeThreats || [], routeOptions);
+      pathClear = coinRouteLegClearCore(bait, source, opportunityThreats, routeOptions);
       reward = Math.max(0, Number(source?.amount ?? candidate?.amount ?? 0));
       staminaCost = opportunityMoveStaminaCost(distance, options, 0)
         + Math.max(0, Number(options.opportunityCoinPickupStaminaMs ?? BROWSER_RUNTIME_DEFAULTS.opportunityCoinPickupStaminaMs ?? 0));
@@ -4105,7 +4110,7 @@ function singleCoinBaitResidualRouteContinuation(input, opportunity, bait, optio
     .map(point => availableByKey.get(coinRouteKey(point)) || null)
     .filter(Boolean);
   const routeOptions = coinRouteCoreOptions(input, {}, options);
-  if (!coinRouteLegClearCore(source, firstFollowUp, input?.activeThreats || [], routeOptions)) return null;
+  if (!coinRouteLegClearCore(source, firstFollowUp, profitOpportunityThreats(input), routeOptions)) return null;
   const summary = coinRouteSummaryCore(remaining, source, routeOptions);
   const firstFollowUpSummary = coinRouteSummaryCore([firstFollowUp], source, routeOptions);
   const reward = Number(summary.totalValue || 0);
@@ -5637,7 +5642,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
   const explorationConfig = reconcileControlledExplorationSessions(input, stateful, options);
   const coinMaxDistance = Math.max(0, Number(options.coinMaxDistance || BROWSER_RUNTIME_DEFAULTS.coinMaxDistance));
   const globalCoinMaxDistance = Math.max(0, Number(options.globalCoinMaxDistance || DEFAULT_GLOBAL_COIN_MAX_DISTANCE));
-  const opportunityThreats = input.avoidanceThreats || input.activeThreats || [];
+  const opportunityThreats = profitOpportunityThreats(input);
   const routeSelectionOptions = { ...options, profitThresholdContext: thresholdContext };
   clearDangerousOpportunityState(stateful, input.nowMs);
   const fieldMigrationCoin = pickFieldMigrationCoin(input, opportunityThreats, thresholdContext, options);
