@@ -7,6 +7,7 @@ const {
   remoteProfitApproachEtaMs,
   remoteProfitDistanceFactor
 } = require('./remote-profit-targets');
+const { rawInvulnerabilityMsToWallMs, rawInvulnerabilityMsFrom } = require('./invulnerability-time');
 
 function scoring(target) {
   const distance = Number(target.distance || 0);
@@ -51,6 +52,9 @@ function runRemoteProfitTargetsSelfTest() {
   assert.strictEqual(remoteProfitDistanceFactor(150000), 0.5);
   assert.strictEqual(remoteProfitDistanceFactor(250000), 0.5);
   assert.strictEqual(remoteProfitApproachEtaMs(100000), 95000);
+  assert.strictEqual(rawInvulnerabilityMsToWallMs(36600), 15250);
+  assert.strictEqual(rawInvulnerabilityMsToWallMs(34200), 14250);
+  assert.strictEqual(rawInvulnerabilityMsFrom({ invulnerable_remaining_ms: 36600 }), 15250);
 
   assert.strictEqual(evaluate([target({ drop: 49 })]).candidates.length, 0);
   assert.strictEqual(evaluate([target({ drop: 50 })]).candidates.length, 1);
@@ -146,6 +150,10 @@ function runRemoteProfitTargetsSelfTest() {
   assert.strictEqual(invulnerableReady.candidates.length, 1);
   const invulnerableLate = evaluate([target({ x: 100000, invulnerable: true, invulnerableRemainingMs: 96000 })]);
   assert.strictEqual(invulnerableLate.candidates.length, 0);
+  const rawInvulnerableReady = evaluate([target({ x: 15000, invulnerable: true, invulnerable_remaining_ms: 24000 })]);
+  assert.strictEqual(rawInvulnerableReady.candidates.length, 1, 'raw protocol countdown converts to wall milliseconds');
+  const rawInvulnerableLate = evaluate([target({ x: 15000, invulnerable: true, invulnerable_remaining_ms: 26400 })]);
+  assert.strictEqual(rawInvulnerableLate.candidates.length, 0, 'converted countdown blocks a late approach');
 
   const conflict = evaluateRemoteProfitTargets({
     self: { user_id: 1, x: 0, y: 0 },

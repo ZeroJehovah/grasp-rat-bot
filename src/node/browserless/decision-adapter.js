@@ -6,6 +6,7 @@ const {
   incomingBulletHasCollisionRiskCore,
   isInvulnerableEntity
 } = require('../../strategy/combat-target-selection');
+const { rawInvulnerabilityMsFrom } = require('../../strategy/invulnerability-time');
 const {
   COMBAT_ECONOMIC_STOP_LOSS_DEFAULTS,
   evaluateEconomicCooldownReentryCore,
@@ -2704,7 +2705,14 @@ function partitionActiveCoinCompetition(self, coins = [], visibleTargets = [], o
 }
 
 function invulnerableRemainingMs(target, options = {}) {
-  const remainingMs = positiveFieldValue(target, INVULNERABLE_MS_FIELDS);
+  const canonicalMs = positiveFieldValue(target, [
+    'invulnerableRemainingMs',
+    'invincibleRemainingMs',
+    'invulnerabilityRemainingMs',
+    'immuneRemainingMs'
+  ]);
+  if (canonicalMs !== null) return Math.round(canonicalMs);
+  const remainingMs = rawInvulnerabilityMsFrom(target);
   if (remainingMs !== null) return Math.round(remainingMs);
   const tickMs = Math.max(1, Number(options.tickMs ?? BROWSER_RUNTIME_DEFAULTS.tickMs ?? 120) || 120);
   const remainingTicks = positiveFieldValue(target, INVULNERABLE_TICK_FIELDS);

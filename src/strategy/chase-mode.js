@@ -1,5 +1,7 @@
 'use strict';
 
+const { rawInvulnerabilityMsFrom } = require('./invulnerability-time');
+
 const CHASE_MODE_STATE_VERSION = 1;
 const CHASE_INVULNERABLE_TICK_MS = 50;
 
@@ -81,7 +83,16 @@ function positiveFieldValue(source, fields) {
 }
 
 function chaseInvulnerableState(target) {
-  const remainingMs = positiveFieldValue(target, INVULNERABLE_MS_FIELDS);
+  const canonicalMs = positiveFieldValue(target, [
+    'invulnerableRemainingMs',
+    'invincibleRemainingMs',
+    'invulnerabilityRemainingMs',
+    'immuneRemainingMs'
+  ]);
+  const rawRemainingMs = rawInvulnerabilityMsFrom(target);
+  const remainingMs = canonicalMs !== null
+    ? canonicalMs
+    : rawInvulnerabilityMsToWallMs(rawRemainingMs);
   const remainingTicks = positiveFieldValue(target, INVULNERABLE_TICK_FIELDS);
   const genericRemaining = positiveFieldValue(target, INVULNERABLE_GENERIC_REMAINING_FIELDS);
   const resolvedTicks = remainingTicks !== null ? remainingTicks : genericRemaining;
