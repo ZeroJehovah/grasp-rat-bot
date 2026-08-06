@@ -1693,6 +1693,11 @@ async function runReadOnlyCanary(config, options = {}) {
     : allStaticWhitelistUserIds;
   const staticWhitelistNameSet = new Set(legacyStaticWhitelistNames);
   const staticWhitelistUserIdSet = new Set(staticWhitelistUserIds);
+  try {
+    options.onRemoteProfitWhitelist?.(staticWhitelistUserIds.slice(0, workerWhitelistMaxEntries));
+  } catch (err) {
+    log('canary-remote-profit-whitelist-callback-error', { error: errorMessage(err) });
+  }
   const isCreatorTarget = target => {
     const userId = Number(target?.user_id ?? target?.userId ?? target?.target_user_id ?? target?.targetUserId);
     return Number.isFinite(userId) && creatorUserIdSet.has(userId);
@@ -2870,7 +2875,7 @@ async function runReadOnlyCanary(config, options = {}) {
     }
     return output;
   };
-  const buildDecisionWorkerContext = (currentState, atMs) => {
+  const buildDecisionWorkerContext = (currentState, atMs, contextOptions = {}) => {
     let easyKillStatus = null;
     let damageStatus = null;
     let dynamicWhitelistStatus = null;
@@ -2894,6 +2899,9 @@ async function runReadOnlyCanary(config, options = {}) {
     return {
       easyKillStatus,
       damageStatus,
+      remoteProfitBatch: contextOptions.includeRemoteProfit === true && typeof options.getRemoteProfitContext === 'function'
+        ? options.getRemoteProfitContext(atMs)
+        : (contextOptions.includeRemoteProfit === true ? (options.remoteProfitBatch || null) : null),
       dynamicWhitelistStatus: {
         memberUserIds: dynamicMemberUserIds,
         userIds: dynamicEnabledUserIds
@@ -2910,7 +2918,7 @@ async function runReadOnlyCanary(config, options = {}) {
       && Number(atMs) - realtimeControlWorkerContextAtMs <= 250) {
       return realtimeControlWorkerContext;
     }
-    realtimeControlWorkerContext = buildDecisionWorkerContext(currentState, atMs);
+    realtimeControlWorkerContext = buildDecisionWorkerContext(currentState, atMs, { includeRemoteProfit: false });
     realtimeControlWorkerContextAtMs = Number(atMs) || now();
     return realtimeControlWorkerContext;
   };
@@ -2989,6 +2997,11 @@ async function runReadOnlyCanary(config, options = {}) {
   };
   const publishFullDecision = (decision, currentState, atMs, detail = {}) => {
     const appliedDecision = applyRestartDrainDecisionGate(decision);
+    try {
+      options.onRemoteProfitDecision?.(appliedDecision, atMs);
+    } catch (err) {
+      log('canary-remote-profit-decision-callback-error', { error: errorMessage(err) });
+    }
     const summary = summarizeBrowserlessDecision(appliedDecision);
     result.decisions.evaluatedCount += 1;
     result.decisions.last = summary;
@@ -3475,7 +3488,7 @@ async function runReadOnlyCanary(config, options = {}) {
     if (!currentState?.realtime?.self) return false;
     plannerInFlight = true;
     lastDecisionAtMs = atMs;
-    const context = buildDecisionWorkerContext(currentState, atMs);
+    const context = buildDecisionWorkerContext(currentState, atMs, { includeRemoteProfit: true });
     const dynamicWhitelistStatus = context.dynamicWhitelistStatus || {};
     const workerOptions = {
       ...runtimeDefaults,
@@ -4112,6 +4125,13 @@ async function runReadOnlyCanary(config, options = {}) {
             const currentState = stateStore.getDecisionState?.(atMs) || stateStore.getState(atMs);
             stageDurations['state-decision-view'] = performance.now() - stageStarted;
             stageStarted = performance.now();
+            try {
+              options.onRemoteProfitRealtime?.(currentState?.realtime?.entities || [], atMs);
+            } catch (err) {
+              log('canary-remote-profit-realtime-callback-error', { error: errorMessage(err) });
+            }
+            stageDurations['remote-profit-realtime-observe'] = performance.now() - stageStarted;
+            stageStarted = performance.now();
             observeDynamicWhitelistBattles(currentState, atMs);
             stageDurations['dynamic-whitelist-observe'] = performance.now() - stageStarted;
             stageDurations['state-ingest-view'] = stageDurations['state-ingest']
@@ -4275,11 +4295,13 @@ async function runReadOnlyCanary(config, options = {}) {
               if (decisionWorker) {
                 dispatchWorkerDecision(currentState, atMs);
               } else {
+                const plannerContext = buildDecisionWorkerContext(currentState, atMs, { includeRemoteProfit: true });
                 const decision = decisionAdapter.decide(currentState, {
                   ...runtimeDefaults,
                   nowMs: atMs,
                   controlMode,
-                  combatEnabled: config.combatEnabled
+                  combatEnabled: config.combatEnabled,
+                  remoteProfitBatch: plannerContext?.remoteProfitBatch || null
                 });
                 lastDecisionAtMs = atMs;
                 publishFullDecision(decision, currentState, atMs);

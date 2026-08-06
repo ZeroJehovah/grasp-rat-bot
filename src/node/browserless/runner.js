@@ -36,6 +36,11 @@ const {
   lastExitPanelVisibleCore
 } = require('./web-panel');
 const {
+  createRemoteProfitWorker,
+  isRemoteProfitSnapshotEligible,
+  remoteProfitRealtimeSelfFromLiveState
+} = require('./remote-profit-worker');
+const {
   applySingleBlockerLoginBypass,
   inspectCanaryFrame,
   runPreLoginSnapshotSafety,
@@ -43,6 +48,7 @@ const {
 } = require('./canary');
 const { runTransportHealthSelfTest } = require('./transport-health');
 const {
+  DEFAULT_RECORD_THRESHOLD,
   DEFAULT_SNAPSHOT_GAP_MS,
   createHighDropPlayerTracker,
   createSnapshotGapPoller
@@ -64,6 +70,7 @@ const {
 } = require('./chat-history-store');
 const {
   BROWSER_RUNTIME_DEFAULTS,
+  buildBrowserlessRuntimeDefaults,
   buildBrowserlessRealtimeControlDecision,
   decisionStatePatch,
   establishedCombatLootPriority,
@@ -116,6 +123,9 @@ const {
 } = require('./session-client');
 const { runCloudflareChallengeSelfTest } = require('./cloudflare-challenge');
 const { runSourceIpProbeSelfTest } = require('./source-ip-probe');
+const { runRemoteProfitWorkerSelfTest } = require('./remote-profit-worker-self-test');
+const { runRemoteProfitActionSelfTest } = require('./remote-profit-action-self-test');
+const { runRemoteProfitDecisionSelfTest } = require('./remote-profit-decision-self-test');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
@@ -225,6 +235,7 @@ function publicConfig(config) {
     stateFile: config.stateFile || stateFilePath(config),
     loginPointPresent: hasConfigNumber(config.loginPointX) && hasConfigNumber(config.loginPointY),
     dynamicProfitThresholdEnabled: Boolean(config.dynamicProfitThresholdEnabled),
+    browserlessRemoteProfitTargetsEnabled: config.browserlessRemoteProfitTargetsEnabled !== false,
     profitThresholdCoinsPer10Stamina: Number(config.profitThresholdCoinsPer10Stamina || 0),
     profitThresholdHourlyStaminaLimit: Number(config.profitThresholdHourlyStaminaLimit || 0),
     profitThresholdResetReserveMs: Number(config.profitThresholdResetReserveMs || 0),
@@ -1619,6 +1630,7 @@ async function runBrowserlessRunner(config, deps = {}) {
   }
   let snapshotGapPoller = null;
   let statusHandle = null;
+  let remoteProfitWorker = null;
   let closeRuntimeHandlesOnReturn = false;
   try {
   let liveState = null;
@@ -1795,6 +1807,30 @@ async function runBrowserlessRunner(config, deps = {}) {
     seedPlayers: chatSeedPlayers,
     onPollingDemandChange: () => snapshotGapPoller?.refreshSchedule?.()
   });
+  let remoteProfitStaticWhitelistIds = [];
+  const remoteProfitScoringOptions = {
+    ...buildBrowserlessRuntimeDefaults(config),
+    controlMode: config.controlMode,
+    combatEnabled: config.combatEnabled === true
+  };
+  remoteProfitWorker = deps.remoteProfitWorker || createRemoteProfitWorker({
+    now,
+    enabled: config.browserlessRemoteProfitTargetsEnabled !== false,
+    onEvent: (type, detail = {}) => {
+      const eventType = String(type || 'event');
+      if (!['published', 'discarded', 'timeout', 'worker-error'].includes(eventType)) return;
+      logStore.append('runner', `remote-profit-${eventType}`, {
+        generation: Number(detail.generation || 0),
+        reason: String(detail.reason || ''),
+        candidateCount: Number(detail.candidateCount || 0),
+        error: String(detail.error || '').slice(0, 240),
+        computeMs: Number(detail.computeMs || 0),
+        roundTripMs: Number(detail.roundTripMs || 0)
+      });
+    }
+  });
+  const remoteProfitContext = atMs => remoteProfitWorker?.context?.(atMs) || null;
+  const remoteProfitRealtimeSelf = () => remoteProfitRealtimeSelfFromLiveState(liveState, config.userId);
   let activeRunKillConfirmations = [];
   const observeSnapshotPayload = (payload, detail = {}) => {
     const observedAtMs = Number(detail.observedAtMs ?? now());
@@ -1806,6 +1842,48 @@ async function runBrowserlessRunner(config, deps = {}) {
     let easyKillNameResult = null;
     let easyKillEvidenceResult = null;
     let damageNameResult = null;
+    const sessionOnline = liveState?.stats?.currentSession?.online === true;
+    const remoteSelf = remoteProfitRealtimeSelf();
+    if (isRemoteProfitSnapshotEligible(snapshotSource, detail, sessionOnline, remoteSelf)) {
+      const dynamicStatus = dynamicWhitelist.status?.() || {};
+      const easyStatus = easyKillPlayerTracker.status?.(observedAtMs) || {};
+      const dynamicIds = [
+        ...(dynamicStatus.memberUserIds || []),
+        ...(dynamicStatus.userIds || []),
+        ...(dynamicStatus.players || []).map(item => item?.userId ?? item?.user_id)
+      ];
+      const whitelistUserIds = [
+        ...remoteProfitStaticWhitelistIds,
+        ...dynamicIds
+      ];
+      const easyKillPlayers = Array.isArray(easyStatus.players) ? easyStatus.players.slice(0, 128) : [];
+      const combatCompletionByUserId = {};
+      for (const player of easyKillPlayers) {
+        const userId = player?.userId ?? player?.user_id;
+        if (userId === null || userId === undefined || userId === '') continue;
+        try {
+          combatCompletionByUserId[String(userId)] = combatCompletionTracker.probability(userId, observedAtMs);
+        } catch (_) {}
+      }
+      remoteProfitWorker?.publish?.({
+        source: snapshotSource,
+        tick: payload?.tick ?? null,
+        observedAtMs,
+        online: true,
+        self: remoteSelf,
+        selfUserId: config.userId,
+        entities: Array.isArray(payload?.entities) ? payload.entities : [],
+        easyKillPlayers,
+        combatCompletionByUserId,
+        whitelistUserIds,
+        scoringOptions: remoteProfitScoringOptions,
+        config: {
+          ...remoteProfitScoringOptions,
+          minDrop: DEFAULT_RECORD_THRESHOLD,
+          whitelistUserIds
+        }
+      }).catch?.(() => {});
+    }
     try {
       chatResult = chatService.observeSnapshot?.(payload, {
         ...detail,
@@ -2921,8 +2999,15 @@ async function runBrowserlessRunner(config, deps = {}) {
   };
   const buildStatusSource = compact => {
     const sourceStarted = performance.now();
+    const remoteProfitStatus = remoteProfitWorker?.status?.(now()) || null;
+    const baseState = liveState || readBrowserlessStateFile(stateFile);
     const source = {
-      ...(liveState || readBrowserlessStateFile(stateFile)),
+      ...baseState,
+      runner: {
+        ...(baseState.runner || {}),
+        remoteProfit: remoteProfitStatus
+      },
+      remoteProfit: remoteProfitStatus,
       highDropPlayers: highDropPlayerTracker.status(now()),
       easyKillPlayers: easyKillPlayerStatus(),
       dailyDamagePlayers: damagePlayerTracker.status(now()),
@@ -3717,6 +3802,10 @@ async function runBrowserlessRunner(config, deps = {}) {
           allowMissingLoginPointBootstrap: true,
           onSnapshotSafety: recordSnapshotSafetyProgress,
           onSnapshotPayload: observeSnapshotPayload,
+          getRemoteProfitContext: remoteProfitContext,
+          onRemoteProfitDecision: decision => remoteProfitWorker?.observeDecision?.(decision),
+          onRemoteProfitRealtime: entities => remoteProfitWorker?.observeRealtimeEntities?.(entities),
+          onRemoteProfitWhitelist: ids => { remoteProfitStaticWhitelistIds = ids.slice(0, 128); },
           fetchWithTimeout: sourceIpController.fetchWithTimeout,
           openBrowserlessWs: sourceIpController.openBrowserlessWs,
           onLoginTransportAttempt: markSourceIpLoginAttempt,
@@ -3839,6 +3928,10 @@ async function runBrowserlessRunner(config, deps = {}) {
         transportRecoveryEscalation,
         onSnapshotSafety: recordSnapshotSafetyProgress,
         onSnapshotPayload: observeSnapshotPayload,
+        getRemoteProfitContext: remoteProfitContext,
+        onRemoteProfitDecision: decision => remoteProfitWorker?.observeDecision?.(decision),
+        onRemoteProfitRealtime: entities => remoteProfitWorker?.observeRealtimeEntities?.(entities),
+        onRemoteProfitWhitelist: ids => { remoteProfitStaticWhitelistIds = ids.slice(0, 128); },
         onSnapshotEdge: progress => logStore.append('runner', `snapshot-edge-${progress.type || 'progress'}`, progress),
         fetchWithTimeout: sourceIpController.fetchWithTimeout,
         openBrowserlessWs: sourceIpController.openBrowserlessWs,
@@ -4060,6 +4153,11 @@ async function runBrowserlessRunner(config, deps = {}) {
         } catch (err) {
           recordSupervisorError(err, { operation: 'status-server-close' });
         }
+      }
+      try {
+        await remoteProfitWorker?.close?.();
+      } catch (err) {
+        recordSupervisorError(err, { operation: 'remote-profit-worker-close' });
       }
       if (ownsStatusRenderIo) await statusRenderIo.close({ timeoutMs: STATUS_IO_CLOSE_TIMEOUT_MS });
       if (ownsBackgroundIo) await backgroundIo.close({ timeoutMs: BACKGROUND_IO_CLOSE_TIMEOUT_MS });
@@ -5076,6 +5174,9 @@ async function runCriticalLatencyExitRegressionSelfTest() {
 async function runBrowserlessRunnerSelfTest() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-browserless-runner-'));
   try {
+    const remoteProfitWorker = await runRemoteProfitWorkerSelfTest();
+    const remoteProfitAction = runRemoteProfitActionSelfTest();
+    const remoteProfitDecision = runRemoteProfitDecisionSelfTest();
     const requestRatePolicy = await runRequestRatePolicySelfTest();
     const requestRateController = await runRequestRateControllerSelfTest();
     const loginPointHighHpExemption = await runLoginPointHighHpExemptionSelfTest();
@@ -7066,6 +7167,9 @@ async function runBrowserlessRunnerSelfTest() {
       ok: Boolean(
         sourceIpProbe.ok
         && requestRatePolicy.ok
+        && remoteProfitWorker.ok
+        && remoteProfitAction.ok
+        && remoteProfitDecision.ok
         && requestRateController.ok
         && loginPointHighHpExemption.ok
         && dryRun.ok
@@ -7138,6 +7242,9 @@ async function runBrowserlessRunnerSelfTest() {
       establishedCombatLootPriority: establishedCombatLootPriorityTest,
       sourceIpProbe,
       requestRatePolicy,
+      remoteProfitWorker,
+      remoteProfitAction,
+      remoteProfitDecision,
       requestRateController,
       loginPointHighHpExemption,
       sourceIpPreflight,
@@ -7225,6 +7332,7 @@ module.exports = {
   runnerResultExitDetail,
   resumeTransportRecoveryAfterCloudflareStop,
   summarizeBrowserlessRunnerResult,
+  isRemoteProfitSnapshotEligible,
   runBrowserlessRunner,
   runBrowserlessRunnerSelfTest
 };

@@ -310,6 +310,12 @@ function profitActionFromDecision(decision) {
   if ((kind === 'attack' || kind === 'seek-enemy') && target?.type === 'enemy') {
     return { type: 'enemy', kind, target };
   }
+  if (kind === 'seek-remote-player'
+    && target?.type === 'enemy'
+    && target?.authority === 'snapshot-navigation'
+    && target?.remoteNavigationOnly === true) {
+    return { type: 'remote-player', kind, target };
+  }
   return null;
 }
 
@@ -2623,6 +2629,47 @@ function createBrowserlessActionAdapter(options = {}) {
     if (profitAction.type === 'enemy') {
       clearCoinFeedbackGate();
       return applyProfitEnemyDecision(stateSnapshot, self, profitAction.target, decision);
+    }
+    if (profitAction.type === 'remote-player') {
+      clearCoinFeedbackGate();
+      const target = profitAction.target;
+      const arrivalToleranceCm = Math.max(0, Number(
+        target?.arrivalToleranceCm
+          ?? options.remoteProfitArrivalToleranceCm
+          ?? BROWSER_RUNTIME_DEFAULTS.remoteProfitArrivalToleranceCm
+          ?? 1000
+      ));
+      const vector = movementVectorToTarget(self, target, {
+        ...options,
+        targetDeadZoneCm: arrivalToleranceCm
+      });
+      if (!vector.ok) {
+        const stopped = stop(vector.reason === 'target-reached' ? 'remote-target-arrived' : 'remote-target-missing-position');
+        return {
+          ok: stopped.ok,
+          kind: 'stop',
+          reason: vector.reason === 'target-reached' ? 'remote-target-arrived' : 'remote-target-missing-position',
+          vector,
+          command: stopped.command || null,
+          skipped: Boolean(stopped.skipped),
+          target,
+          remoteNavigationOnly: true,
+          ...transportFailure(stopped)
+        };
+      }
+      const sent = sendVelocity(vector.dx, vector.dy, 'seek-remote-player', target);
+      return {
+        ok: sent.ok,
+        kind: 'velocity',
+        reason: 'seek-remote-player',
+        vector,
+        command: sent.command || null,
+        skipped: Boolean(sent.skipped),
+        target,
+        remoteNavigationOnly: true,
+        shoot: { ok: true, skipped: true, reason: 'remote-navigation-no-shoot' },
+        ...transportFailure(sent)
+      };
     }
     const target = profitAction.target;
     const vector = coinMotionVectorToTarget(self, target, options, state, now());

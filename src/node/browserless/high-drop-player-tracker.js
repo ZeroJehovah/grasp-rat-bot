@@ -440,6 +440,7 @@ function createSnapshotGapPoller(options = {}) {
 }
 
 module.exports = {
+  DEFAULT_RECORD_THRESHOLD,
   DEFAULT_SNAPSHOT_GAP_MS,
   createHighDropPlayerTracker,
   createSnapshotGapPoller,

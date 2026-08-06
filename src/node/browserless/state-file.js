@@ -51,6 +51,7 @@ function defaultBrowserlessState() {
       currentAction: null,
       lastRun: null,
       connectionFailure: null,
+      remoteProfit: null,
       lastError: ''
     },
     probes: {
@@ -3172,6 +3173,56 @@ function compactProfitSource(profit) {
   } : null;
 }
 
+function compactRemoteProfitStatus(value) {
+  if (!value || typeof value !== 'object') return null;
+  return {
+    enabled: value.enabled !== false,
+    ready: value.ready === true,
+    busy: value.busy === true,
+    failed: value.failed === true,
+    workerNice: compactNumber(value.workerNice),
+    generation: compactNumber(value.generation),
+    latestRequestedGeneration: compactNumber(value.latestRequestedGeneration),
+    latestPublishedGeneration: compactNumber(value.latestPublishedGeneration),
+    snapshotAt: compactString(value.snapshotAt, 48),
+    ageMs: compactNumber(value.ageMs),
+    expiresAt: compactString(value.expiresAt, 48),
+    pending: value.pending === true,
+    candidateCount: compactNumber(value.candidateCount),
+    highDropAfkCount: compactNumber(value.highDropAfkCount),
+    easyKillActiveCount: compactNumber(value.easyKillActiveCount),
+    postMs: compactNumber(value.postMs),
+    postCpuMs: compactNumber(value.postCpuMs),
+    publicationCpuMs: compactNumber(value.publicationCpuMs),
+    computeMs: compactNumber(value.computeMs),
+    roundTripMs: compactNumber(value.roundTripMs),
+    maxPostMs: compactNumber(value.maxPostMs),
+    maxPostCpuMs: compactNumber(value.maxPostCpuMs),
+    maxPublicationCpuMs: compactNumber(value.maxPublicationCpuMs),
+    maxContextSerializationCpuMs: compactNumber(value.maxContextSerializationCpuMs),
+    maxContextSerializationMs: compactNumber(value.maxContextSerializationMs),
+    maxComputeMs: compactNumber(value.maxComputeMs),
+    maxRoundTripMs: compactNumber(value.maxRoundTripMs),
+    completed: compactNumber(value.completed),
+    discarded: compactNumber(value.discarded),
+    timeouts: compactNumber(value.timeouts),
+    realtimeSupersededCount: compactNumber(value.realtimeSupersededCount),
+    missSuppressedCount: compactNumber(value.missSuppressedCount),
+    selected: value.selected && typeof value.selected === 'object'
+      ? {
+          userId: compactNumber(value.selected.userId),
+          classification: compactString(value.selected.remoteClassification, 40),
+          x: compactNumber(value.selected.x),
+          y: compactNumber(value.selected.y),
+          adjustedScore: compactNumber(value.selected.adjustedScore),
+          distanceFactor: compactNumber(value.selected.distanceFactor)
+        }
+      : null,
+    lastError: compactString(value.lastError, 160),
+    lastErrorAt: compactString(value.lastErrorAt, 48)
+  };
+}
+
 function compactDecisionSource(decision) {
   if (!decision || typeof decision !== 'object') return null;
   const compact = compactDecision(decision);
@@ -3226,6 +3277,7 @@ function browserlessCompactStatusSource(state = {}) {
       connectionFailure: compactConnectionFailure(runner.connectionFailure),
       restartDrain: runner.restartDrain || null,
       currentAction: compactAction(runner.currentAction),
+      remoteProfit: compactRemoteProfitStatus(runner.remoteProfit || state.remoteProfit),
       lastRun: compactLastRunSource(runner.lastRun)
     },
     probes: {
@@ -3283,6 +3335,7 @@ function browserlessCompactStatusSource(state = {}) {
     easyKillPlayers: compactEasyKillPlayers(state.easyKillPlayers),
     dailyDamagePlayers: compactDailyDamagePlayers(state.dailyDamagePlayers),
     dynamicWhitelist: compactDynamicWhitelist(state.dynamicWhitelist),
+    remoteProfit: compactRemoteProfitStatus(state.remoteProfit || runner.remoteProfit),
     statusRender: state.statusRender || null
   };
 }

@@ -54,6 +54,13 @@ function opportunityReward(item) {
 
 function opportunityNetRoiCore(item, extraStaminaCost = 0) {
   if (!item) return null;
+  if (item.scoreAuthority === 'adjusted-distance-score' || item.selectionScore !== undefined) {
+    const score = Number(item.selectionScore ?? item.score);
+    const staminaCost = Number(item.staminaCost);
+    if (!Number.isFinite(score)) return null;
+    if (!(extraStaminaCost > 0) || !(staminaCost > 0)) return score;
+    return score * staminaCost / (staminaCost + Math.max(0, Number(extraStaminaCost || 0)));
+  }
   const reward = opportunityReward(item);
   const staminaCost = Number(item.staminaCost);
   if (reward !== null && Number.isFinite(staminaCost) && staminaCost + extraStaminaCost > 0) {
@@ -532,6 +539,9 @@ function rememberOpportunityChoiceCore(item, action, previous = null, options = 
     amount: Number.isFinite(Number(item.amount)) ? Number(item.amount) : null,
     distance: Number.isFinite(Number(item.distance)) ? Math.round(Number(item.distance)) : null,
     actionKind: item.actionKind || action?.kind || '',
+    remoteGeneration: item.type === 'remote-player-navigation'
+      ? Number(item.generation || 0)
+      : 0,
     priorityTier: Number(item.priorityTier || 0),
     maxDistance: Number.isFinite(Number(item.maxDistance)) ? Number(item.maxDistance) : null,
     missingSince: missingHold ? Number(previous?.missingSince || t) : 0,

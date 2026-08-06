@@ -271,6 +271,8 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     attackApproachMinDrop: 12,
     attackMinRewardRatio: 0.5,
     dynamicProfitThresholdEnabled: true,
+    browserlessRemoteProfitTargetsEnabled: config.browserlessRemoteProfitTargetsEnabled !== false,
+    remoteProfitArrivalToleranceCm: 1000,
     profitThresholdCoinsPer10Stamina: 1,
     profitThresholdHourlyStaminaLimit: 3000,
     profitThresholdResetReserveMs: 14400000,

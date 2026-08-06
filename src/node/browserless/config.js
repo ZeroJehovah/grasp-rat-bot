@@ -119,6 +119,7 @@ const DEFAULTS = {
   loginPointY: null,
   loginPointHp: null,
   dynamicProfitThresholdEnabled: true,
+  browserlessRemoteProfitTargetsEnabled: true,
   profitThresholdCoinsPer10Stamina: 1,
   profitThresholdHourlyStaminaLimit: 3000,
   profitThresholdResetReserveMs: 14400000
@@ -311,6 +312,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     loginPointY: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y, DEFAULTS.loginPointY),
     loginPointHp: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_HP, DEFAULTS.loginPointHp),
     dynamicProfitThresholdEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_DYNAMIC_PROFIT_THRESHOLD_ENABLED, DEFAULTS.dynamicProfitThresholdEnabled),
+    browserlessRemoteProfitTargetsEnabled: boolEnv(
+      env.GRASP_RAT_BROWSERLESS_REMOTE_PROFIT_TARGETS_ENABLED,
+      DEFAULTS.browserlessRemoteProfitTargetsEnabled
+    ),
     profitThresholdCoinsPer10Stamina: numberEnv(env.GRASP_RAT_BROWSERLESS_PROFIT_THRESHOLD_COINS_PER_10_STAMINA, DEFAULTS.profitThresholdCoinsPer10Stamina),
     profitThresholdHourlyStaminaLimit: numberEnv(env.GRASP_RAT_BROWSERLESS_PROFIT_THRESHOLD_HOURLY_STAMINA_LIMIT, DEFAULTS.profitThresholdHourlyStaminaLimit),
     profitThresholdResetReserveMs: numberEnv(env.GRASP_RAT_BROWSERLESS_PROFIT_THRESHOLD_RESET_RESERVE_MS, DEFAULTS.profitThresholdResetReserveMs),

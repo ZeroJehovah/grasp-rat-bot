@@ -73,7 +73,8 @@ function dynamicOptions(message, effects) {
       status: () => context.damageStatus || { players: [], userIds: [] }
     },
     combatCompletionTracker: completionTrackerProxy(context),
-    combatCompletionByUserId: context.combatCompletionByUserId || {}
+    combatCompletionByUserId: context.combatCompletionByUserId || {},
+    remoteProfitBatch: context.remoteProfitBatch || null
   };
 }
 
@@ -104,7 +105,8 @@ parentPort.on('message', message => {
           applyPatchItemCount: Object.keys(decision?.stateful || {}).length + effects.length,
           visibleTargetCount: Number(summary?.input?.visibleTargetCount ?? summary?.input?.nearby?.visibleTargetCount ?? 0),
           profitCandidateCount: Number(summary?.profit?.candidates?.length || 0),
-          combatCandidateCount: Number(summary?.combat?.candidates?.length || 0)
+          combatCandidateCount: Number(summary?.combat?.candidates?.length || 0),
+          remoteProfitCandidateCount: Number(summary?.profit?.remoteProfit?.candidateCount || decision?.remoteProfit?.candidateCount || 0)
         },
         computeMs: performance.now() - started,
         requestAtMs: message.requestAtMs || 0

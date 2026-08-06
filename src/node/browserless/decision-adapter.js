@@ -164,9 +164,9 @@ const DEFAULT_AFK_COMBAT_MOVEMENT_STAMINA_PER_SHOT_MS = 425;
 const DEFAULT_AFK_DISPLAY_INACTIVE_MS = 60000;
 const EASY_KILL_CANDIDATE_DIAGNOSTIC_LIMIT = 8;
 const EASY_KILL_SEEK_RANGE_CM_BY_SCORE = Object.freeze({
-  1: 30000,
-  2: 50000,
-  3: 50000
+  1: 50000,
+  2: null,
+  3: null
 });
 const DEFAULT_INVULNERABLE_PROFIT_APPROACH_DISTANCE_CM = 5000;
 const DEFAULT_INVULNERABLE_PROFIT_MOVE_SPEED_CM_PER_SEC = 1000;
@@ -826,7 +826,7 @@ function refreshEasyKillTargetAnnotations(
         && !target.invulnerable
         && Number.isFinite(Number(target.distance))
         && (visibleDistance <= 0 || Number(target.distance) <= visibleDistance)
-        && Number(target.distance) <= seekRangeCm
+        && (seekRangeCm === null || Number(target.distance) <= seekRangeCm)
     );
   }
   input.easyKillTargets = targets.filter(target => target.easyKillProfitTarget);
@@ -3223,6 +3223,9 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     profitCoins,
     panelProfitCoins,
     profitCoinSource,
+    remoteProfitBatch: options.remoteProfitBatch && typeof options.remoteProfitBatch === 'object'
+      ? cloneJson(options.remoteProfitBatch)
+      : null,
     activeCoinCompetition: {
       enabled: options.activeCoinCompetitionEnabled !== false,
       activeCompetitorCount: activeCoinCompetition.activeCompetitorCount,
@@ -4904,6 +4907,30 @@ function annotateProfitActionThreshold(action, thresholdContext, options = {}) {
   };
 }
 
+function clearInvalidRemoteFinalActionHold(stateful = {}, opportunity = {}) {
+  const arbitration = ensureFinalActionArbitrationState(stateful);
+  const previous = arbitration.lastAction || null;
+  if (String(previous?.kind || '') !== 'seek-remote-player') return false;
+  const target = previous.target || {};
+  const targetId = target.userId ?? target.user_id;
+  const generation = Number(target.generation || 0);
+  const remote = opportunity.remoteProfit || {};
+  const stillAvailable = remote.valid === true
+    && generation > 0
+    && generation === Number(remote.generation || 0)
+    && (opportunity.opportunities || []).some(item => (
+      String(item?.type || '') === 'remote-player-navigation'
+        && String(item.id ?? '') === String(targetId ?? '')
+        && Number(item.generation || 0) === generation
+    ));
+  if (stillAvailable) return false;
+  arbitration.lastAction = null;
+  arbitration.lastFocus = null;
+  arbitration.lastSelectedAt = 0;
+  arbitration.profitDropout = null;
+  return true;
+}
+
 function clearIneligibleFinalProfitHold(stateful = {}, thresholdContext, opportunity = {}) {
   if (!thresholdContext?.active) return;
   const arbitration = ensureFinalActionArbitrationState(stateful);
@@ -4930,6 +4957,7 @@ function targetSwitchOscillationWindowMs(options = {}) {
 
 function applyBrowserlessFinalActionArbitration(action, stateful = {}, input = {}, options = {}, opportunity = {}) {
   const arbitration = ensureFinalActionArbitrationState(stateful);
+  clearInvalidRemoteFinalActionHold(stateful, opportunity);
   const rememberedThreatCount = Object.keys(stateful.recentInvulnerableThreats || {}).length;
   if (arbitration.lastAction?.target?.safetyMemoryOnly && rememberedThreatCount === 0) {
     arbitration.lastAction = null;
@@ -5126,6 +5154,7 @@ function opportunityNearbyPriorityDistance(options = {}) {
 }
 
 function browserlessOpportunityPriorityTier(item, options = {}) {
+  if (String(item?.type || '') === 'remote-player-navigation') return 1;
   const base = opportunityPriorityTierCore(item, {
     visibleDistance: opportunityVisibleDistance(options),
     nearbyPriorityDistance: opportunityNearbyPriorityDistance(options)
@@ -5625,6 +5654,132 @@ function observeControlledExplorationCandidate(input, stateful, item, config) {
   return { session, observation, rejectionReason: '' };
 }
 
+function remoteProfitCurrentWhitelistIds(options = {}) {
+  return new Set([
+    ...(options.targetWhitelistUserIds || []),
+    ...(options.creatorUserIds || []),
+    ...(options.dynamicWhitelistMemberUserIds || []),
+    ...(options.dynamicWhitelistEnabledUserIds || [])
+  ].map(Number).filter(Number.isFinite).map(String));
+}
+
+function remoteProfitCandidateInput(input, options = {}) {
+  const batch = input?.remoteProfitBatch && typeof input.remoteProfitBatch === 'object'
+    ? input.remoteProfitBatch
+    : null;
+  const result = {
+    enabled: options.browserlessRemoteProfitTargetsEnabled !== false,
+    generation: Number(batch?.generation || 0),
+    snapshotAt: batch?.observedAtMs ? new Date(Number(batch.observedAtMs)).toISOString() : '',
+    candidates: [],
+    realtimeSupersededIds: [],
+    missSuppressedIds: [],
+    inputCount: Number(batch?.candidates?.length || 0),
+    filtered: {},
+    valid: false,
+    ageMs: null,
+    expiresAt: batch?.expiresAtMs ? new Date(Number(batch.expiresAtMs)).toISOString() : ''
+  };
+  const reject = reason => {
+    result.filtered[reason] = Number(result.filtered[reason] || 0) + 1;
+  };
+  if (options.browserlessRemoteProfitTargetsEnabled === false) {
+    reject('disabled');
+    return result;
+  }
+  if (!batch || !input?.self) {
+    reject(!batch ? 'missing-batch' : 'missing-realtime-self');
+    return result;
+  }
+  const observedAtMs = Number(batch.observedAtMs);
+  const expiresAtMs = Number(batch.expiresAtMs);
+  if (!Number.isFinite(observedAtMs) || !Number.isFinite(expiresAtMs) || input.nowMs >= expiresAtMs) {
+    reject('expired-or-invalid-batch');
+    return result;
+  }
+  result.valid = true;
+  result.ageMs = Math.max(0, input.nowMs - observedAtMs);
+  const visibleIds = new Set((input.panelVisibleTargets || input.visibleTargets || [])
+    .map(target => easyKillTargetUserId(target))
+    .filter(id => id !== null)
+    .map(String));
+  const candidateIds = new Set((batch.candidates || [])
+    .map(candidate => easyKillTargetUserId(candidate))
+    .filter(id => id !== null)
+    .map(String));
+  const superseded = new Set((batch.realtimeSupersededIds || []).map(String));
+  const missSuppressed = new Set((batch.missSuppressedIds || []).map(String));
+  const currentWhitelistIds = remoteProfitCurrentWhitelistIds(options);
+  for (const id of visibleIds) {
+    if (candidateIds.has(id)) superseded.add(id);
+  }
+  const arrivalToleranceCm = Math.max(0, Number(
+    options.remoteProfitArrivalToleranceCm
+      ?? options.movementTargetDeadZoneCm
+      ?? BROWSER_RUNTIME_DEFAULTS.remoteProfitArrivalToleranceCm
+      ?? 1000
+  ));
+  for (const candidate of batch.candidates || []) {
+    const userId = easyKillTargetUserId(candidate);
+    if (userId === null) {
+      reject('missing-user-id');
+      continue;
+    }
+    const id = String(userId);
+    if (visibleIds.has(id) || superseded.has(id)) {
+      reject('realtime-superseded');
+      continue;
+    }
+    if (missSuppressed.has(id)) {
+      reject('arrival-miss-suppressed');
+      continue;
+    }
+    if (currentWhitelistIds.has(id)) {
+      missSuppressed.add(id);
+      reject('current-whitelist');
+      continue;
+    }
+    const distanceNow = distanceBetween(input.self, candidate);
+    if (!Number.isFinite(distanceNow)) {
+      reject('invalid-current-distance');
+      continue;
+    }
+    if (distanceNow <= arrivalToleranceCm) {
+      missSuppressed.add(id);
+      reject('arrival-target-missing');
+      continue;
+    }
+    if (!opportunityStaminaAffordable(input.self, candidate.staminaCost, options)) {
+      reject('stamina-unaffordable');
+      continue;
+    }
+    result.candidates.push(candidate);
+  }
+  result.realtimeSupersededIds = Array.from(superseded).slice(0, 64);
+  result.missSuppressedIds = Array.from(missSuppressed).slice(0, 64);
+  return result;
+}
+
+function remoteProfitActionTarget(item) {
+  const target = summarizeTarget(item?.sourceTarget);
+  if (!target) return null;
+  if (String(item?.type || '') !== 'remote-player-navigation') return target;
+  return {
+    ...target,
+    authority: 'snapshot-navigation',
+    remoteNavigationOnly: true,
+    remoteClassification: item.remoteClassification || item.sourceTarget?.classification || '',
+    easyKillScore: numberOrNull(item.sourceTarget?.easyKillScore),
+    baseScore: roundedDiagnosticNumber(item.baseScore),
+    distanceFactor: roundedDiagnosticNumber(item.distanceFactor),
+    adjustedScore: roundedDiagnosticNumber(item.adjustedScore),
+    arrivalToleranceCm: 1000,
+    snapshotDistance: Number.isFinite(Number(item.distance)) ? Math.round(Number(item.distance)) : null,
+    snapshotAt: item.snapshotAt || '',
+    generation: Number(item.generation || 0)
+  };
+}
+
 function buildOpportunityDecision(input, stateful = {}, options = {}) {
   const thresholdContext = options.profitThresholdContext || buildProfitThresholdContext(input, options);
   if (!input.self) {
@@ -5725,6 +5880,10 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     afkFinishCommitmentMaxStaminaCost: options.afkFinishCommitmentMaxStaminaCost ?? 25000,
     nowMs: input.nowMs
   };
+  const remoteProfit = remoteProfitCandidateInput(input, options);
+  opportunityOptions.remotePlayerCandidates = remoteProfit.candidates;
+  opportunityOptions.remotePlayerGeneration = remoteProfit.generation;
+  opportunityOptions.remotePlayerSnapshotAt = remoteProfit.snapshotAt;
   const afkOpportunityTargets = includeAfkProfitTargets
     ? input.afkTargets
       .filter(target => !targetDangerousCooldownRecord(stateful, target, input.nowMs))
@@ -5848,7 +6007,16 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     storedCurrent.staminaCost,
     thresholdContext.threshold
   );
-  const current = thresholdContext.active && !storedCurrentEligible ? null : storedCurrent;
+  const storedRemoteGeneration = Number(storedCurrent?.remoteGeneration || 0);
+  const remoteCurrentPresent = storedCurrent?.type === 'remote-player-navigation'
+    && remoteProfit.valid
+    && storedRemoteGeneration > 0
+    && storedRemoteGeneration === remoteProfit.generation
+    && opportunities.some(item => item.type === 'remote-player-navigation'
+      && String(item.id) === String(storedCurrent.id));
+  const current = storedCurrent?.type === 'remote-player-navigation'
+    ? (remoteCurrentPresent && (!thresholdContext.active || storedCurrentEligible) ? storedCurrent : null)
+    : (thresholdContext.active && !storedCurrentEligible ? null : storedCurrent);
   const currentEnemyPresent = current?.type === 'enemy'
     && opportunities.some(item => String(item.type) === 'enemy' && String(item.id) === String(current.id));
   const enemyMissingHoldMs = Math.max(0, Number(options.enemyMissingHoldMs ?? 1800));
@@ -5902,7 +6070,9 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
         reason: rawChosen.reason || 'best-opportunity',
         target: rawChosen.type === 'coin'
           ? summarizeCoin(rawChosen.sourceCoin)
-          : { ...summarizeTarget(rawChosen.sourceTarget), cachedNavigationOnly: Boolean(rawChosen.sourceTarget?.cachedNavigationOnly) },
+          : rawChosen.type === 'remote-player-navigation'
+            ? remoteProfitActionTarget(rawChosen)
+            : { ...summarizeTarget(rawChosen.sourceTarget), cachedNavigationOnly: Boolean(rawChosen.sourceTarget?.cachedNavigationOnly) },
         reward: rawChosen.reward,
         expectedReward: rawChosen.expectedReward ?? rawChosen.reward,
         effectiveProfitReward: rawChosen.effectiveProfitReward || null,
@@ -5933,7 +6103,9 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
         reason: chosen.reason || 'best-opportunity',
         target: chosen.type === 'coin'
           ? summarizeCoin(chosen.sourceCoin)
-          : { ...summarizeTarget(chosen.sourceTarget), cachedNavigationOnly: Boolean(chosen.sourceTarget?.cachedNavigationOnly) },
+          : chosen.type === 'remote-player-navigation'
+            ? remoteProfitActionTarget(chosen)
+            : { ...summarizeTarget(chosen.sourceTarget), cachedNavigationOnly: Boolean(chosen.sourceTarget?.cachedNavigationOnly) },
         reward: chosen.reward,
         expectedReward: chosen.expectedReward ?? chosen.reward,
         effectiveProfitReward: chosen.effectiveProfitReward || null,
@@ -5964,6 +6136,20 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     switchDiagnostics: choice.switchDiagnostics || null,
     opportunityChoice: remembered.choice || null,
     action: remembered.action || action,
+    remoteProfit: {
+      enabled: remoteProfit.enabled,
+      valid: remoteProfit.valid,
+      generation: remoteProfit.generation,
+      snapshotAt: remoteProfit.snapshotAt,
+      ageMs: remoteProfit.ageMs,
+      expiresAt: remoteProfit.expiresAt,
+      inputCount: remoteProfit.inputCount,
+      candidateCount: remoteProfit.candidates.length,
+      realtimeSupersededIds: remoteProfit.realtimeSupersededIds,
+      missSuppressedIds: remoteProfit.missSuppressedIds,
+      filtered: remoteProfit.filtered,
+      selected: chosen?.type === 'remote-player-navigation' ? remoteProfitActionTarget(chosen) : null
+    },
     threshold: {
       ...thresholdContext,
       rawCount: filtered.rawCount,
@@ -10761,6 +10947,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       candidates: topItems(opportunity.sorted, summarizeOpportunity),
       threshold: opportunity.threshold,
       switch: opportunity.switchDiagnostics || null,
+      remoteProfit: cloneJson(opportunity.remoteProfit || null),
       competition: cloneJson(input.activeCoinCompetition),
       singleCoinBait: singleCoinBait.summary,
       singleCoinBaitLifecycle: cloneJson(singleCoinBait.lifecycle || null),
@@ -11217,6 +11404,7 @@ module.exports = {
   evaluateProactiveCombatMarginalRoi,
   lowHpRecoveryThreatRadiusForHp,
   opportunityEnemyStaminaCost,
+  scoreEnemyOpportunity,
   normalizeCoinForDecision,
   normalizeEntityForDecision,
   observeBrowserlessCoinPickups,

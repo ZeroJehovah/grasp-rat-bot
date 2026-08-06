@@ -224,9 +224,17 @@ const {
   dynamicWhitelistIncomingOverrideCore,
   evaluateDynamicWhitelistContactCore
 } = require('./dynamic-whitelist-safety');
+const { runRemoteProfitTargetsSelfTest } = require('./remote-profit-targets-self-test');
 
 function runStrategyModuleSelfTests() {
   const results = [];
+
+  const remoteProfitTargets = runRemoteProfitTargetsSelfTest();
+  results.push({
+    name: 'remote-profit-target-boundaries',
+    passed: remoteProfitTargets.ok === true,
+    cases: remoteProfitTargets.cases
+  });
 
   const hpAttributionSelfTest = runCombatHpLossAttributionSelfTest();
   results.push({
@@ -4950,6 +4958,96 @@ function runStrategyModuleSelfTests() {
     passed: enemyCandidate.length === 2
       && enemyCandidate.find(item => item.id === 'afk')?.actionKind === 'attack'
       && enemyCandidate.find(item => item.id === 'active-far')?.actionKind === 'seek-enemy'
+  });
+
+  const remoteCompetitionCandidates = buildOpportunityCandidatesCore({ x: 0, y: 0 }, [], [{
+    maxDistance: 5000,
+    coins: [{ drop_id: 'visible', amount: 5, x: 1000, y: 0, distance: 1000, score: 10 }]
+  }], [], null, {
+    ...candidateOptions,
+    remotePlayerCandidates: [{
+      userId: 77,
+      x: 90000,
+      y: 0,
+      drop: 50,
+      distance: 90000,
+      expectedReward: 50,
+      staminaCost: 100,
+      baseScore: 80,
+      distanceFactor: 0.75,
+      adjustedScore: 60
+    }]
+  });
+  const remoteCompetitionChoice = chooseStableOpportunityCore(
+    remoteCompetitionCandidates,
+    null,
+    null,
+    { switchConfirmFrames: 1, switchMargin: 0, switchRelativeMargin: 0, oscillationSwitchLimit: 0 }
+  );
+  const visibleCompetitionCandidates = remoteCompetitionCandidates.map(item => item.type === 'remote-player-navigation'
+    ? { ...item, adjustedScore: 1, score: 1, selectionScore: 1 }
+    : item);
+  const visibleCompetitionChoice = chooseStableOpportunityCore(
+    visibleCompetitionCandidates,
+    null,
+    null,
+    { switchConfirmFrames: 1, switchMargin: 0, switchRelativeMargin: 0, oscillationSwitchLimit: 0 }
+  );
+  results.push({
+    name: 'opportunity-candidates-remote-player-competes-at-realtime-tier',
+    passed: remoteCompetitionCandidates.some(item => item.type === 'remote-player-navigation'
+        && item.priorityTier === 1
+        && item.actionKind === 'seek-remote-player'
+        && item.authority === 'snapshot-navigation')
+      && remoteCompetitionChoice.chosen?.type === 'remote-player-navigation'
+      && visibleCompetitionChoice.chosen?.type === 'coin'
+  });
+  const remoteSwitchCurrent = {
+    key: 'coin:visible',
+    type: 'coin',
+    id: 'visible',
+    until: 0,
+    score: 10,
+    staminaCost: 1000,
+    reward: 5,
+    x: 1000,
+    y: 0,
+    priorityTier: 1
+  };
+  const remoteSwitchOptions = {
+    self: { x: 0, y: 0 },
+    nowMs: 1000,
+    switchConfirmFrames: 3,
+    switchMargin: 0,
+    switchRelativeMargin: 0,
+    oscillationSwitchLimit: 0
+  };
+  const remoteSwitchOne = chooseStableOpportunityCore(
+    remoteCompetitionCandidates,
+    remoteSwitchCurrent,
+    null,
+    remoteSwitchOptions
+  );
+  const remoteSwitchTwo = chooseStableOpportunityCore(
+    remoteCompetitionCandidates,
+    remoteSwitchCurrent,
+    remoteSwitchOne.switchLock,
+    { ...remoteSwitchOptions, nowMs: 1100 }
+  );
+  const remoteSwitchThree = chooseStableOpportunityCore(
+    remoteCompetitionCandidates,
+    remoteSwitchCurrent,
+    remoteSwitchTwo.switchLock,
+    { ...remoteSwitchOptions, nowMs: 1200 }
+  );
+  results.push({
+    name: 'opportunity-choice-remote-player-keeps-three-frame-switch-confirmation',
+    passed: remoteSwitchOne.chosen?.type === 'coin'
+      && remoteSwitchOne.switchDiagnostics?.confirmationFrames === 1
+      && remoteSwitchTwo.chosen?.type === 'coin'
+      && remoteSwitchTwo.switchDiagnostics?.confirmationFrames === 2
+      && remoteSwitchThree.chosen?.type === 'remote-player-navigation'
+      && remoteSwitchThree.switchDiagnostics?.confirmationFrames === 3
   });
 
   const bestCoinRouteScore = bestCoinOpportunityScoreCore({ x: 0, y: 0 }, [{

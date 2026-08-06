@@ -42991,7 +42991,7 @@ async function runSelfTest() {
 	      want: 'profit-candidate|seek-enemy|easy-kill-active-profit|true|51450|51450'
 	    },
 	    {
-	      name: 'browserless easy-kill proactive seek range scales from score one through three',
+      name: 'browserless easy-kill proactive seek range keeps score-one boundary and removes score-specific caps',
 	      got: (() => {
 	        const decide = (score, distance) => buildBrowserlessDecision({
 	          userId: 7,
@@ -43031,7 +43031,7 @@ async function runSelfTest() {
 	          score3Edge.action.target?.easyKillSeekRangeCm
 	        ].join('|');
 	      })(),
-	      want: 'seek-enemy|1|30000|out-of-score-range|seek-enemy|50000|out-of-range|seek-enemy|50000'
+      want: 'seek-enemy|1|50000||seek-enemy|null|out-of-range|seek-enemy|null'
 	    },
 	    {
 	      name: 'browserless active profit threshold uses effective reward and bounded exploration admission',

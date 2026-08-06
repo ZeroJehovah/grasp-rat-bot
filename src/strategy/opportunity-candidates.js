@@ -1,6 +1,7 @@
 'use strict';
 
 const { coinRouteKey } = require('./coin-route');
+const { buildRemotePlayerNavigationOpportunitiesCore } = require('./remote-profit-targets');
 
 function opportunityEffectiveStaminaCostCore(staminaCost, options = {}) {
   const floor = Math.max(1, Number(options.distanceFloor || 1));
@@ -174,7 +175,12 @@ function buildEnemyOpportunityCandidatesCore(targets, options = {}) {
 function buildOpportunityCandidatesCore(self, activeThreats, coinGroups, enemyTargets, routeCoin = null, options = {}) {
   return [
     ...buildCoinOpportunityCandidatesCore(self, coinGroups, activeThreats, routeCoin, options),
-    ...buildEnemyOpportunityCandidatesCore(enemyTargets, options)
+    ...buildEnemyOpportunityCandidatesCore(enemyTargets, options),
+    ...buildRemotePlayerNavigationOpportunitiesCore(options.remotePlayerCandidates || [], {
+      generation: options.remotePlayerGeneration,
+      snapshotAt: options.remotePlayerSnapshotAt,
+      scoreAuthority: 'adjusted-distance-score'
+    })
   ];
 }
 
@@ -205,6 +211,7 @@ module.exports = {
   uniqueVisibleRouteCoinsCore,
   buildCoinOpportunityCandidatesCore,
   buildEnemyOpportunityCandidatesCore,
+  buildRemotePlayerNavigationOpportunitiesCore,
   buildOpportunityCandidatesCore,
   bestCoinOpportunityScoreCore
 };
