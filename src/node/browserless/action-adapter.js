@@ -2127,7 +2127,8 @@ function createBrowserlessActionAdapter(options = {}) {
       };
     }
     if (!changed) refreshVelocityOwnership(ownership, last);
-    if (!changed && velocityRepeatEnabled && !sendOptions.suppressRepeat) {
+    const forceNewCommand = sendOptions.forceNewCommand === true;
+    if (!changed && !forceNewCommand && velocityRepeatEnabled && !sendOptions.suppressRepeat) {
       const repeat = scheduleVelocityRepeat(dx, dy, last, sendOptions.repeatSummary !== false);
       state.skippedCount += 1;
       return {
@@ -2139,14 +2140,14 @@ function createBrowserlessActionAdapter(options = {}) {
         directionGeneration: last?.directionGeneration ?? null
       };
     }
-    if (!changed && atMs - Number(last.sentAtMs || 0) < commandIntervalMs) {
+    if (!changed && !forceNewCommand && atMs - Number(last.sentAtMs || 0) < commandIntervalMs) {
       state.skippedCount += 1;
       return { ok: true, skipped: true, reason: 'unchanged-command-throttled', command: summarizeCommand(last) };
     }
     clearPrecisionPulseStop();
     state.velocityPulseToken += 1;
     const pulseToken = state.velocityPulseToken;
-    if (changed) cancelVelocityRepeat();
+    if (changed || forceNewCommand) cancelVelocityRepeat();
     try {
       transport.sendVelocity(dx, dy);
     } catch (err) {
@@ -2506,6 +2507,7 @@ function createBrowserlessActionAdapter(options = {}) {
       : null);
     return sendVelocity(0, 0, reason, null, {
       ...stopOptions,
+      forceNewCommand: true,
       ownership
     });
   }
