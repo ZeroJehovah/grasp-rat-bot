@@ -13,6 +13,7 @@ const {
   createBrowserlessDecisionAdapter
 } = require('./decision-adapter');
 const { createBrowserlessDecisionWorker } = require('./decision-worker');
+const { createBrowserlessRealtimeControlWorker } = require('./realtime-control-worker');
 
 function battleState(options = {}) {
   const self = options.self === null
@@ -554,6 +555,53 @@ async function runDynamicWhitelistSelfTest() {
         await worker.close();
       }
       cases.push('main-worker-whitelist-policy-consistency');
+    }
+
+    {
+      const nowMs = 4000;
+      const baseOptions = decisionOptions({
+        nowMs,
+        dynamicWhitelistMemberUserIds: undefined,
+        dynamicWhitelistEnabledUserIds: undefined
+      });
+      const state = decisionState({
+        hp: 100,
+        nowMs,
+        targetDistance: 13000,
+        targetMode: 'Active',
+        targetVx: 35,
+        targetStamina5s: 4609,
+        bulletStartX: 13000,
+        bulletStartY: 0,
+        bulletTargetX: 13000,
+        bulletTargetY: 10000
+      });
+      const worker = createBrowserlessRealtimeControlWorker(baseOptions);
+      try {
+        await worker.ready();
+        const remote = await worker.evaluate(state, baseOptions, {
+          damageStatus: { userIds: [], players: [] },
+          dynamicWhitelistStatus: {
+            memberUserIds: [8],
+            userIds: [8]
+          }
+        });
+        const control = remote.control;
+        const policy = control.whitelistSafety.targets[0].policy;
+        assert.strictEqual(control.action, null);
+        assert.strictEqual(control.combat.target, null);
+        assert.strictEqual(control.combat.candidates.length, 0);
+        assert.strictEqual(control.whitelistSafety.incoming.collisionBulletCount, 0);
+        assert.strictEqual(policy.dynamicWhitelistMember, true);
+        assert.strictEqual(policy.dynamicWhitelistEnabled, true);
+        assert.strictEqual(policy.damagedSelfToday, false);
+        assert.strictEqual(policy.proactiveCombatRangeCm, 6500);
+        assert.strictEqual(policy.distanceCm, 13000);
+        assert.strictEqual(policy.reason, 'dynamic-whitelist-distance-guard');
+      } finally {
+        await worker.close();
+      }
+      cases.push('realtime-worker-restores-dynamic-whitelist-context');
     }
 
     return { ok: true, cases };

@@ -58,9 +58,16 @@ function completionTrackerProxy(context = {}) {
 
 function dynamicOptions(message, effects) {
   const context = message.context || {};
+  const dynamicWhitelistStatus = context.dynamicWhitelistStatus || {};
   return {
     ...(message.options || {}),
     dailyDamageUserIds: message.options?.dailyDamageUserIds || context.damageStatus?.userIds || [],
+    dynamicWhitelistMemberUserIds: message.options?.dynamicWhitelistMemberUserIds
+      || dynamicWhitelistStatus.memberUserIds
+      || [],
+    dynamicWhitelistEnabledUserIds: message.options?.dynamicWhitelistEnabledUserIds
+      || dynamicWhitelistStatus.userIds
+      || [],
     easyKillPlayerTracker: easyKillTrackerProxy(context, effects),
     damagePlayerTracker: {
       status: () => context.damageStatus || { players: [], userIds: [] }

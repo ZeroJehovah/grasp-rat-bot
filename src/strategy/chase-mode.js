@@ -89,10 +89,9 @@ function chaseInvulnerableState(target) {
     'invulnerabilityRemainingMs',
     'immuneRemainingMs'
   ]);
-  const rawRemainingMs = rawInvulnerabilityMsFrom(target);
   const remainingMs = canonicalMs !== null
     ? canonicalMs
-    : rawInvulnerabilityMsToWallMs(rawRemainingMs);
+    : rawInvulnerabilityMsFrom(target);
   const remainingTicks = positiveFieldValue(target, INVULNERABLE_TICK_FIELDS);
   const genericRemaining = positiveFieldValue(target, INVULNERABLE_GENERIC_REMAINING_FIELDS);
   const resolvedTicks = remainingTicks !== null ? remainingTicks : genericRemaining;
