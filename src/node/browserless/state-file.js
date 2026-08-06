@@ -1467,6 +1467,23 @@ function compactBrowserlessStats(normalized, game, action, options = {}, lastKno
     ? ''
     : (action?.nextRunAt || stats.lastExit.nextRunAt || '');
   const offlineBlocker = compactOfflineBlocker(normalized, lastKnown, options, nowMs);
+  // A confirmed exit is emitted to recentExits before the asynchronous stats
+  // projection necessarily catches up. Prefer that newer actual exit for the
+  // public status so a new cooldown cannot display an older process-restart
+  // timestamp. Safety/preflight observations are excluded by shouldLeave.
+  const recentActualExit = latestMatchingRecentActualExit(
+    normalized.recentExits,
+    {}
+  );
+  const recentExitAt = parseTimeMs(recentActualExit?.at || recentActualExit?.time || recentActualExit?.createdAt);
+  const persistedExitAt = parseTimeMs(stats.lastExit.at);
+  const effectiveLastExit = recentActualExit && recentExitAt > persistedExitAt
+    ? {
+        at: compactString(recentActualExit.at || recentActualExit.time || recentActualExit.createdAt, 48),
+        reason: compactString(recentActualExit.reason || recentActualExit.type, 160),
+        runId: compactString(recentExitRunId(recentActualExit), 96)
+      }
+    : stats.lastExit;
   const rawNextRunAtMs = parseTimeMs(rawNextRunAt);
   const blockerReadyAtMs = parseTimeMs(offlineBlocker?.nextReadyAt);
   let nextRunAt = blockerReadyAtMs > rawNextRunAtMs
@@ -1489,9 +1506,9 @@ function compactBrowserlessStats(normalized, game, action, options = {}, lastKno
       kills: compactNumber(session.kills)
     },
     offline: {
-      lastExitAt: stats.lastExit.at || session.exitedAt || '',
-      lastExitReason: stats.lastExit.reason || session.exitReason || '',
-      lastExitRunId: stats.lastExit.runId || '',
+      lastExitAt: effectiveLastExit.at || session.exitedAt || '',
+      lastExitReason: effectiveLastExit.reason || session.exitReason || '',
+      lastExitRunId: effectiveLastExit.runId || '',
       nextReconnectAt: compactString(nextRunAt, 48),
       reconnectRemainingMs: nextRunAtMs ? Math.max(0, Math.round(nextRunAtMs - nowMs)) : null,
       scheduledReconnectAt: compactString(rawNextRunAt, 48),
@@ -2232,6 +2249,18 @@ function rejectedTargetlessCombatDecision(decision, combat) {
   return actionKind === 'combat-live'
     && combat?.actionEligible === false
     && !combat?.target;
+}
+
+function lifecycleActionKind(kind, reason) {
+  const normalizedKind = String(kind || '');
+  const normalizedReason = String(reason || '');
+  return [
+    'loop-wait', 'stopped', 'snapshot-wait',
+    'source-ip-preflight', 'source-ip-preflight-cooldown',
+    'source-ip-preflight-login', 'source-ip-preflight-retry',
+    'exit-recovery', 'leave', 'safety-exit'
+  ].includes(normalizedKind)
+    || /(?:^|-)leave$|^restart-drain|pending-snapshot-safety|snapshot-safety-retry|source-ip-(?:preflight|snapshot)/i.test(normalizedReason);
 }
 
 function compactBattleStatus(normalized, game, action, decision, combat, options = {}) {
@@ -2993,7 +3022,19 @@ function compactGameStatus(normalized) {
   // `stop` is also the normal in-game zero-velocity action (for example,
   // combat-live-no-target). Only lifecycle waits/stopped state mean that
   // realtime control is offline.
-  const waiting = ['loop-wait', 'stopped'].includes(kind)
+  // These actions belong to the offline/exit lifecycle.  The previous
+  // realtime decision may still be retained in `current.decision` while
+  // preflight or snapshot safety is running; it must not make that stale
+  // combat state look current.
+  const waiting = [
+    'loop-wait',
+    'stopped',
+    'snapshot-wait',
+    'source-ip-preflight',
+    'source-ip-preflight-cooldown',
+    'source-ip-preflight-login',
+    'source-ip-preflight-retry'
+  ].includes(kind)
     || [
       'missing-manual-session',
       'snapshot-safety-retry',
@@ -3358,8 +3399,11 @@ function buildCompactBrowserlessStatus(state, config = {}) {
   // showing an older wait state beside newly observed loot. When the combat
   // adapter explicitly rejects a missing target, the executed stop is newer
   // authority than the retained arbitration action.
+  const executedIsLifecycle = lifecycleActionKind(executedAction?.kind, executedAction?.reason);
   const action = game.inGame
-    ? (rejectedCombatDecision ? (executedAction || decision?.action) : (decision?.action || executedAction))
+    ? (executedIsLifecycle || rejectedCombatDecision
+      ? (executedAction || decision?.action)
+      : (decision?.action || executedAction))
     : (executedAction || decision?.action);
   const recentExits = Array.isArray(normalized.recentExits) ? normalized.recentExits : [];
   const recentActualExit = latestMatchingRecentActualExit(recentExits, normalized.stats?.lastExit);
