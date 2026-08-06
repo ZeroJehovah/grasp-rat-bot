@@ -598,6 +598,31 @@ function theoreticalShotMinimumMiss(rows, ack) {
 const confirmedShotAckCache = new Map();
 const confirmedShotRunnerCache = new Map();
 
+function confirmedShotAcksForBattleRows(rows = []) {
+  const shotsByIdentity = new Map();
+  for (const row of rows) {
+    if (row.entry?.type !== 'shoot-execution') continue;
+    if (!['shoot-ack-accepted', 'shoot-ack-late'].includes(String(row.detail?.type || ''))) continue;
+    const ack = row.detail?.ack;
+    const at = numberOrNull(row.detail?.atMs) ?? Date.parse(row.entry?.at || '');
+    const identity = String(ack?.bullet_id ?? ack?.bulletId ?? '');
+    const createdTick = numberOrNull(ack?.created_tick ?? ack?.createdTick);
+    if (!ack || !Number.isFinite(at) || !identity || createdTick === null) continue;
+    shotsByIdentity.set(identity, {
+      at,
+      ack: {
+        ...ack,
+        requestId: row.detail?.requestId ?? null,
+        targetId: row.detail?.targetId ?? null,
+        acceptedAtMs: at,
+        created_tick: createdTick,
+        expire_tick: Number(ack.expire_tick ?? ack.expireTick ?? createdTick + 30)
+      }
+    });
+  }
+  return Array.from(shotsByIdentity.values()).sort((left, right) => left.at - right.at);
+}
+
 function confirmedShotAcksForFile(wsFile) {
   const resolved = path.resolve(wsFile);
   if (confirmedShotAckCache.has(resolved)) return confirmedShotAckCache.get(resolved);
@@ -639,19 +664,25 @@ function confirmedShotAcksForRunnerFile(runnerFile) {
   return shots;
 }
 
-function confirmedShotsForRows(options, rows) {
+function confirmedShotsForRows(options, rows, allRows = rows) {
   if (!rows.length) return [];
   const { runnerFile, wsFile } = movementReplayLogFiles(options);
   const firstAt = Date.parse(rows[0].entry.at) - 3000;
   const lastAt = Date.parse(rows[rows.length - 1].entry.at) + 3000;
   const selfId = String(rows[0].detail.self?.userId ?? '');
-  const candidates = fs.existsSync(wsFile)
+  const battleCandidates = confirmedShotAcksForBattleRows(allRows);
+  const wsCandidates = battleCandidates.length === 0 && fs.existsSync(wsFile)
     ? confirmedShotAcksForFile(wsFile)
     : [];
-  const fallbackCandidates = candidates.length === 0 && fs.existsSync(runnerFile)
+  const runnerCandidates = battleCandidates.length === 0
+    && wsCandidates.length === 0
+    && fs.existsSync(runnerFile)
     ? confirmedShotAcksForRunnerFile(runnerFile)
     : [];
-  return (candidates.length ? candidates : fallbackCandidates).filter(shot => (
+  const candidates = battleCandidates.length
+    ? battleCandidates
+    : (wsCandidates.length ? wsCandidates : runnerCandidates);
+  return candidates.filter(shot => (
     shot.at >= firstAt
       && shot.at <= lastAt
       && String(shot.ack.owner_user_id ?? '') === selfId
@@ -659,7 +690,7 @@ function confirmedShotsForRows(options, rows) {
 }
 
 function executionMatchedConfirmedShots(options, allRows, rows) {
-  const candidates = confirmedShotsForRows(options, rows);
+  const candidates = confirmedShotsForRows(options, rows, allRows);
   if (!candidates.length) return [];
   const targetId = String(options.targetId || rows[0]?.detail?.target?.userId || '');
   const dispatchByRequest = new Map(allRows
@@ -972,7 +1003,7 @@ function replayCombatExchangeStopLoss(rows) {
 function replayCombat(options) {
   const allRows = selectedEntries(options);
   const rows = allRows.filter(({ detail }) => String(detail.target?.userId ?? '') === options.targetId);
-  const confirmedShots = confirmedShotsForRows(options, rows);
+  const confirmedShots = confirmedShotsForRows(options, rows, allRows);
   const state = { motionSamples: [] };
   const baselineMisses = [];
   const improvedMisses = [];
@@ -6752,6 +6783,54 @@ function replayDistanceAwareCombat(options = {}) {
 
 function runDistanceAwareReplaySelfTest() {
   const checks = [];
+  const replayAt = Date.parse('2026-08-06T00:00:00.000Z');
+  const replayCombatRows = [{
+    line: 1,
+    entry: { at: new Date(replayAt).toISOString(), type: 'combat-live' },
+    detail: { self: { userId: 7 }, target: { userId: 8 }, tick: 100 }
+  }];
+  const replayRows = [
+    ...replayCombatRows,
+    {
+      line: 2,
+      entry: { at: new Date(replayAt + 50).toISOString(), type: 'shoot-execution' },
+      detail: {
+        type: 'shoot-ack-accepted',
+        atMs: replayAt + 50,
+        requestId: 'replay-request-1',
+        targetId: '8',
+        ack: {
+          bullet_id: 'replay-bullet-1',
+          owner_user_id: '7',
+          start_x: 0,
+          start_y: 0,
+          target_x: 1000,
+          target_y: 0,
+          dir_x_micros: 1000000,
+          dir_y_micros: 0,
+          range_cm: 15000,
+          speed_per_tick: 500,
+          created_tick: 101,
+          expire_tick: 131,
+          observedTick: 100,
+          executionDelayTicks: 1
+        }
+      }
+    }
+  ];
+  const battleShots = confirmedShotsForRows({
+    file: path.join('/nonexistent', 'battles', 'replay.jsonl')
+  }, replayCombatRows, replayRows);
+  checks.push({
+    name: 'battle-execution-ACK-geometry-is-self-contained-replay-authority',
+    passed: battleShots.length === 1
+      && battleShots[0].ack.bullet_id === 'replay-bullet-1'
+      && battleShots[0].ack.requestId === 'replay-request-1'
+      && battleShots[0].ack.targetId === '8'
+      && battleShots[0].ack.created_tick === 101
+      && battleShots[0].ack.observedTick === 100
+      && battleShots[0].ack.executionDelayTicks === 1
+  });
   const oracle = distance => independentCreationReachabilityOracleCore(
     { x: 0, y: 0, vx: 0, vy: 0 },
     { x: distance, y: 0, vx: 0, vy: 0 },

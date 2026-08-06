@@ -125,6 +125,40 @@ function numberOrNull(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function boundedIdentifier(value) {
+  if (value === null || value === undefined) return null;
+  const text = String(value).trim().slice(0, 80);
+  return text || null;
+}
+
+function sanitizeShootAckReplay(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const replay = {
+    bullet_id: boundedIdentifier(source.bullet_id ?? source.bulletId),
+    owner_user_id: boundedIdentifier(source.owner_user_id ?? source.ownerUserId),
+    start_x: numberOrNull(source.start_x ?? source.startX),
+    start_y: numberOrNull(source.start_y ?? source.startY),
+    target_x: numberOrNull(source.target_x ?? source.targetX),
+    target_y: numberOrNull(source.target_y ?? source.targetY),
+    dir_x_micros: numberOrNull(source.dir_x_micros ?? source.dirXMicros),
+    dir_y_micros: numberOrNull(source.dir_y_micros ?? source.dirYMicros),
+    range_cm: numberOrNull(source.range_cm ?? source.rangeCm),
+    speed_per_tick: numberOrNull(source.speed_per_tick ?? source.speedPerTick),
+    created_tick: numberOrNull(source.created_tick ?? source.createdTick),
+    expire_tick: numberOrNull(source.expire_tick ?? source.expireTick),
+    observedTick: numberOrNull(source.observedTick),
+    executionDelayTicks: numberOrNull(source.executionDelayTicks)
+  };
+  return replay.bullet_id !== null
+    && replay.start_x !== null
+    && replay.start_y !== null
+    && replay.dir_x_micros !== null
+    && replay.dir_y_micros !== null
+    && replay.created_tick !== null
+    ? replay
+    : null;
+}
+
 function metricSnapshot(metrics = {}) {
   const source = metrics && typeof metrics === 'object' ? metrics : {};
   return Object.fromEntries(SEGMENT_METRIC_FIELDS.map(field => [field, numberOrNull(source[field])]));
@@ -1283,6 +1317,10 @@ function createCombatBattleLog(options = {}) {
       runId: String(detail?.runId || ''),
       runtimeRevision: String(detail?.runtimeRevision || '')
     };
+    const replayAck = ['shoot-ack-accepted', 'shoot-ack-late'].includes(event.type)
+      ? sanitizeShootAckReplay(detail?.ack)
+      : null;
+    if (replayAck) event.ack = replayAck;
     const activeGeneration = String(active?.lastMetrics?.engagementGeneration || '');
     const requestKey = event.requestId ?? event.commandId ?? '';
     const origin = (event.engagementGeneration && executionOrigins.get(event.engagementGeneration))
@@ -1447,7 +1485,24 @@ function runCombatBattleLogSelfTest() {
           controlGeneration: 'control:test',
           engagementGeneration: generation,
           targetId: String(targetId),
-          outcome: 'accepted'
+          outcome: 'accepted',
+          ack: {
+            bullet_id: `${prefix}-bullet-${index + 1}`,
+            owner_user_id: 7,
+            start_x: 10 + index,
+            start_y: 20 + index,
+            target_x: 1000 + index,
+            target_y: 2000 + index,
+            dir_x_micros: 1000000,
+            dir_y_micros: 0,
+            range_cm: 15000,
+            speed_per_tick: 500,
+            created_tick: 100 + index,
+            expire_tick: 130 + index,
+            observedTick: 99 + index,
+            executionDelayTicks: 1,
+            sessionToken: 'execution-leak-token'
+          }
         });
       }
     };
@@ -1709,6 +1764,20 @@ function runCombatBattleLogSelfTest() {
       return entry.at && entry.type && entry.detail && typeof entry.detail === 'object';
     }));
     assert('gz frames redacted secrets', !decompressed.includes('leak-token'));
+    const acceptedAckEntry = gzLines.map(JSON.parse).find(entry => (
+      entry.type === 'shoot-execution' && entry.detail?.type === 'shoot-ack-accepted'
+    ));
+    assert('accepted ACK keeps only bounded replay geometry in the battle file',
+      acceptedAckEntry?.detail?.ack?.bullet_id === 'a1-bullet-1'
+        && acceptedAckEntry.detail.ack.owner_user_id === '7'
+        && acceptedAckEntry.detail.ack.start_x === 10
+        && acceptedAckEntry.detail.ack.target_y === 2000
+        && acceptedAckEntry.detail.ack.dir_x_micros === 1000000
+        && acceptedAckEntry.detail.ack.created_tick === 100
+        && acceptedAckEntry.detail.ack.expire_tick === 130
+        && acceptedAckEntry.detail.ack.observedTick === 99
+        && acceptedAckEntry.detail.ack.executionDelayTicks === 1
+        && !Object.prototype.hasOwnProperty.call(acceptedAckEntry.detail.ack, 'sessionToken'));
 
     nowMs += 1;
     log.recordShotExecution({

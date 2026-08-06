@@ -17,6 +17,10 @@ function shotAck(bulletId, targetX, targetY, tick) {
     start_y: 0,
     target_x: targetX,
     target_y: targetY,
+    dir_x_micros: 1000000,
+    dir_y_micros: 0,
+    range_cm: 15000,
+    speed_per_tick: 500,
     created_tick: tick,
     expire_tick: tick + 50,
     tick
@@ -86,6 +90,8 @@ function runCombatShotExecutionSelfTest() {
 
   let nowMs = 1000;
   const store = createBrowserlessStateStore({ userId: 1, now: () => nowMs });
+  const ackExecutionEvents = [];
+  store.setShootExecutionListener(event => ackExecutionEvents.push(event));
   const controlA = store.beginControlGeneration('ws-open');
   const requestA = store.recordShootRequest({
     requestId: 'request-a',
@@ -102,6 +108,20 @@ function runCombatShotExecutionSelfTest() {
     && command.confirmedShots[0].requestId === requestA.requestId
     && command.confirmedShots[0].controlGeneration === controlA
     && command.confirmedShots[0].engagementGeneration === 'engagement-a');
+  const acceptedExecution = ackExecutionEvents.find(event => event.type === 'shoot-ack-accepted');
+  check('accepted ACK listener carries bounded replay geometry without expanding cached execution state',
+    acceptedExecution?.ack?.bullet_id === 'bullet-a'
+      && acceptedExecution.ack.owner_user_id === '1'
+      && acceptedExecution.ack.start_x === 0
+      && acceptedExecution.ack.target_x === 100
+      && acceptedExecution.ack.dir_x_micros === 1000000
+      && acceptedExecution.ack.range_cm === 15000
+      && acceptedExecution.ack.speed_per_tick === 500
+      && acceptedExecution.ack.created_tick === 11
+      && acceptedExecution.ack.expire_tick === 61
+      && acceptedExecution.ack.observedTick === 10
+      && acceptedExecution.ack.executionDelayTicks === 1
+      && !Object.prototype.hasOwnProperty.call(command.executionEvents.at(-1), 'ack'));
 
   store.ingestFrame(shotAck('bullet-a', 100, 0, 11), { receivedAtMs: nowMs + 30 });
   command = store.getCommandState(nowMs + 30).shooting;

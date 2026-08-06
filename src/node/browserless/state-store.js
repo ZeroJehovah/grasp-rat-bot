@@ -26,6 +26,39 @@ function optionalNumericOrNull(value) {
   return numericOrNull(value);
 }
 
+function boundedLogIdentifier(value) {
+  if (value === null || value === undefined) return null;
+  const text = String(value).trim().slice(0, 80);
+  return text || null;
+}
+
+function shootAckReplayGeometry(shot = {}) {
+  const replay = {
+    bullet_id: boundedLogIdentifier(shot.bullet_id ?? shot.bulletId),
+    owner_user_id: boundedLogIdentifier(shot.owner_user_id ?? shot.ownerUserId),
+    start_x: optionalNumericOrNull(shot.start_x ?? shot.startX),
+    start_y: optionalNumericOrNull(shot.start_y ?? shot.startY),
+    target_x: optionalNumericOrNull(shot.target_x ?? shot.targetX),
+    target_y: optionalNumericOrNull(shot.target_y ?? shot.targetY),
+    dir_x_micros: optionalNumericOrNull(shot.dir_x_micros ?? shot.dirXMicros),
+    dir_y_micros: optionalNumericOrNull(shot.dir_y_micros ?? shot.dirYMicros),
+    range_cm: optionalNumericOrNull(shot.range_cm ?? shot.rangeCm),
+    speed_per_tick: optionalNumericOrNull(shot.speed_per_tick ?? shot.speedPerTick),
+    created_tick: optionalNumericOrNull(shot.created_tick ?? shot.createdTick),
+    expire_tick: optionalNumericOrNull(shot.expire_tick ?? shot.expireTick),
+    observedTick: optionalNumericOrNull(shot.observedTick),
+    executionDelayTicks: optionalNumericOrNull(shot.executionDelayTicks)
+  };
+  return replay.bullet_id !== null
+    && replay.start_x !== null
+    && replay.start_y !== null
+    && replay.dir_x_micros !== null
+    && replay.dir_y_micros !== null
+    && replay.created_tick !== null
+    ? replay
+    : null;
+}
+
 function incrementCount(map, key) {
   const normalized = String(key || 'unknown');
   map[normalized] = Number(map[normalized] || 0) + 1;
@@ -641,8 +674,13 @@ function createBrowserlessStateStore(options = {}) {
     }
     if (shootExecutionListener) {
       try {
+        const listenerEntry = optionsForRecord.listenerAck
+          ? { ...entry, ack: optionsForRecord.listenerAck }
+          : entry;
         shootExecutionListener(
-          optionsForRecord.listenerUsesInternal === true ? entry : cloneJson(entry)
+          optionsForRecord.listenerUsesInternal === true && listenerEntry === entry
+            ? entry
+            : cloneJson(listenerEntry)
         );
       } catch (_) {}
     }
@@ -1060,6 +1098,8 @@ function createBrowserlessStateStore(options = {}) {
         targetId: confirmed.targetId,
         outcome: pending.source === 'expired' ? 'late-ack' : 'accepted',
         observedTick: meta.tick
+      }, {
+        listenerAck: shootAckReplayGeometry(confirmed)
       });
     } else {
       state.command.orphanAckCount += 1;

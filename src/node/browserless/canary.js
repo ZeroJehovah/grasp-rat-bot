@@ -2189,7 +2189,8 @@ async function runReadOnlyCanary(config, options = {}) {
   };
   stateStore.setShootExecutionListener?.(event => {
     const enriched = addRunMeta(event);
-    log('shoot-execution', event);
+    const { ack: _battleReplayAck, ...runnerEvent } = event;
+    log('shoot-execution', runnerEvent);
     combatBattleLog?.recordShotExecution?.(enriched, { atMs: event.atMs });
   });
   const invokeVerifiedLeave = async leaveOptions => {
