@@ -17,7 +17,6 @@ usage() {
 Usage: scripts/install-browserless-runner-service.sh [options]
 
 Options:
-  --app-dir <dir>      Repository/app directory for WorkingDirectory.
   --unit-dest <file>   Unit destination. Default: /etc/systemd/system/grasp-rat-browserless-runner.service
   --env-dest <file>    Env destination. Default: /etc/grasp-rat/browserless-runner.env
   --install-env        Install env example if env file is missing.
@@ -30,10 +29,6 @@ USAGE
 REPLACE_ENV=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --app-dir)
-      APP_DIR="$2"
-      shift 2
-      ;;
     --unit-dest)
       UNIT_DEST="$2"
       shift 2
@@ -69,6 +64,11 @@ done
 
 if [ ! -f "$UNIT_SOURCE" ]; then
   echo "Missing unit source: $UNIT_SOURCE" >&2
+  exit 1
+fi
+
+if [ ! -d "$APP_DIR/.git" ]; then
+  echo "Refusing non-primary or linked-worktree app directory: $APP_DIR (.git directory required)" >&2
   exit 1
 fi
 

@@ -16,6 +16,7 @@ const DEFAULT_UNIT_PATH = `/etc/systemd/system/${DEFAULT_SERVICE_NAME}.service`;
 const DEFAULT_ENV_PATH = '/etc/grasp-rat/browserless-runner.env';
 const DEFAULT_DATA_DIR = '/var/lib/grasp-rat-browserless';
 const DEFAULT_LOG_DIR = '/var/log/grasp-rat-browserless';
+const DEFAULT_SOURCE_DIR = path.resolve(__dirname, '..');
 const VALID_ENV_MODES = new Set(['safe', 'live', 'any']);
 const VALID_CONTROL_MODES = new Set(['read-only', 'movement-only', 'non-combat-profit', 'profit-live', 'combat-dry-run', 'combat-live']);
 const VALID_CANARY_PROFILES = new Set(['read-only', 'movement-only', 'profit', 'combat-dry-run', 'combat-live']);
@@ -116,6 +117,14 @@ function accessOk(dir) {
   }
 }
 
+function directoryOk(dir) {
+  try {
+    return fs.statSync(dir).isDirectory();
+  } catch (_) {
+    return false;
+  }
+}
+
 function isEnvBool(value) {
   return /^(?:true|false)$/i.test(String(value || '').trim());
 }
@@ -202,13 +211,16 @@ function auditDeployment(options = {}, deps = {}) {
   const env = parseEnvText(envFile.text);
   const dataDir = path.resolve(String(options.dataDir || env.GRASP_RAT_BROWSERLESS_DATA_DIR || DEFAULT_DATA_DIR));
   const logDir = path.resolve(String(options.logDir || env.GRASP_RAT_BROWSERLESS_LOG_DIR || DEFAULT_LOG_DIR));
+  const sourceDir = path.resolve(String(options.sourceDir || DEFAULT_SOURCE_DIR));
   const workingDirectory = unitValue(unit.text, 'WorkingDirectory');
+  const resolvedWorkingDirectory = workingDirectory ? path.resolve(workingDirectory) : '';
   const environmentFile = unitValue(unit.text, 'EnvironmentFile');
   const execStart = unitValue(unit.text, 'ExecStart');
   const readWritePaths = unitValue(unit.text, 'ReadWritePaths');
 
   addCheck(checks, 'service-name', serviceName === DEFAULT_SERVICE_NAME, `serviceName=${serviceName}`);
-  addCheck(checks, 'working-directory', Boolean(workingDirectory && fs.existsSync(workingDirectory)), `WorkingDirectory=${workingDirectory || 'missing'}`);
+  addCheck(checks, 'source-main-workspace', directoryOk(path.join(sourceDir, '.git')), `sourceDir=${sourceDir}, .git=${directoryOk(path.join(sourceDir, '.git')) ? 'directory' : 'missing-or-nondirectory'}`);
+  addCheck(checks, 'working-directory', resolvedWorkingDirectory === sourceDir, `WorkingDirectory=${workingDirectory || 'missing'}, expected=${sourceDir}`);
   addCheck(checks, 'runner-entrypoint', Boolean(workingDirectory && fs.existsSync(path.join(workingDirectory, 'scripts', 'browserless-runner.js'))), `entrypoint=${workingDirectory ? path.join(workingDirectory, 'scripts', 'browserless-runner.js') : 'missing'}`);
   addCheck(checks, 'source-ip-preflight-module', Boolean(workingDirectory && fs.existsSync(path.join(workingDirectory, 'src', 'node', 'browserless', 'source-ip-preflight.js'))), `module=${workingDirectory ? path.join(workingDirectory, 'src', 'node', 'browserless', 'source-ip-preflight.js') : 'missing'}`);
   addCheck(checks, 'environment-file-reference', environmentFile === envPath, `EnvironmentFile=${environmentFile || 'missing'}`);
@@ -260,6 +272,7 @@ function auditDeployment(options = {}, deps = {}) {
     unitPath,
     envPath,
     envMode,
+    sourceDir,
     dataDir,
     logDir,
     generatedAt: new Date().toISOString(),
@@ -275,7 +288,8 @@ function formatHuman(report) {
     `Service: ${report.serviceName}`,
     `Unit: ${report.unitPath}`,
     `Env: ${report.envPath}`,
-    `Env mode: ${report.envMode}`
+    `Env mode: ${report.envMode}`,
+    `Source: ${report.sourceDir}`
   ];
   for (const check of report.checks) {
     lines.push(`- ${check.ok ? 'ok' : 'missing'} ${check.key}: ${check.evidence}`);

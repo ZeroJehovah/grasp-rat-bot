@@ -28744,10 +28744,11 @@ async function runSelfTest() {
           installer.includes('LOG_DIR="/var/log/grasp-rat-browserless"'),
           installer.includes('install -d -m 0750 "$DATA_DIR"'),
           installer.includes('install -d -m 0750 "$LOG_DIR"'),
+          installer.includes('[ ! -d "$APP_DIR/.git" ]'),
           installer.includes('systemctl daemon-reload')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless deployment audit checks installed service evidence',
@@ -28757,6 +28758,7 @@ async function runSelfTest() {
         const dataDir = path.join(dir, 'data');
         const logDir = path.join(dir, 'logs');
         fs.mkdirSync(scriptsDir, { recursive: true });
+        fs.mkdirSync(path.join(appDir, '.git'), { recursive: true });
         fs.mkdirSync(path.join(appDir, 'src', 'node', 'browserless'), { recursive: true });
         fs.mkdirSync(dataDir, { recursive: true });
         fs.mkdirSync(logDir, { recursive: true });
@@ -28800,7 +28802,8 @@ async function runSelfTest() {
         };
         const ok = auditBrowserlessDeployment({
           unitPath,
-          envPath
+          envPath,
+          sourceDir: appDir
         }, auditDeps);
         fs.writeFileSync(envPath, [
           `GRASP_RAT_BROWSERLESS_DATA_DIR=${dataDir}`,
@@ -28829,12 +28832,14 @@ async function runSelfTest() {
           unitPath,
           envPath,
           envMode: 'live',
+          sourceDir: appDir,
           skipSystemctl: true
         }, auditDeps);
         const aggregate = auditBrowserlessDeployment({
           unitPath,
           envPath,
           envMode: 'any',
+          sourceDir: appDir,
           skipSystemctl: true
         }, auditDeps);
         const conflictEnvPath = path.join(dir, 'conflict.env');
@@ -28843,6 +28848,7 @@ async function runSelfTest() {
           unitPath,
           envPath: conflictEnvPath,
           envMode: 'live',
+          sourceDir: appDir,
           skipSystemctl: true
         }, auditDeps);
         const missingLoginPointEnvPath = path.join(dir, 'missing-login-point.env');
@@ -28852,6 +28858,7 @@ async function runSelfTest() {
           unitPath,
           envPath: missingLoginPointEnvPath,
           envMode: 'live',
+          sourceDir: appDir,
           skipSystemctl: true
         }, auditDeps);
         const placeholderEnvPath = path.join(dir, 'placeholder.env');
@@ -28859,6 +28866,15 @@ async function runSelfTest() {
         const placeholder = auditBrowserlessDeployment({
           unitPath,
           envPath: placeholderEnvPath,
+          sourceDir: appDir,
+          skipSystemctl: true
+        }, auditDeps);
+        fs.rmSync(path.join(appDir, '.git'), { recursive: true });
+        fs.writeFileSync(path.join(appDir, '.git'), 'gitdir: /tmp/linked-worktree\n');
+        const linkedWorktree = auditBrowserlessDeployment({
+          unitPath,
+          envPath,
+          sourceDir: appDir,
           skipSystemctl: true
         }, auditDeps);
         return [
@@ -28874,10 +28890,12 @@ async function runSelfTest() {
           missingLoginPoint.failed.some(item => item.key === 'env-login-point'),
           placeholder.ok,
           placeholder.failed.some(item => item.key === 'environment-file-reference'),
-          placeholder.failed.some(item => item.key === 'env-web-token')
+          placeholder.failed.some(item => item.key === 'env-web-token'),
+          linkedWorktree.ok,
+          linkedWorktree.failed.some(item => item.key === 'source-main-workspace')
         ].join('|');
       }),
-      want: 'true|0|true|0|true|0|false|true|false|true|false|true|true'
+      want: 'true|0|true|0|true|0|false|true|false|true|false|true|true|false|true'
     },
     {
       name: 'browserless acceptance report aggregates deployment canary and stop audits',
