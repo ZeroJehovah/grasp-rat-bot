@@ -43961,6 +43961,45 @@ async function runSelfTest() {
 	      want: 'velocity|profit-easy-kill-seek|true|vel 1 0|false'
 	    },
 	    {
+	      name: 'browserless action adapter approaches ETA-qualified invulnerable easy active player without firing',
+	      got: (() => {
+	        const commands = [];
+	        const adapter = createBrowserlessActionAdapter({
+	          now: () => 1000 + commands.length * 100,
+	          commandIntervalMs: 1,
+	          attackRangeCm: 14500,
+	          transport: {
+	            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`),
+	            sendShoot: () => commands.push('shoot')
+	          }
+	        });
+	        const result = adapter.applyDecision({
+	          realtime: { self: { user_id: 7, x: 0, y: 0 }, tick: 1 }
+	        }, {
+	          kind: 'profit-candidate',
+	          band: 'profit',
+	          action: {
+	            kind: 'seek-enemy',
+	            band: 'profit',
+	            reason: 'easy-kill-active-profit',
+	            target: {
+	              type: 'enemy',
+	              userId: 8,
+	              x: 30000,
+	              y: 0,
+	              active: true,
+	              invulnerable: true,
+	              easyKillKnown: true,
+	              easyKillProfitTarget: true,
+	              easyKillInvulnerableApproachEligible: true
+	            }
+	          }
+	        });
+	        return [result.kind, result.reason, result.easyKillApproach, commands.join(','), commands.includes('shoot')].join('|');
+	      })(),
+	      want: 'velocity|profit-easy-kill-seek|true|vel 1 0|false'
+	    },
+	    {
 	      name: 'browserless easy-kill approach stops after eight-second low-closing window',
 	      got: (() => {
 	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-approach-'));

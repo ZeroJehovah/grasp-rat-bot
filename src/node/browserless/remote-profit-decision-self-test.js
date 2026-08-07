@@ -146,6 +146,102 @@ function runRemoteProfitDecisionSelfTest() {
   assert.strictEqual(first.combat?.target, null);
   assert.strictEqual(first.action?.opportunisticShot, undefined);
 
+  const invulnerableRemoteAdapter = createBrowserlessDecisionAdapter({
+    userId: 7,
+    controlMode: 'non-combat-profit',
+    combatEnabled: false,
+    finalActionArbitrationHoldMs: 1800,
+    opportunitySwitchConfirmFrames: 1,
+    opportunitySwitchMargin: 0,
+    opportunitySwitchRelativeMargin: 0
+  });
+  const invulnerableActiveCandidate = remoteCandidate({
+    active: true,
+    classification: 'easy-kill-active',
+    easyKillScore: 3,
+    invulnerable: true,
+    invulnerableRemainingMs: 75000,
+    approachDistanceCm: 15000,
+    approachEtaMs: 75000
+  });
+  const invulnerableActiveBatch = batch(invulnerableActiveCandidate);
+  const invulnerableRemoteFirst = decide(
+    invulnerableRemoteAdapter,
+    state(fullStaminaSelf()),
+    2000,
+    invulnerableActiveBatch,
+    { finalActionArbitrationHoldMs: 1800 }
+  );
+  assert.strictEqual(invulnerableRemoteFirst.action?.kind, 'seek-remote-player');
+  assert.strictEqual(invulnerableRemoteFirst.action?.target?.invulnerableRemainingMs, 74000);
+  assert.strictEqual(invulnerableRemoteFirst.action?.target?.arrivalToleranceCm, 15000);
+  const invulnerableRemoteTooClose = decide(
+    invulnerableRemoteAdapter,
+    state(fullStaminaSelf({ x: 10000 }), [], [{ drop_id: 'fallback', amount: 1, x: 10100, y: 0 }]),
+    2100,
+    invulnerableActiveBatch,
+    { finalActionArbitrationHoldMs: 1800 }
+  );
+  assert.strictEqual(invulnerableRemoteTooClose.profit.remoteProfit.filtered['invulnerable-not-ready-on-current-approach'], 1);
+  assert.notStrictEqual(invulnerableRemoteTooClose.action?.kind, 'seek-remote-player');
+
+  const realtimeInvulnerableAdapter = createBrowserlessDecisionAdapter({
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    dynamicProfitThresholdEnabled: false,
+    finalActionArbitrationHoldMs: 1800,
+    opportunitySwitchConfirmFrames: 1,
+    opportunitySwitchMargin: 0,
+    opportunitySwitchRelativeMargin: 0
+  });
+  const activeInvulnerable = (x, rawRemaining) => ({
+    entity_id: 2,
+    user_id: 88,
+    name: 'active-invulnerable',
+    x,
+    y: 0,
+    vx: -35,
+    vy: 0,
+    hp: 100,
+    max_hp: 100,
+    drop: 100,
+    current_join_mode: 'Active',
+    invulnerable: true,
+    invulnerable_remaining_ms: rawRemaining
+  });
+  const realtimeInvulnerableReady = decide(
+    realtimeInvulnerableAdapter,
+    state(fullStaminaSelf(), [activeInvulnerable(50000, 84000)]),
+    3000,
+    null,
+    {
+      controlMode: 'profit-live',
+      combatEnabled: true,
+      easyKillPlayers: [{ userId: 88, score: 3 }],
+      dailyDamageUserIds: [],
+      finalActionArbitrationHoldMs: 1800
+    }
+  );
+  assert.strictEqual(realtimeInvulnerableReady.action?.kind, 'seek-enemy');
+  assert.strictEqual(realtimeInvulnerableReady.action?.target?.easyKillInvulnerableApproachEligible, true);
+  assert.strictEqual(realtimeInvulnerableReady.action?.target?.invulnerableApproachDistanceCm, 15000);
+  const realtimeInvulnerableTooClose = decide(
+    realtimeInvulnerableAdapter,
+    state(fullStaminaSelf(), [activeInvulnerable(20000, 72000)]),
+    3100,
+    null,
+    {
+      controlMode: 'profit-live',
+      combatEnabled: true,
+      easyKillPlayers: [{ userId: 88, score: 3 }],
+      dailyDamageUserIds: [],
+      finalActionArbitrationHoldMs: 1800
+    }
+  );
+  assert.strictEqual(realtimeInvulnerableTooClose.profit.easyKill.stopLoss?.reason, 'easy-kill-invulnerability-eta-no-longer-eligible');
+  assert.notStrictEqual(realtimeInvulnerableTooClose.action?.kind, 'seek-enemy');
+
   const highValueCoin = decide(
     adapter,
     state(fullStaminaSelf(), [], [{ drop_id: 'high', amount: 100, x: 100, y: 0 }]),
@@ -285,7 +381,7 @@ function runRemoteProfitDecisionSelfTest() {
   );
   assert.strictEqual(ordinaryFirst.action?.target?.id, 'coin-a');
   assert.strictEqual(ordinaryNext.action?.target?.id, 'coin-a', 'ordinary final-action hold remains unchanged');
-  return { ok: true, cases: 28 };
+  return { ok: true, cases: 36 };
 }
 
 if (require.main === module) {

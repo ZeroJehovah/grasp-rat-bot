@@ -4,6 +4,7 @@ const assert = require('assert');
 const {
   buildRemotePlayerNavigationOpportunitiesCore,
   evaluateRemoteProfitTargets,
+  remoteProfitApproachDistanceCm,
   remoteProfitApproachEtaMs,
   remoteProfitDistanceFactor
 } = require('./remote-profit-targets');
@@ -57,6 +58,9 @@ function runRemoteProfitTargetsSelfTest() {
   assert.strictEqual(remoteProfitDistanceFactor(150000), 0.5);
   assert.strictEqual(remoteProfitDistanceFactor(250000), 0.5);
   assert.strictEqual(remoteProfitApproachEtaMs(100000), 95000);
+  assert.strictEqual(remoteProfitApproachDistanceCm('high-drop-afk'), 5000);
+  assert.strictEqual(remoteProfitApproachDistanceCm('easy-kill-active'), 15000);
+  assert.strictEqual(remoteProfitApproachEtaMs(100000, {}, 'easy-kill-active'), 85000);
   assert.strictEqual(rawInvulnerabilityMsToWallMs(36600), 15250);
   assert.strictEqual(rawInvulnerabilityMsToWallMs(34200), 14250);
   assert.strictEqual(rawInvulnerabilityMsFrom({ invulnerable_remaining_ms: 36600 }), 15250);
@@ -157,6 +161,23 @@ function runRemoteProfitTargetsSelfTest() {
   assert.strictEqual(invulnerableReady.candidates.length, 1);
   const invulnerableLate = evaluate([target({ x: 100000, invulnerable: true, invulnerableRemainingMs: 96000 })]);
   assert.strictEqual(invulnerableLate.candidates.length, 0);
+  const invulnerableActiveReady = evaluateRemoteProfitTargets({
+    self: { user_id: 1, x: 0, y: 0 },
+    entities: [target({ user_id: 24, x: 100000, current_join_mode: 'Active', invulnerable: true, invulnerableRemainingMs: 85000 })],
+    easyKillPlayers: [{ userId: 24, score: 3 }],
+    config: {},
+    online: true
+  }, { scoreTarget: (_entity, details) => scoring({ ...details, drop: _entity.drop, distance: details.distance }) });
+  assert.strictEqual(invulnerableActiveReady.candidates.length, 1);
+  assert.strictEqual(invulnerableActiveReady.candidates[0].approachDistanceCm, 15000);
+  const invulnerableActiveLate = evaluateRemoteProfitTargets({
+    self: { user_id: 1, x: 0, y: 0 },
+    entities: [target({ user_id: 24, x: 100000, current_join_mode: 'Active', invulnerable: true, invulnerableRemainingMs: 85001 })],
+    easyKillPlayers: [{ userId: 24, score: 3 }],
+    config: {},
+    online: true
+  }, { scoreTarget: (_entity, details) => scoring({ ...details, drop: _entity.drop, distance: details.distance }) });
+  assert.strictEqual(invulnerableActiveLate.candidates.length, 0);
   const rawInvulnerableReady = evaluate([target({ x: 15000, invulnerable: true, invulnerable_remaining_ms: 24000 })]);
   assert.strictEqual(rawInvulnerableReady.candidates.length, 1, 'raw protocol countdown converts to wall milliseconds');
   const rawInvulnerableLate = evaluate([target({ x: 15000, invulnerable: true, invulnerable_remaining_ms: 26400 })]);
@@ -236,7 +257,7 @@ function runRemoteProfitTargetsSelfTest() {
   assert.strictEqual(movedSelfOpportunities[0].baseScore, opportunities[0].baseScore);
   assert.strictEqual(movedSelfOpportunities[0].distanceFactor, opportunities[0].distanceFactor);
   assert.strictEqual(movedSelfOpportunities[0].adjustedScore, opportunities[0].adjustedScore);
-  return { ok: true, cases: 41 };
+  return { ok: true, cases: 47 };
 }
 
 if (require.main === module) {

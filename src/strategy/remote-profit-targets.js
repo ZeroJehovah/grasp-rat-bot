@@ -13,7 +13,8 @@ const DEFAULT_REMOTE_PROFIT_TARGET_CONFIG = Object.freeze({
   distanceHalfFactorCm: 150000,
   distanceFloorFactor: 0.5,
   staminaFullRatio: 0.98,
-  invulnerableApproachDistanceCm: 5000,
+  invulnerableAfkApproachDistanceCm: 5000,
+  invulnerableActiveApproachDistanceCm: 15000,
   invulnerableMoveSpeedCmPerSec: 1000,
   maxCandidates: 64,
   arrivalToleranceCm: 1000
@@ -82,12 +83,20 @@ function remoteProfitDistanceFactor(distance, config = {}) {
   return 1 - ratio * (1 - floor);
 }
 
-function remoteProfitApproachEtaMs(distance, config = {}) {
+function remoteProfitApproachDistanceCm(classification = '', config = {}) {
+  const active = String(classification || '') === 'easy-kill-active';
+  const configured = active
+    ? config.invulnerableActiveApproachDistanceCm
+    : config.invulnerableAfkApproachDistanceCm;
+  const fallback = active
+    ? DEFAULT_REMOTE_PROFIT_TARGET_CONFIG.invulnerableActiveApproachDistanceCm
+    : DEFAULT_REMOTE_PROFIT_TARGET_CONFIG.invulnerableAfkApproachDistanceCm;
+  return Math.max(0, Number(configured ?? config.invulnerableApproachDistanceCm ?? fallback));
+}
+
+function remoteProfitApproachEtaMs(distance, config = {}, classification = '') {
   const value = Number(distance);
-  const approachDistance = Math.max(0, Number(
-    config.invulnerableApproachDistanceCm
-      ?? DEFAULT_REMOTE_PROFIT_TARGET_CONFIG.invulnerableApproachDistanceCm
-  ));
+  const approachDistance = remoteProfitApproachDistanceCm(classification, config);
   const speed = Math.max(1, Number(
     config.invulnerableMoveSpeedCmPerSec
       ?? DEFAULT_REMOTE_PROFIT_TARGET_CONFIG.invulnerableMoveSpeedCmPerSec
@@ -232,7 +241,8 @@ function classifyRemoteTarget(target, context, config, helpers) {
 
   const invulnerableRemainingMs = finiteNumber(target.invulnerableRemainingMs);
   const invulnerable = Boolean(target.invulnerable || (invulnerableRemainingMs !== null && invulnerableRemainingMs > 0));
-  const approachEtaMs = remoteProfitApproachEtaMs(distance, config);
+  const approachDistanceCm = remoteProfitApproachDistanceCm(classification, config);
+  const approachEtaMs = remoteProfitApproachEtaMs(distance, config, classification);
   if (invulnerable && (
     invulnerableRemainingMs === null
       || approachEtaMs === null
@@ -287,6 +297,7 @@ function classifyRemoteTarget(target, context, config, helpers) {
       easyKillScore: score,
       distance,
       centerDistance,
+      approachDistanceCm,
       approachEtaMs,
       expectedReward,
       staminaCost,
@@ -427,6 +438,7 @@ module.exports = {
   buildRemotePlayerNavigationOpportunitiesCore,
   distanceBetween,
   evaluateRemoteProfitTargets,
+  remoteProfitApproachDistanceCm,
   remoteProfitApproachEtaMs,
   remoteProfitDistanceFactor
 };

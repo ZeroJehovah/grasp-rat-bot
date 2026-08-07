@@ -2939,12 +2939,19 @@ function createBrowserlessActionAdapter(options = {}) {
   function applyProfitEnemyDecision(stateSnapshot, self, target, decision) {
     clearNearCoinContinuation('profit-enemy-action');
     if (target?.active && target?.easyKillProfitTarget) {
-      const vector = movementVectorToTarget(self, target, options);
+      const invulnerableApproach = target?.invulnerable
+        && target?.easyKillInvulnerableApproachEligible === true;
+      const vector = movementVectorToTarget(self, target, invulnerableApproach
+        ? {
+            ...options,
+            targetDeadZoneCm: Math.max(0, Number(target.invulnerableApproachDistanceCm || 15000))
+          }
+        : options);
       const distance = Number.isFinite(Number(vector.distance))
         ? Number(vector.distance)
         : Math.hypot(Number(target?.x) - Number(self?.x), Number(target?.y) - Number(self?.y));
       const attackRange = Math.max(0, Number(options.combatAttackRange ?? options.attackRangeCm ?? options.attackRange ?? DEFAULT_ATTACK_RANGE_CM));
-      if (target?.invulnerable) {
+      if (target?.invulnerable && target?.easyKillInvulnerableApproachEligible !== true) {
         const stopped = stop('profit-easy-kill-target-invulnerable');
         return {
           ok: stopped.ok,
