@@ -161,6 +161,9 @@ function createSourceIpController(options = {}) {
     minimumIntervalMs: options.requestMinIntervalMs
   });
   const logStore = options.logStore || null;
+  const onStatePersisted = typeof options.onStatePersisted === 'function'
+    ? options.onStatePersisted
+    : null;
   let state = options.state || (stateFile ? readBrowserlessStateFile(stateFile) : {});
   const preflightEnabled = options.preflightEnabled === true;
   let candidates = resolveSourceIpCandidates(config, state, { preflightEnabled });
@@ -189,6 +192,7 @@ function createSourceIpController(options = {}) {
       state = updateBrowserlessStateFile(stateFile, {
         network
       }, { updatedAt });
+      if (onStatePersisted) onStatePersisted(stateFile, state);
     } catch (err) {
       state = {
         ...(state || {}),

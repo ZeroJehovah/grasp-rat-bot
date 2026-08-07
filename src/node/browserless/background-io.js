@@ -128,6 +128,13 @@ function createBrowserlessBackgroundIo(options = {}) {
     });
   }
 
+  function invalidateJsonCache(file) {
+    return post({
+      kind: 'json-cache-invalidate',
+      file: path.resolve(String(file || ''))
+    });
+  }
+
   function finalizeGz(file) {
     return post({ kind: 'finalize-gz', file: path.resolve(String(file || '')) });
   }
@@ -250,6 +257,7 @@ function createBrowserlessBackgroundIo(options = {}) {
     close,
     finalizeGz,
     flush,
+    invalidateJsonCache,
     renderStatus,
     status,
     writeJsonAtomic,

@@ -1658,9 +1658,15 @@ async function runBrowserlessRunner(config, deps = {}) {
   });
   const stateFile = config.stateFile || stateFilePath(config);
   const restartDrain = deps.restartDrainCoordinator || createRestartDrainCoordinator({ now });
+  const invalidateBackgroundStateCache = () => {
+    if (!backgroundIo?.invalidateJsonCache) return true;
+    return backgroundIo.invalidateJsonCache(stateFile);
+  };
   const updateState = (patch, options = {}) => {
     try {
-      return updateBrowserlessStateFile(stateFile, patch, options);
+      const updated = updateBrowserlessStateFile(stateFile, patch, options);
+      invalidateBackgroundStateCache();
+      return updated;
     } catch (err) {
       recordSupervisorError(err, { operation: 'state-update' });
       logStore.append('runner', 'state-update-error', { error: errorMessage(err) });
@@ -1669,7 +1675,9 @@ async function runBrowserlessRunner(config, deps = {}) {
   };
   const writeState = state => {
     try {
-      return writeBrowserlessStateFile(stateFile, state);
+      const written = writeBrowserlessStateFile(stateFile, state);
+      invalidateBackgroundStateCache();
+      return written;
     } catch (err) {
       recordSupervisorError(err, { operation: 'state-write' });
       logStore.append('runner', 'state-write-error', { error: errorMessage(err) });
@@ -2064,7 +2072,8 @@ async function runBrowserlessRunner(config, deps = {}) {
     openBrowserlessWs: deps.openBrowserlessWs,
     requestAuthUrl: deps.requestAuthUrl,
     submitCallbackInput: deps.submitCallbackInput,
-    leaveWithVerification: deps.leaveWithVerification
+    leaveWithVerification: deps.leaveWithVerification,
+    onStatePersisted: invalidateBackgroundStateCache
   });
   config.sourceIp = sourceIpController.currentSourceIp();
   config.sourceIps = sourceIpController.sourceIps();

@@ -27446,6 +27446,23 @@ async function runSelfTest() {
             ['players', 'old'],
             ['strategyLearning', 'routeTransitions', 'old']
           ]);
+          const cacheCoherenceFile = path.join(dir, 'state', 'cache-coherence.json');
+          fs.writeFileSync(cacheCoherenceFile, JSON.stringify({
+            stats: { today: { uptimeMs: 1, sessionCount: 1 } },
+            network: { phase: 'initial' }
+          }));
+          backgroundIo.writeJsonPatchAtomic(cacheCoherenceFile, {
+            network: { phase: 'cached' }
+          });
+          await backgroundIo.flush();
+          fs.writeFileSync(cacheCoherenceFile, JSON.stringify({
+            stats: { today: { uptimeMs: 9000, sessionCount: 3 } },
+            network: { phase: 'complete-write' }
+          }));
+          backgroundIo.invalidateJsonCache(cacheCoherenceFile);
+          backgroundIo.writeJsonPatchAtomic(cacheCoherenceFile, {
+            network: { phase: 'patched-after-complete-write' }
+          });
           const combatFile = path.join(dir, 'state', 'combat-learning.json');
           const routeKey = 'mode=zigzag-strafe|distance=far|direction=east|dwell=settled|speed=fast|radial=stable|lateral=right';
           fs.writeFileSync(combatFile, JSON.stringify({
@@ -27488,6 +27505,7 @@ async function runSelfTest() {
           const logEntry = JSON.parse(logText.trim());
           const json = JSON.parse(fs.readFileSync(jsonFile, 'utf8'));
           const patched = JSON.parse(fs.readFileSync(patchFile, 'utf8'));
+          const cacheCoherent = JSON.parse(fs.readFileSync(cacheCoherenceFile, 'utf8'));
           const combatPatched = JSON.parse(fs.readFileSync(combatFile, 'utf8'));
           const renderedStatus = JSON.parse(rendered.text);
           const renderedText = rendered.text;
@@ -27504,6 +27522,9 @@ async function runSelfTest() {
             patched.players.fresh?.score,
             patched.strategyLearning.routeTransitions.old.outcomes.south === undefined,
             patched.strategyLearning.routeTransitions.old.outcomes.north,
+            cacheCoherent.stats.today.uptimeMs,
+            cacheCoherent.stats.today.sessionCount,
+            cacheCoherent.network.phase,
             combatPatched.players['user:8']?.targetDamage,
             combatPatched.players['user:8']?.selfDamage,
             combatPatched.strategyLearning.routeTransitions[routeKey]?.outcomes.south === undefined,
@@ -27517,7 +27538,7 @@ async function runSelfTest() {
           await backgroundIo.close();
         }
       }),
-      want: 'true|0|true|[redacted]|true|true|true|7|true|2|true|5|9|3|true|5|true|true|true|true'
+      want: 'true|0|true|[redacted]|true|true|true|7|true|2|true|5|9000|3|patched-after-complete-write|9|3|true|5|true|true|true|true'
     },
     {
       name: 'browserless background IO continues after one operation failure',

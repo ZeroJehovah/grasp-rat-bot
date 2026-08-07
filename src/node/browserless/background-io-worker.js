@@ -98,6 +98,10 @@ function writeJsonPatchAtomic(message) {
   writeJsonFileAtomic(file, value);
 }
 
+function invalidateJsonCache(message) {
+  jsonStateCache.delete(path.resolve(String(message.file || '')));
+}
+
 // Compress a finished per-battle JSONL file to `<file>.gz` and remove the raw
 // file. Runs on the background worker so gzip never blocks the combat loop.
 function finalizeGz(message) {
@@ -153,6 +157,7 @@ parentPort.on('message', message => {
     if (message.kind === 'log') appendLog(message);
     else if (message.kind === 'json-atomic') writeJsonAtomic(message);
     else if (message.kind === 'json-patch-atomic') writeJsonPatchAtomic(message);
+    else if (message.kind === 'json-cache-invalidate') invalidateJsonCache(message);
     else if (message.kind === 'finalize-gz') finalizeGz(message);
     else if (message.kind === 'append-raw-line') appendRawLine(message);
     else if (message.kind === 'chat-history') appendChatHistory(message);

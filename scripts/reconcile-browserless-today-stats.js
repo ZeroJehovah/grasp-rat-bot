@@ -136,6 +136,7 @@ async function analyzeDay(options) {
   const contextWsFiles = contextDays.map(day => path.join(options.logDir, day, 'ws.jsonl'));
   const decisionFiles = days.map(day => path.join(options.logDir, day, 'decisions.jsonl'));
   const exitFiles = days.map(day => path.join(options.logDir, day, 'exits.jsonl'));
+  const runnerFiles = contextDays.map(day => path.join(options.logDir, day, 'runner.jsonl'));
   const runs = new Map();
   let previousDrop = null;
   let positiveDropUnits = 0;
@@ -155,6 +156,47 @@ async function analyzeDay(options) {
   let fallbackLatestDrop = null;
   let fallbackPositiveDropUnits = 0;
   let fallbackDropResetCount = 0;
+
+  const loginRowsByRunId = new Map();
+  const terminalRowsByRunId = new Map();
+  await eachJsonLine(runnerFiles, entry => {
+    const atMs = Date.parse(String(entry?.at || ''));
+    if (!Number.isFinite(atMs) || atMs < startMs - DAY_MS || atMs > endMs) return;
+    const runId = String(entry?.detail?.runId || '');
+    if (!runId) return;
+    if (entry.type === 'source-ip-login-success') {
+      const existing = loginRowsByRunId.get(runId);
+      if (!existing || atMs < existing.atMs) loginRowsByRunId.set(runId, { runId, atMs, at: entry.at });
+      return;
+    }
+    if (entry.type !== 'runner-stop' && entry.type !== 'runner-finish') return;
+    const completedAtMs = Date.parse(String(entry?.detail?.completedAt || ''));
+    const terminalAtMs = Number.isFinite(completedAtMs) ? completedAtMs : atMs;
+    const rows = terminalRowsByRunId.get(runId) || [];
+    rows.push({ runId, atMs: terminalAtMs, loggedAtMs: atMs, at: entry.at, type: entry.type });
+    terminalRowsByRunId.set(runId, rows);
+  });
+
+  const loginRows = Array.from(loginRowsByRunId.values()).sort((a, b) => a.atMs - b.atMs);
+  const runnerSessions = [];
+  for (let index = 0; index < loginRows.length; index += 1) {
+    const login = loginRows[index];
+    const nextLoginAtMs = loginRows[index + 1]?.atMs ?? Infinity;
+    const terminal = (terminalRowsByRunId.get(login.runId) || [])
+      .filter(row => row.atMs >= login.atMs)
+      .sort((a, b) => a.atMs - b.atMs)[0] || null;
+    const rawEndMs = Math.min(terminal?.atMs ?? endMs, nextLoginAtMs, endMs);
+    const sessionStartMs = Math.max(login.atMs, startMs);
+    if (rawEndMs < sessionStartMs || login.atMs > endMs) continue;
+    runnerSessions.push({
+      runId: login.runId,
+      enteredAt: new Date(login.atMs).toISOString(),
+      exitedAt: new Date(rawEndMs).toISOString(),
+      durationMs: Math.max(0, rawEndMs - sessionStartMs),
+      completed: Boolean(terminal && terminal.atMs <= nextLoginAtMs && terminal.atMs <= endMs),
+      terminalType: terminal?.type || ''
+    });
+  }
 
   function observeFallbackDrop(drop) {
     if (fallbackInitialDrop === null) fallbackInitialDrop = drop;
@@ -308,9 +350,13 @@ async function analyzeDay(options) {
     observeStamina(exitEvent.stamina, exitEvent.at);
   }
 
-  const inGameDurationMs = Array.from(runs.values()).reduce((sum, run) => (
+  const wsInGameDurationMs = Array.from(runs.values()).reduce((sum, run) => (
     sum + Math.max(0, run.lastAtMs - run.firstAtMs)
   ), 0);
+  const runnerInGameDurationMs = runnerSessions.reduce((sum, session) => sum + session.durationMs, 0);
+  const useRunnerSessions = runnerSessions.length > 0;
+  const inGameDurationMs = useRunnerSessions ? runnerInGameDurationMs : wsInGameDurationMs;
+  const runCount = useRunnerSessions ? runnerSessions.length : runs.size;
   const staminaSpentMs = lastStamina1dRemaining === null || lastStamina1dLimit === null
     ? null
     : Math.max(0, Math.round(staminaSpentBeforeResetMs + lastStamina1dLimit - lastStamina1dRemaining));
@@ -321,12 +367,18 @@ async function analyzeDay(options) {
     files: {
       ws: wsFiles.filter(fs.existsSync),
       decisions: decisionFiles.filter(fs.existsSync),
-      exits: exitFiles.filter(fs.existsSync)
+      exits: exitFiles.filter(fs.existsSync),
+      runner: runnerFiles.filter(fs.existsSync)
     },
     evidence: {
       selfSamples,
       decisionRows,
-      runCount: runs.size,
+      runCount,
+      durationSource: useRunnerSessions ? 'runner-login-lifecycle' : 'ws-observation-window',
+      runnerSessionCount: runnerSessions.length,
+      runnerCompletedSessionCount: runnerSessions.filter(session => session.completed).length,
+      runnerOpenSessionCount: runnerSessions.filter(session => !session.completed).length,
+      runnerSessions,
       firstSelfAt,
       lastSelfAt,
       firstEvidenceAt,
@@ -365,6 +417,7 @@ function authoritativeStaminaSpent(state, day) {
 
 function reconcileState(state, analysis) {
   const currentToday = state?.stats?.today || {};
+  const hasDropEvidence = Number(analysis?.evidence?.selfSamples || 0) > 0;
   const rawAnalyzedStaminaSpentMs = analysis?.stats?.staminaSpentMs;
   const staminaSpentMs = rawAnalyzedStaminaSpentMs !== null
     && rawAnalyzedStaminaSpentMs !== undefined
@@ -375,14 +428,18 @@ function reconcileState(state, analysis) {
     ...currentToday,
     day: analysis.day,
     uptimeMs: Math.max(Number(currentToday.uptimeMs || 0), analysis.stats.uptimeMs),
-    coinsGained: analysis.stats.coinsGained,
+    coinsGained: hasDropEvidence
+      ? analysis.stats.coinsGained
+      : Number(currentToday.coinsGained || 0),
     kills: Math.max(Number(currentToday.kills || 0), analysis.stats.kills),
     sessionCount: Math.max(Number(currentToday.sessionCount || 0), analysis.evidence.runCount),
-    initialDrop: analysis.evidence.initialDrop,
-    maxDrop: analysis.evidence.maxDrop,
-    latestDrop: analysis.evidence.lastDrop,
-    dropResetCount: analysis.evidence.dropResetCount,
-    crossDayDropPending: null,
+    ...(hasDropEvidence ? {
+      initialDrop: analysis.evidence.initialDrop,
+      maxDrop: analysis.evidence.maxDrop,
+      latestDrop: analysis.evidence.lastDrop,
+      dropResetCount: analysis.evidence.dropResetCount,
+      crossDayDropPending: null
+    } : {}),
     ...(staminaSpentMs === null ? {} : { staminaSpentMs }),
     ...(analysis.evidence.staminaSamples > 0 ? {
       staminaSpentBeforeResetMs: analysis.stats.staminaSpentBeforeResetMs,
@@ -406,14 +463,16 @@ function reconcileState(state, analysis) {
       staminaSpentMs: Number(currentToday.staminaSpentMs || 0),
       coinsGained: Number(currentToday.coinsGained || 0),
       pickedCoins: Number(currentToday.coinsGained || 0),
-      kills: Number(currentToday.kills || 0)
+      kills: Number(currentToday.kills || 0),
+      sessionCount: Number(currentToday.sessionCount || 0)
     },
     after: {
       uptimeMs: today.uptimeMs,
       staminaSpentMs: Number(today.staminaSpentMs || 0),
       coinsGained: today.coinsGained,
       pickedCoins: today.coinsGained,
-      kills: today.kills
+      kills: today.kills,
+      sessionCount: today.sessionCount
     },
     today
   };
@@ -512,6 +571,66 @@ async function runSelfTest() {
       logDir: crossDayLogDir,
       userId: 7
     });
+    const runnerOnlyLogDir = path.join(root, 'runner-only-logs');
+    const runnerOnlyDir = path.join(runnerOnlyLogDir, '2026-07-15');
+    fs.mkdirSync(runnerOnlyDir, { recursive: true });
+    const runnerRows = [
+      {
+        at: '2026-07-15T00:00:00.000Z',
+        type: 'source-ip-login-success',
+        detail: { runId: 'runner-a' }
+      },
+      {
+        at: '2026-07-15T00:10:01.000Z',
+        type: 'runner-stop',
+        detail: { runId: 'runner-a', completedAt: '2026-07-15T00:10:00.000Z' }
+      },
+      {
+        at: '2026-07-15T00:15:00.000Z',
+        type: 'runner-stop',
+        detail: { runId: 'failed-before-login', completedAt: '2026-07-15T00:15:00.000Z' }
+      },
+      {
+        at: '2026-07-15T00:20:00.000Z',
+        type: 'source-ip-login-success',
+        detail: { runId: 'runner-b' }
+      },
+      {
+        at: '2026-07-15T00:40:01.000Z',
+        type: 'runner-finish',
+        detail: { runId: 'runner-b', completedAt: '2026-07-15T00:40:00.000Z' }
+      },
+      {
+        at: '2026-07-15T00:50:00.000Z',
+        type: 'source-ip-login-success',
+        detail: { runId: 'runner-c' }
+      }
+    ].map(row => JSON.stringify(row)).join('\n') + '\n';
+    fs.writeFileSync(path.join(runnerOnlyDir, 'runner.jsonl'), runnerRows);
+    const runnerOnlyAnalysis = await analyzeDay({
+      day: '2026-07-15',
+      cutoffMs: Date.parse('2026-07-15T01:00:00.000Z'),
+      logDir: runnerOnlyLogDir,
+      userId: 7
+    });
+    const runnerOnlyReconciled = reconcileState({
+      stats: {
+        currentSession: { online: false },
+        today: {
+          day: '2026-07-15',
+          uptimeMs: 1234,
+          staminaSpentMs: 5678,
+          coinsGained: 980,
+          kills: 50,
+          sessionCount: 1,
+          initialDrop: 5238,
+          maxDrop: 5728,
+          latestDrop: 5728,
+          dropResetCount: 2,
+          crossDayDropPending: { drop: 5728 }
+        }
+      }
+    }, runnerOnlyAnalysis);
     let mismatchedDayRejected = false;
     try {
       assertApplySafe({
@@ -541,6 +660,19 @@ async function runSelfTest() {
         && crossDayAnalysis.stats.dropUnitsGained === 10
         && crossDayAnalysis.stats.coinsGained === 20
         && crossDayAnalysis.evidence.dropResetCount === 0
+        && runnerOnlyAnalysis.stats.uptimeMs === 2400000
+        && runnerOnlyAnalysis.evidence.durationSource === 'runner-login-lifecycle'
+        && runnerOnlyAnalysis.evidence.runCount === 3
+        && runnerOnlyAnalysis.evidence.runnerCompletedSessionCount === 2
+        && runnerOnlyAnalysis.evidence.runnerOpenSessionCount === 1
+        && runnerOnlyReconciled.today.uptimeMs === 2400000
+        && runnerOnlyReconciled.today.sessionCount === 3
+        && runnerOnlyReconciled.today.coinsGained === 980
+        && runnerOnlyReconciled.today.initialDrop === 5238
+        && runnerOnlyReconciled.today.maxDrop === 5728
+        && runnerOnlyReconciled.today.latestDrop === 5728
+        && runnerOnlyReconciled.today.dropResetCount === 2
+        && runnerOnlyReconciled.today.crossDayDropPending?.drop === 5728
         && mismatchedDayRejected,
       analysis
     };
