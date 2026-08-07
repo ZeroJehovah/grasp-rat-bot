@@ -4440,6 +4440,30 @@ function runStrategyModuleSelfTests() {
       && builtRoute.routeKind === 'short'
   });
 
+  const discountedRouteCoins = [
+    { drop_id: 'discounted', amount: 10, x: 1000, y: 0, distance: 1000, profitScoreMultiplier: 0.5 },
+    { drop_id: 'full', amount: 10, x: 2000, y: 0, distance: 2000 }
+  ];
+  const discountedRoute = buildCoinRouteFromAnchorCore(
+    routeSelf,
+    discountedRouteCoins[0],
+    discountedRouteCoins,
+    [],
+    {
+      ...routeOptions,
+      coinValue: coin => Number(coin.amount || 0) * Number(coin.profitScoreMultiplier ?? 1)
+    }
+  );
+  results.push({
+    name: 'coin-route-scores-easy-kill-contested-coin-at-half-value',
+    passed: discountedRoute?.coinRoute?.value === 20
+      && discountedRoute.coinRoute.effectiveValue === 15
+      && discountedRoute.routeValue === 20
+      && discountedRoute.routeEffectiveValue === 15
+      && discountedRoute.opportunityScore === 750
+      && discountedRoute.coinRoute.points?.[0]?.profitScoreMultiplier === 0.5
+  });
+
   const twoCoinAggregateRoute = buildCoinRouteFromAnchorCore(
     { x: -45369, y: -58449 },
     { drop_id: '823', amount: 1, x: -45410, y: -45344, distance: 13105 },

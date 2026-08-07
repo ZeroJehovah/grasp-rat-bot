@@ -342,6 +342,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     activeCoinCompetitionUncertainLeadDistanceCm: numberDefault(config.activeCoinCompetitionUncertainLeadDistanceCm, 12000),
     activeCoinCompetitionHeadingCosMin: numberDefault(config.activeCoinCompetitionHeadingCosMin, 0.35),
     activeCoinCompetitionMovingSpeedMin: numberDefault(config.activeCoinCompetitionMovingSpeedMin, 5),
+    activeCoinCompetitionEasyKillScoreMultiplier: numberDefault(config.activeCoinCompetitionEasyKillScoreMultiplier, 0.5),
     invulnerableActiveCoinDangerRadius: 36000,
     invulnerableActiveCoinHeadingBlockRadius: 65000,
     invulnerableActiveCoinHeadingLaneRadius: 18000,

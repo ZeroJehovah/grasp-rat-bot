@@ -19662,6 +19662,109 @@ async function runSelfTest() {
       want: '28316|competitor-replaced-by-stronger|1|1'
     },
     {
+      name: 'browserless coin competition halves score for easy-kill-only race and blocks mixed race',
+      got: (() => {
+        const self = {
+          entity_id: 1,
+          user_id: 7,
+          x: 0,
+          y: 0,
+          hp: 100,
+          max_hp: 100,
+          stamina_5s_remaining_milli: 10000,
+          stamina_1h_remaining_milli: 100000,
+          stamina_1d_remaining_milli: 100000,
+          current_join_mode: 'Active'
+        };
+        const coin = { drop_id: 9612, amount: 20, x: 40000, y: 0 };
+        const easy = {
+          entity_id: 2,
+          user_id: 28315,
+          name: 'known-easy',
+          x: 30000,
+          y: 0,
+          vx: 50,
+          vy: 0,
+          hp: 100,
+          max_hp: 100,
+          current_join_mode: 'Active'
+        };
+        const ordinary = {
+          entity_id: 3,
+          user_id: 28316,
+          name: 'ordinary-active',
+          x: 32000,
+          y: 0,
+          vx: 50,
+          vy: 0,
+          hp: 100,
+          max_hp: 100,
+          current_join_mode: 'Active'
+        };
+        const state = entities => ({
+          userId: 7,
+          realtime: {
+            tick: 1000,
+            receivedAtMs: 1000,
+            frameAgeMs: 0,
+            self,
+            entities: [self, ...entities],
+            bullets: [],
+            coinDrops: [coin]
+          },
+          fallback: {
+            tick: 1000,
+            receivedAtMs: 1000,
+            frameAgeMs: 0,
+            self,
+            entities: [],
+            bullets: [],
+            coinDrops: [],
+            messages: []
+          },
+          frameAges: { latestFrameAgeMs: 0, realtimeAgeMs: 0 }
+        });
+        const baseOptions = {
+          nowMs: 1000,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: false,
+          opportunityVisibleDistance: 50000,
+          globalCoinMaxDistance: 50000,
+          easyKillPlayers: [{ userId: 28315, name: 'known-easy', score: 3 }]
+        };
+        const unopposed = buildBrowserlessDecision(state([]), {}, baseOptions);
+        const discounted = buildBrowserlessDecision(state([easy]), {}, baseOptions);
+        const blocked = buildBrowserlessDecision(state([easy, ordinary]), {}, baseOptions);
+        const thresholded = buildBrowserlessDecision(state([easy]), {}, {
+          ...baseOptions,
+          dynamicProfitThresholdEnabled: true,
+          profitThresholdCoinsPer10Stamina: 3
+        });
+        const unopposedCoin = unopposed.profit.candidates.find(item => item.type === 'coin' && String(item.id) === '9612');
+        const discountedCoin = discounted.profit.candidates.find(item => item.type === 'coin' && String(item.id) === '9612');
+        const blockedCoin = blocked.profit.candidates.find(item => item.type === 'coin' && String(item.id) === '9612');
+        const thresholdedCoin = thresholded.profit.candidates.find(item => item.type === 'coin' && String(item.id) === '9612');
+        const thresholdedFilteredCoin = thresholded.profit.threshold.filtered.find(item => item.type === 'coin' && String(item.id) === '9612');
+        return [
+          unopposedCoin.score === discountedCoin.score * 2,
+          discounted.input.activeCoinCompetition.contestedCoinCount,
+          discounted.input.activeCoinCompetition.discountedCoinCount,
+          discounted.input.activeCoinCompetition.discounted[0]?.competitorId,
+          discountedCoin.coin?.amount,
+          discountedCoin.coin?.effectiveProfitReward,
+          discountedCoin.coin?.profitScoreMultiplier,
+          blocked.input.activeCoinCompetition.contestedCoinCount,
+          blocked.input.activeCoinCompetition.discountedCoinCount,
+          Boolean(blockedCoin),
+          thresholded.profit.threshold.active,
+          thresholdedFilteredCoin?.reward,
+          Boolean(thresholdedCoin)
+        ].join('|');
+      })(),
+      want: 'true|0|1|28315|20|10|0.5|1|0|false|true|10|false'
+    },
+    {
       name: 'browserless combat engagement records motion samples for aim confidence',
       got: (() => {
         const stateful = {

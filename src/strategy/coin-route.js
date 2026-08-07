@@ -14,6 +14,14 @@ function coinRouteKey(coin) {
   return [Math.round(Number(coin?.x || 0)), Math.round(Number(coin?.y || 0)), Math.round(Number(coin?.amount || 0))].join(':');
 }
 
+function coinRouteValueCore(coin, options = {}) {
+  const coinValue = typeof options.coinValue === 'function'
+    ? options.coinValue
+    : item => Number(item?.amount || 0);
+  const value = Number(coinValue(coin));
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
 function coinRouteIdsFrom(value) {
   const ids = Array.isArray(value?.coinRoute?.ids) ? value.coinRoute.ids : (Array.isArray(value?.routeIds) ? value.routeIds : value?.coinRouteIds);
   return Array.isArray(ids) ? ids.map(id => String(id)).filter(Boolean) : [];
@@ -65,6 +73,7 @@ function coinRouteSummaryCore(route, self, options = {}) {
   const dist = typeof options.dist === 'function' ? options.dist : defaultDist;
   const moveStaminaCost = typeof options.moveStaminaCost === 'function' ? options.moveStaminaCost : distance => Math.max(0, Number(distance || 0));
   let totalValue = 0;
+  let effectiveValue = 0;
   let totalStaminaCost = 0;
   let totalDistance = 0;
   let previous = self;
@@ -72,11 +81,17 @@ function coinRouteSummaryCore(route, self, options = {}) {
     const legDistance = dist(previous, coin);
     totalDistance += legDistance;
     totalValue += Math.max(0, Number(coin.amount || 0));
+    effectiveValue += coinRouteValueCore(coin, options);
     totalStaminaCost += moveStaminaCost(legDistance, 0)
       + Math.max(0, Number(options.pickupStaminaMs || 0));
     previous = coin;
   }
-  return { totalValue, totalStaminaCost, totalDistance };
+  return {
+    totalValue,
+    totalStaminaCost,
+    totalDistance,
+    ...(effectiveValue !== totalValue ? { effectiveValue } : {})
+  };
 }
 
 function coinRouteFirstLegLaneCore(self, first, coin) {
@@ -110,16 +125,23 @@ function coinRoutePoints(route) {
       x: Number(coin?.x),
       y: Number(coin?.y),
       amount: Number(coin?.amount || 0),
-      order: index + 1
+      order: index + 1,
+      ...(Number.isFinite(Number(coin?.profitScoreMultiplier))
+        && Number(coin.profitScoreMultiplier) !== 1
+        ? { profitScoreMultiplier: Number(coin.profitScoreMultiplier) }
+        : {})
     }))
     .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
 }
 
 function coinRouteActionMetaCore(route, fallbackFirstDistance = 0) {
+  const value = Number(route?.value || 0);
+  const effectiveValue = Number(route?.effectiveValue);
   return route ? {
     ids: route.ids,
     points: Array.isArray(route.points) ? route.points : null,
-    value: Number(route.value || 0),
+    value,
+    ...(Number.isFinite(effectiveValue) && effectiveValue !== value ? { effectiveValue } : {}),
     staminaCost: Math.round(Number(route.staminaCost || 0)),
     legCount: Number(route.legCount || 0),
     totalDistance: Math.round(Number(route.totalDistance || 0)),
@@ -146,14 +168,16 @@ function buildCoinRouteFromAnchorCore(self, anchor, candidates, activeThreats, o
   }
   const anchorKey = routeKey(anchor);
   const anchorAmount = Math.max(0, Number(anchor.amount || 0));
+  const anchorEffectiveValue = coinRouteValueCore(anchor, options);
   const initialState = {
     route: [anchor],
     used: new Set([anchorKey]),
     current: anchor,
     totalValue: anchorAmount,
+    effectiveValue: anchorEffectiveValue,
     totalStaminaCost: firstStaminaCost,
     totalDistance: firstDistance,
-    rankScore: valueScore(anchorAmount, firstStaminaCost, options.coinOpportunityValue)
+    rankScore: valueScore(anchorEffectiveValue, firstStaminaCost, options.coinOpportunityValue)
   };
   let states = [initialState];
   let bestState = null;
@@ -200,8 +224,9 @@ function buildCoinRouteFromAnchorCore(self, anchor, candidates, activeThreats, o
           continue;
         }
         const nextValue = state.totalValue + Math.max(0, Number(coin.amount || 0));
+        const nextEffectiveValue = state.effectiveValue + coinRouteValueCore(coin, options);
         const nextDistance = state.totalDistance + routeLegDistance;
-        const prefixScore = valueScore(nextValue, nextStaminaCost, options.coinOpportunityValue);
+        const prefixScore = valueScore(nextEffectiveValue, nextStaminaCost, options.coinOpportunityValue);
         if (!Number.isFinite(prefixScore)) continue;
         const nextUsed = new Set(state.used);
         nextUsed.add(coinKey);
@@ -210,6 +235,7 @@ function buildCoinRouteFromAnchorCore(self, anchor, candidates, activeThreats, o
           used: nextUsed,
           current: coin,
           totalValue: nextValue,
+          effectiveValue: nextEffectiveValue,
           totalStaminaCost: nextStaminaCost,
           totalDistance: nextDistance,
           prefixScore,
@@ -222,8 +248,9 @@ function buildCoinRouteFromAnchorCore(self, anchor, candidates, activeThreats, o
         }
         if (nextState.route.length >= minimumRouteCoins && routeEligible({
           route: nextState.route,
-          value: nextValue,
+          value: nextEffectiveValue,
           totalValue: nextValue,
+          effectiveValue: nextEffectiveValue,
           staminaCost: nextStaminaCost,
           totalStaminaCost: nextStaminaCost,
           totalDistance: nextDistance,
@@ -252,6 +279,7 @@ function buildCoinRouteFromAnchorCore(self, anchor, candidates, activeThreats, o
   const bestRoute = selectedState.route;
   const summary = {
     totalValue: selectedState.totalValue,
+    effectiveValue: selectedState.effectiveValue,
     totalStaminaCost: selectedState.totalStaminaCost,
     totalDistance: selectedState.totalDistance
   };
@@ -259,7 +287,7 @@ function buildCoinRouteFromAnchorCore(self, anchor, candidates, activeThreats, o
     recordDiagnostic(bestRoute[0], 'route-stamina-unaffordable', { staminaCost: Math.round(summary.totalStaminaCost) });
     return null;
   }
-  const score = valueScore(summary.totalValue, summary.totalStaminaCost, options.coinOpportunityValue);
+  const score = valueScore(summary.effectiveValue, summary.totalStaminaCost, options.coinOpportunityValue);
   if (!Number.isFinite(score)) return null;
   const first = bestRoute[0];
   const routeFirstDistance = dist(self, first);
@@ -273,6 +301,7 @@ function buildCoinRouteFromAnchorCore(self, anchor, candidates, activeThreats, o
       ids: bestRoute.map(coinRouteKey),
       points: coinRoutePoints(bestRoute),
       value: summary.totalValue,
+      ...(summary.effectiveValue !== summary.totalValue ? { effectiveValue: summary.effectiveValue } : {}),
       staminaCost: summary.totalStaminaCost,
       legCount: bestRoute.length,
       totalDistance: summary.totalDistance,
@@ -282,6 +311,7 @@ function buildCoinRouteFromAnchorCore(self, anchor, candidates, activeThreats, o
     },
     routeIds: bestRoute.map(coinRouteKey),
     routeValue: summary.totalValue,
+    ...(summary.effectiveValue !== summary.totalValue ? { routeEffectiveValue: summary.effectiveValue } : {}),
     routeKind,
     routeLegs: bestRoute.length,
     opportunityScore: score,

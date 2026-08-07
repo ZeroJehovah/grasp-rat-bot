@@ -190,6 +190,7 @@ const DEFAULT_ACTIVE_COIN_COMPETITION_MIN_LEAD_DISTANCE_CM = BROWSER_RUNTIME_DEF
 const DEFAULT_ACTIVE_COIN_COMPETITION_UNCERTAIN_LEAD_DISTANCE_CM = BROWSER_RUNTIME_DEFAULTS.activeCoinCompetitionUncertainLeadDistanceCm ?? 12000;
 const DEFAULT_ACTIVE_COIN_COMPETITION_HEADING_COS_MIN = BROWSER_RUNTIME_DEFAULTS.activeCoinCompetitionHeadingCosMin ?? 0.35;
 const DEFAULT_ACTIVE_COIN_COMPETITION_MOVING_SPEED_MIN = BROWSER_RUNTIME_DEFAULTS.activeCoinCompetitionMovingSpeedMin ?? 5;
+const DEFAULT_ACTIVE_COIN_COMPETITION_EASY_KILL_SCORE_MULTIPLIER = BROWSER_RUNTIME_DEFAULTS.activeCoinCompetitionEasyKillScoreMultiplier ?? 0.5;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DANGEROUS_COMBAT_EXIT_REASONS = new Set([
@@ -2084,6 +2085,7 @@ function summarizeCoin(coin) {
   if (!coin) return null;
   const routeMeta = coinRouteActionMetaCore(coin.coinRoute || null, coin.distance);
   const sourceUserId = numberOrNull(coin.source_user_id ?? coin.sourceUserId);
+  const profitScoreMultiplier = coinProfitScoreMultiplier(coin);
   return {
     type: 'coin',
     id: coin.drop_id ?? coin.id ?? '',
@@ -2100,7 +2102,13 @@ function summarizeCoin(coin) {
     snapshotOnly: Boolean(coin.snapshotOnly),
     sourceUserId,
     selfKilledPlayerDrop: Boolean(coin.selfKilledPlayerDrop),
-    playerDropPriority: Boolean(coin.playerDropPriority)
+    playerDropPriority: Boolean(coin.playerDropPriority),
+    ...(profitScoreMultiplier !== 1 || coin.profitScoreReason ? {
+      profitScoreMultiplier,
+      effectiveProfitReward: effectiveCoinProfitReward(coin),
+      profitScoreReason: String(coin.profitScoreReason || ''),
+      activeCoinCompetition: coin.activeCoinCompetition ? cloneJson(coin.activeCoinCompetition) : null
+    } : {})
   };
 }
 
@@ -2285,19 +2293,51 @@ function buildProfitThresholdContext(input, options = {}) {
   });
 }
 
+function coinProfitScoreMultiplier(coin) {
+  if (coin?.profitScoreMultiplier === null
+    || coin?.profitScoreMultiplier === undefined
+    || coin?.profitScoreMultiplier === '') return 1;
+  const value = numberOrNull(coin?.profitScoreMultiplier);
+  return value === null ? 1 : Math.max(0, Math.min(1, value));
+}
+
+function rawCoinProfitReward(coin) {
+  return Number(coin?.routeValue
+    ?? coin?.coinRoute?.value
+    ?? coin?.fieldAmount
+    ?? coin?.totalAmount
+    ?? coin?.amount);
+}
+
+function effectiveCoinProfitReward(coin, rewardOverride = null) {
+  if (rewardOverride === null) {
+    const explicit = numberOrNull(coin?.routeEffectiveValue
+      ?? coin?.coinRoute?.effectiveValue
+      ?? coin?.fieldEffectiveAmount
+      ?? coin?.effectiveProfitReward);
+    if (explicit !== null) return Math.max(0, explicit);
+  }
+  const reward = rewardOverride === null ? rawCoinProfitReward(coin) : Number(rewardOverride);
+  if (!Number.isFinite(reward)) return 0;
+  return Math.max(0, reward) * coinProfitScoreMultiplier(coin);
+}
+
 function profitRewardAndCostEligible(reward, staminaCost, thresholdContext) {
   return !thresholdContext?.active
     || profitTargetEligibleCore(reward, staminaCost, thresholdContext.threshold);
 }
 
 function profitCoinEligible(coin, thresholdContext, options = {}, rewardOverride = null) {
-  const reward = rewardOverride === null ? Number(coin?.amount) : Number(rewardOverride);
+  const reward = effectiveCoinProfitReward(coin, rewardOverride);
   return profitRewardAndCostEligible(reward, opportunityCoinStaminaCost(coin, options), thresholdContext);
 }
 
 function profitRouteThresholdEligible(route, thresholdContext) {
   if (!thresholdContext?.active) return true;
-  const reward = Number(route?.value
+  const reward = Number(route?.effectiveValue
+    ?? route?.routeEffectiveValue
+    ?? route?.coinRoute?.effectiveValue
+    ?? route?.value
     ?? route?.totalValue
     ?? route?.routeValue
     ?? route?.coinRoute?.value
@@ -2314,11 +2354,24 @@ function profitOpportunityThresholdReward(item) {
     return Number(item?.effectiveProfitReward?.expectedReward ?? item?.expectedReward ?? item?.reward);
   }
   const sourceCoin = item?.sourceCoin || item || {};
+  if (item?.reward !== null && item?.reward !== undefined && item?.reward !== ''
+    && Number.isFinite(Number(item.reward))) return Number(item.reward);
   if (sourceCoin.fieldMigration || String(item?.reason || '') === 'migrate-to-known-field') {
-    return Number(item?.amount ?? sourceCoin.amount);
+    return effectiveCoinProfitReward(sourceCoin, item?.amount ?? sourceCoin.amount);
   }
-  return Number(item?.routeValue ?? sourceCoin.routeValue ?? sourceCoin.coinRoute?.value
-    ?? item?.fieldAmount ?? sourceCoin.fieldAmount ?? item?.amount ?? sourceCoin.amount);
+  const explicitEffectiveReward = numberOrNull(item?.routeEffectiveValue
+    ?? sourceCoin.routeEffectiveValue
+    ?? sourceCoin.coinRoute?.effectiveValue
+    ?? item?.fieldEffectiveAmount
+    ?? sourceCoin.fieldEffectiveAmount);
+  if (explicitEffectiveReward !== null) return Math.max(0, explicitEffectiveReward);
+  return effectiveCoinProfitReward(sourceCoin, item?.routeValue
+    ?? sourceCoin.routeValue
+    ?? sourceCoin.coinRoute?.value
+    ?? item?.fieldAmount
+    ?? sourceCoin.fieldAmount
+    ?? item?.amount
+    ?? sourceCoin.amount);
 }
 
 function buildProfitSelectionInput(input, thresholdContext, options = {}, stateful = {}) {
@@ -2571,7 +2624,9 @@ function activeCoinCompetitionOptions(options = {}) {
     headingCosMin: options.activeCoinCompetitionHeadingCosMin
       ?? DEFAULT_ACTIVE_COIN_COMPETITION_HEADING_COS_MIN,
     movingSpeedMin: options.activeCoinCompetitionMovingSpeedMin
-      ?? DEFAULT_ACTIVE_COIN_COMPETITION_MOVING_SPEED_MIN
+      ?? DEFAULT_ACTIVE_COIN_COMPETITION_MOVING_SPEED_MIN,
+    easyKillScoreMultiplier: options.activeCoinCompetitionEasyKillScoreMultiplier
+      ?? DEFAULT_ACTIVE_COIN_COMPETITION_EASY_KILL_SCORE_MULTIPLIER
   };
 }
 
@@ -2605,7 +2660,14 @@ function coinCompetitionRelease(stateful, key, record, reason, nowMs, releases) 
 function partitionActiveCoinCompetition(self, coins = [], visibleTargets = [], options = {}, stateful = {}) {
   const activeCompetitors = (visibleTargets || []).filter(target => target?.active === true && target.alive !== false);
   if (options.activeCoinCompetitionEnabled === false || !self) {
-    return { available: coins || [], panel: coins || [], activeCompetitorCount: activeCompetitors.length, contested: [], released: [] };
+    return {
+      available: coins || [],
+      panel: coins || [],
+      activeCompetitorCount: activeCompetitors.length,
+      contested: [],
+      discounted: [],
+      released: []
+    };
   }
   const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
   const currentTick = numberOrNull(options.currentTick ?? options.realtimeTick);
@@ -2624,10 +2686,51 @@ function partitionActiveCoinCompetition(self, coins = [], visibleTargets = [], o
   const available = [];
   const panel = [];
   const contested = [];
+  const discounted = [];
   const competitionOptions = activeCoinCompetitionOptions(options);
+  const easyKillCompetitors = activeCompetitors.filter(target => target?.easyKillKnown === true);
+  const ordinaryCompetitors = activeCompetitors.filter(target => target?.easyKillKnown !== true);
   for (const coin of coins || []) {
     const coinKey = coinDecisionKey(coin);
-    const competition = activeCoinCompetitionCore(self, coin, activeCompetitors, competitionOptions);
+    const competition = activeCoinCompetitionCore(self, coin, ordinaryCompetitors, competitionOptions);
+    const easyKillCompetition = competition
+      ? null
+      : activeCoinCompetitionCore(self, coin, easyKillCompetitors, competitionOptions);
+    if (easyKillCompetition) {
+      for (const [existingKey, existingRecord] of Object.entries(state)) {
+        if (String(existingRecord?.coinKey || '') !== coinKey) continue;
+        coinCompetitionRelease(stateful, existingKey, existingRecord, 'easy-kill-only-discount', nowMs, releases);
+      }
+      const configuredMultiplier = Number(competitionOptions.easyKillScoreMultiplier);
+      const scoreMultiplier = Math.max(0, Math.min(1, Number.isFinite(configuredMultiplier)
+        ? configuredMultiplier
+        : DEFAULT_ACTIVE_COIN_COMPETITION_EASY_KILL_SCORE_MULTIPLIER));
+      const summary = {
+        ...easyKillCompetition,
+        coinKey,
+        authority: String(coin?.authority || ''),
+        snapshotOnly: Boolean(coin?.snapshotOnly),
+        easyKillOnly: true,
+        scoreMultiplier,
+        effectiveAmount: Math.max(0, Number(coin?.amount || 0)) * scoreMultiplier,
+        contestHeld: false,
+        releaseReason: 'easy-kill-only-discount'
+      };
+      const adjustedCoin = {
+        ...coin,
+        profitScoreMultiplier: Math.min(coinProfitScoreMultiplier(coin), scoreMultiplier),
+        profitScoreReason: 'easy-kill-only-competition',
+        activeCoinCompetition: summary
+      };
+      adjustedCoin.effectiveProfitReward = effectiveCoinProfitReward(
+        adjustedCoin,
+        rawCoinProfitReward(adjustedCoin)
+      );
+      available.push(adjustedCoin);
+      panel.push(adjustedCoin);
+      discounted.push(summary);
+      continue;
+    }
     if (competition) {
       const pairKey = `${coinKey}|${competition.competitorId}`;
       for (const [existingKey, existingRecord] of Object.entries(state)) {
@@ -2732,7 +2835,14 @@ function partitionActiveCoinCompetition(self, coins = [], visibleTargets = [], o
       panel.push(coin);
     }
   }
-  return { available, panel, activeCompetitorCount: activeCompetitors.length, contested, released: releases };
+  return {
+    available,
+    panel,
+    activeCompetitorCount: activeCompetitors.length,
+    contested,
+    discounted,
+    released: releases
+  };
 }
 
 function invulnerableRemainingMs(target, options = {}) {
@@ -3244,6 +3354,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const profitCoins = activeCoinCompetition.available;
   const panelProfitCoins = activeCoinCompetition.panel;
   if (activeCoinCompetition.contested.length) dataGaps.push('active-player-coin-competition');
+  if (activeCoinCompetition.discounted.length) dataGaps.push('easy-kill-only-coin-competition-discount');
   const result = {
     userId: Number(state?.userId || options.userId || 0),
     nowMs,
@@ -3301,7 +3412,9 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
       enabled: options.activeCoinCompetitionEnabled !== false,
       activeCompetitorCount: activeCoinCompetition.activeCompetitorCount,
       contestedCoinCount: activeCoinCompetition.contested.length,
+      discountedCoinCount: activeCoinCompetition.discounted.length,
       contested: activeCoinCompetition.contested.slice(0, 8),
+      discounted: activeCoinCompetition.discounted.slice(0, 8),
       released: activeCoinCompetition.released.slice(0, 8)
     },
     bullets: Array.isArray(realtime.bullets) ? realtime.bullets : [],
@@ -3560,7 +3673,7 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
 
 function scoreCoinOpportunity(coin, options = {}) {
   const weight = Number(options.coinOpportunityValue ?? BROWSER_RUNTIME_DEFAULTS.coinOpportunityValue ?? 1);
-  const reward = Number(coin?.routeValue ?? coin?.coinRoute?.value ?? coin?.fieldAmount ?? coin?.totalAmount ?? coin?.amount);
+  const reward = effectiveCoinProfitReward(coin);
   return opportunityValueScoreCore(reward, opportunityCoinStaminaCost(coin, options), {
     distanceFloor: options.opportunityDistanceFloor ?? BROWSER_RUNTIME_DEFAULTS.opportunityDistanceFloor,
     distanceScoreScale: options.distanceScoreScale || options.opportunityDistanceScoreScale || BROWSER_RUNTIME_DEFAULTS.opportunityDistanceScoreScale || 10000,
@@ -3873,7 +3986,7 @@ function buildHighValueVisibleCoinPriorityDecision(input, combatDecision, option
     band: 'profit',
     reason: 'high-value-visible-coin-priority',
     ignoreReturnBlock: true,
-    reward: Number(coin.coinRoute?.value ?? coin.fieldAmount ?? coin.amount ?? 0),
+    reward: effectiveCoinProfitReward(coin),
     staminaCost: opportunityCoinStaminaCost(coin, options),
     target: summarizeCoin(coin),
     highValueCoinPriority: {
@@ -4118,12 +4231,12 @@ function singleCoinBaitAnchoredOpportunity(input, candidate, bait, threshold, op
         previous = point;
       }
       const summary = coinRouteSummaryCore(routePoints, bait, routeOptions);
-      reward = Number(summary.totalValue || 0);
+      reward = Number(summary.effectiveValue ?? summary.totalValue ?? 0);
       staminaCost = Number(summary.totalStaminaCost || 0);
       distance = Number(summary.totalDistance || distance);
     } else {
       pathClear = coinRouteLegClearCore(bait, source, opportunityThreats, routeOptions);
-      reward = Math.max(0, Number(source?.amount ?? candidate?.amount ?? 0));
+      reward = effectiveCoinProfitReward(source, source?.amount ?? candidate?.amount ?? 0);
       staminaCost = opportunityMoveStaminaCost(distance, options, 0)
         + Math.max(0, Number(options.opportunityCoinPickupStaminaMs ?? BROWSER_RUNTIME_DEFAULTS.opportunityCoinPickupStaminaMs ?? 0));
     }
@@ -4199,13 +4312,13 @@ function singleCoinBaitResidualRouteContinuation(input, opportunity, bait, optio
   if (!coinRouteLegClearCore(source, firstFollowUp, profitOpportunityThreats(input), routeOptions)) return null;
   const summary = coinRouteSummaryCore(remaining, source, routeOptions);
   const firstFollowUpSummary = coinRouteSummaryCore([firstFollowUp], source, routeOptions);
-  const reward = Number(summary.totalValue || 0);
+  const reward = Number(summary.effectiveValue ?? summary.totalValue ?? 0);
   const staminaCost = Number(summary.totalStaminaCost || 0);
-  const baitReward = Math.max(1, Number(source.amount || 1));
+  const baitReward = Math.max(1, effectiveCoinProfitReward(source, Number(source.amount || 1)));
   const baitStaminaCost = Math.max(0, Number(opportunityCoinStaminaCost(source, options)));
   const aggregateReward = baitReward + reward;
   const aggregateStaminaCost = baitStaminaCost + staminaCost;
-  const firstFollowUpReward = Number(firstFollowUpSummary.totalValue || 0);
+  const firstFollowUpReward = Number(firstFollowUpSummary.effectiveValue ?? firstFollowUpSummary.totalValue ?? 0);
   const firstFollowUpStaminaCost = Number(firstFollowUpSummary.totalStaminaCost || 0);
   // The bait is the first leg of this plan. A later route may make the whole
   // plan profitable even when its first follow-up coin is below the threshold
@@ -5209,6 +5322,8 @@ function buildDailyStaminaFinalCoinDecision(input, options = {}) {
       : 'seek-coin',
     band: 'profit',
     reason: 'daily-stamina-final-visible-coin',
+    reward: effectiveCoinProfitReward(coin),
+    staminaCost: opportunityCoinStaminaCost(coin, options),
     target: summarizeCoin(coin),
     dailyStaminaFinalRun: {
       staminaCost: Math.round(opportunityCoinStaminaCost(coin, options)),
@@ -5347,6 +5462,11 @@ function pickFieldMigrationCoin(input, activeThreats, thresholdContext, options 
     // trip to its first coin, which systematically overstated distant fields.
     const totalAmount = members.reduce((sum, item) => sum + Number(item.amount || 0), 0);
     const plannedAmount = Math.max(0, Number(fieldRoute.routeValue ?? fieldRoute.coinRoute?.value ?? 0));
+    const plannedEffectiveAmount = Math.max(0, Number(
+      fieldRoute.routeEffectiveValue
+        ?? fieldRoute.coinRoute?.effectiveValue
+        ?? plannedAmount
+    ));
     const plannedMembers = Math.max(0, Number(fieldRoute.routeLegs ?? fieldRoute.coinRoute?.legCount ?? 0));
     const staminaCost = Math.max(0, Number(fieldRoute.opportunityStaminaCost ?? fieldRoute.coinRoute?.staminaCost ?? 0));
     const score = Number(fieldRoute.opportunityScore);
@@ -5361,6 +5481,7 @@ function pickFieldMigrationCoin(input, activeThreats, thresholdContext, options 
         fieldMigration: true,
         fieldMembers: plannedMembers,
         fieldAmount: plannedAmount,
+        ...(plannedEffectiveAmount !== plannedAmount ? { fieldEffectiveAmount: plannedEffectiveAmount } : {}),
         fieldClusterMembers: members.length,
         fieldClusterAmount: totalAmount,
         fieldRoute: fieldRoute.coinRoute || null,
@@ -5402,6 +5523,7 @@ function coinRouteCoreOptions(input, stateful = {}, options = {}) {
   return {
     dist: distanceBetween,
     moveStaminaCost: distance => opportunityMoveStaminaCost(distance, options),
+    coinValue: coin => effectiveCoinProfitReward(coin, Number(coin?.amount || 0)),
     pickupStaminaMs: options.opportunityCoinPickupStaminaMs ?? BROWSER_RUNTIME_DEFAULTS.opportunityCoinPickupStaminaMs,
     sampleDistance: options.coinRouteLegSampleDistance ?? BROWSER_RUNTIME_DEFAULTS.coinRouteLegSampleDistance,
     threatDangerRadius: threat => coinThreatDangerRadius(threat, options),
@@ -6035,6 +6157,12 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     routeCoin,
     opportunityOptions
   ), options).map(item => {
+    if (item.type === 'coin') {
+      return {
+        ...item,
+        reward: effectiveCoinProfitReward(item.sourceCoin)
+      };
+    }
     if (item.type !== 'enemy') return item;
     const effective = effectiveProfitReward(item.sourceTarget, easyKillOpportunityScoringOptions(item.sourceTarget, stateful, options));
     return {
@@ -6824,7 +6952,7 @@ function buildPriorityCoinDecision(input, coin, reason, options = {}, extra = {}
       : 'seek-coin',
     band: 'profit',
     reason,
-    reward: Number(coin.coinRoute?.value ?? coin.fieldAmount ?? coin.amount ?? 0),
+    reward: effectiveCoinProfitReward(coin),
     staminaCost: opportunityCoinStaminaCost(coin, options),
     target: summarizeCoin(coin),
     ...extra
@@ -8986,7 +9114,7 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}) {
           : 'seek-coin',
         band: 'profit',
         reason,
-        reward: Number(coin.amount || 0),
+        reward: effectiveCoinProfitReward(coin),
         staminaCost: opportunityCoinStaminaCost(coin, options),
         target: summarizeCoin(coin),
         realtimeLootPriority: true
