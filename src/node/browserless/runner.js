@@ -1611,6 +1611,25 @@ function preLoginSnapshotSafetyAction(state = {}) {
   };
 }
 
+function browserlessRestartDrainStateIsOffline(state = {}) {
+  const runner = state?.runner || {};
+  if (runner.pendingExit?.active !== false && runner.pendingExit) return false;
+  if (runner.transportRecovery) return false;
+  if (state?.stats?.currentSession?.online === true) return false;
+
+  const action = runner.currentAction || {};
+  const kind = String(action.kind || '');
+  const reason = String(action.reason || '');
+  if (runner.running === false || kind === 'stopped') return true;
+
+  const preflightPhase = String(state?.network?.sourceIpPreflight?.phase || '');
+  if (preflightPhase === 'login-attempt' || preflightPhase === 'active') return false;
+
+  if (kind === 'loop-wait') return true;
+  if (kind === 'source-ip-preflight' || kind === 'source-ip-preflight-cooldown') return true;
+  return /pending-snapshot-safety|snapshot-safety-retry|source-ip-(?:preflight|snapshot)/i.test(reason);
+}
+
 async function runBrowserlessRunner(config, deps = {}) {
   const now = typeof deps.now === 'function' ? deps.now : Date.now;
   const sleep = typeof deps.sleep === 'function'
@@ -1754,8 +1773,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         ...detail,
         commitmentKey: detail.commitmentKey || actionTargetKey(action)
       });
-      const kind = String(currentState?.runner?.currentAction?.kind || action.kind || '');
-      if (['loop-wait', 'stopped'].includes(kind) || currentState?.runner?.running === false) {
+      if (browserlessRestartDrainStateIsOffline(currentState)) {
         restartDrain.observe(evaluateRestartReadiness({ online: false }));
         safetyController.requestStop('restart-drain-ready', {
           source: detail.source || 'lifecycle-control',
@@ -5697,6 +5715,44 @@ async function runBrowserlessRunnerSelfTest() {
     drainNowMs = 1500;
     restartDrain.observe(restartDrainIdle);
     const restartDrainStatus = restartDrain.status();
+    const restartDrainOfflineLifecycle = {
+      snapshotWait: browserlessRestartDrainStateIsOffline({
+        runner: {
+          running: true,
+          currentAction: { kind: 'source-ip-preflight', reason: 'source-ip-snapshot-safety-wait' }
+        },
+        network: { sourceIpPreflight: { phase: 'snapshot-wait' } },
+        stats: { currentSession: { online: false } }
+      }),
+      loginAttempt: browserlessRestartDrainStateIsOffline({
+        runner: {
+          running: true,
+          currentAction: { kind: 'source-ip-preflight', reason: 'source-ip-login-websocket-attempt' }
+        },
+        network: { sourceIpPreflight: { phase: 'login-attempt' } },
+        stats: { currentSession: { online: false } }
+      }),
+      online: browserlessRestartDrainStateIsOffline({
+        runner: { running: true, currentAction: { kind: 'loop-wait', reason: 'ws-recovery' } },
+        stats: { currentSession: { online: true } }
+      }),
+      pendingExit: browserlessRestartDrainStateIsOffline({
+        runner: {
+          running: true,
+          currentAction: { kind: 'loop-wait', reason: 'exit-recovery' },
+          pendingExit: { active: true, exitAttemptId: 'exit:self-test' }
+        },
+        stats: { currentSession: { online: false } }
+      }),
+      transportRecovery: browserlessRestartDrainStateIsOffline({
+        runner: {
+          running: true,
+          currentAction: { kind: 'loop-wait', reason: 'transport-recovery' },
+          transportRecovery: { recoveryId: 'transport:self-test' }
+        },
+        stats: { currentSession: { online: false } }
+      })
+    };
     const committedDropAllowed = restartDrainAllowsDecision({
       action: {
         kind: 'coin',
@@ -7345,6 +7401,11 @@ async function runBrowserlessRunnerSelfTest() {
         && restartDrainCombat.ready === false
         && restartDrainIdle.ready === true
         && restartDrainStatus.ready === true
+        && restartDrainOfflineLifecycle.snapshotWait === true
+        && restartDrainOfflineLifecycle.loginAttempt === false
+        && restartDrainOfflineLifecycle.online === false
+        && restartDrainOfflineLifecycle.pendingExit === false
+        && restartDrainOfflineLifecycle.transportRecovery === false
         && committedDropAllowed
         && !unrelatedDropBlocked
         && productionFootDropReadiness.ready === false
@@ -7418,6 +7479,7 @@ async function runBrowserlessRunnerSelfTest() {
       restartDrainSafetyReason,
       forcedStatusConnectionsClosed,
       restartDrainStatus,
+      restartDrainOfflineLifecycle,
       committedDropAllowed,
       unrelatedDropBlocked,
       productionFootDropReadiness,
@@ -7455,6 +7517,7 @@ module.exports = {
   browserlessDailyFirstLoginDelayPlan,
   browserlessLoginIntervalDelayPlan,
   browserlessLoopPlan,
+  browserlessRestartDrainStateIsOffline,
   browserlessTerminalStopRequestsRuntimeClose,
   closeBrowserlessStatusHandle,
   confirmedLeaveStateFromResult,
