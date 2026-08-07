@@ -129,6 +129,7 @@ const { runSourceIpProbeSelfTest } = require('./source-ip-probe');
 const { runRemoteProfitWorkerSelfTest } = require('./remote-profit-worker-self-test');
 const { runRemoteProfitActionSelfTest } = require('./remote-profit-action-self-test');
 const { runRemoteProfitDecisionSelfTest } = require('./remote-profit-decision-self-test');
+const { runMissingEnemyHoldSelfTest } = require('./missing-enemy-hold-self-test');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
@@ -1682,6 +1683,10 @@ async function runBrowserlessRunner(config, deps = {}) {
   try {
   let liveState = null;
   let liveStatePersistencePending = false;
+  let loginSuccessStatePatchGeneration = 0;
+  let lastLoginSuccessStatePatchKey = '';
+  const pendingLoginSuccessStatePatches = [];
+  const pendingDeferredLoginSuccessStateWrites = [];
   if (publishLiveState) {
     try {
       publishLiveState(() => liveState);
@@ -1691,7 +1696,9 @@ async function runBrowserlessRunner(config, deps = {}) {
   }
   const patchLiveState = (patch, options = {}) => {
     const updatedAt = options.updatedAt || new Date(now()).toISOString();
-    const base = liveState || readBrowserlessStateFile(config.stateFile || stateFilePath(config));
+    const base = liveState
+      || options.baseState
+      || readBrowserlessStateFile(config.stateFile || stateFilePath(config));
     liveState = mergeLiveState(base, { ...patch, updatedAt });
     return liveState;
   };
@@ -2348,7 +2355,7 @@ async function runBrowserlessRunner(config, deps = {}) {
   };
 
   const markSourceIpLoginAttempt = () => {
-    const current = liveState || readBrowserlessStateFile(stateFile);
+    const current = liveState || persisted;
     const preflight = normalizeSourceIpPreflight(
       current.network?.sourceIpPreflight,
       Object.keys(current.network?.sourceIpRisk || {}).length
@@ -2393,11 +2400,14 @@ async function runBrowserlessRunner(config, deps = {}) {
   };
 
   const markSourceIpLoginSuccess = canary => {
-    const loginAt = canary?.firstSelfAt || new Date(now()).toISOString();
-    const loginPatch = { runner: { lastLoginAt: loginAt } };
-    updateState(loginPatch, { updatedAt: loginAt });
-    if (liveState) patchLiveState(loginPatch, { updatedAt: loginAt });
-    const current = liveState || readBrowserlessStateFile(stateFile);
+    const runId = String(canary?.runId || canary?.entry?.runId || '');
+    const loginAt = canary?.firstSelfAt
+      || canary?.entry?.firstSelfAt
+      || new Date(now()).toISOString();
+    const patchKey = `${runId}\u0000${loginAt}`;
+    if (patchKey === lastLoginSuccessStatePatchKey) return false;
+    lastLoginSuccessStatePatchKey = patchKey;
+    const current = liveState || persisted;
     const preflight = normalizeSourceIpPreflight(
       current.network?.sourceIpPreflight,
       Object.keys(current.network?.sourceIpRisk || {}).length
@@ -2405,10 +2415,10 @@ async function runBrowserlessRunner(config, deps = {}) {
     const lifecycleSourceIps = Array.isArray(current.network?.lifecycleSourceIps)
       ? current.network.lifecycleSourceIps.slice(0, SOURCE_IP_PREFLIGHT_REQUIRED_COUNT)
       : [];
-    if (lifecycleSourceIps.length !== SOURCE_IP_PREFLIGHT_REQUIRED_COUNT) return false;
-    if (preflight.phase === 'active' && preflight.reason === 'source-ip-lifecycle-active') return false;
-    publishSourceIpNetwork({
-      sourceIpPreflight: {
+    const activateLifecycle = lifecycleSourceIps.length === SOURCE_IP_PREFLIGHT_REQUIRED_COUNT
+      && !(preflight.phase === 'active' && preflight.reason === 'source-ip-lifecycle-active');
+    const sourceIpPreflight = activateLifecycle
+      ? {
         ...preflight,
         phase: 'active',
         reason: 'source-ip-lifecycle-active',
@@ -2417,14 +2427,72 @@ async function runBrowserlessRunner(config, deps = {}) {
         reusedAt: '',
         nextRetryAt: ''
       }
-    });
+      : null;
+    const loginPatch = {
+      runner: {
+        lastLoginAt: loginAt,
+        ...(sourceIpPreflight ? { currentAction: sourceIpPreflightAction(sourceIpPreflight) } : {})
+      },
+      ...(sourceIpPreflight ? { network: { sourceIpPreflight } } : {})
+    };
+    const generation = ++loginSuccessStatePatchGeneration;
+    const queuedAtMs = now();
+    const patchBytes = Buffer.byteLength(JSON.stringify(loginPatch));
+    patchLiveState(loginPatch, { updatedAt: loginAt, baseState: current });
+    const patchRecord = {
+      generation,
+      queuedAtMs,
+      loginAt,
+      patchBytes,
+      persistence: '',
+      persisted: false,
+      backgroundOperationErrorCount: 0
+    };
+    let backgroundQueued = false;
+    if (backgroundIo?.writeJsonPatchAtomic) {
+      patchRecord.backgroundOperationErrorCount = Number(
+        backgroundIo.status?.().operationErrorCount || 0
+      );
+      backgroundQueued = backgroundIo.writeJsonPatchAtomic(stateFile, {
+        ...loginPatch,
+        updatedAt: loginAt
+      });
+      if (backgroundQueued) {
+        patchRecord.persistence = 'background-worker';
+        liveStatePersistencePending = true;
+      }
+    }
+    if (!backgroundQueued) {
+      patchRecord.persistence = 'deferred-main-thread';
+      const deferredWrite = new Promise(resolve => {
+        setImmediate(() => {
+          try {
+            updateBrowserlessStateFile(stateFile, loginPatch, { updatedAt: loginAt });
+            invalidateBackgroundStateCache();
+            patchRecord.persisted = true;
+            resolve({ ok: true, generation });
+          } catch (error) {
+            resolve({ ok: false, generation, error });
+          }
+        });
+      });
+      pendingDeferredLoginSuccessStateWrites.push(deferredWrite);
+    }
+    pendingLoginSuccessStatePatches.push(patchRecord);
     logStore.append('runner', 'source-ip-login-success', {
-      runId: canary?.runId || '',
+      runId,
       loginAt,
       sourceIp: current.network.sourceIp || '',
-      lifecycleSourceIps
+      lifecycleSourceIps,
+      statePatch: {
+        generation,
+        patchBytes,
+        backgroundQueued,
+        lifecycleMerged: Boolean(sourceIpPreflight),
+        queueDelayMs: Math.max(0, now() - queuedAtMs)
+      }
     });
-    return true;
+    return activateLifecycle;
   };
 
   const beginGameplaySnapshotSession = (entry = {}, carriedSnapshot = null) => {
@@ -4285,16 +4353,62 @@ async function runBrowserlessRunner(config, deps = {}) {
       }
     });
     finalState.updatedAt = new Date(now()).toISOString();
+    if (pendingDeferredLoginSuccessStateWrites.length) {
+      const deferredResults = await Promise.all(pendingDeferredLoginSuccessStateWrites.splice(0));
+      for (const deferredResult of deferredResults) {
+        if (deferredResult?.ok) continue;
+        const err = deferredResult?.error || new Error('deferred login-success state patch failed');
+        recordSupervisorError(err, {
+          operation: 'deferred-login-success-state-patch',
+          generation: deferredResult?.generation || 0
+        });
+        logStore.append('runner', 'login-success-state-patch-error', {
+          generation: deferredResult?.generation || 0,
+          persistence: 'deferred-main-thread',
+          error: errorMessage(err)
+        });
+      }
+    }
     if (liveStatePersistencePending && backgroundIo?.flush) {
       try {
-        await backgroundIo.flush();
+        const flushResult = await backgroundIo.flush();
+        for (const patch of pendingLoginSuccessStatePatches) {
+          if (patch.persistence !== 'background-worker') continue;
+          patch.persisted = Boolean(
+            flushResult?.ok !== false
+              && Number(flushResult?.pending || 0) === 0
+              && Number(flushResult?.operationErrorCount || 0) === patch.backgroundOperationErrorCount
+          );
+        }
       } catch (err) {
         recordSupervisorError(err, { operation: 'live-state-persistence-flush' });
         logStore.append('runner', 'live-state-persistence-flush-error', { error: errorMessage(err) });
       }
       liveStatePersistencePending = false;
     }
-    writeState(finalState);
+    const writtenFinalState = writeState(finalState);
+    const finalLastLoginAt = String(writtenFinalState?.runner?.lastLoginAt || '');
+    const ackAtMs = now();
+    for (const patch of pendingLoginSuccessStatePatches.splice(0)) {
+      if (!patch.persisted && finalLastLoginAt === patch.loginAt) patch.persisted = true;
+      if (patch.persisted) {
+        logStore.append('runner', 'login-success-state-patch-ack', {
+          generation: patch.generation,
+          loginAt: patch.loginAt,
+          patchBytes: patch.patchBytes,
+          persistence: patch.persistence,
+          queueDelayMs: Math.max(0, ackAtMs - patch.queuedAtMs),
+          persisted: true
+        });
+      } else {
+        logStore.append('runner', 'login-success-state-patch-error', {
+          generation: patch.generation,
+          loginAt: patch.loginAt,
+          persistence: patch.persistence,
+          error: 'login-success state patch was not confirmed on disk'
+        });
+      }
+    }
     liveState = null;
     logStore.append('runner', result.ok ? 'runner-finish' : 'runner-stop', summarizeBrowserlessRunnerResult(result));
     if (transportRecoveryRecovered) {
@@ -4746,6 +4860,7 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
         && !/\?(?:[^\s"']*token|session|authorization|cookie)/i.test(logText)
     );
     const loginSuccessLogCount = (logText.match(/"type":"source-ip-login-success"/g) || []).length;
+    const loginSuccessAckCount = (logText.match(/"type":"login-success-state-patch-ack"/g) || []).length;
     return {
       ok: Boolean(
         result.ok
@@ -4755,8 +4870,9 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
           && JSON.stringify(state.network.lifecycleSourceIps) === JSON.stringify(canarySourceIps)
           && state.network.sourceIpPreflight.phase === 'active'
           && state.runner.lastLoginAt === new Date(nowMs).toISOString()
-          && phaseBeforeCanaryReturn === 'active'
+          && phaseBeforeCanaryReturn === 'login-attempt'
           && loginSuccessLogCount === 1
+          && loginSuccessAckCount === 1
           && bypassReason === 'daily-first-login-invulnerability'
           && snapshotSessionEvents.length === 2
           && snapshotSessionEvents[0].type === 'start'
@@ -4772,6 +4888,7 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
       lastLoginAt: state.runner.lastLoginAt,
       phaseBeforeCanaryReturn,
       loginSuccessLogCount,
+      loginSuccessAckCount,
       bypassReason,
       snapshotSessionEvents,
       logSafe
@@ -5349,6 +5466,299 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
   };
 }
 
+async function runLoginSuccessStatePatchPersistenceSelfTest(tmp, testOptions = {}) {
+  const dataDir = path.join(tmp, 'login-success-state-patch');
+  const config = parseBrowserlessRunnerArgs([
+    '--once',
+    '--live',
+    '--data-dir', dataDir,
+    '--loop-delay-ms', '1000',
+    '--user-id', '7',
+    '--session-token', 'login-success-state-patch-self-test-token',
+    '--login-point-x', '1',
+    '--login-point-y', '2',
+    '--login-point-hp', '100',
+    '--source-ip', '10.0.0.70',
+    '--source-ips', '10.0.0.70,10.0.0.71,10.0.0.72'
+  ], {});
+  const stateFile = stateFilePath(config);
+  const baseNowMs = Date.UTC(2026, 7, 7, 14, 30, 0);
+  const loginCount = Math.max(13, Math.round(Number(testOptions.loginCount || 13)));
+  const paddingBytes = Math.max(2 * 1024 * 1024, Math.round(Number(testOptions.paddingBytes || 0)));
+  const selectedIps = ['10.0.0.70', '10.0.0.71', '10.0.0.72'];
+  writeBrowserlessStateFile(stateFile, {
+    updatedAt: new Date(baseNowMs - 60000).toISOString(),
+    diagnostics: {
+      loginSuccessStatePatchPadding: 'x'.repeat(paddingBytes)
+    },
+    session: {
+      userId: 7,
+      sessionToken: 'login-success-state-patch-self-test-token'
+    },
+    runner: {
+      lastLoginAt: ''
+    },
+    loginPointSafety: {
+      ok: true,
+      reason: 'self-test-ready',
+      point: { x: 1, y: 2, hp: 100, source: 'self-test' },
+      checkedAt: new Date(baseNowMs - 60000).toISOString()
+    },
+    lastKnown: {
+      hp: 100,
+      x: 1,
+      y: 2,
+      observedAt: new Date(baseNowMs - 60000).toISOString()
+    },
+    stats: {
+      today: { day: browserlessDayKey(baseNowMs), sessionCount: 1 },
+      currentSession: { online: false }
+    }
+  });
+  const initialStateBytes = fs.statSync(stateFile).size;
+  const callbackSamples = [];
+  const cycleResults = [];
+  for (let index = 0; index < loginCount; index += 1) {
+    const nowMs = baseNowMs + index * 61000;
+    const loginAt = new Date(nowMs).toISOString();
+    updateBrowserlessStateFile(stateFile, {
+      updatedAt: loginAt,
+      stats: {
+        today: { day: browserlessDayKey(nowMs), sessionCount: index + 1 },
+        currentSession: {
+          online: false,
+          exitedAt: new Date(nowMs - 1000).toISOString(),
+          exitReason: 'login-success-state-patch-self-test-cycle'
+        }
+      },
+      runner: {
+        pendingExit: null,
+        transportRecovery: null
+      },
+      network: {
+        sourceIp: '',
+        sourceIps: [],
+        lifecycleSourceIps: [],
+        lifecycleSourceIpIndex: 0,
+        lifecyclePreparedAt: '',
+        sourceIpPreflight: {
+          phase: 'idle',
+          reason: 'login-success-state-patch-self-test-reset',
+          availableIps: [],
+          availableCount: 0,
+          requiredCount: SOURCE_IP_PREFLIGHT_REQUIRED_COUNT,
+          deferredForNextLoginPoint: false,
+          reuseWithoutRetest: false
+        }
+      },
+      lastKnown: {
+        hp: 100,
+        x: 1,
+        y: 2,
+        observedAt: loginAt
+      }
+    }, { updatedAt: loginAt });
+    const sourceIpProbe = {
+      selectSourceIps: () => ({
+        ok: true,
+        cached: true,
+        reason: 'source-ip-probe-selected',
+        availableIps: selectedIps.slice(),
+        sourceIpPreflight: {
+          phase: 'ready',
+          reason: 'source-ip-probe-selected',
+          queuePhase: 'cached-history',
+          completedAt: loginAt,
+          discoveredCount: selectedIps.length,
+          ordinaryQueueCount: selectedIps.length,
+          availableIps: selectedIps.slice(),
+          availableCount: selectedIps.length,
+          requiredCount: SOURCE_IP_PREFLIGHT_REQUIRED_COUNT,
+          riskCount: 0
+        },
+        diagnostics: { selectedAt: loginAt, candidates: [] }
+      })
+    };
+    let callbackCount = 0;
+    const result = await runBrowserlessRunner(config, {
+      startStatusServer: false,
+      now: () => nowMs,
+      monotonicNow: () => index * 61000,
+      sourceIpProbe,
+      discoverSourceIps: () => selectedIps.slice(),
+      sourceIpPreflightRequest: async () => {
+        throw new Error('login-success state patch self-test performed an anonymous source-IP request');
+      },
+      snapshotGapPoller: {
+        noteSnapshot() {},
+        refreshSchedule() {},
+        start() {},
+        stop() {},
+        status() { return { intervalMs: DEFAULT_SNAPSHOT_GAP_MS, stopped: true }; }
+      },
+      runReadOnlyOnce: async (_runtimeConfig, options) => {
+        const self = { userId: 7, name: 'self', x: 1, y: 2, hp: 100, drop: 20 };
+        const runId = `login-success-state-patch-${String(index + 1).padStart(2, '0')}`;
+        options.onLoginTransportAttempt?.();
+        const cpuStarted = currentMainThreadCpuMs();
+        const wallStarted = performance.now();
+        options.onLoginSuccess?.({
+          runId,
+          firstSelf: self,
+          firstSelfAt: loginAt,
+          firstSelfTick: index + 1
+        });
+        const wallMs = performance.now() - wallStarted;
+        const cpuFinished = currentMainThreadCpuMs();
+        const cpuMs = cpuStarted !== null && cpuFinished !== null
+          ? Math.max(0, cpuFinished - cpuStarted)
+          : wallMs;
+        callbackSamples.push({
+          cycle: index + 1,
+          runId,
+          loginAt,
+          cpuMs: Number(cpuMs.toFixed(3)),
+          wallMs: Number(wallMs.toFixed(3)),
+          timingSource: cpuStarted !== null && cpuFinished !== null
+            ? 'linux-main-thread-schedstat'
+            : 'performance-now-fallback'
+        });
+        callbackCount += 1;
+        options.onDecision?.({
+          at: loginAt,
+          input: {
+            self,
+            stamina: { stamina1dRemainingMilli: 20000000, stamina1dLimitMilli: 20000000 },
+            selfKillEvidence: []
+          }
+        });
+        return {
+          ok: true,
+          runId,
+          firstSelfAt: loginAt,
+          completedAt: loginAt,
+          snapshotSafety: { ok: true, reason: 'safe', satisfied: true },
+          entry: {
+            firstSelf: { user_id: 7, x: 1, y: 2, hp: 100 },
+            firstSelfAt: loginAt
+          },
+          state: { realtime: { self } }
+        };
+      }
+    });
+    const persistedAfterCycle = readBrowserlessStateFile(stateFile);
+    cycleResults.push({
+      cycle: index + 1,
+      ok: Boolean(result.ok && callbackCount === 1 && persistedAfterCycle.runner.lastLoginAt === loginAt),
+      runnerOk: Boolean(result.ok),
+      callbackCount,
+      expectedLastLoginAt: loginAt,
+      persistedLastLoginAt: persistedAfterCycle.runner.lastLoginAt
+    });
+  }
+  const finalLoginAtMs = baseNowMs + (loginCount - 1) * 61000;
+  const onlineFinalState = readBrowserlessStateFile(stateFile);
+  updateBrowserlessStateFile(stateFile, {
+    stats: {
+      currentSession: {
+        online: false,
+        exitedAt: new Date(finalLoginAtMs + 1).toISOString(),
+        exitReason: 'login-success-state-patch-restart-gate'
+      }
+    }
+  }, { updatedAt: new Date(finalLoginAtMs + 1).toISOString() });
+  const finalState = readBrowserlessStateFile(stateFile);
+  const finalStateBytes = fs.statSync(stateFile).size;
+  const remainingAt15Seconds = browserlessLoginIntervalDelayPlan(
+    finalState,
+    config,
+    finalLoginAtMs + 15000
+  );
+  const remainingAt59999 = browserlessLoginIntervalDelayPlan(
+    finalState,
+    config,
+    finalLoginAtMs + 59999
+  );
+  const expiredAt60Seconds = browserlessLoginIntervalDelayPlan(
+    finalState,
+    config,
+    finalLoginAtMs + 60000
+  );
+  const onlineTakeover = browserlessLoginIntervalDelayPlan({
+    ...onlineFinalState,
+    stats: {
+      ...onlineFinalState.stats,
+      currentSession: { ...onlineFinalState.stats?.currentSession, online: true }
+    }
+  }, config, finalLoginAtMs + 15000);
+  const runnerLog = path.join(config.logDir, browserlessDayKey(finalLoginAtMs), 'runner.jsonl');
+  const logRows = fs.existsSync(runnerLog)
+    ? fs.readFileSync(runnerLog, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))
+    : [];
+  const successRows = logRows.filter(row => row.type === 'source-ip-login-success');
+  const ackRows = logRows.filter(row => row.type === 'login-success-state-patch-ack');
+  const errorRows = logRows.filter(row => row.type === 'login-success-state-patch-error');
+  const cpuViolations = callbackSamples.filter(sample => sample.cpuMs >= SELF_TEST_MAIN_THREAD_BUDGET_MS);
+  const maxCpuMs = callbackSamples.length
+    ? Math.max(...callbackSamples.map(sample => sample.cpuMs))
+    : null;
+  const maxWallMs = callbackSamples.length
+    ? Math.max(...callbackSamples.map(sample => sample.wallMs))
+    : null;
+  const maximumPatchBytes = successRows.length
+    ? Math.max(...successRows.map(row => Number(row.detail?.statePatch?.patchBytes || 0)))
+    : null;
+  return {
+    ok: Boolean(
+      initialStateBytes >= 2 * 1024 * 1024
+        && finalStateBytes >= 2 * 1024 * 1024
+        && callbackSamples.length === loginCount
+        && cpuViolations.length === 0
+        && cycleResults.every(item => item.ok)
+        && finalState.runner.lastLoginAt === new Date(finalLoginAtMs).toISOString()
+        && remainingAt15Seconds?.reason === 'login-interval'
+        && remainingAt15Seconds?.delayMs === 45000
+        && remainingAt59999?.delayMs === 1
+        && expiredAt60Seconds === null
+        && onlineTakeover === null
+        && successRows.length === loginCount
+        && ackRows.length === loginCount
+        && errorRows.length === 0
+        && successRows.every(row => row.detail?.statePatch?.backgroundQueued === true)
+        && ackRows.every(row => row.detail?.persistence === 'background-worker')
+        && maximumPatchBytes !== null
+        && maximumPatchBytes < 8192
+    ),
+    loginCount,
+    initialStateBytes,
+    finalStateBytes,
+    stateAtLeastTwoMiB: initialStateBytes >= 2 * 1024 * 1024 && finalStateBytes >= 2 * 1024 * 1024,
+    timingSource: callbackSamples[0]?.timingSource || '',
+    callbackBudgetMs: SELF_TEST_MAIN_THREAD_BUDGET_MS,
+    maxCpuMs,
+    maxWallMs,
+    cpuViolationCount: cpuViolations.length,
+    callbackSamples,
+    cycleResults,
+    finalLastLoginAt: finalState.runner.lastLoginAt,
+    intervalGate: {
+      remainingAt15SecondsMs: remainingAt15Seconds?.delayMs ?? null,
+      remainingAt59999Ms: remainingAt59999?.delayMs ?? null,
+      expiredAt60Seconds: expiredAt60Seconds === null,
+      onlineTakeoverBypassed: onlineTakeover === null
+    },
+    persistence: {
+      successCount: successRows.length,
+      ackCount: ackRows.length,
+      errorCount: errorRows.length,
+      maximumPatchBytes,
+      backgroundQueuedCount: successRows.filter(row => row.detail?.statePatch?.backgroundQueued === true).length,
+      backgroundAckCount: ackRows.filter(row => row.detail?.persistence === 'background-worker').length
+    },
+    runnerLog
+  };
+}
+
 async function runCriticalLatencyExitRegressionSelfTest() {
   const nowMs = Date.parse('2026-08-02T11:00:00.000Z');
   const state = {
@@ -5506,12 +5916,14 @@ async function runBrowserlessRunnerSelfTest() {
     const remoteProfitWorker = await runRemoteProfitWorkerSelfTest();
     const remoteProfitAction = runRemoteProfitActionSelfTest();
     const remoteProfitDecision = runRemoteProfitDecisionSelfTest();
+    const missingEnemyHold = runMissingEnemyHoldSelfTest();
     const requestRatePolicy = await runRequestRatePolicySelfTest();
     const requestRateController = await runRequestRateControllerSelfTest();
     const loginPointHighHpExemption = await runLoginPointHighHpExemptionSelfTest();
     const sourceIpProbe = await runSourceIpProbeSelfTest();
     const sourceIpPreflight = await runSourceIpPreflightSelfTest();
     const sourceIpPreflightRunner = await runSourceIpPreflightRunnerIntegrationSelfTest(tmp);
+    const loginSuccessStatePatch = await runLoginSuccessStatePatchPersistenceSelfTest(tmp);
     const criticalLatencyExitRegression = await runCriticalLatencyExitRegressionSelfTest();
     const establishedCombatLootPriorityTest = (() => {
       const combat = {
@@ -7692,11 +8104,13 @@ async function runBrowserlessRunnerSelfTest() {
         && remoteProfitWorker.ok
         && remoteProfitAction.ok
         && remoteProfitDecision.ok
+        && missingEnemyHold.ok
         && requestRateController.ok
         && loginPointHighHpExemption.ok
         && dryRun.ok
         && sourceIpPreflight.ok
         && sourceIpPreflightRunner.ok
+        && loginSuccessStatePatch.ok
         && criticalLatencyExitRegression.ok
         && establishedCombatLootPriorityTest.ok
         && transportHealth.ok
@@ -7773,10 +8187,12 @@ async function runBrowserlessRunnerSelfTest() {
       remoteProfitWorker,
       remoteProfitAction,
       remoteProfitDecision,
+      missingEnemyHold,
       requestRateController,
       loginPointHighHpExemption,
       sourceIpPreflight,
       sourceIpPreflightRunner,
+      loginSuccessStatePatch,
       criticalLatencyExitRegression,
       transportHealth,
       textFrameParsing,
@@ -7867,5 +8283,6 @@ module.exports = {
   summarizeBrowserlessRunnerResult,
   isRemoteProfitSnapshotEligible,
   runBrowserlessRunner,
-  runBrowserlessRunnerSelfTest
+  runBrowserlessRunnerSelfTest,
+  runLoginSuccessStatePatchPersistenceSelfTest
 };

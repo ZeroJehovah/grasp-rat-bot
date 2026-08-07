@@ -75,10 +75,16 @@ const {
 const { updatePostKillSettlementCore } = require('../src/strategy/post-kill-settlement');
 const { postAttackCoinMatchesAttackCore } = require('../src/strategy/post-attack-drop');
 const { chooseStableOpportunityCore } = require('../src/strategy/opportunity-choice');
+const {
+  assignedEventsForSegment,
+  loadShotOwnershipInputs,
+  reconcileShotOwnership
+} = require('../src/node/browserless/shot-ownership-reconciler');
 
 function parseArgs(argv) {
   const options = {
     file: '',
+    amendmentsFile: '',
     runnerFile: '',
     wsFile: '',
     startLine: 1,
@@ -97,7 +103,6 @@ function parseArgs(argv) {
     trajectoryRouteSelectionMode: 'weighted',
     trajectoryImprovementGate: true,
     trajectoryRouteSequencePhase: 0,
-    dynamicRouteNoProgressLevel: null,
     cutoffAt: '',
     expectCases: 0,
     expectTailLoss: null,
@@ -106,11 +111,13 @@ function parseArgs(argv) {
     selfTest: false,
     seed: 1,
     maxPendingShootCommands: 3,
-    shootAckTimeoutMs: 3000
+    shootAckTimeoutMs: 3000,
+    decisionLines: ''
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--file') options.file = argv[++index] || '';
+    else if (arg === '--amendments-file') options.amendmentsFile = argv[++index] || '';
     else if (arg === '--runner-file') options.runnerFile = argv[++index] || '';
     else if (arg === '--ws-file') options.wsFile = argv[++index] || '';
     else if (arg === '--start-line') options.startLine = Number(argv[++index] || 1);
@@ -129,7 +136,6 @@ function parseArgs(argv) {
     else if (arg === '--trajectory-route-selection-mode') options.trajectoryRouteSelectionMode = String(argv[++index] || 'weighted');
     else if (arg === '--trajectory-improvement-gate') options.trajectoryImprovementGate = String(argv[++index] || 'on') !== 'off';
     else if (arg === '--trajectory-route-sequence-phase') options.trajectoryRouteSequencePhase = Number(argv[++index] || 0);
-    else if (arg === '--dynamic-route-no-progress-level') options.dynamicRouteNoProgressLevel = Number(argv[++index]);
     else if (arg === '--cutoff-at') options.cutoffAt = String(argv[++index] || '');
     else if (arg === '--expect-cases') options.expectCases = Number(argv[++index] || 0);
     else if (arg === '--expect-tail-loss') options.expectTailLoss = Number(argv[++index]);
@@ -139,10 +145,24 @@ function parseArgs(argv) {
     else if (arg === '--seed') options.seed = Number(argv[++index] || 1);
     else if (arg === '--max-pending-shoot-commands') options.maxPendingShootCommands = Number(argv[++index] || 3);
     else if (arg === '--shoot-ack-timeout-ms') options.shootAckTimeoutMs = Number(argv[++index] || 3000);
+    else if (arg === '--decision-lines') options.decisionLines = String(argv[++index] || '');
     else throw new Error(`unknown argument: ${arg}`);
   }
   if (!options.file && !options.selfTest) throw new Error('--file is required');
   return options;
+}
+
+function selectedDecisionLineNumbers(spec = '') {
+  const values = new Set();
+  for (const token of String(spec || '').split(',').map(item => item.trim()).filter(Boolean)) {
+    const match = token.match(/^(\d+)(?:-(\d+))?$/);
+    if (!match) throw new Error(`invalid --decision-lines token: ${token}`);
+    const first = Math.max(1, Number(match[1]));
+    const last = Math.max(first, Number(match[2] || match[1]));
+    if (last - first > 1000) throw new Error(`--decision-lines range is too large: ${token}`);
+    for (let line = first; line <= last; line += 1) values.add(line);
+  }
+  return values;
 }
 
 function selectedEntries(options) {
@@ -599,6 +619,92 @@ function theoreticalShotMinimumMiss(rows, ack) {
 
 const confirmedShotAckCache = new Map();
 const confirmedShotRunnerCache = new Map();
+const reconciledBattleExecutionCache = new Map();
+
+function reconciledExecutionForBattle(options, allRows = []) {
+  const file = path.resolve(String(options.file || ''));
+  const directory = path.dirname(file);
+  if (path.basename(directory) !== 'battles') return null;
+  const cacheKey = `${file}|${path.resolve(String(options.amendmentsFile || ''))}|${allRows.length}`;
+  if (!options.shotOwnershipInputs && reconciledBattleExecutionCache.has(cacheKey)) {
+    return reconciledBattleExecutionCache.get(cacheKey);
+  }
+  const dayDir = path.dirname(directory);
+  const inputs = options.shotOwnershipInputs || loadShotOwnershipInputs(dayDir, {
+    amendmentsFile: options.amendmentsFile || undefined
+  });
+  const basename = path.basename(file);
+  const segment = (inputs.segments || []).find(item => item.file === basename
+    || item.file === `${basename}.gz`
+    || item.file.replace(/\.gz$/i, '') === basename) || null;
+  if (!segment) return null;
+  if (options.shotOwnershipReconciliation) {
+    const reconciliation = options.shotOwnershipReconciliation;
+    const row = reconciliation.rows.find(item => item.segmentId === segment.segmentId) || null;
+    return {
+      segment,
+      row,
+      reconciliation,
+      assignedEvents: assignedEventsForSegment(reconciliation, segment.segmentId)
+    };
+  }
+  const physicalEvents = allRows
+    .filter(row => row.entry?.type === 'shoot-execution')
+    .map(row => ({
+      ...row.detail,
+      atMs: optionalNumberOrNull(row.detail?.atMs) ?? Date.parse(row.entry?.at || '')
+    }));
+  const reconciliation = reconcileShotOwnership({
+    segments: inputs.segments,
+    amendments: inputs.amendments,
+    physicalSegments: [{
+      segmentId: segment.segmentId,
+      file: segment.file,
+      events: physicalEvents
+    }]
+  });
+  const row = reconciliation.rows.find(item => item.segmentId === segment.segmentId) || null;
+  const result = {
+    segment,
+    row,
+    reconciliation,
+    assignedEvents: assignedEventsForSegment(reconciliation, segment.segmentId)
+  };
+  if (!options.shotOwnershipInputs) reconciledBattleExecutionCache.set(cacheKey, result);
+  return result;
+}
+
+function shotFromExecutionEvent(event, source) {
+  const ack = event?.ack;
+  const at = optionalNumberOrNull(event?.atMs);
+  const identity = String(ack?.bullet_id ?? ack?.bulletId ?? '');
+  const createdTick = optionalNumberOrNull(ack?.created_tick ?? ack?.createdTick);
+  if (!ack || at === null || !identity || createdTick === null) return null;
+  return {
+    at,
+    source,
+    ack: {
+      ...ack,
+      requestId: event.requestId ?? null,
+      targetId: event.targetId ?? null,
+      acceptedAtMs: at,
+      created_tick: createdTick,
+      expire_tick: Number(ack.expire_tick ?? ack.expireTick ?? createdTick + 30)
+    }
+  };
+}
+
+function deduplicateConfirmedShots(shots = []) {
+  const byIdentity = new Map();
+  for (const shot of shots) {
+    const identity = String(shot.ack?.bullet_id ?? shot.ack?.bulletId ?? '')
+      || `${shot.ack?.requestId || ''}:${shot.at}`;
+    if (!identity) continue;
+    const previous = byIdentity.get(identity);
+    if (!previous || previous.source !== 'battle-physical') byIdentity.set(identity, shot);
+  }
+  return [...byIdentity.values()].sort((left, right) => left.at - right.at);
+}
 
 function confirmedShotAcksForBattleRows(rows = []) {
   const shotsByIdentity = new Map();
@@ -672,7 +778,17 @@ function confirmedShotsForRows(options, rows, allRows = rows) {
   const firstAt = Date.parse(rows[0].entry.at) - 3000;
   const lastAt = Date.parse(rows[rows.length - 1].entry.at) + 3000;
   const selfId = String(rows[0].detail.self?.userId ?? '');
-  const battleCandidates = confirmedShotAcksForBattleRows(allRows);
+  const physicalBattleCandidates = confirmedShotAcksForBattleRows(allRows)
+    .map(shot => ({ ...shot, source: 'battle-physical' }));
+  const reconciled = reconciledExecutionForBattle(options, allRows);
+  const amendmentBattleCandidates = (reconciled?.assignedEvents || [])
+    .filter(item => ['shoot-ack-accepted', 'shoot-ack-late'].includes(item.type))
+    .map(item => shotFromExecutionEvent(item.event, 'battle-amendment'))
+    .filter(Boolean);
+  const battleCandidates = deduplicateConfirmedShots([
+    ...physicalBattleCandidates,
+    ...amendmentBattleCandidates
+  ]);
   const wsCandidates = battleCandidates.length === 0 && fs.existsSync(wsFile)
     ? confirmedShotAcksForFile(wsFile)
     : [];
@@ -685,8 +801,7 @@ function confirmedShotsForRows(options, rows, allRows = rows) {
     ? battleCandidates
     : (wsCandidates.length ? wsCandidates : runnerCandidates);
   return candidates.filter(shot => (
-    shot.at >= firstAt
-      && shot.at <= lastAt
+    (shot.source === 'battle-amendment' || (shot.at >= firstAt && shot.at <= lastAt))
       && String(shot.ack.owner_user_id ?? '') === selfId
   ));
 }
@@ -695,22 +810,27 @@ function executionMatchedConfirmedShots(options, allRows, rows) {
   const candidates = confirmedShotsForRows(options, rows, allRows);
   if (!candidates.length) return [];
   const targetId = String(options.targetId || rows[0]?.detail?.target?.userId || '');
-  const dispatchByRequest = new Map(allRows
-    .filter(row => row.entry?.type === 'shoot-execution'
-      && row.detail?.type === 'shoot-dispatch'
-      && row.detail?.requestId)
-    .map(row => [String(row.detail.requestId), {
-      at: optionalNumberOrNull(row.detail?.atMs) ?? Date.parse(row.entry.at || ''),
-      observedTick: optionalNumberOrNull(row.detail?.observedTick)
+  const reconciledEvents = reconciledExecutionForBattle(options, allRows)?.assignedEvents || [];
+  const executionEvents = [
+    ...allRows.filter(row => row.entry?.type === 'shoot-execution').map(row => ({
+      ...row.detail,
+      atMs: optionalNumberOrNull(row.detail?.atMs) ?? Date.parse(row.entry.at || '')
+    })),
+    ...reconciledEvents.map(item => item.event)
+  ];
+  const dispatchByRequest = new Map(executionEvents
+    .filter(event => event.type === 'shoot-dispatch' && event.requestId)
+    .map(event => [String(event.requestId), {
+      at: optionalNumberOrNull(event.atMs),
+      observedTick: optionalNumberOrNull(event.observedTick)
     }]));
-  const accepted = allRows
-    .filter(row => row.entry?.type === 'shoot-execution'
-      && row.detail?.type === 'shoot-ack-accepted'
-      && (!targetId || String(row.detail?.targetId ?? '') === targetId))
-    .map(row => ({
-      at: optionalNumberOrNull(row.detail?.atMs) ?? Date.parse(row.entry.at || ''),
-      requestId: String(row.detail?.requestId || ''),
-      targetId: String(row.detail?.targetId ?? '')
+  const accepted = executionEvents
+    .filter(event => ['shoot-ack-accepted', 'shoot-ack-late'].includes(event.type)
+      && (!targetId || String(event.targetId ?? '') === targetId))
+    .map(event => ({
+      at: optionalNumberOrNull(event.atMs),
+      requestId: String(event.requestId || ''),
+      targetId: String(event.targetId ?? '')
     }))
     .filter(item => Number.isFinite(item.at))
     .sort((left, right) => left.at - right.at);
@@ -720,6 +840,8 @@ function executionMatchedConfirmedShots(options, allRows, rows) {
     let best = null;
     for (const shot of unused) {
       if (shot.used) continue;
+      const shotRequestId = String(shot.ack?.requestId || '');
+      if (shotRequestId && event.requestId && shotRequestId !== event.requestId) continue;
       const gap = Math.abs(shot.at - event.at);
       if (gap > 1000) continue;
       if (!best || gap < best.gap || (gap === best.gap && shot.at < best.shot.at)) best = { shot, gap };
@@ -1089,8 +1211,7 @@ function replayCombat(options) {
       // to this offline replay path so the production weighted selector can
       // be compared on identical accepted-shot opportunities.
       trajectoryRouteSelectionMode: options.trajectoryRouteSelectionMode,
-      combatDynamicRouteSequencePhase: options.trajectoryRouteSequencePhase,
-      combatDynamicRouteNoProgressLevel: options.dynamicRouteNoProgressLevel ?? undefined
+      combatDynamicRouteSequencePhase: options.trajectoryRouteSequencePhase
     });
     const replayDynamicBehaviorEligible = dynamicBehaviorTrajectoryEligibilityCore(
       state.opponentBehaviorState || replayBehavior
@@ -6758,11 +6879,334 @@ function replayDistanceAwareDodge(rows, options = {}) {
   };
 }
 
+function missingEnemyHoldCounterfactual(row = {}) {
+  const detail = row.detail || row.entry?.detail || {};
+  const action = detail.action || {};
+  const rawBest = detail.profit?.rawBest || null;
+  const staleTargetId = String(action.target?.userId ?? action.target?.user_id ?? action.target?.id ?? '');
+  const reward = optionalNumberOrNull(action.reward ?? action.effectiveProfitReward?.expectedReward);
+  const oldInvalid = action.reason === 'missing-realtime-enemy-hold'
+    && action.profitThresholdEligible === false
+    && (reward === null || reward <= 0 || action.target?.dropKnown === false);
+  const replacementEligible = rawBest?.profitThresholdEligible === true;
+  const replacementTargetId = String(rawBest?.id ?? '');
+  const candidates = Array.isArray(detail.profit?.candidates) ? detail.profit.candidates : [];
+  const bestEligibleScore = candidates
+    .filter(candidate => candidate?.profitThresholdEligible === true)
+    .map(candidate => optionalNumberOrNull(candidate.score))
+    .filter(value => value !== null)
+    .reduce((maximum, value) => Math.max(maximum, value), -Infinity);
+  const replacementScore = optionalNumberOrNull(rawBest?.score);
+  const higherRoiValidOpportunityLost = Number.isFinite(bestEligibleScore)
+    && replacementScore !== null
+    && replacementScore + 1e-9 < bestEligibleScore;
+  const releaseReason = reward === null || reward <= 0 || action.target?.dropKnown === false
+    ? 'held-reward-unknown'
+    : (action.profitThresholdEligible === false ? 'held-below-current-profit-threshold' : '');
+  return {
+    decisionLine: row.line ?? null,
+    at: row.entry?.at || row.at || '',
+    atMs: Date.parse(row.entry?.at || row.at || ''),
+    runId: String(detail.runId || ''),
+    staleTargetId,
+    old: {
+      kind: String(action.kind || ''),
+      reason: String(action.reason || ''),
+      reward,
+      staminaCost: optionalNumberOrNull(action.staminaCost),
+      profitThresholdEligible: action.profitThresholdEligible === true
+        ? true
+        : (action.profitThresholdEligible === false ? false : null),
+      invalidMissingHold: oldInvalid
+    },
+    release: {
+      reason: releaseReason,
+      immediate: Boolean(oldInvalid && releaseReason)
+    },
+    counterfactual: replacementEligible ? {
+      kind: String(rawBest.actionKind || (rawBest.type === 'coin' ? 'coin' : 'wait')),
+      reason: String(rawBest.reason || 'best-eligible-profit'),
+      type: String(rawBest.type || ''),
+      id: replacementTargetId,
+      reward: optionalNumberOrNull(rawBest.reward),
+      staminaCost: optionalNumberOrNull(rawBest.staminaCost),
+      score: replacementScore,
+      profitThresholdEligible: true,
+      staleEnemySelected: rawBest.type === 'enemy' && replacementTargetId === staleTargetId
+    } : {
+      kind: 'wait',
+      reason: 'no-current-eligible-profit',
+      type: '',
+      id: '',
+      reward: null,
+      staminaCost: null,
+      score: null,
+      profitThresholdEligible: null,
+      staleEnemySelected: false
+    },
+    bestEligibleScore: Number.isFinite(bestEligibleScore) ? bestEligibleScore : null,
+    higherRoiValidOpportunityLost
+  };
+}
+
+function replayMissingEnemyHold(options = {}) {
+  const requestedLines = selectedDecisionLineNumbers(options.decisionLines);
+  if (!requestedLines.size) throw new Error('--decision-lines is required for missing-enemy-hold replay');
+  const decisions = [];
+  forEachJsonlEntry(options.file, (entry, line) => {
+    if (!requestedLines.has(line)) return;
+    decisions.push(missingEnemyHoldCounterfactual({
+      line,
+      entry,
+      detail: entry?.detail || {}
+    }));
+  });
+  decisions.sort((left, right) => left.decisionLine - right.decisionLine);
+  const runnerFile = options.runnerFile || path.join(path.dirname(options.file), 'runner.jsonl');
+  if (fs.existsSync(runnerFile)) {
+    forEachJsonlEntry(runnerFile, (entry, line) => {
+      if (entry?.type !== 'movement-command') return;
+      const atMs = Date.parse(entry.at || '');
+      const detail = entry.detail || {};
+      const action = detail.action || {};
+      for (const decision of decisions) {
+        if (decision.runId !== String(detail.runId || '')) continue;
+        if (!Number.isFinite(decision.atMs) || !Number.isFinite(atMs)) continue;
+        if (atMs < decision.atMs || atMs - decision.atMs > 250) continue;
+        if (!decision.historicalMovement) decision.historicalMovement = [];
+        decision.historicalMovement.push({
+          runnerLine: line,
+          at: entry.at || '',
+          kind: String(action.kind || ''),
+          reason: String(action.reason || ''),
+          targetId: String(action.target?.userId ?? action.target?.user_id ?? action.target?.id ?? ''),
+          skipped: action.skipped === true,
+          command: action.command ? {
+            type: String(action.command.type || ''),
+            dx: optionalNumberOrNull(action.command.dx),
+            dy: optionalNumberOrNull(action.command.dy),
+            sentAtMs: optionalNumberOrNull(action.command.sentAtMs)
+          } : null
+        });
+      }
+    });
+  }
+  for (const decision of decisions) {
+    decision.historicalMovement = decision.historicalMovement || [];
+    decision.oldStaleEnemyMovementDispatchCount = decision.historicalMovement.filter(item => (
+      !item.skipped
+        && item.reason === 'missing-realtime-enemy-hold'
+        && item.targetId === decision.staleTargetId
+    )).length;
+    decision.counterfactualStaleEnemyMovementDispatchCount = decision.counterfactual.staleEnemySelected ? 1 : 0;
+    decision.accepted = Boolean(
+      decision.old.invalidMissingHold
+        && decision.release.immediate
+        && decision.counterfactual.profitThresholdEligible !== false
+        && !decision.counterfactual.staleEnemySelected
+        && !decision.higherRoiValidOpportunityLost
+        && decision.historicalMovement.length > 0
+    );
+  }
+  const oldStaleEnemyMovementDispatchCount = decisions.reduce(
+    (total, decision) => total + decision.oldStaleEnemyMovementDispatchCount,
+    0
+  );
+  const counterfactualStaleEnemyMovementDispatchCount = decisions.reduce(
+    (total, decision) => total + decision.counterfactualStaleEnemyMovementDispatchCount,
+    0
+  );
+  return {
+    mode: 'missing-enemy-hold',
+    decisionsFile: path.resolve(options.file),
+    runnerFile: path.resolve(runnerFile),
+    requestedDecisionLines: [...requestedLines].sort((left, right) => left - right),
+    matchedDecisionCount: decisions.length,
+    oldStaleEnemyMovementDispatchCount,
+    counterfactualStaleEnemyMovementDispatchCount,
+    higherRoiValidOpportunityLostCount: decisions.filter(item => item.higherRoiValidOpportunityLost).length,
+    decisions,
+    accepted: decisions.length === requestedLines.size
+      && decisions.every(item => item.accepted)
+      && oldStaleEnemyMovementDispatchCount > 0
+      && counterfactualStaleEnemyMovementDispatchCount === 0
+  };
+}
+
+function acceptedTypeCount(counts = {}) {
+  return Number(counts['shoot-ack-accepted'] || 0) + Number(counts['shoot-ack-late'] || 0);
+}
+
+function replayDistanceAwareCombatDay(options = {}) {
+  const inputPath = path.resolve(String(options.file || ''));
+  const stat = fs.statSync(inputPath);
+  let dayDir;
+  let indexFile;
+  if (stat.isDirectory()) {
+    dayDir = path.basename(inputPath) === 'battles' ? path.dirname(inputPath) : inputPath;
+    indexFile = path.join(dayDir, 'battles', 'index.jsonl');
+  } else {
+    indexFile = inputPath;
+    const directory = path.dirname(indexFile);
+    dayDir = path.basename(directory) === 'battles' ? path.dirname(directory) : directory;
+  }
+  const battlesDir = path.join(dayDir, 'battles');
+  const inputs = loadShotOwnershipInputs(dayDir, {
+    indexFile,
+    amendmentsFile: options.amendmentsFile || undefined
+  });
+  const physicalSegments = [];
+  for (const segment of inputs.segments) {
+    const battleFile = path.join(battlesDir, segment.file);
+    if (!fs.existsSync(battleFile)) {
+      physicalSegments.push({ segmentId: segment.segmentId, file: segment.file, events: [] });
+      continue;
+    }
+    const events = selectedEntries({ file: battleFile, startLine: 1, endLine: Infinity })
+      .filter(row => row.entry?.type === 'shoot-execution')
+      .map(row => ({
+        ...row.detail,
+        atMs: optionalNumberOrNull(row.detail?.atMs) ?? Date.parse(row.entry?.at || '')
+      }));
+    physicalSegments.push({ segmentId: segment.segmentId, file: segment.file, events });
+  }
+  const reconciliation = reconcileShotOwnership({
+    segments: inputs.segments,
+    amendments: inputs.amendments,
+    physicalSegments
+  });
+  const segmentResults = [];
+  const sharedHistoricalMisses = [];
+  const sharedCurrentMisses = [];
+  let confirmedShots = 0;
+  let historicalEstimatedHits = 0;
+  let currentEstimatedHits = 0;
+  for (const segment of inputs.segments) {
+    const battleFile = path.join(battlesDir, segment.file);
+    const ownership = reconciliation.rows.find(item => item.segmentId === segment.segmentId) || null;
+    if (!fs.existsSync(battleFile)) {
+      segmentResults.push({
+        indexLine: segment.line,
+        segmentId: segment.segmentId || '',
+        file: segment.file,
+        targetId: String(segment.targetId ?? ''),
+        error: 'battle-file-missing',
+        correctedAccepted: ownership?.corrected?.accepted || 0,
+        confirmedShots: 0,
+        historicalEstimatedHits: 0,
+        currentEstimatedHits: 0,
+        outcome: 'unresolved'
+      });
+      continue;
+    }
+    const allRows = selectedEntries({ file: battleFile, startLine: 1, endLine: Infinity });
+    const rows = allRows.filter(row => row.entry?.type === 'combat-live'
+      && String(row.detail.target?.userId ?? '') === String(segment.targetId ?? ''));
+    const replayOptions = {
+      ...options,
+      file: battleFile,
+      startLine: 1,
+      endLine: Infinity,
+      targetId: String(segment.targetId ?? ''),
+      shotOwnershipInputs: inputs,
+      shotOwnershipReconciliation: reconciliation
+    };
+    const executionMatchedShots = executionMatchedConfirmedShots(replayOptions, allRows, rows);
+    const aim = replayDistanceAwareAim(allRows, rows, {
+      ...replayOptions,
+      executionMatchedShots
+    });
+    confirmedShots += aim.confirmedShots;
+    historicalEstimatedHits += aim.historicalEstimatedHits;
+    currentEstimatedHits += aim.currentEstimatedHits;
+    sharedHistoricalMisses.push(...aim.sharedReachableOpportunitySet.historicalMissesCm);
+    sharedCurrentMisses.push(...aim.sharedReachableOpportunitySet.currentMissesCm);
+    const outcome = aim.confirmedShots === 0
+      ? 'unresolved'
+      : (aim.currentEstimatedHits > aim.historicalEstimatedHits
+          ? 'improved'
+          : (aim.currentEstimatedHits < aim.historicalEstimatedHits ? 'regressed' : 'same'));
+    segmentResults.push({
+      indexLine: segment.line,
+      segmentId: segment.segmentId || '',
+      file: segment.file,
+      targetId: String(segment.targetId ?? ''),
+      frames: rows.length,
+      physicalAccepted: ownership?.physical?.accepted || 0,
+      amendedAccepted: ownership?.amended?.accepted || 0,
+      unresolvedAccepted: ownership?.unresolved?.accepted || 0,
+      correctedAccepted: ownership?.corrected?.accepted || 0,
+      ownershipInvariantOk: ownership?.invariant?.ok === true,
+      confirmedShots: aim.confirmedShots,
+      historicalEstimatedHits: aim.historicalEstimatedHits,
+      currentEstimatedHits: aim.currentEstimatedHits,
+      hitDelta: aim.currentEstimatedHits - aim.historicalEstimatedHits,
+      historicalMeanMissCm: aim.historical.meanMissCm,
+      currentMeanMissCm: aim.current.meanMissCm,
+      productionIndependentFalseSafe: aim.productionIndependentFalseSafe,
+      outcome
+    });
+  }
+  const improvedSegments = segmentResults.filter(item => item.outcome === 'improved');
+  const regressedSegments = segmentResults.filter(item => item.outcome === 'regressed');
+  const sameSegments = segmentResults.filter(item => item.outcome === 'same');
+  const unresolvedSegments = segmentResults.filter(item => item.outcome === 'unresolved');
+  const correctedAccepted = reconciliation.rows.reduce(
+    (total, row) => total + Number(row.corrected?.accepted || 0),
+    0
+  );
+  const sharedHistorical = distanceAwareAimStats(sharedHistoricalMisses);
+  const sharedCurrent = distanceAwareAimStats(sharedCurrentMisses);
+  const selectorRetained = confirmedShots > 0
+    && currentEstimatedHits > historicalEstimatedHits
+    && regressedSegments.length === 0;
+  return {
+    mode: 'distance-aware-combat-day',
+    dayDir,
+    indexFile,
+    amendmentsFile: options.amendmentsFile || path.join(battlesDir, 'shot-amendments.jsonl'),
+    segmentCount: inputs.segments.length,
+    ownership: {
+      conservation: reconciliation.conservation,
+      physicalAccepted: reconciliation.rows.reduce(
+        (total, row) => total + Number(row.physical?.accepted || 0),
+        0
+      ),
+      amendedAccepted: reconciliation.rows.reduce(
+        (total, row) => total + Number(row.amended?.accepted || 0),
+        0
+      ),
+      unresolvedAccepted: acceptedTypeCount(reconciliation.conservation.unresolvedByType),
+      correctedAccepted,
+      replayGeometryMatchedAccepted: confirmedShots,
+      assignedAcceptedWithoutReplayGeometry: Math.max(0, correctedAccepted - confirmedShots)
+    },
+    pairedAim: {
+      confirmedShots,
+      historicalEstimatedHits,
+      currentEstimatedHits,
+      hitDelta: currentEstimatedHits - historicalEstimatedHits,
+      improvedSegmentCount: improvedSegments.length,
+      regressedSegmentCount: regressedSegments.length,
+      sameSegmentCount: sameSegments.length,
+      unresolvedSegmentCount: unresolvedSegments.length,
+      sharedReachableHistorical: sharedHistorical,
+      sharedReachableCurrent: sharedCurrent,
+      selectorDecision: selectorRetained ? 'retain-weighted-selector' : 'revert-or-narrow-weighted-selector'
+    },
+    improvedSegments,
+    regressedSegments,
+    segments: segmentResults,
+    accepted: reconciliation.conservation.ok && selectorRetained
+  };
+}
+
 function replayDistanceAwareCombat(options = {}) {
   const allRows = selectedEntries(options);
   const rows = allRows.filter(row => row.entry?.type === 'combat-live'
     && (!options.targetId || String(row.detail.target?.userId ?? '') === String(options.targetId)));
   const executionMatchedShots = executionMatchedConfirmedShots(options, allRows, rows);
+  const shotOwnership = reconciledExecutionForBattle(options, allRows);
   const replayOptions = { ...options, executionMatchedShots };
   const aim = replayDistanceAwareAim(allRows, rows, replayOptions);
   const dispatch = replayDistanceAwareDispatch(allRows, rows, replayOptions);
@@ -6774,6 +7218,15 @@ function replayDistanceAwareCombat(options = {}) {
     frames: rows.length,
     causalPrefixOnly: true,
     independentOracle: 'replay-local-created-tick-quadratic-and-fixed-aim-range',
+    shotOwnership: shotOwnership?.row ? {
+      segmentId: shotOwnership.row.segmentId,
+      physical: shotOwnership.row.physical,
+      amended: shotOwnership.row.amended,
+      unresolved: shotOwnership.row.unresolved,
+      corrected: shotOwnership.row.corrected,
+      invariant: shotOwnership.row.invariant,
+      conservation: shotOwnership.reconciliation.conservation
+    } : null,
     aim,
     dispatch,
     dodge,
@@ -6830,6 +7283,71 @@ function runDistanceAwareReplaySelfTest() {
       && battleShots[0].ack.created_tick === 101
       && battleShots[0].ack.observedTick === 100
       && battleShots[0].ack.executionDelayTicks === 1
+  });
+  const amendmentFile = path.join('/synthetic', 'day', 'battles', 'amendment.jsonl.gz');
+  const amendmentInputs = {
+    segments: [{
+      line: 1,
+      segmentId: '8:1#1',
+      file: 'amendment.jsonl.gz',
+      targetId: '8',
+      controlGeneration: 'control:test',
+      engagementGeneration: 'engagement:test',
+      segmentStartedAt: replayAt,
+      segmentEndedAt: replayAt + 1000,
+      segmentRequestedShots: 0,
+      segmentAcceptedShots: 0,
+      combatAudit: { dispatchCount: 1, acceptedAckCount: 2 }
+    }],
+    amendments: [{
+      type: 'shoot-ack-accepted',
+      atMs: replayAt + 50,
+      requestId: 'replay-request-1',
+      targetId: '8',
+      currentSegmentId: '8:1#1',
+      ack: replayRows[1].detail.ack
+    }, {
+      type: 'shoot-dispatch',
+      atMs: replayAt + 100,
+      requestId: 'replay-request-2',
+      requestSequence: 2,
+      controlGeneration: 'control:test',
+      engagementGeneration: 'engagement:test',
+      targetId: '8',
+      currentSegmentId: '8:1#1'
+    }, {
+      type: 'shoot-ack-accepted',
+      atMs: replayAt + 120,
+      requestId: 'replay-request-2',
+      requestSequence: 2,
+      controlGeneration: 'control:test',
+      engagementGeneration: 'engagement:test',
+      targetId: '8',
+      currentSegmentId: '8:1#1',
+      ack: {
+        ...replayRows[1].detail.ack,
+        bullet_id: 'replay-bullet-amendment',
+        created_tick: 102,
+        observedTick: 101,
+        executionDelayTicks: 1
+      }
+    }]
+  };
+  const amendmentShots = confirmedShotsForRows({
+    file: amendmentFile,
+    shotOwnershipInputs: amendmentInputs
+  }, replayCombatRows, replayRows);
+  const amendmentReconciliation = reconciledExecutionForBattle({
+    file: amendmentFile,
+    shotOwnershipInputs: amendmentInputs
+  }, replayRows)?.reconciliation;
+  checks.push({
+    name: 'battle-amendment-ACKs-are-loaded-and-physical-duplicates-are-deduplicated',
+    passed: amendmentShots.length === 2
+      && amendmentShots.some(shot => shot.ack.bullet_id === 'replay-bullet-1')
+      && amendmentShots.some(shot => shot.ack.bullet_id === 'replay-bullet-amendment')
+      && amendmentReconciliation?.conservation.duplicateCount === 1
+      && amendmentReconciliation?.conservation.assignedByType['shoot-ack-accepted'] === 1
   });
   const oracle = distance => independentCreationReachabilityOracleCore(
     { x: 0, y: 0, vx: 0, vy: 0 },
@@ -6996,6 +7514,43 @@ function runDistanceAwareReplaySelfTest() {
       && negativeY >= 450 && negativeY <= 550
       && positiveY >= 450 && positiveY <= 550
   });
+  const missingEnemyCounterfactual = missingEnemyHoldCounterfactual({
+    line: 99,
+    entry: { at: new Date(replayAt).toISOString() },
+    detail: {
+      runId: 'missing-enemy-replay-self-test',
+      action: {
+        kind: 'seek-enemy',
+        reason: 'missing-realtime-enemy-hold',
+        reward: 0,
+        staminaCost: 20000,
+        profitThresholdEligible: false,
+        target: { userId: 42, dropKnown: false }
+      },
+      profit: {
+        rawBest: {
+          type: 'coin',
+          id: 7,
+          actionKind: 'coin',
+          reason: 'best-opportunity-coin',
+          reward: 1,
+          staminaCost: 1000,
+          score: 600000,
+          profitThresholdEligible: true
+        },
+        candidates: [{ type: 'coin', id: 7, score: 600000, profitThresholdEligible: true }]
+      }
+    }
+  });
+  checks.push({
+    name: 'missing-enemy-historical-counterfactual-releases-invalid-hold-to-best-eligible-profit',
+    passed: missingEnemyCounterfactual.old.invalidMissingHold
+      && missingEnemyCounterfactual.release.reason === 'held-reward-unknown'
+      && missingEnemyCounterfactual.counterfactual.type === 'coin'
+      && missingEnemyCounterfactual.counterfactual.id === '7'
+      && missingEnemyCounterfactual.counterfactual.staleEnemySelected === false
+      && missingEnemyCounterfactual.higherRoiValidOpportunityLost === false
+  });
   const failed = checks.filter(check => !check.passed);
   return {
     mode: 'distance-aware-combat-self-test',
@@ -7009,6 +7564,8 @@ function runDistanceAwareReplaySelfTest() {
 
 function runReplay(options) {
   if (options.selfTest) return runDistanceAwareReplaySelfTest();
+  if (options.mode === 'missing-enemy-hold') return replayMissingEnemyHold(options);
+  if (options.mode === 'distance-aware-combat-day') return replayDistanceAwareCombatDay(options);
   if (options.mode === 'distance-aware-combat') return replayDistanceAwareCombat(options);
   if (options.mode === 'movement-command-latency') return replayMovementCommandLatency(options);
   if (options.mode === 'opportunity') return replayOpportunity(options);

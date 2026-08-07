@@ -24,6 +24,7 @@ const {
   observeCombatAudit,
   observeCombatAuditExecution,
   observeCombatAuditTail,
+  scalarPolicy,
   summarizeCombatAudit
 } = require('./combat-audit');
 
@@ -719,6 +720,7 @@ function createBattleExitTail() {
     firstRequestDelayMs: null,
     hedgeStartedAtMs: null,
     hedgeDispatchDriftMs: null,
+    exitAttemptId: '',
     leaveConfirmed: false,
     leaveCompletedAtMs: null
   };
@@ -756,6 +758,14 @@ function observeBattleExitTail(tail, type, detail, atMs) {
     next.minPostTriggerHp = hp;
   }
   if (!next.active) return next;
+
+  const exitAttemptId = String(
+    value.exitAttemptId
+      ?? pending.exitAttemptId
+      ?? response.exitAttemptId
+      ?? ''
+  );
+  if (exitAttemptId) next.exitAttemptId = exitAttemptId;
 
   next.frames += 1;
   next.lastObservedAtMs = firstFiniteNumber(value.atMs, value.startedAtMs, atMs);
@@ -842,6 +852,7 @@ function summarizeBattleExitTail(tail) {
     firstRequestDelayMs: numberOrNull(value.firstRequestDelayMs),
     hedgeStartedAtMs: numberOrNull(value.hedgeStartedAtMs),
     hedgeDispatchDriftMs: numberOrNull(value.hedgeDispatchDriftMs),
+    ...(value.exitAttemptId ? { exitAttemptId: String(value.exitAttemptId) } : {}),
     leaveConfirmed: Boolean(value.leaveConfirmed),
     leaveCompletedAtMs: numberOrNull(value.leaveCompletedAtMs),
     terminalOutcome
@@ -962,18 +973,18 @@ function buildBattleSummary(battle, reason, finalizeMs) {
   const segmentRequestedShots = numberOrNull(physicalSegment.values.requestedShots) ?? 0;
   const cumulativeAcceptedShots = numberOrNull(cumulativeMetrics.acceptedShots) ?? 0;
   const cumulativeRequestedShots = numberOrNull(cumulativeMetrics.requestedShots) ?? 0;
+  const combatAudit = summarizeCombatAudit(battle.combatAudit);
+  const auditDispatchCount = Math.max(0, Number(combatAudit.dispatchCount || 0));
+  const auditAcceptedCount = Math.max(0, Number(combatAudit.acceptedAckCount || 0));
+  const executionCountsMatchAudit = auditDispatchCount === segmentRequestedShots
+    && auditAcceptedCount === segmentAcceptedShots;
   const shotOwnershipInvariantOk = physicalSegment.invariant.acceptedNotOverRequested
-    && cumulativeAcceptedShots <= cumulativeRequestedShots;
+    && cumulativeAcceptedShots <= cumulativeRequestedShots
+    && executionCountsMatchAudit;
   const shotOwnershipAnomalies = shotOwnershipInvariantOk
     ? []
     : [{
-        type: 'accepted-over-requested',
-        segmentId: battle.segmentId,
-        engagementGeneration: String(metrics.engagementGeneration || ''),
-        segmentAcceptedShots,
-        segmentRequestedShots,
-        cumulativeAcceptedShots,
-        cumulativeRequestedShots
+        type: executionCountsMatchAudit ? 'accepted-over-requested' : 'physical-audit-execution-mismatch'
       }];
   const exitTail = summarizeBattleExitTail(battle.exitTail);
   const engagementTrajectoryCoverage = mergeTrajectoryCoverageShotObservations(
@@ -1038,10 +1049,7 @@ function buildBattleSummary(battle, reason, finalizeMs) {
     stopDispatchAt: numberOrNull(metrics.stopDispatchAt),
     shotOwnershipInvariantOk,
     shotOwnershipInvariant: {
-      segmentAcceptedShots,
-      segmentRequestedShots,
-      cumulativeAcceptedShots,
-      cumulativeRequestedShots
+      executionCountsMatchAudit
     },
     engagementInvariant: {
       cumulativeAcceptedNotOverRequested: cumulativeAcceptedShots <= cumulativeRequestedShots,
@@ -1056,7 +1064,7 @@ function buildBattleSummary(battle, reason, finalizeMs) {
     terminalOutcome: exitTail?.terminalOutcome ?? null,
     exitTail,
     ...summarizeBattleObservations(battle.observations),
-    combatAudit: summarizeCombatAudit(battle.combatAudit),
+    combatAudit,
     ...summarizeTrajectoryCoverageShots(engagementTrajectoryCoverage, 'engagementCumulative'),
     runId: String(battle.runId || ''),
     runtimeRevision: String(battle.runtimeRevision || '')
@@ -1322,6 +1330,7 @@ function createCombatBattleLog(options = {}) {
       shotExecutionEvents: [],
       lastMetrics: null
     };
+    active.segmentGeneration = active.segmentId;
     touchEngagementSegment(engagementId, {
       nextOrdinal: segmentOrdinal,
       engagementStartedAtMs,
@@ -1453,6 +1462,8 @@ function createCombatBattleLog(options = {}) {
       : null;
     if (replayAck) event.ack = replayAck;
     const activeGeneration = String(active?.lastMetrics?.engagementGeneration || '');
+    const activeControlGeneration = String(active?.lastMetrics?.controlGeneration || '');
+    const activeTargetId = String(active?.lastMetrics?.targetId ?? active?.targetId ?? '');
     const requestKey = event.requestId ?? event.commandId ?? '';
     const normalizedRequestKey = String(requestKey || '');
     const requestSequenceKey = event.requestSequence === null ? '' : String(event.requestSequence);
@@ -1468,20 +1479,49 @@ function createCombatBattleLog(options = {}) {
     const generationOrigin = event.engagementGeneration
       ? executionOrigins.get(event.engagementGeneration)
       : null;
-    const origin = requestConflict
+    let origin = requestConflict
       ? { status: 'ambiguous-request' }
       : (explicitRequestOrigin || generationOrigin || null);
+    const eventTargetMatchesActive = active && String(event.targetId ?? '') === activeTargetId;
+    const eventControlMatchesActive = active && (!event.controlGeneration
+      || !activeControlGeneration
+      || event.controlGeneration === activeControlGeneration);
+    const eventEngagementMatchesActive = active && (!event.engagementGeneration
+      || !activeGeneration
+      || event.engagementGeneration === activeGeneration);
+    const publishedSegmentMatchesActive = active
+      && String(event.segmentGeneration || '') === String(active.segmentGeneration || active.segmentId);
+    const staleSegmentCanRebind = event.type === 'shoot-dispatch'
+      && eventTargetMatchesActive
+      && eventControlMatchesActive
+      && (eventEngagementMatchesActive || publishedSegmentMatchesActive);
+    if (!requestConflict && active && staleSegmentCanRebind
+      && (!origin || String(origin.segmentId || '') !== String(active.segmentId))) {
+      const staleSegmentGeneration = String(event.segmentGeneration || origin?.segmentId || '');
+      origin = {
+        segmentId: active.segmentId,
+        engagementId: String(active.engagementId || ''),
+        file: path.basename(active.gzFile),
+        controlGeneration: activeControlGeneration,
+        engagementGeneration: activeGeneration,
+        status: staleSegmentGeneration && staleSegmentGeneration !== String(active.segmentGeneration || active.segmentId)
+          ? 'stale-segment-generation'
+          : 'active-segment'
+      };
+      if (origin.status === 'stale-segment-generation') event.staleSegmentGeneration = staleSegmentGeneration;
+    }
     const activeOrigin = active && !requestConflict && (
       explicitRequestOrigin
-        ? String(explicitRequestOrigin.segmentId || '') === String(active.segmentId)
+        ? (String(origin?.segmentId || '') === String(active.segmentId) || staleSegmentCanRebind)
         : ((event.engagementGeneration && event.engagementGeneration === activeGeneration)
+          || publishedSegmentMatchesActive
           || (origin && String(origin.segmentId || '') === String(active.segmentId)))
     );
     event.originSegmentId = origin?.segmentId ?? (activeOrigin ? active.segmentId : null);
     event.originEngagementId = origin?.engagementId ?? (activeOrigin ? String(active.engagementId || '') : null);
     event.originFile = origin?.file ?? (activeOrigin ? path.basename(active.gzFile) : null);
     event.originStatus = origin?.status ?? (activeOrigin ? 'active-segment' : 'unresolved');
-    event.segmentGeneration = String(event.segmentGeneration || event.originSegmentId || active?.segmentId || '');
+    event.segmentGeneration = String(event.originSegmentId || event.segmentGeneration || active?.segmentId || '');
     event.currentSegmentId = active?.segmentId || null;
     event.currentSegmentFile = active ? path.basename(active.gzFile) : null;
     if (requestConflict) event.ownershipDisposition = 'ambiguous-request';
@@ -1550,7 +1590,23 @@ function createCombatBattleLog(options = {}) {
     };
   }
 
-  return { record, recordTail, recordShotExecution, finalizeActive, flush, status };
+  function currentSegmentGeneration(context = {}) {
+    if (!active) return '';
+    const targetId = context.targetId === null || context.targetId === undefined
+      ? ''
+      : String(context.targetId);
+    const controlGeneration = String(context.controlGeneration || '');
+    const engagementGeneration = String(context.engagementGeneration || '');
+    const activeControlGeneration = String(active.lastMetrics?.controlGeneration || '');
+    const activeEngagementGeneration = String(active.lastMetrics?.engagementGeneration || '');
+    const activeTargetId = String(active.lastMetrics?.targetId ?? active.targetId ?? '');
+    if (targetId && activeTargetId && targetId !== activeTargetId) return '';
+    if (controlGeneration && activeControlGeneration && controlGeneration !== activeControlGeneration) return '';
+    if (engagementGeneration && activeEngagementGeneration && engagementGeneration !== activeEngagementGeneration) return '';
+    return String(active.segmentGeneration || active.segmentId || '');
+  }
+
+  return { record, recordTail, recordShotExecution, currentSegmentGeneration, finalizeActive, flush, status };
 }
 
 function runCombatBattleLogSelfTest() {
@@ -2122,6 +2178,15 @@ function runCombatBattleLogSelfTest() {
       && explicitNullAudit.firstEligibleAt === null
       && explicitNullAudit.shooting.dodgeReserveMs === null
       && explicitNullAudit.shooting.requiredStaminaMs === null);
+    assert('combatAudit extracts scalar response policy fields without implicit object stringification',
+      scalarPolicy('direct-policy', 'unknown') === 'direct-policy'
+        && scalarPolicy({ effectivePolicy: 'effective-policy', name: 'fallback-name' }, 'unknown') === 'effective-policy'
+        && scalarPolicy({ committedPolicy: 'committed-policy' }, 'unknown') === 'committed-policy'
+        && scalarPolicy({ candidatePolicy: 'candidate-policy' }, 'unknown') === 'candidate-policy'
+        && scalarPolicy({ name: 'named-policy' }, 'unknown') === 'named-policy'
+        && scalarPolicy({}, 'unknown') === 'unknown'
+        && scalarPolicy(null, 'unknown') === 'unknown'
+        && ![scalarPolicy({}, 'unknown'), scalarPolicy({ effectivePolicy: {} }, 'unknown')].includes('[object Object]'));
     ownershipLog.record('combat-live', frame('500:5000', {
       engagementGeneration: 'same-generation',
       lastObservedAt: nowMs
@@ -2138,6 +2203,7 @@ function runCombatBattleLogSelfTest() {
       requestId: 'rollover-request',
       controlGeneration: 'control:rollover',
       engagementGeneration: 'same-generation',
+      segmentGeneration: '500:5000#1',
       ownerSelfId: 7,
       targetId: '500',
       wireTarget: { x: 1000, y: 0 },
@@ -2174,6 +2240,7 @@ function runCombatBattleLogSelfTest() {
       requestId: 'rollover-request',
       controlGeneration: 'control:rollover',
       engagementGeneration: 'same-generation',
+      segmentGeneration: '500:5000#1',
       ownerSelfId: 7,
       targetId: '500',
       wireTarget: { x: 1000, y: 0 },
@@ -2189,6 +2256,7 @@ function runCombatBattleLogSelfTest() {
       requestId: 'current-request',
       controlGeneration: 'control:rollover',
       engagementGeneration: 'same-generation',
+      segmentGeneration: '500:5000#1',
       ownerSelfId: 7,
       targetId: '600',
       wireTarget: { x: 1100, y: 0 },
@@ -2203,6 +2271,7 @@ function runCombatBattleLogSelfTest() {
       requestId: 'current-request',
       controlGeneration: 'control:rollover',
       engagementGeneration: 'same-generation',
+      segmentGeneration: '500:5000#1',
       ownerSelfId: 7,
       targetId: '600',
       wireTarget: { x: 1100, y: 0 },
@@ -2263,11 +2332,23 @@ function runCombatBattleLogSelfTest() {
       .trim().split('\n').filter(Boolean).map(JSON.parse);
     const ownershipAmendments = fs.readFileSync(path.join(ownershipDayDir, SHOT_AMENDMENTS_FILE), 'utf8')
       .trim().split('\n').filter(Boolean).map(JSON.parse);
+    const currentOwnershipEvents = zlibSync.gunzipSync(
+      fs.readFileSync(path.join(ownershipDayDir, ownershipRows[1].file))
+    ).toString('utf8').trim().split('\n').filter(Boolean).map(JSON.parse)
+      .filter(entry => entry.type === 'shoot-execution')
+      .map(entry => entry.detail);
+    const staleReboundDispatch = currentOwnershipEvents.find(event => event.requestId === 'current-request'
+      && event.type === 'shoot-dispatch');
     const crossSegmentAmendment = ownershipAmendments.find(item => item.reconciliation?.type === 'cross-segment-ack');
     assert('same-generation rollover keeps the old ACK out of the new physical ledger', ownershipRows.length === 2
       && ownershipRows[0].segmentAcceptedShots === 0
       && ownershipRows[1].segmentAcceptedShots === 1
-      && ownershipRows[1].shotOwnershipInvariantOk === true
+      && ownershipRows[1].shotOwnershipInvariantOk === false
+      && ownershipRows[1].shotOwnershipAnomalies?.[0]?.type === 'physical-audit-execution-mismatch'
+      && ownershipRows[1].shotOwnershipInvariant?.executionCountsMatchAudit === false
+      && staleReboundDispatch?.originStatus === 'stale-segment-generation'
+      && staleReboundDispatch.staleSegmentGeneration === '500:5000#1'
+      && staleReboundDispatch.segmentGeneration === '600:6000#1'
       && crossSegmentAmendment?.ownershipDisposition === 'cross-segment-ack'
       && crossSegmentAmendment.reconciliation.originalSegmentId === '500:5000#1'
       && crossSegmentAmendment.reconciliation.currentSegmentId === '600:6000#1');
@@ -2279,8 +2360,9 @@ function runCombatBattleLogSelfTest() {
       && ownershipRows[1].combatAudit.crossSegmentAckCount === 1
       && ownershipRows[1].combatAudit.skipEventCount === 3
       && ownershipRows[1].combatAudit.skipCount === 2
-      && ownershipRows[1].combatAudit.leaveDispatchCount === 1
-      && Buffer.byteLength(JSON.stringify(ownershipRows[1]), 'utf8') <= MAX_INDEX_LINE_BYTES);
+      && ownershipRows[1].combatAudit.leaveDispatchCount === 1);
+    assert('combatAudit mismatch summary remains below eight KiB',
+      Buffer.byteLength(JSON.stringify(ownershipRows[1]), 'utf8') <= MAX_INDEX_LINE_BYTES);
 
     // The background worker may not have created either the raw or gz path by
     // the time the same engagement reopens. In-memory path allocation must

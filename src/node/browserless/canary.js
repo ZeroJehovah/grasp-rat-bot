@@ -4179,6 +4179,7 @@ async function runReadOnlyCanary(config, options = {}) {
               result.entry.firstSelfAt = firstSelfAt;
               result.entry.firstSelfTick = firstSelfTick;
               if (typeof options.onLoginSuccess === 'function') {
+                const loginSuccessPatchStarted = performance.now();
                 try {
                   options.onLoginSuccess({
                     runId,
@@ -4190,6 +4191,7 @@ async function runReadOnlyCanary(config, options = {}) {
                 } catch (err) {
                   log('canary-source-ip-login-success-state-error', { error: errorMessage(err) });
                 }
+                stageDurations['login-success-state-patch'] = performance.now() - loginSuccessPatchStarted;
               }
             }
             if (exitRecoveryActive && currentSelf && !leavePending) {
@@ -4482,6 +4484,7 @@ async function runReadOnlyCanary(config, options = {}) {
           shootRequestUsesCommandObject: true,
           getTransportHealth: () => result.transportHealth || transportHealthMonitor.snapshot(now()),
           onVelocityRequest: request => stateStore.recordVelocityRequest(request, { returnInternal: true }),
+          getSegmentGeneration: context => combatBattleLog?.currentSegmentGeneration?.(context) || '',
           onShootRequest: request => stateStore.recordShootRequest(request, { returnInternal: true }),
           onShootExecution: event => stateStore.recordShootExecution?.(event, {
             returnInternal: true,

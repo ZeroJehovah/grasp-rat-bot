@@ -598,6 +598,9 @@ function createBrowserlessActionAdapter(options = {}) {
     options.afkShootCorrelationOffsetCm ?? DEFAULT_AFK_SHOOT_CORRELATION_OFFSET_CM
   );
   const onShootRequest = typeof options.onShootRequest === 'function' ? options.onShootRequest : null;
+  const getSegmentGeneration = typeof options.getSegmentGeneration === 'function'
+    ? options.getSegmentGeneration
+    : null;
   const shootRequestUsesCommandObject = options.shootRequestUsesCommandObject === true;
   const onShootExecution = typeof options.onShootExecution === 'function' ? options.onShootExecution : null;
   const controlGeneration = String(options.controlGeneration || '');
@@ -2273,12 +2276,18 @@ function createBrowserlessActionAdapter(options = {}) {
   function sendShoot(targetX, targetY, startX, startY, reason, target = null, cadenceMs = combatShootMinIntervalMs, shotMeta = {}) {
     const atMs = now();
     const requestId = `${controlGeneration || 'control'}:shoot-attempt:${nextShootAttemptSequence++}`;
+    const publishedSegmentGeneration = String(getSegmentGeneration?.({
+      atMs,
+      controlGeneration,
+      engagementGeneration: shotMeta.engagementGeneration,
+      targetId: targetRepeatKey(target)
+    }) || shotMeta.segmentGeneration || '');
     const executionContext = {
       atMs,
       requestId,
       controlGeneration,
       engagementGeneration: shotMeta.engagementGeneration,
-      segmentGeneration: shotMeta.segmentGeneration,
+      segmentGeneration: publishedSegmentGeneration,
       ownerSelfId,
       targetId: targetRepeatKey(target),
       wireTarget: { x: numberOrNull(targetX), y: numberOrNull(targetY) },
@@ -2391,7 +2400,7 @@ function createBrowserlessActionAdapter(options = {}) {
       requestId,
       controlGeneration,
       engagementGeneration: String(shotMeta.engagementGeneration || ''),
-      segmentGeneration: String(shotMeta.segmentGeneration || ''),
+      segmentGeneration: publishedSegmentGeneration,
       requestSequence: null,
       ownerSelfId,
       wireTarget: { x: Math.round(Number(targetX) || 0), y: Math.round(Number(targetY) || 0) },

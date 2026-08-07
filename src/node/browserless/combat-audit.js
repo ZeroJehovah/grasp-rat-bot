@@ -21,6 +21,19 @@ function boundedText(value, fallback = '') {
   return text.length > MAX_AUDIT_TEXT ? text.slice(0, MAX_AUDIT_TEXT) : text;
 }
 
+function scalarPolicy(value, fallback = '') {
+  if (value === null || value === undefined || value === '') return boundedText(fallback);
+  if (typeof value !== 'object') return boundedText(value, fallback);
+  for (const key of ['effectivePolicy', 'committedPolicy', 'candidatePolicy', 'name']) {
+    const candidate = value[key];
+    if (candidate !== null && candidate !== undefined && typeof candidate !== 'object') {
+      const text = boundedText(candidate);
+      if (text) return text;
+    }
+  }
+  return boundedText(fallback || 'unknown');
+}
+
 function boundedList(values, limit = MAX_AUDIT_LIST) {
   return [...new Set((Array.isArray(values) ? values : [])
     .map(value => boundedText(value))
@@ -121,7 +134,8 @@ function buildCombatAudit(summary = {}) {
   if (combat.contactEntryGuard?.reason) hardBlockers.push(combat.contactEntryGuard.reason);
   advisoryBlockers.push(...(shooting.advisoryCadenceReasons || []));
   advisoryBlockers.push(...(shooting.advisoryFireSuppressionReasons || []));
-  if (behavior.responsePolicy) advisoryBlockers.push(`response-policy:${behavior.responsePolicy}`);
+  const responsePolicy = scalarPolicy(behavior.responsePolicy || shooting.responsePolicy, 'unknown');
+  if (behavior.responsePolicy || shooting.responsePolicy) advisoryBlockers.push(`response-policy:${responsePolicy}`);
   const switchDiagnostic = combat.combatTargetSwitch || action?.targetSwitch || null;
   return {
     version: COMBAT_AUDIT_VERSION,
@@ -131,7 +145,7 @@ function buildCombatAudit(summary = {}) {
     authorityIsRealtime: (target?.authority || combat.authority || 'realtime') === 'realtime',
     target,
     mode: boundedText(behavior.mode || combat.combatPhase?.phase),
-    policy: boundedText(behavior.responsePolicy || shooting.responsePolicy),
+    policy: responsePolicy,
     modeTransitionReason: boundedText(behavior.transitionReason),
     policyReason: boundedText(behavior.behaviorReason || shooting.behaviorReason),
     firstEligibleAt: numberOrNull(metrics.firstEligibleAt),
@@ -381,5 +395,6 @@ module.exports = {
   observeCombatAudit,
   observeCombatAuditExecution,
   observeCombatAuditTail,
+  scalarPolicy,
   summarizeCombatAudit
 };

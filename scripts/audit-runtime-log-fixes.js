@@ -14,8 +14,14 @@ const {
   physicalSegmentSummary,
   recordPhysicalExecution
 } = require('../src/node/browserless/combat-battle-log');
+const { scalarPolicy } = require('../src/node/browserless/combat-audit');
+const {
+  loadShotOwnershipInputs,
+  reconcileShotOwnership
+} = require('../src/node/browserless/shot-ownership-reconciler');
 
 const DEFAULT_DAY_DIR = '/var/log/grasp-rat-browserless/2026-08-02';
+const DEFAULT_LOGIN_CPU_BASELINE_REVISION = '3f743959a2de';
 const P1_INDEX_LINES = [16, 25, 119, 155, 176];
 const P2_INDEX_LINES = [21, 31, 41, 42, 53, 55, 69, 82, 84, 97, 113, 115, 122, 141, 147, 158, 171, 174];
 const P3_REPLAY_LINES = [86, 170];
@@ -28,9 +34,15 @@ function numberOrNull(value) {
 }
 
 function parseArgs(argv) {
-  const result = { dayDir: DEFAULT_DAY_DIR };
+  const result = {
+    dayDir: DEFAULT_DAY_DIR,
+    loginCpuBaselineRevision: DEFAULT_LOGIN_CPU_BASELINE_REVISION
+  };
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === '--day-dir') result.dayDir = path.resolve(argv[++index]);
+    else if (argv[index] === '--login-cpu-baseline-revision') {
+      result.loginCpuBaselineRevision = String(argv[++index] || '');
+    }
   }
   return result;
 }
@@ -74,6 +86,8 @@ async function inspectBattle(dayDir, index) {
   let stopReason = '';
   let physicalLedger = createPhysicalSegmentLedger();
   const physicalExecutionEvents = [];
+  const normalizedPolicyCounts = {};
+  const exitAttemptIds = new Set();
   const input = fs.createReadStream(file).pipe(zlib.createGunzip());
   await readJsonLines(file, row => {
     const atMs = Date.parse(row.at);
@@ -82,13 +96,20 @@ async function inspectBattle(dayDir, index) {
       physicalLedger = recordPhysicalExecution(physicalLedger, detail);
       physicalExecutionEvents.push({
         type: String(detail.type || ''),
+        atMs: numberOrNull(detail.atMs) ?? atMs,
         requestId: detail.requestId ?? detail.commandId ?? null,
+        requestSequence: numberOrNull(detail.requestSequence),
         sequence: numberOrNull(detail.sequence),
         engagementGeneration: String(detail.engagementGeneration || ''),
         controlGeneration: String(detail.controlGeneration || ''),
+        segmentGeneration: String(detail.segmentGeneration || ''),
+        targetId: detail.targetId ?? null,
         originSegmentId: detail.originSegmentId ?? null,
         originFile: detail.originFile ?? null,
-        originStatus: String(detail.originStatus || '')
+        originStatus: String(detail.originStatus || ''),
+        currentSegmentId: detail.currentSegmentId ?? null,
+        currentSegmentFile: detail.currentSegmentFile ?? null,
+        ack: detail.ack || null
       });
     } else if (row.type === 'combat-live' || row.type === 'combat-dry-run') {
       physicalLedger = observePhysicalSegmentFrame(physicalLedger, detail);
@@ -103,6 +124,8 @@ async function inspectBattle(dayDir, index) {
       lastMetrics = detail.metrics;
       lastDetail = detail;
       if (detail.shooting?.wouldShoot === true) intentFrames += 1;
+      const policy = scalarPolicy(detail.behavior?.responsePolicy || detail.shooting?.responsePolicy, 'unknown');
+      normalizedPolicyCounts[policy] = Number(normalizedPolicyCounts[policy] || 0) + 1;
       const baseCadence = numberOrNull(detail.shooting?.cadenceMs);
       const effectiveCadence = numberOrNull(detail.shooting?.effectiveCadenceMs);
       if (Number.isFinite(Number(detail.shooting?.cadenceMs))
@@ -126,6 +149,13 @@ async function inspectBattle(dayDir, index) {
       }
     }
     observeBattleExitTail(exitTail, row.type, detail, atMs);
+    const exitAttemptId = String(
+      detail.exitAttemptId
+        ?? detail.pending?.exitAttemptId
+        ?? detail.response?.exitAttemptId
+        ?? ''
+    );
+    if (exitAttemptId) exitAttemptIds.add(exitAttemptId);
     if (row.type === 'safety-trigger' && stopAtMs === null) {
       stopAtMs = atMs;
       stopObservedAtMs = atMs;
@@ -174,6 +204,8 @@ async function inspectBattle(dayDir, index) {
     correctedSharedBudgetMax,
     physical,
     physicalExecutionEvents,
+    normalizedPolicyCounts,
+    exitAttemptIds: [...exitAttemptIds],
     stopAtMs,
     stopObservedAtMs,
     stopReason,
@@ -505,6 +537,192 @@ function physicalExecutionOwnershipAudit(battles) {
   return result;
 }
 
+async function reconcileBattleTerminals(dayDir, battles) {
+  const outcomes = [];
+  const exitsFile = path.join(dayDir, 'exits.jsonl');
+  if (fs.existsSync(exitsFile)) {
+    await readJsonLines(exitsFile, (row, line) => {
+      if (row.type !== 'exit-recovery-outcome') return;
+      const detail = row.detail || {};
+      outcomes.push({
+        line,
+        at: String(row.at || ''),
+        atMs: Date.parse(String(row.at || '')),
+        exitAttemptId: String(detail.exitAttemptId || ''),
+        outcome: String(detail.outcome || ''),
+        authority: String(detail.authority || 'unknown'),
+        sourceRunId: String(detail.sourceRunId || ''),
+        currentRunId: String(detail.runId || ''),
+        startedAtMs: Date.parse(String(detail.startedAt || '')),
+        completedAtMs: Date.parse(String(detail.completedAt || row.at || ''))
+      });
+    });
+  }
+  const byAttempt = new Map();
+  for (const outcome of outcomes) {
+    if (!outcome.exitAttemptId) continue;
+    if (!byAttempt.has(outcome.exitAttemptId)) byAttempt.set(outcome.exitAttemptId, []);
+    byAttempt.get(outcome.exitAttemptId).push(outcome);
+  }
+  const rows = battles.map(battle => {
+    const exact = battle.exitAttemptIds
+      .flatMap(id => byAttempt.get(id) || [])
+      .sort((left, right) => Number(left.completedAtMs || left.atMs || 0) - Number(right.completedAtMs || right.atMs || 0));
+    let matched = exact.at(-1) || null;
+    let matchSource = matched ? 'exitAttemptId' : '';
+    if (!matched) {
+      const triggerAtMs = numberOrNull(battle.index.exitTail?.triggerAtMs);
+      const fallback = outcomes.filter(outcome => outcome.sourceRunId === String(battle.index.runId || '')
+        && triggerAtMs !== null
+        && Number.isFinite(outcome.startedAtMs)
+        && Math.abs(outcome.startedAtMs - triggerAtMs) <= 60000);
+      if (fallback.length === 1) {
+        matched = fallback[0];
+        matchSource = 'unique-run-time-fallback';
+      }
+    }
+    const originalTerminalOutcome = String(battle.index.terminalOutcome || battle.replayedExitTail?.terminalOutcome || '');
+    const reconciledTerminalOutcome = matched?.outcome || originalTerminalOutcome;
+    const row = {
+      indexLine: battle.index.line,
+      segmentId: battle.index.segmentId || '',
+      file: battle.index.file,
+      runId: String(battle.index.runId || ''),
+      exitAttemptIds: battle.exitAttemptIds,
+      originalTerminalOutcome,
+      reconciledTerminalOutcome,
+      reconciliation: matched ? {
+        matchSource,
+        exitsLine: matched.line,
+        exitAttemptId: matched.exitAttemptId,
+        outcome: matched.outcome,
+        authority: matched.authority,
+        completedAt: matched.at
+      } : null
+    };
+    battle.terminalReconciliation = row;
+    return row;
+  });
+  return {
+    outcomeCount: outcomes.length,
+    exactAttemptMatchCount: rows.filter(row => row.reconciliation?.matchSource === 'exitAttemptId').length,
+    fallbackMatchCount: rows.filter(row => row.reconciliation?.matchSource === 'unique-run-time-fallback').length,
+    lateReconciledCount: rows.filter(row => row.originalTerminalOutcome === 'leave-unconfirmed'
+      && row.originalTerminalOutcome !== row.reconciledTerminalOutcome).length,
+    rows
+  };
+}
+
+function normalizedCombatAuditPolicyReport(battles) {
+  const rows = battles.map(battle => {
+    const serialized = JSON.stringify(battle.index.combatAudit || null);
+    const broken = serialized.includes('[object Object]');
+    const normalized = Object.entries(battle.normalizedPolicyCounts)
+      .map(([key, count]) => ({ key, count }))
+      .sort((left, right) => right.count - left.count || left.key.localeCompare(right.key));
+    return {
+      indexLine: battle.index.line,
+      segmentId: battle.index.segmentId || '',
+      file: battle.index.file,
+      brokenHistoricalValue: broken,
+      normalizedPolicies: normalized.length ? normalized : [{ key: 'unknown', count: 0 }],
+      containsImplicitObjectString: normalized.some(item => item.key === '[object Object]')
+    };
+  });
+  return {
+    brokenHistoricalSegmentCount: rows.filter(row => row.brokenHistoricalValue).length,
+    normalizedSegmentCount: rows.length,
+    implicitObjectStringCount: rows.filter(row => row.containsImplicitObjectString).length,
+    explicitUnknownSegmentCount: rows.filter(row => row.normalizedPolicies.some(item => item.key === 'unknown')).length,
+    rows
+  };
+}
+
+function largestDurationStage(stages = {}) {
+  return Object.entries(stages || {})
+    .map(([name, durationMs]) => ({ name, durationMs: numberOrNull(durationMs) }))
+    .filter(item => item.durationMs !== null)
+    .sort((left, right) => right.durationMs - left.durationMs || left.name.localeCompare(right.name))[0]
+    || null;
+}
+
+async function loginSuccessCpuBaseline(dayDir, startRevision) {
+  const successes = [];
+  const budgetEvents = [];
+  const runnerFile = path.join(dayDir, 'runner.jsonl');
+  await readJsonLines(runnerFile, (row, line) => {
+    if (row.type === 'source-ip-login-success') {
+      const loginAt = String(row.detail?.loginAt || row.at || '');
+      successes.push({
+        line,
+        at: row.at || '',
+        atMs: Date.parse(row.at || ''),
+        loginAt,
+        loginAtMs: Date.parse(loginAt),
+        runId: String(row.detail?.runId || '')
+      });
+      return;
+    }
+    if (row.type !== 'main-thread-budget-exceeded') return;
+    const cpuMs = numberOrNull(row.detail?.workProfile?.cpuWorkMs ?? row.detail?.cpuDurationMs);
+    budgetEvents.push({
+      line,
+      at: row.at || '',
+      atMs: Date.parse(row.at || ''),
+      runId: String(row.detail?.runId || ''),
+      runtimeRevision: String(row.detail?.runtimeRevision || ''),
+      task: String(row.detail?.task || ''),
+      cpuMeasured: row.detail?.cpuMeasured === true,
+      cpuOverBudget: row.detail?.cpuOverBudget === true,
+      cpuMs,
+      largestStage: largestDurationStage(row.detail?.stages)
+    });
+  });
+  const startBudget = budgetEvents.find(item => item.runtimeRevision === String(startRevision || '')) || null;
+  const startSuccess = startBudget
+    ? successes.find(item => item.runId === startBudget.runId && item.line <= startBudget.line) || null
+    : null;
+  const relevantSuccesses = startSuccess
+    ? successes.filter(item => item.line >= startSuccess.line)
+    : [];
+  const samples = relevantSuccesses.map(success => {
+    const hardEvent = budgetEvents.find(item => item.runId === success.runId
+      && Number.isFinite(success.loginAtMs)
+      && Number.isFinite(item.atMs)
+      && item.atMs >= success.loginAtMs
+      && item.atMs - success.loginAtMs <= 500) || null;
+    return {
+      successLine: success.line,
+      hardEventLine: hardEvent?.line ?? null,
+      runId: success.runId,
+      loginAt: success.loginAt,
+      runtimeRevision: hardEvent?.runtimeRevision || '',
+      delayFromFirstSelfMs: hardEvent && Number.isFinite(success.loginAtMs)
+        ? hardEvent.atMs - success.loginAtMs
+        : null,
+      task: hardEvent?.task || '',
+      cpuMeasured: hardEvent?.cpuMeasured === true,
+      cpuOverBudget: hardEvent?.cpuOverBudget === true,
+      cpuMs: hardEvent?.cpuMs ?? null,
+      largestStage: hardEvent?.largestStage || null
+    };
+  });
+  const measuredCpu = samples.map(item => item.cpuMs).filter(value => value !== null);
+  const hardViolations = samples.filter(item => item.cpuMeasured && item.cpuOverBudget && Number(item.cpuMs) >= 50);
+  return {
+    runnerFile,
+    startRevision: String(startRevision || ''),
+    startSuccessLine: startSuccess?.line ?? null,
+    successfulLoginCount: samples.length,
+    pairedHardEventCount: samples.filter(item => item.hardEventLine !== null).length,
+    hardViolationCount: hardViolations.length,
+    everySuccessfulLoginViolated: samples.length > 0 && hardViolations.length === samples.length,
+    minimumCpuMs: measuredCpu.length ? Math.min(...measuredCpu) : null,
+    maximumCpuMs: measuredCpu.length ? Math.max(...measuredCpu) : null,
+    samples
+  };
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const indexes = readIndex(options.dayDir);
@@ -515,6 +733,22 @@ async function main() {
   const ackAudit = await readAndMatchAcks(options.dayDir, requests, battles);
   const executionOwnership = physicalExecutionOwnershipAudit(battles);
   const physicalSummary = physicalSummaryAudit(battles, executionOwnership);
+  const shotInputs = loadShotOwnershipInputs(options.dayDir);
+  const shotOwnership = reconcileShotOwnership({
+    segments: indexes,
+    amendments: shotInputs.amendments,
+    physicalSegments: battles.map(battle => ({
+      segmentId: battle.index.segmentId,
+      file: battle.index.file,
+      events: battle.physicalExecutionEvents
+    }))
+  });
+  const terminalReconciliation = await reconcileBattleTerminals(options.dayDir, battles);
+  const combatAuditPolicies = normalizedCombatAuditPolicyReport(battles);
+  const historicalLoginSuccessCpu = await loginSuccessCpuBaseline(
+    options.dayDir,
+    options.loginCpuBaselineRevision
+  );
   const activeBattles = battles.filter(battle => battle.index.targetActiveObserved === true
     || battle.index.opponentFireObserved === true);
   const p1Battles = P1_INDEX_LINES
@@ -594,6 +828,29 @@ async function main() {
         confirmedHits: 'runtime metric retained as a diagnostic because adjacent HP changes do not uniquely identify per-shot hit count'
       }
     },
+    shotOwnership: {
+      conservation: shotOwnership.conservation,
+      correctedRows: shotOwnership.rows,
+      unresolvedEvents: shotOwnership.assignments
+        .filter(item => item.status === 'unresolved')
+        .map(item => ({
+          amendmentLine: item.event.amendmentLine,
+          type: item.type,
+          requestId: item.event.requestId ?? null,
+          requestSequence: item.event.requestSequence ?? null,
+          targetId: item.event.targetId ?? null,
+          currentSegmentId: item.event.currentSegmentId ?? null,
+          reason: item.reason,
+          candidates: item.candidates || []
+        })),
+      index156Rebuilt79Of79: (() => {
+        const row = shotOwnership.rows.find(item => item.indexLine === 156);
+        return row?.corrected.dispatch === 79 && row?.corrected.accepted === 79;
+      })()
+    },
+    combatAuditPolicies,
+    terminalReconciliation,
+    historicalLoginSuccessCpu,
     p1: {
       samples: p1,
       allSamplesInvariantOk: p1.every(row => row.corrected.invariantOk),

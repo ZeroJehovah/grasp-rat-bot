@@ -18891,14 +18891,14 @@ async function runSelfTest() {
             }
           }
         });
-        const run = (mode, shots, confidence = 0.8, stamina = 10000, noDamageMs = 0) => estimateAim(
+        const run = (mode, shots, confidence = 0.8, stamina = 10000) => estimateAim(
           { ...self, stamina_5s_remaining_milli: stamina },
           target,
           {
             nowMs: 5000,
             actualShots: shots,
             combatTargetState: {
-              noDamageMs,
+              noDamageMs: 0,
               motionSamples: [],
               opponentBehaviorState: { ...behavior(mode), confidence }
             }
@@ -18909,8 +18909,6 @@ async function runSelfTest() {
         const lowConfidence = run('zigzag-strafe', 0, 0.69);
         const stationary = run('stationary', 0, 0.95);
         const unaffordable = run('zigzag-strafe', 0, 0.8, 2000);
-        const noProgressPending = run('zigzag-strafe', 9, 0.8, 10000, 6000);
-        const noProgress = run('zigzag-strafe', 9, 0.8, 10000, 6800);
         return [
           zigzag[0].routeCoverage?.style,
           zigzag.every(item => Boolean(item.routeCoverage?.selected)),
@@ -18925,15 +18923,10 @@ async function runSelfTest() {
           lowConfidence.routeCoverage?.dynamicBehaviorEligible === true,
           stationary.routeCoverage?.dynamicBehaviorEligible === true,
           unaffordable.routeCoverage === null,
-          unaffordable.fireRiskClassification?.affordabilityDegraded === true,
-          noProgressPending.routeCoverage?.selection?.mode,
-          noProgress.routeCoverage?.style,
-          noProgress.routeCoverage?.selection?.mode,
-          noProgress.routeCoverage?.selection?.noProgressLevel,
-          noProgress.routeCoverage?.selection?.noProgressCycleLevel
+          unaffordable.fireRiskClassification?.affordabilityDegraded === true
         ].join('|');
       })(),
-      want: 'dynamic-behavior-weighted-zigzag-strafe|true|weighted-sample,weighted-sample,bounded-exploration,weighted-sample|0|true|true|dynamic-behavior-weighted-retreat-kite|true|weighted-sample,weighted-sample,bounded-exploration,weighted-sample|true|false|false|true|true|weighted-sample|dynamic-behavior-no-progress-cycle-zigzag-strafe|no-progress-cycle|8|8'
+      want: 'dynamic-behavior-weighted-zigzag-strafe|true|weighted-sample,weighted-sample,bounded-exploration,weighted-sample|0|true|true|dynamic-behavior-weighted-retreat-kite|true|weighted-sample,weighted-sample,bounded-exploration,weighted-sample|true|false|false|true|true'
     },
     {
       name: 'browserless trajectory coverage stays shadow and rejects unqualified live aim without changing fire',

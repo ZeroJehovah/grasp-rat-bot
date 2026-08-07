@@ -1688,24 +1688,12 @@ function estimateAim(self, target, options = {}) {
       .filter(candidate => candidate.hypothesis === 'left-turn' || candidate.hypothesis === 'right-turn')
       .sort((a, b) => b.probability - a.probability || a.hypothesis.localeCompare(b.hypothesis))[0] || null;
     const routeSelectionMode = normalizedDynamicRouteSelectionMode(options.trajectoryRouteSelectionMode);
-    const noProgressCycleLevel = Math.max(
-      1,
-      Math.round(Number(options.combatDynamicRouteNoProgressLevel ?? 8))
-    );
-    const noProgressCycleEligible = Boolean(
-      dynamicBehaviorCoverage
-        && routeSelectionMode !== 'legacy-fixed'
-        && noDamageLevel >= noProgressCycleLevel
-    );
-    const activeRouteSelectionMode = routeSelectionMode === 'legacy-fixed'
-      ? 'legacy-fixed'
-      : (noProgressCycleEligible ? 'no-progress-cycle' : 'weighted');
-    const boundedDynamicCoverageCycle = dynamicBehaviorCoverage
+    const legacyDynamicCoverageSequence = dynamicBehaviorCoverage
       ? ['continue', 'stop', preferredTurn?.hypothesis, 'reverse']
           .map(hypothesis => candidates.find(candidate => candidate.hypothesis === hypothesis))
           .filter(Boolean)
       : [];
-    const dynamicSelection = dynamicBehaviorCoverage && activeRouteSelectionMode === 'weighted'
+    const dynamicSelection = dynamicBehaviorCoverage && routeSelectionMode !== 'legacy-fixed'
       ? selectDynamicRouteCandidateCore(candidates, {
           acceptedShotIndex: shotIndex,
           predictionHorizonTicks: leadTicks,
@@ -1715,14 +1703,14 @@ function estimateAim(self, target, options = {}) {
         })
       : null;
     const coverageSequence = dynamicBehaviorCoverage
-      ? (activeRouteSelectionMode !== 'weighted'
-          ? boundedDynamicCoverageCycle
+      ? (routeSelectionMode === 'legacy-fixed'
+          ? legacyDynamicCoverageSequence
           : dynamicSelection?.ranked || [])
       : (highEntropyCoverage
           ? [primaryCandidate, ...(highEntropyExplore ? [explorationCandidate] : [])].filter(Boolean)
           : rankedCandidates.slice(0, 2));
     let selected = dynamicBehaviorCoverage
-      ? (activeRouteSelectionMode !== 'weighted'
+      ? (routeSelectionMode === 'legacy-fixed'
           ? coverageSequence[shotIndex % Math.max(1, coverageSequence.length)]
           : dynamicSelection?.selected || null)
       : (highEntropyCoverage
@@ -1809,8 +1797,8 @@ function estimateAim(self, target, options = {}) {
         style: robustApplied
           ? `robust-trajectory-medoid-${behavior?.mode || 'moving'}`
           : dynamicBehaviorCoverage
-          ? (activeRouteSelectionMode !== 'weighted'
-              ? `dynamic-behavior-${activeRouteSelectionMode}-${behavior.mode}`
+          ? (routeSelectionMode === 'legacy-fixed'
+              ? `dynamic-behavior-legacy-fixed-${behavior.mode}`
               : `dynamic-behavior-weighted-${behavior.mode}`)
           : (highEntropyCoverage
               ? (highEntropyExplore ? 'high-entropy-bounded-exploration' : 'high-entropy-robust-stop')
@@ -1819,27 +1807,25 @@ function estimateAim(self, target, options = {}) {
         selected: selected.hypothesis,
         sequence: coverageSequence.map(item => item.hypothesis),
         selection: dynamicBehaviorCoverage ? {
-          mode: activeRouteSelectionMode !== 'weighted'
-            ? activeRouteSelectionMode
+          mode: routeSelectionMode === 'legacy-fixed'
+            ? 'legacy-fixed'
             : (dynamicSelection?.selectionMode || 'weighted-sample'),
-          explorationInterval: activeRouteSelectionMode !== 'weighted'
+          explorationInterval: routeSelectionMode === 'legacy-fixed'
             ? null
             : dynamicSelection?.explorationInterval ?? null,
-          explorationLimit: activeRouteSelectionMode !== 'weighted'
+          explorationLimit: routeSelectionMode === 'legacy-fixed'
             ? null
             : dynamicSelection?.explorationLimit ?? null,
-          explorationOrdinal: activeRouteSelectionMode !== 'weighted'
+          explorationOrdinal: routeSelectionMode === 'legacy-fixed'
             ? null
             : dynamicSelection?.explorationOrdinal ?? null,
-          explorationAllowed: activeRouteSelectionMode !== 'weighted'
+          explorationAllowed: routeSelectionMode === 'legacy-fixed'
             ? false
             : Boolean(dynamicSelection?.explorationAllowed),
-          explorationCountRemaining: activeRouteSelectionMode !== 'weighted'
+          explorationCountRemaining: routeSelectionMode === 'legacy-fixed'
             ? null
             : dynamicSelection?.explorationCountRemaining ?? null,
-          acceptedShotIndex: shotIndex,
-          noProgressLevel: noDamageLevel,
-          noProgressCycleLevel
+          acceptedShotIndex: shotIndex
         } : null,
         contextKey: routeContextKey,
         phase: routePhase,

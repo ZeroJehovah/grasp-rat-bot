@@ -100,6 +100,7 @@ function runCombatShotExecutionSelfTest() {
     targetY: 0,
     controlGeneration: controlA,
     engagementGeneration: 'engagement-a',
+    segmentGeneration: 'segment-a',
     observedTick: 10
   });
   store.ingestFrame(shotAck('bullet-a', 100, 0, 11), { receivedAtMs: nowMs + 20 });
@@ -112,6 +113,8 @@ function runCombatShotExecutionSelfTest() {
     && requestA.ownership?.wireTarget?.x === 100
     && command.confirmedShots[0].controlGeneration === controlA
     && command.confirmedShots[0].engagementGeneration === 'engagement-a'
+    && command.confirmedShots[0].segmentGeneration === 'segment-a'
+    && requestA.ownership?.segmentGeneration === 'segment-a'
     && command.confirmedShots[0].requestSequence === requestA.requestSequence);
   const acceptedExecution = ackExecutionEvents.find(event => event.type === 'shoot-ack-accepted');
   check('accepted ACK listener carries bounded replay geometry without expanding cached execution state',
@@ -273,6 +276,13 @@ function runCombatShotExecutionSelfTest() {
     commandIntervalMs: 0,
     combatShootMinIntervalMs: 160,
     maxPendingShootCommands: 20,
+    getSegmentGeneration: context => (
+      context.controlGeneration === actionControl
+        && context.engagementGeneration === 'execution-generation'
+        && String(context.targetId) === '8'
+        ? 'segment:execution-current'
+        : ''
+    ),
     transport: {
       sendVelocity() {},
       sendShoot() { wireDispatches += 1; }
@@ -300,7 +310,13 @@ function runCombatShotExecutionSelfTest() {
   }
   check('advisory cadence never reduces dispatch count', wireDispatches === modes.length
     && executionEvents.filter(event => event.type === 'shoot-dispatch').length === modes.length
-    && executionEvents.filter(event => event.type === 'shoot-dispatch').every(event => Number(event.requestSequence) > 0));
+    && executionEvents.filter(event => event.type === 'shoot-dispatch').every(event => (
+      Number(event.requestSequence) > 0
+        && event.segmentGeneration === 'segment:execution-current'
+    ))
+    && actionStore.getCommandState(actionNow).shooting.pendingShots.every(request => (
+      request.segmentGeneration === 'segment:execution-current'
+    )));
 
   actionNow += 50;
   const throttled = adapter.applyDecision(stateSnapshot, combatDecision(

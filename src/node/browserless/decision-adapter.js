@@ -5143,20 +5143,38 @@ function clearInvalidRemoteFinalActionHold(stateful = {}, opportunity = {}) {
   return true;
 }
 
-function clearIneligibleFinalProfitHold(stateful = {}, thresholdContext, opportunity = {}) {
-  if (!thresholdContext?.active) return;
+function clearIneligibleFinalProfitHold(stateful = {}, thresholdContext, opportunity = {}, nowMs = Date.now()) {
+  if (!thresholdContext?.active) return false;
   const arbitration = ensureFinalActionArbitrationState(stateful);
   const previous = arbitration.lastAction || null;
-  if (previous?.band !== 'profit') return;
+  if (previous?.band !== 'profit') return false;
   const currentEligibility = currentProfitThresholdEligibility(previous, opportunity);
-  if (currentEligibility?.eligible === false) {
-    arbitration.lastAction = {
-      ...previous,
-      profitThresholdEligible: false,
-      profitThresholdReason: currentEligibility.reason,
-      currentProfitThresholdKey: currentEligibility.key
+  const cachedMissingTarget = previous?.target?.cachedNavigationOnly === true
+    || previous?.reason === 'missing-realtime-enemy-hold';
+  const invalid = currentEligibility?.eligible === false
+    || previous.profitThresholdEligible === false
+    || (cachedMissingTarget && currentEligibility?.eligible !== true);
+  if (invalid) {
+    arbitration.lastRelease = {
+      at: Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now(),
+      reason: currentEligibility?.reason
+        || previous.profitThresholdReason
+        || (cachedMissingTarget ? 'missing-hold-current-eligibility-unknown' : 'below-profit-threshold'),
+      targetKey: currentEligibility?.key || normalizedProfitOpportunityKey(null, previous),
+      replacementCandidate: opportunity.choice ? {
+        type: String(opportunity.choice.type || ''),
+        id: String(opportunity.choice.id ?? ''),
+        reason: String(opportunity.choice.reason || ''),
+        profitThresholdEligible: opportunity.choice.profitThresholdEligible === true
+      } : null
     };
+    arbitration.lastAction = null;
+    arbitration.lastFocus = null;
+    arbitration.lastSelectedAt = 0;
+    arbitration.profitDropout = null;
+    return true;
   }
+  return false;
 }
 
 function targetSwitchDiagnosticsHistoryLimit(options = {}) {
@@ -6032,6 +6050,7 @@ function remoteProfitActionTarget(item) {
 
 function buildOpportunityDecision(input, stateful = {}, options = {}) {
   const thresholdContext = options.profitThresholdContext || buildProfitThresholdContext(input, options);
+  const enemyMissingHoldMs = Math.max(0, Number(options.enemyMissingHoldMs ?? 1800));
   if (!input.self) {
     return {
       opportunities: [],
@@ -6165,12 +6184,24 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     }
     if (item.type !== 'enemy') return item;
     const effective = effectiveProfitReward(item.sourceTarget, easyKillOpportunityScoringOptions(item.sourceTarget, stateful, options));
+    const rewardKnown = item.sourceTarget?.dropKnown === true
+      && Number.isFinite(Number(effective.expectedReward))
+      && Number(effective.expectedReward) > 0;
     return {
       ...item,
       reason: item.sourceTarget?.easyKillProfitTarget ? 'easy-kill-active-profit' : item.reason,
       reward: effective.expectedReward,
       expectedReward: effective.expectedReward,
-      effectiveProfitReward: effective
+      effectiveProfitReward: effective,
+      heldCandidateSource: item.sourceTarget?.authority === 'realtime' ? 'realtime-visible' : String(item.sourceTarget?.authority || ''),
+      heldRewardSource: rewardKnown
+        ? String(item.sourceTarget?.profitMetadataAuthority || effective.modelSource || 'realtime-visible-drop')
+        : '',
+      heldRewardKnown: rewardKnown,
+      heldRewardObservedAt: input.nowMs,
+      heldProvenanceExpiresAt: input.nowMs + enemyMissingHoldMs,
+      targetHp: numberOrNull(item.sourceTarget?.hp),
+      targetActive: Boolean(item.sourceTarget?.active)
     };
   });
   const filtered = filterProfitCandidatesCore(rawOpportunities, thresholdContext, {
@@ -6270,22 +6301,17 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     && storedRemoteGeneration === remoteProfit.generation
     && opportunities.some(item => item.type === 'remote-player-navigation'
       && String(item.id) === String(storedCurrent.id));
-  const current = storedCurrent?.type === 'remote-player-navigation'
+  let current = storedCurrent?.type === 'remote-player-navigation'
     ? (remoteCurrentPresent && (!thresholdContext.active || storedCurrentEligible) ? storedCurrent : null)
-    : (thresholdContext.active && !storedCurrentEligible ? null : storedCurrent);
+    : (storedCurrent?.type === 'enemy'
+        ? storedCurrent
+        : (thresholdContext.active && !storedCurrentEligible ? null : storedCurrent));
   const currentEnemyPresent = current?.type === 'enemy'
     && opportunities.some(item => String(item.type) === 'enemy' && String(item.id) === String(current.id));
-  const enemyMissingHoldMs = Math.max(0, Number(options.enemyMissingHoldMs ?? 1800));
   const enemyLastSeenAt = Number(current?.lastSeenAt || current?.at || 0);
-  if (
-    current?.type === 'enemy'
-    && !currentEnemyPresent
-    && enemyMissingHoldMs > 0
-    && input.nowMs - enemyLastSeenAt <= enemyMissingHoldMs
-    && Number.isFinite(Number(current.x))
-    && Number.isFinite(Number(current.y))
-    && (!thresholdContext.active || current.profitThresholdEligible === true)
-  ) {
+  let missingEnemyHold = null;
+  if (current?.type === 'enemy' && !currentEnemyPresent) {
+    const ageMs = Math.max(0, input.nowMs - enemyLastSeenAt);
     const cachedTarget = {
       type: 'enemy',
       userId: current.id,
@@ -6293,24 +6319,96 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       x: Number(current.x),
       y: Number(current.y),
       distance: distanceBetween(input.self, current),
-      active: false,
+      hp: numberOrNull(current.targetHp),
+      active: Boolean(current.targetActive),
       cachedNavigationOnly: true,
       authority: 'last-realtime-position'
     };
-    opportunities = opportunities.concat([{
-      type: 'enemy',
-      id: current.id,
-      x: cachedTarget.x,
-      y: cachedTarget.y,
-      distance: cachedTarget.distance,
-      score: Number(current.score || 0),
-      staminaCost: Number(current.staminaCost || 0),
-      priorityTier: Number(current.priorityTier || 0),
-      actionKind: 'seek-enemy',
-      reason: 'missing-realtime-enemy-hold',
-      missingHold: true,
-      sourceTarget: cachedTarget
-    }]);
+    const heldReward = numberOrNull(
+      current.effectiveProfitReward?.expectedReward
+        ?? current.expectedReward
+        ?? current.reward
+    );
+    const heldStaminaCost = Number.isFinite(cachedTarget.distance)
+      ? opportunityEnemyStaminaCost(cachedTarget, options)
+      : null;
+    const heldCandidateSource = String(current.heldCandidateSource || '');
+    const heldRewardSource = String(current.heldRewardSource || '');
+    const heldRewardObservedAt = numberOrNull(current.heldRewardObservedAt);
+    const heldProvenanceExpiresAt = numberOrNull(current.heldProvenanceExpiresAt);
+    const positionComplete = Number.isFinite(Number(current.x)) && Number.isFinite(Number(current.y));
+    const provenanceComplete = heldCandidateSource === 'realtime-visible'
+      && Boolean(heldRewardSource)
+      && current.heldRewardKnown === true
+      && heldRewardObservedAt !== null
+      && heldProvenanceExpiresAt !== null;
+    const provenanceFresh = provenanceComplete
+      && heldProvenanceExpiresAt >= input.nowMs
+      && input.nowMs - heldRewardObservedAt <= enemyMissingHoldMs;
+    const heldThresholdEligible = heldReward !== null
+      && heldReward > 0
+      && heldStaminaCost !== null
+      && (!thresholdContext.active
+        || profitTargetEligibleCore(heldReward, heldStaminaCost, thresholdContext.threshold));
+    const affordable = heldStaminaCost !== null
+      && opportunityStaminaAffordable(input.self, heldStaminaCost, options);
+    let releaseReason = '';
+    if (enemyMissingHoldMs <= 0) releaseReason = 'missing-hold-disabled';
+    else if (ageMs > enemyMissingHoldMs) releaseReason = 'missing-hold-expired';
+    else if (!positionComplete) releaseReason = 'held-position-incomplete';
+    else if (heldReward === null || heldReward <= 0 || current.heldRewardKnown !== true) releaseReason = 'held-reward-unknown';
+    else if (!provenanceComplete) releaseReason = 'held-provenance-incomplete';
+    else if (!provenanceFresh) releaseReason = 'held-provenance-expired';
+    else if (!heldThresholdEligible) releaseReason = 'held-below-current-profit-threshold';
+    else if (!affordable) releaseReason = 'held-stamina-unaffordable';
+    missingEnemyHold = {
+      targetId: String(current.id ?? ''),
+      heldCandidateSource,
+      heldRewardSource,
+      heldReward,
+      heldStaminaCost: numberOrNull(heldStaminaCost),
+      heldThresholdEligible,
+      heldProvenanceComplete: provenanceComplete,
+      heldProvenanceFresh: provenanceFresh,
+      ageMs,
+      holdMs: enemyMissingHoldMs,
+      releaseReason,
+      replacementCandidate: null
+    };
+    if (!releaseReason) {
+      opportunities = opportunities.concat([{
+        type: 'enemy',
+        id: current.id,
+        x: cachedTarget.x,
+        y: cachedTarget.y,
+        distance: cachedTarget.distance,
+        score: Number(current.score || 0),
+        reward: heldReward,
+        expectedReward: heldReward,
+        effectiveProfitReward: current.effectiveProfitReward || null,
+        staminaCost: heldStaminaCost,
+        priorityTier: Number(current.priorityTier || 0),
+        actionKind: 'seek-enemy',
+        reason: 'missing-realtime-enemy-hold',
+        missingHold: true,
+        heldCandidateSource,
+        heldRewardSource,
+        heldRewardKnown: true,
+        heldRewardObservedAt,
+        heldProvenanceExpiresAt,
+        targetHp: cachedTarget.hp,
+        targetActive: cachedTarget.active,
+        profitThresholdEligible: true,
+        profitThresholdReason: 'held-current-threshold-eligible',
+        profitThresholdActive: Boolean(thresholdContext.active),
+        profitThresholdRewardCoins: thresholdContext.threshold?.rewardCoins ?? null,
+        profitThresholdStaminaMilli: thresholdContext.threshold?.staminaMilli ?? null,
+        sourceTarget: cachedTarget
+      }]);
+    } else {
+      current = null;
+      if (stateful.currentOpportunity === storedCurrent) stateful.currentOpportunity = null;
+    }
   }
   const rawChoiceResult = chooseStableOpportunityCore(
     rawOpportunities,
@@ -6352,6 +6450,16 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     opportunityOptions
   );
   const chosen = choice.chosen || null;
+  if (missingEnemyHold?.releaseReason) {
+    missingEnemyHold.replacementCandidate = chosen ? {
+      type: String(chosen.type || ''),
+      id: String(chosen.id ?? ''),
+      reason: String(chosen.reason || ''),
+      reward: numberOrNull(chosen.reward),
+      staminaCost: numberOrNull(chosen.staminaCost),
+      profitThresholdEligible: chosen.profitThresholdEligible === true
+    } : null;
+  }
   const action = chosen
     ? {
         kind: chosen.actionKind || chosen.type,
@@ -6392,6 +6500,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     switchDiagnostics: choice.switchDiagnostics || null,
     opportunityChoice: remembered.choice || null,
     action: remembered.action || action,
+    missingEnemyHold,
     remoteProfit: {
       enabled: remoteProfit.enabled,
       valid: remoteProfit.valid,
@@ -11124,7 +11233,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       reason = action.reason || reason;
     }
     action = annotateProfitActionThreshold(action, profitThresholdContext, options);
-    clearIneligibleFinalProfitHold(stateful, profitThresholdContext, opportunity);
+    clearIneligibleFinalProfitHold(stateful, profitThresholdContext, opportunity, input.nowMs);
     const boundaryAction = applyCenterActivityHardBoundary(input, action, options);
     centerHardBoundary = boundaryAction.boundary;
     if (boundaryAction.boundary.outside) {
@@ -11228,6 +11337,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       candidates: topItems(opportunity.sorted, summarizeOpportunity),
       threshold: opportunity.threshold,
       switch: opportunity.switchDiagnostics || null,
+      missingEnemyHold: cloneJson(opportunity.missingEnemyHold || null),
       remoteProfit: cloneJson(opportunity.remoteProfit || null),
       competition: cloneJson(input.activeCoinCompetition),
       singleCoinBait: singleCoinBait.summary,
@@ -11670,11 +11780,13 @@ module.exports = {
   effectiveProfitReward,
   establishedCombatLootPriority,
   buildBrowserlessDecision,
+  buildOpportunityDecision,
   buildBrowserlessCombatStrategyInput,
   buildBrowserlessRealtimeControlDecision,
   buildBrowserlessRuntimeDefaults,
   buildBrowserlessStrategyInput,
   currentProfitThresholdEligibility,
+  clearIneligibleFinalProfitHold,
   buildLowHpRecoveryThreatExitDecision,
   buildRecoveryContactGuardDecision,
   createBrowserlessDecisionAdapter,
