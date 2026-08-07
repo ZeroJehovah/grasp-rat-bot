@@ -78,7 +78,7 @@ const DEFAULTS = {
   combatAimSnapshotOutlierDisadvantageRange: 11000,
   combatAimSnapshotOutlierNoDamageMs: 1000,
   opportunityShotStaminaCostMs: 500,
-  combatEfficiencyWindowMs: 30000,
+  combatEfficiencyWindowMs: 0,
   combatEfficiencyCloseStepCm: 1000,
   combatEfficiencyMinimumDistanceCm: 1000,
   combatEfficiencyRequiredCloserRatio: 0.5,
@@ -1234,6 +1234,12 @@ function runCombatEfficiencyDistanceControlScenario(frames, targetId, options) {
       staminaSpentMilli: exitPhase.lastCompletedWindow?.staminaSpentMilli ?? null,
       damageEfficiencyHpPerStamina: exitPhase.lastCompletedWindow?.damageEfficiencyHpPerStamina ?? null,
       requiredHpPerStamina: exitPhase.lastCompletedWindow?.requiredHpPerStamina ?? null,
+      evaluationWindowMs: exitPhase.lastCompletedWindow?.evaluationWindowMs
+        ?? exitPhase.evaluationWindowMs
+        ?? null,
+      windowMode: exitPhase.lastCompletedWindow?.windowMode ?? null,
+      referenceDamageHp: exitPhase.lastCompletedWindow?.referenceDamageHp ?? null,
+      expectedHitRate: exitPhase.lastCompletedWindow?.expectedHitRate ?? null,
       rewardMultiplier: exitPhase.lastCompletedWindow?.rewardMultiplier ?? null,
       effectiveRewardCoins: exitPhase.lastCompletedWindow?.effectiveRewardCoins ?? null,
       targetDrop: exitPhase.lastCompletedWindow?.targetDrop ?? null

@@ -178,6 +178,7 @@ const {
 const { COMBAT_CONSTANTS, validateCombatConstants } = require('./combat-constants');
 const {
   combatDamageEfficiencyThresholdCore,
+  combatEfficiencyWindowCore,
   combatPressurePhaseCore,
   combatPressureStrafeCore,
   combatPressureTargetRangeCore
@@ -2133,7 +2134,7 @@ function runStrategyModuleSelfTests() {
     damageProgressAt: 1000,
     acceptedShotsSinceDamage: 99,
     distance: 12000
-  });
+  }, { combatEfficiencyWindowMs: 30000 });
   const pressureAt = combatPressurePhaseCore({
     id: '8',
     combatPhase: 'normal-combat',
@@ -2151,7 +2152,7 @@ function runStrategyModuleSelfTests() {
     damageProgressAt: 1000,
     acceptedShotsSinceDamage: 0,
     distance: 12000
-  });
+  }, { combatEfficiencyWindowMs: 30000 });
   const pressureRange = combatPressureTargetRangeCore({
     combatControlIntervalMs: 50,
     combatServerTickMs: 50,
@@ -2192,7 +2193,7 @@ function runStrategyModuleSelfTests() {
     name: 'combat-efficiency-close-starts-after-thirty-seconds-regardless-of-shot-count-at-derived-range',
     passed: pressureBefore.phase === 'normal-combat'
       && pressureAt.phase === 'close-pressure'
-      && pressureAt.triggerReason === 'no-damage-window-threshold'
+      && pressureAt.triggerReason === 'low-damage-efficiency-window-threshold'
       && pressureAt.stepIndex === 1
       && pressureAt.stepStartDistanceCm === 12000
       && pressureAt.goalDistanceCm === 5000
@@ -2226,6 +2227,25 @@ function runStrategyModuleSelfTests() {
   });
   const efficiencyThreshold50 = combatDamageEfficiencyThresholdCore(50, {
     profitThresholdCoinsPer10Stamina: 1
+  });
+  const efficiencyWindow100 = combatEfficiencyWindowCore(efficiencyThreshold100, {
+    combatShootMinIntervalMs: 160,
+    combatShotStaminaCostMs: 500
+  });
+  const efficiencyWindow50 = combatEfficiencyWindowCore(efficiencyThreshold50, {
+    combatShootMinIntervalMs: 160,
+    combatShotStaminaCostMs: 500
+  });
+  results.push({
+    name: 'combat-efficiency-window-derives-drop-aware-time-for-nine-hp',
+    passed: efficiencyWindow100.windowMode === 'expected-9-hp'
+      && efficiencyWindow100.referenceDamageHp === 9
+      && efficiencyWindow100.expectedHitRate === 0.016667
+      && efficiencyWindow100.expectedStaminaForReferenceDamage === 90
+      && efficiencyWindow100.evaluationWindowMs === 28800
+      && efficiencyWindow50.expectedHitRate === 0.033333
+      && efficiencyWindow50.expectedStaminaForReferenceDamage === 45
+      && efficiencyWindow50.evaluationWindowMs === 14400
   });
   const measuredEfficiencyOptions = {
     combatControlIntervalMs: 50,
@@ -2364,6 +2384,7 @@ function runStrategyModuleSelfTests() {
   });
 
   const pressurePhaseOptions = {
+    combatEfficiencyWindowMs: 30000,
     combatControlIntervalMs: 50,
     combatServerTickMs: 50,
     combatBulletSpeedPerTick: 500,

@@ -2856,6 +2856,12 @@ function compactExit(event) {
       ? {
           timeoutMs: compactNumber(missClose.timeoutMs),
           evaluationWindowMs: compactNumber(missClose.evaluationWindowMs),
+          windowMode: compactString(missClose.attackEfficiency?.windowMode, 40),
+          referenceDamageHp: compactNumber(missClose.attackEfficiency?.referenceDamageHp),
+          expectedHitRate: compactNumber(missClose.attackEfficiency?.expectedHitRate),
+          expectedShotsForReferenceDamage: compactNumber(missClose.attackEfficiency?.expectedShotsForReferenceDamage),
+          expectedStaminaForReferenceDamage: compactNumber(missClose.attackEfficiency?.expectedStaminaForReferenceDamage),
+          derivedWindowMs: compactNumber(missClose.attackEfficiency?.derivedWindowMs),
           stepElapsedMs: compactNumber(missClose.stepElapsedMs),
           stepIndex: compactNumber(missClose.stepIndex),
           stepStartDistanceCm: compactNumber(missClose.stepStartDistanceCm),

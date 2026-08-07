@@ -3833,7 +3833,7 @@ function replayCombatClosePressure(options) {
     .map(row => numberOrNull(row.detail.timing?.rollingP90Ticks))
     .filter(Number.isFinite), 0.9) ?? 5;
   const pressureOptions = {
-    combatEfficiencyWindowMs: 30000,
+    combatEfficiencyWindowMs: 0,
     combatEfficiencyCloseStepCm: 1000,
     combatEfficiencyMinimumDistanceCm: 1000,
     combatEfficiencyRequiredCloserRatio: 0.5,
@@ -3912,6 +3912,7 @@ function replayCombatClosePressure(options) {
           closerRatio: phase.closerRatio,
           outsideCloserRatio: phase.outsideCloserRatio,
           requiredCloserRatio: phase.requiredCloserRatio,
+          evaluationWindowMs: phase.evaluationWindowMs,
           rule: phase.exitRule,
           movementStamina: Math.max(0, Number(row.detail.metrics?.movementStaminaSpent || 0))
         };
@@ -4021,7 +4022,7 @@ function replayCombatClosePressure(options) {
     } : null,
     progressiveClose: {
       stepCm: 1000,
-      evaluationWindowMs: 30000,
+      evaluationWindowMs: trigger?.evaluationWindowMs ?? pressureOptions.combatEfficiencyWindowMs,
       requiredCloserRatio: 0.5,
       stepsStarted,
       stepsReached,
@@ -4059,7 +4060,7 @@ function replayCombatClosePressure(options) {
     : reserveReplay.shotsFired === 0);
   result.accepted = Boolean(
     trigger
-      && trigger.noDamageMs >= 30000
+      && trigger.noDamageMs >= Number(trigger.evaluationWindowMs || 0)
       && trigger.triggerReason === 'no-damage-window-threshold'
       && range.progressiveMissClose === true
       && Number(trigger.stepStartDistanceCm) - Number(trigger.goalDistanceCm) > 0
@@ -4074,7 +4075,7 @@ function replayCombatClosePressure(options) {
       && threatPreserving.pressureAttack.cadenceMs === 160
       && reserveAccepted
       && (policyTimeout
-        ? policyTimeout.stepElapsedMs >= 30000
+        ? policyTimeout.stepElapsedMs >= Number(policyTimeout.evaluationWindowMs || 0)
         : (stepsReached > 0 || noBulletControl.controlledPressureBandFrames > 0))
       && (policyTimeout || threatPreserving.distance.p50Cm < historical.distance.p50Cm)
   );

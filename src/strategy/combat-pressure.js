@@ -20,6 +20,10 @@ const DEFAULT_EFFICIENCY_DROP_REFERENCE_COINS = 100;
 const DEFAULT_EFFICIENCY_MIN_REWARD_MULTIPLIER = 0.5;
 const DEFAULT_EFFICIENCY_MAX_REWARD_MULTIPLIER = 1;
 const DEFAULT_PROFIT_THRESHOLD_COINS_PER_10_STAMINA = 1;
+const DEFAULT_EFFICIENCY_REFERENCE_DAMAGE_HP = 9;
+const DEFAULT_EFFICIENCY_EXPECTED_DAMAGE_PER_SHOT = 3;
+const DEFAULT_EFFICIENCY_EXPECTED_SHOT_CADENCE_MS = 160;
+const DEFAULT_EFFICIENCY_MIN_WINDOW_MS = 1000;
 const STAMINA_MILLI_PER_UNIT = 1000;
 const PRESSURE_RANGE_CACHE = new WeakMap();
 
@@ -244,6 +248,77 @@ function combatDamageEfficiencyThresholdCore(targetDrop, options = {}) {
 }
 
 /**
+ * Derive the observation window from the time needed to produce the target
+ * reference damage at the current economic efficiency threshold. The legacy
+ * fixed window remains available only as an explicit override for replay and
+ * rollback; production defaults to this Drop-aware calculation.
+ */
+function combatEfficiencyWindowCore(efficiencyThreshold, options = {}) {
+  const referenceDamageHp = Math.max(0.1, Number(
+    options.combatEfficiencyReferenceDamageHp ?? DEFAULT_EFFICIENCY_REFERENCE_DAMAGE_HP
+  ));
+  const expectedDamagePerShot = Math.max(0.1, Number(
+    options.combatEfficiencyExpectedDamagePerShot ?? DEFAULT_EFFICIENCY_EXPECTED_DAMAGE_PER_SHOT
+  ));
+  const expectedShotCadenceMs = Math.max(1, Number(
+    options.combatEfficiencyExpectedShotCadenceMs
+      ?? options.combatShootMinIntervalMs
+      ?? DEFAULT_EFFICIENCY_EXPECTED_SHOT_CADENCE_MS
+  ));
+  const shotStaminaMilli = Math.max(1, Number(
+    options.combatEfficiencyShotStaminaMilli
+      ?? options.combatShotStaminaCostMs
+      ?? options.opportunityShotStaminaCostMs
+      ?? 500
+  ));
+  const shotStamina = shotStaminaMilli / STAMINA_MILLI_PER_UNIT;
+  const requiredHpPerStamina = numberOrNull(efficiencyThreshold?.requiredHpPerStamina);
+  const expectedHitRateRaw = requiredHpPerStamina !== null && requiredHpPerStamina > 0
+    ? requiredHpPerStamina * shotStamina / expectedDamagePerShot
+    : null;
+  const expectedHitRate = expectedHitRateRaw === null
+    ? null
+    : clamp(expectedHitRateRaw, 0, 1);
+  const expectedShotsForReferenceDamage = expectedHitRate !== null && expectedHitRate > 0
+    ? referenceDamageHp / (expectedDamagePerShot * expectedHitRate)
+    : null;
+  const expectedStaminaForReferenceDamage = expectedShotsForReferenceDamage === null
+    ? null
+    : expectedShotsForReferenceDamage * shotStamina;
+  const derivedWindowMs = expectedShotsForReferenceDamage === null
+    ? null
+    : expectedShotsForReferenceDamage * expectedShotCadenceMs;
+  const explicitWindowMs = numberOrNull(options.combatEfficiencyWindowMs);
+  const minimumWindowMs = Math.max(1, Number(
+    options.combatEfficiencyMinimumWindowMs ?? DEFAULT_EFFICIENCY_MIN_WINDOW_MS
+  ));
+  const hasExplicitWindow = explicitWindowMs !== null && explicitWindowMs > 0;
+  const evaluationWindowMs = Math.max(
+    minimumWindowMs,
+    hasExplicitWindow
+      ? explicitWindowMs
+      : (derivedWindowMs ?? minimumWindowMs)
+  );
+  return {
+    windowMode: hasExplicitWindow ? 'explicit-override' : 'expected-9-hp',
+    referenceDamageHp: Number(referenceDamageHp.toFixed(3)),
+    expectedDamagePerShot: Number(expectedDamagePerShot.toFixed(3)),
+    expectedShotCadenceMs: Math.round(expectedShotCadenceMs),
+    shotStaminaMilli: Math.round(shotStaminaMilli),
+    shotStamina: Number(shotStamina.toFixed(3)),
+    expectedHitRate: expectedHitRate === null ? null : Number(expectedHitRate.toFixed(6)),
+    expectedShotsForReferenceDamage: expectedShotsForReferenceDamage === null
+      ? null
+      : Number(expectedShotsForReferenceDamage.toFixed(3)),
+    expectedStaminaForReferenceDamage: expectedStaminaForReferenceDamage === null
+      ? null
+      : Number(expectedStaminaForReferenceDamage.toFixed(3)),
+    derivedWindowMs: derivedWindowMs === null ? null : Math.round(derivedWindowMs),
+    evaluationWindowMs: Math.round(evaluationWindowMs)
+  };
+}
+
+/**
  * Resolve time-bounded close pressure for one target. Every completed window
  * compares cumulative target HP loss with the actual total stamina spent.
  * Shot count remains diagnostic and never gates distance control or stop-loss.
@@ -280,7 +355,6 @@ function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
   const damageProgressAt = Math.max(0, Number(input.damageProgressAt || input.lastDamageAt || startedAt || nowMs));
   const noDamageMs = Math.max(0, nowMs - damageProgressAt);
   const ballisticRange = combatPressureTargetRangeCore(options);
-  const evaluationWindowMs = Math.max(1000, Number(options.combatEfficiencyWindowMs ?? 30000));
   const stepCm = Math.max(100, Number(options.combatEfficiencyCloseStepCm ?? 1000));
   const minimumDistanceCm = Math.max(0, Number(
     options.combatEfficiencyMinimumDistanceCm ?? ballisticRange.zeroLatencyUnreliableRangeCm
@@ -304,6 +378,8 @@ function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
     input.targetDrop ?? input.drop,
     options
   );
+  const efficiencyWindow = combatEfficiencyWindowCore(efficiencyThreshold, options);
+  const evaluationWindowMs = efficiencyWindow.evaluationWindowMs;
   const priorWindowStartedAt = Math.max(0, Number(previousEfficiency?.startedAt || 0));
   let windowStartedAt = priorWindowStartedAt
     || Math.max(0, startedAt ?? nowMs);
@@ -429,7 +505,8 @@ function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
         goalDistanceCm: Math.round(goalDistanceCm),
         rewardMultiplier: efficiencyThreshold.rewardMultiplier,
         effectiveRewardCoins: efficiencyThreshold.effectiveRewardCoins,
-        targetDrop: efficiencyThreshold.targetDrop
+        targetDrop: efficiencyThreshold.targetDrop,
+        ...efficiencyWindow
       };
       lastCompletedWindow = justCompletedWindow;
       if (efficiencyAcceptable) {
@@ -500,7 +577,8 @@ function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
       goalDistanceCm: null,
       rewardMultiplier: efficiencyThreshold.rewardMultiplier,
       effectiveRewardCoins: efficiencyThreshold.effectiveRewardCoins,
-      targetDrop: efficiencyThreshold.targetDrop
+      targetDrop: efficiencyThreshold.targetDrop,
+      ...efficiencyWindow
     };
     lastCompletedWindow = justCompletedWindow;
     windowStartedAt = nowMs;
@@ -528,7 +606,8 @@ function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
       goalDistanceCm: null,
       rewardMultiplier: efficiencyThreshold.rewardMultiplier,
       effectiveRewardCoins: efficiencyThreshold.effectiveRewardCoins,
-      targetDrop: efficiencyThreshold.targetDrop
+      targetDrop: efficiencyThreshold.targetDrop,
+      ...efficiencyWindow
     };
     lastCompletedWindow = justCompletedWindow;
     windowStartedAt = nowMs;
@@ -640,6 +719,15 @@ function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
     attackEfficiency: {
       basis: 'realtime-target-hp-loss-per-actual-total-stamina',
       windowMs: Math.round(evaluationWindowMs),
+      windowMode: efficiencyWindow.windowMode,
+      referenceDamageHp: efficiencyWindow.referenceDamageHp,
+      expectedDamagePerShot: efficiencyWindow.expectedDamagePerShot,
+      expectedShotCadenceMs: efficiencyWindow.expectedShotCadenceMs,
+      shotStaminaMilli: efficiencyWindow.shotStaminaMilli,
+      expectedHitRate: efficiencyWindow.expectedHitRate,
+      expectedShotsForReferenceDamage: efficiencyWindow.expectedShotsForReferenceDamage,
+      expectedStaminaForReferenceDamage: efficiencyWindow.expectedStaminaForReferenceDamage,
+      derivedWindowMs: efficiencyWindow.derivedWindowMs,
       windowComplete,
       measurable: efficiencyMeasurable,
       targetDamageObserved: windowDamageHp > 0,
@@ -781,6 +869,7 @@ function combatPressureStrafeCore(self = {}, target = {}, phase = {}, options = 
 
 module.exports = {
   combatDamageEfficiencyThresholdCore,
+  combatEfficiencyWindowCore,
   combatPressureTargetRangeCore,
   combatPressurePhaseCore,
   combatPressureStrafeCore

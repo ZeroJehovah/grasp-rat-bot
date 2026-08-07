@@ -60,7 +60,14 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     combatClosePressureReserveMs: numberDefault(config.combatClosePressureReserveMs, 2600),
     combatClosePressureMinSelfHp: numberDefault(config.combatClosePressureMinSelfHp, 60),
     combatClosePressureMaxHpGap: numberDefault(config.combatClosePressureMaxHpGap, 20),
-    combatEfficiencyWindowMs: numberDefault(config.combatEfficiencyWindowMs, 30000),
+    combatEfficiencyWindowMs: numberDefault(config.combatEfficiencyWindowMs, 0),
+    combatEfficiencyReferenceDamageHp: numberDefault(config.combatEfficiencyReferenceDamageHp, 9),
+    combatEfficiencyExpectedDamagePerShot: numberDefault(config.combatEfficiencyExpectedDamagePerShot, 3),
+    combatEfficiencyExpectedShotCadenceMs: numberDefault(
+      config.combatEfficiencyExpectedShotCadenceMs,
+      numberDefault(config.combatShootMinIntervalMs, 160)
+    ),
+    combatEfficiencyMinimumWindowMs: numberDefault(config.combatEfficiencyMinimumWindowMs, 1000),
     combatEfficiencyCloseStepCm: numberDefault(config.combatEfficiencyCloseStepCm, 1000),
     combatEfficiencyMinimumDistanceCm: numberDefault(config.combatEfficiencyMinimumDistanceCm, 1000),
     combatEfficiencyRequiredCloserRatio: numberDefault(config.combatEfficiencyRequiredCloserRatio, 0.5),

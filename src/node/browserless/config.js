@@ -99,7 +99,11 @@ const DEFAULTS = {
   combatClosePressureReserveMs: 2600,
   combatClosePressureMinSelfHp: 60,
   combatClosePressureMaxHpGap: 20,
-  combatEfficiencyWindowMs: 30000,
+  combatEfficiencyWindowMs: 0,
+  combatEfficiencyReferenceDamageHp: 9,
+  combatEfficiencyExpectedDamagePerShot: 3,
+  combatEfficiencyExpectedShotCadenceMs: 160,
+  combatEfficiencyMinimumWindowMs: 1000,
   combatEfficiencyCloseStepCm: 1000,
   combatEfficiencyMinimumDistanceCm: 1000,
   combatEfficiencyRequiredCloserRatio: 0.5,
@@ -286,6 +290,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     combatClosePressureMinSelfHp: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_MIN_SELF_HP, DEFAULTS.combatClosePressureMinSelfHp),
     combatClosePressureMaxHpGap: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_MAX_HP_GAP, DEFAULTS.combatClosePressureMaxHpGap),
     combatEfficiencyWindowMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_EFFICIENCY_WINDOW_MS, DEFAULTS.combatEfficiencyWindowMs),
+    combatEfficiencyReferenceDamageHp: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_EFFICIENCY_REFERENCE_DAMAGE_HP, DEFAULTS.combatEfficiencyReferenceDamageHp),
+    combatEfficiencyExpectedDamagePerShot: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_EFFICIENCY_EXPECTED_DAMAGE_PER_SHOT, DEFAULTS.combatEfficiencyExpectedDamagePerShot),
+    combatEfficiencyExpectedShotCadenceMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_EFFICIENCY_EXPECTED_SHOT_CADENCE_MS, DEFAULTS.combatEfficiencyExpectedShotCadenceMs),
+    combatEfficiencyMinimumWindowMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_EFFICIENCY_MINIMUM_WINDOW_MS, DEFAULTS.combatEfficiencyMinimumWindowMs),
     combatEfficiencyCloseStepCm: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_EFFICIENCY_CLOSE_STEP_CM, DEFAULTS.combatEfficiencyCloseStepCm),
     combatEfficiencyMinimumDistanceCm: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_EFFICIENCY_MINIMUM_DISTANCE_CM, DEFAULTS.combatEfficiencyMinimumDistanceCm),
     combatEfficiencyRequiredCloserRatio: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_EFFICIENCY_REQUIRED_CLOSER_RATIO, DEFAULTS.combatEfficiencyRequiredCloserRatio),
@@ -526,6 +534,14 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.combatClosePressureMaxHpGap = numberEnv(argv[++i], config.combatClosePressureMaxHpGap);
     } else if (arg === '--combat-efficiency-window-ms') {
       config.combatEfficiencyWindowMs = numberEnv(argv[++i], config.combatEfficiencyWindowMs);
+    } else if (arg === '--combat-efficiency-reference-damage-hp') {
+      config.combatEfficiencyReferenceDamageHp = numberEnv(argv[++i], config.combatEfficiencyReferenceDamageHp);
+    } else if (arg === '--combat-efficiency-expected-damage-per-shot') {
+      config.combatEfficiencyExpectedDamagePerShot = numberEnv(argv[++i], config.combatEfficiencyExpectedDamagePerShot);
+    } else if (arg === '--combat-efficiency-expected-shot-cadence-ms') {
+      config.combatEfficiencyExpectedShotCadenceMs = numberEnv(argv[++i], config.combatEfficiencyExpectedShotCadenceMs);
+    } else if (arg === '--combat-efficiency-minimum-window-ms') {
+      config.combatEfficiencyMinimumWindowMs = numberEnv(argv[++i], config.combatEfficiencyMinimumWindowMs);
     } else if (arg === '--combat-efficiency-close-step-cm') {
       config.combatEfficiencyCloseStepCm = numberEnv(argv[++i], config.combatEfficiencyCloseStepCm);
     } else if (arg === '--combat-efficiency-minimum-distance-cm') {
@@ -676,7 +692,11 @@ function usage() {
     '  --combat-close-pressure-reserve-ms <ms>  Close-pressure stamina reserve. Default: 2600',
     '  --combat-close-pressure-min-self-hp <hp>  Minimum HP for exchange continuation. Default: 60',
     '  --combat-close-pressure-max-hp-gap <hp>  Maximum target HP lead for continuation. Default: 20',
-    '  --combat-efficiency-window-ms <ms>  No-damage observation and closer-range assessment window. Default: 30000',
+    '  --combat-efficiency-window-ms <ms>  Explicit efficiency-window override; 0 derives the Drop-aware 9 HP window. Default: 0',
+    '  --combat-efficiency-reference-damage-hp <hp>  Reference damage used to derive the efficiency window. Default: 9',
+    '  --combat-efficiency-expected-damage-per-shot <hp>  Expected damage per successful shot for the derived window. Default: 3',
+    '  --combat-efficiency-expected-shot-cadence-ms <ms>  Expected normal combat shot cadence for the derived window. Default: 160',
+    '  --combat-efficiency-minimum-window-ms <ms>  Safety floor for the derived efficiency window. Default: 1000',
     '  --combat-efficiency-close-step-cm <cm>  Distance removed after each maintained low-efficiency window. Default: 1000',
     '  --combat-efficiency-minimum-distance-cm <cm>  Lowest forced-close goal. Default: 1000',
     '  --combat-efficiency-required-closer-ratio <ratio>  Required time share inside the closer range. Default: 0.5',
