@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.07.5';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.07.6';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -84,6 +84,20 @@ function highDropRankValueCore(item) {
     if (Number.isFinite(value)) return value;
   }
   return -Infinity;
+}
+
+function highDropSortValueCore(item, field = 'drop') {
+  if (field === 'drop-change') {
+    if (item?.[1] === null || item?.[1] === undefined || item?.[1] === '') return -Infinity;
+    const initial = Number(item?.[1]);
+    const current = highDropRankValueCore(item);
+    return Number.isFinite(initial) && Number.isFinite(current) ? current - initial : -Infinity;
+  }
+  if (field === 'estimated-quota') {
+    const quota = estimatedHighDropQuotaCore(item?.[1], item?.[2], item?.[3]);
+    return quota === null ? -Infinity : quota;
+  }
+  return highDropRankValueCore(item);
 }
 
 function isStaminaExhaustionExitReasonCore(reason) {
@@ -429,10 +443,14 @@ function renderBrowserlessWebPanel() {
     .coin-row{grid-template-columns:minmax(48px,1fr) minmax(34px,.5fr) minmax(46px,.65fr)}
     .player-row{grid-template-columns:minmax(150px,2.8fr) minmax(40px,.55fr) minmax(42px,.55fr) minmax(42px,.5fr) minmax(52px,.65fr)}
     .high-drop-list{display:grid;gap:0;min-width:0}
-    .high-drop-row{display:grid;grid-template-columns:minmax(120px,2fr) minmax(94px,.55fr) minmax(64px,.45fr);gap:8px;align-items:center;min-height:26px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)}
+    .high-drop-row{display:grid;grid-template-columns:minmax(100px,1.8fr) minmax(56px,.5fr) minmax(72px,.58fr) minmax(64px,.5fr);gap:8px;align-items:center;min-height:26px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)}
     .high-drop-row:last-child{border-bottom:0}
     .high-drop-head{position:sticky;top:0;z-index:1;color:var(--muted);font-size:11px;font-weight:700;background:var(--panel)}
     .high-drop-cell{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .high-drop-sort{display:inline-flex;align-items:center;gap:4px;width:max-content;max-width:100%;min-height:0;padding:0;border:0;border-radius:0;background:transparent;color:inherit;font-size:inherit;font-weight:inherit;line-height:inherit}
+    .high-drop-sort:hover{border-color:transparent;color:var(--text)}
+    .high-drop-sort:focus-visible{outline:1px solid var(--blue);outline-offset:2px}
+    .high-drop-sort.active::after{content:'';flex:0 0 auto;width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-top:5px solid var(--blue)}
     .high-drop-name{display:flex;align-items:center;gap:6px}
     .high-drop-name.online{color:var(--blue)}
     .high-drop-name.self.online,.high-drop-values.self.online{color:var(--green)}
@@ -443,6 +461,10 @@ function renderBrowserlessWebPanel() {
     .high-drop-values .high-drop-delta{color:var(--text)}
     .high-drop-values .high-drop-delta.positive{color:var(--red)}
     .high-drop-values .high-drop-delta.negative{color:var(--green)}
+    .high-drop-values.high-drop-current{color:var(--coin)}
+    .high-drop-values.high-drop-delta{color:var(--text)}
+    .high-drop-values.high-drop-delta.positive{color:var(--red)}
+    .high-drop-values.high-drop-delta.negative{color:var(--green)}
     .player-insights-body{height:186px;overflow-y:auto;scrollbar-gutter:stable}
     .player-memory-list{display:flex;flex-wrap:wrap;gap:6px 5px;min-height:24px;align-items:center;align-content:flex-start}
     .player-memory-name{display:inline-flex;align-items:center;max-width:100%;height:26px;box-sizing:border-box;padding:2px 5px;border:1px solid transparent;border-radius:4px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -652,6 +674,7 @@ function renderBrowserlessWebPanel() {
     if (token) localStorage.graspRatBrowserlessToken = token;
     const WEB_PANEL_VERSION = ${JSON.stringify(BROWSERLESS_WEB_PANEL_VERSION)};
     const highDropRankValue = ${highDropRankValueCore.toString()};
+    const highDropSortValue = ${highDropSortValueCore.toString().replaceAll('highDropRankValueCore', 'highDropRankValue').replaceAll('estimatedHighDropQuotaCore', 'estimatedHighDropQuota')};
     const isStaminaExhaustionExitReason = ${isStaminaExhaustionExitReasonCore.toString()};
     const WEB_PANEL_RELOAD_KEY = 'graspRatBrowserlessPanelReloadedVersion';
     const PANEL_COLLAPSE_KEY = 'graspRatBrowserlessPanelCollapsedV1';
@@ -677,6 +700,7 @@ function renderBrowserlessWebPanel() {
     let mapTrailHistory = new Map();
     let mapTrailObservationAtMs = 0;
     let mapTrailSessionKey = '';
+    let highDropSortField = 'drop';
     let panelCollapseState = readPanelCollapseState();
 
     const groupChatMessagesForDisplay = ${groupChatMessagesForDisplay.toString()};
@@ -2707,7 +2731,7 @@ function renderBrowserlessWebPanel() {
         delta: initial === null ? null : Math.round(current - initial)
       };
     }
-    function createHighDropRow(name, drops, estimatedQuota, head = false, online = undefined, self = false) {
+    function createHighDropRow(name, drop, dropChange, estimatedQuota, head = false, online = undefined, self = false, onSort = null) {
       const row = document.createElement('div');
       row.className = 'high-drop-row' + (head ? ' high-drop-head' : '');
       const nameCell = document.createElement('div');
@@ -2725,26 +2749,44 @@ function renderBrowserlessWebPanel() {
         nameCell.title = online === true ? '在线' : (online === false ? '离线' : '等待全局快照确认');
         nameCell.append(dot, text);
       }
-      const dropCell = document.createElement('div');
-      dropCell.className = 'high-drop-cell' + (head ? '' : (showPresence ? ' high-drop-values ' + onlineClass + (self ? ' self' : '') : ' muted'));
-      if (head || !drops || typeof drops !== 'object') {
-        dropCell.textContent = value(drops);
-      } else {
-        const current = document.createElement('span');
-        current.className = 'high-drop-current';
-        current.textContent = integer(drops.current);
-        dropCell.append(current);
-        if (drops.delta !== null) {
-          const delta = document.createElement('span');
-          delta.className = 'high-drop-delta ' + (drops.delta > 0 ? 'positive' : (drops.delta < 0 ? 'negative' : 'zero'));
-          delta.textContent = '(' + (drops.delta > 0 ? '+' : '') + String(drops.delta) + ')';
-          dropCell.append(delta);
+      const valueCellClass = 'high-drop-cell' + (head ? '' : (showPresence ? ' high-drop-values ' + onlineClass + (self ? ' self' : '') : ' muted'));
+      const sortableCell = (label, field) => {
+        const cell = document.createElement('div');
+        cell.className = 'high-drop-cell';
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'high-drop-sort' + (highDropSortField === field ? ' active' : '');
+        button.textContent = label;
+        button.title = '按' + label + '从大到小排序';
+        button.setAttribute('aria-sort', highDropSortField === field ? 'descending' : 'none');
+        button.addEventListener('click', () => onSort?.(field));
+        cell.appendChild(button);
+        return cell;
+      };
+      const dropCell = head ? sortableCell(drop, 'drop') : document.createElement('div');
+      if (!head) {
+        dropCell.className = valueCellClass;
+        dropCell.classList.add('high-drop-current');
+        dropCell.textContent = value(drop);
+      }
+      const changeCell = head ? sortableCell(dropChange, 'drop-change') : document.createElement('div');
+      if (!head) {
+        changeCell.className = valueCellClass;
+        if (typeof dropChange === 'number') {
+          changeCell.classList.add('high-drop-delta', dropChange > 0 ? 'positive' : (dropChange < 0 ? 'negative' : 'zero'));
+          changeCell.textContent = (dropChange > 0 ? '+' : '') + String(dropChange);
+        } else {
+          changeCell.textContent = value(dropChange);
         }
       }
       const quotaCell = document.createElement('div');
-      quotaCell.className = 'high-drop-cell' + (head ? '' : (showPresence ? ' high-drop-values ' + onlineClass + (self ? ' self' : '') : ' muted'));
-      quotaCell.textContent = value(estimatedQuota);
-      row.append(nameCell, dropCell, quotaCell);
+      if (head) {
+        row.append(nameCell, dropCell, changeCell, sortableCell(estimatedQuota, 'estimated-quota'));
+      } else {
+        quotaCell.className = valueCellClass;
+        quotaCell.textContent = value(estimatedQuota);
+        row.append(nameCell, dropCell, changeCell, quotaCell);
+      }
       return row;
     }
     function renderHighDropPlayers(status) {
@@ -2764,7 +2806,10 @@ function renderBrowserlessWebPanel() {
         { text: stamp(status.highDropPlayers?.lastSnapshotAt) }
       ]);
       const fragment = document.createDocumentFragment();
-      fragment.appendChild(createHighDropRow('玩家名称', 'Drop', '推测额度', true));
+      fragment.appendChild(createHighDropRow('玩家名称', 'Drop', 'Drop变化', '推测额度', true, undefined, false, field => {
+        highDropSortField = field;
+        renderHighDropPlayers(status);
+      }));
       const rankedItems = items
         .filter(item => selfUserId === null || number(item?.[4]) !== selfUserId)
         .map(item => ({ item, self: false, online: item?.[5] }));
@@ -2778,17 +2823,20 @@ function renderBrowserlessWebPanel() {
           online: status.game?.inGame === true
         });
       }
-      rankedItems.sort((left, right) => highDropRankValue(right.item) - highDropRankValue(left.item)
+      rankedItems.sort((left, right) => highDropSortValue(right.item, highDropSortField) - highDropSortValue(left.item, highDropSortField)
+        || highDropRankValue(right.item) - highDropRankValue(left.item)
         || (number(right.item?.[2]) ?? -Infinity) - (number(left.item?.[2]) ?? -Infinity)
         || String(left.item?.[0] || '').localeCompare(String(right.item?.[0] || '')));
       if (!rankedItems.length) {
-        fragment.appendChild(createHighDropRow('无', '--', '--'));
+        fragment.appendChild(createHighDropRow('无', '--', '--', '--'));
       } else {
         for (const entry of rankedItems) {
           const item = entry.item;
+          const drops = highDropValueParts(item);
           fragment.appendChild(createHighDropRow(
             item?.[0],
-            highDropValueParts(item),
+            drops?.current ?? null,
+            drops?.delta ?? null,
             integer(estimatedHighDropQuota(item?.[1], item?.[2], item?.[3])),
             false,
             entry.online,
@@ -3701,6 +3749,7 @@ module.exports = {
   groupBlockingFactorsCore,
   groupChatMessagesForDisplay,
   highDropRankValueCore,
+  highDropSortValueCore,
   interpolateMapMarkerCore,
   isStaminaExhaustionExitReasonCore,
   lastExitPanelVisibleCore,

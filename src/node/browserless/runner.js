@@ -33,6 +33,7 @@ const {
   appendMapTrailSampleCore,
   groupBlockingFactorsCore,
   highDropRankValueCore,
+  highDropSortValueCore,
   isStaminaExhaustionExitReasonCore,
   lastExitPanelVisibleCore,
   mapTrailOpacityCore
@@ -6330,6 +6331,13 @@ async function runBrowserlessRunnerSelfTest() {
     ].sort((left, right) => highDropRankValueCore(right) - highDropRankValueCore(left))
       .map(item => item[0])
       .join(',') === 'other,self';
+    const highDropSortTest = {
+      drop: highDropSortValueCore(['player', 100, 140, 130], 'drop') === 130,
+      change: highDropSortValueCore(['player', 100, 140, 130], 'drop-change') === 30,
+      quota: highDropSortValueCore(['player', 100, 140, 140], 'estimated-quota') === 2080,
+      missingQuota: highDropSortValueCore(['player', 100, 140, 130], 'estimated-quota') === -Infinity
+    };
+    highDropSortTest.ok = Object.values(highDropSortTest).every(Boolean);
     const highDropRecencyTest = (() => {
       let observedAtMs = Date.UTC(2026, 6, 27, 0, 0, 0);
       const file = path.join(tmp, 'high-drop-recency-self-test.json');
@@ -7009,7 +7017,7 @@ async function runBrowserlessRunnerSelfTest() {
       const panelDetailTest = {
         ok: Boolean(
           pageHtml.includes('>Drop排行</h2>')
-          && pageHtml.includes('grid-template-columns:minmax(120px,2fr) minmax(94px,.55fr) minmax(64px,.45fr)')
+          && pageHtml.includes('grid-template-columns:minmax(100px,1.8fr) minmax(56px,.5fr) minmax(72px,.58fr) minmax(64px,.5fr)')
           && pageHtml.includes('id="transportHealthMode"')
           && pageHtml.includes('id="transportLatency"')
           && pageHtml.includes('id="transportFrameLoss"')
@@ -7024,8 +7032,11 @@ async function runBrowserlessRunnerSelfTest() {
           && pageHtml.includes("if (health.mode === 'active') return '活跃采样'")
           && pageHtml.includes("{ text: '更新于', className: 'meta-label' }")
           && pageHtml.includes("{ text: stamp(status.highDropPlayers?.lastSnapshotAt) }")
-          && pageHtml.includes("createHighDropRow('玩家名称', 'Drop', '推测额度', true)")
-          && pageHtml.includes('rankedItems.sort((left, right) => highDropRankValue(right.item) - highDropRankValue(left.item)')
+          && pageHtml.includes("createHighDropRow('玩家名称', 'Drop', 'Drop变化', '推测额度', true")
+          && pageHtml.includes("let highDropSortField = 'drop'")
+          && pageHtml.includes("button.className = 'high-drop-sort' + (highDropSortField === field ? ' active' : '')")
+          && pageHtml.includes("button.setAttribute('aria-sort', highDropSortField === field ? 'descending' : 'none')")
+          && pageHtml.includes("rankedItems.sort((left, right) => highDropSortValue(right.item, highDropSortField) - highDropSortValue(left.item, highDropSortField)")
           && pageHtml.includes('initial * 20 + (latest - initial) * 2')
           && pageHtml.includes('if (latest !== maximum) return null')
           && pageHtml.includes('.high-drop-name.self.online,.high-drop-values.self.online{color:var(--green)}')
@@ -7133,6 +7144,7 @@ async function runBrowserlessRunnerSelfTest() {
           && browserlessSnapshotCoinPickupObservationTest.ok
           && browserlessFastSnapshotPickupObservationTest.ok
           && highDropRankingTest
+          && highDropSortTest.ok
           && highDropRecencyTest.ok
           && staminaExhaustionPanelTest
           && panelBattleCompact.battle.distance === 5600
@@ -7180,6 +7192,7 @@ async function runBrowserlessRunnerSelfTest() {
         snapshotCoinPickupObservation: browserlessSnapshotCoinPickupObservationTest,
         fastSnapshotCoinPickupObservation: browserlessFastSnapshotPickupObservationTest,
         highDropRanking: highDropRankingTest,
+        highDropSort: highDropSortTest,
         highDropRecency: highDropRecencyTest,
         staminaExhaustionPanel: staminaExhaustionPanelTest,
         offlineTransition: {
