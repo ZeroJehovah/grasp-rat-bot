@@ -13,7 +13,13 @@ const DEFAULT_PENDING_GRACE_MS = 5000;
 const MAX_CANDIDATES = 64;
 
 function isRemoteProfitSnapshotEligible(source, detail = {}, sessionOnline, realtimeSelf) {
-  if (String(source || '') !== 'gap-http' || detail.global !== true || sessionOnline !== true) return false;
+  const normalizedSource = String(source || '');
+  const gameplaySnapshot = normalizedSource === 'gap-http';
+  const carriedPreLoginSnapshot = normalizedSource === 'prelogin-http'
+    && detail.carriedIntoSession === true;
+  if ((!gameplaySnapshot && !carriedPreLoginSnapshot)
+    || detail.global !== true
+    || sessionOnline !== true) return false;
   const authority = String(realtimeSelf?.authority || realtimeSelf?.source || '').toLowerCase();
   if (!['realtime', 'pos', 'native'].includes(authority)) return false;
   if (realtimeSelf?.x === null || realtimeSelf?.x === undefined || realtimeSelf?.x === '') return false;
@@ -372,6 +378,17 @@ function createRemoteProfitWorker(options = {}) {
     return added;
   }
 
+  function reset(reason = 'session-reset') {
+    nextGeneration += 1;
+    latestRequestedGeneration = nextGeneration;
+    if (pending?.timer) clearTimeout(pending.timer);
+    pending?.resolve?.(null);
+    pending = null;
+    busy = false;
+    clearPublished(reason);
+    return true;
+  }
+
   async function close() {
     if (closed) return status();
     closed = true;
@@ -434,6 +451,7 @@ function createRemoteProfitWorker(options = {}) {
     observeRealtimeEntities,
     publish: publishRequest,
     request: publishRequest,
+    reset,
     status
   };
 }

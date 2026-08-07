@@ -6,7 +6,7 @@ const path = require('path');
 const SCHEMA_VERSION = 3;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DEFAULT_RECORD_THRESHOLD = 50;
-const DEFAULT_SNAPSHOT_GAP_MS = 3 * 60 * 1000;
+const DEFAULT_SNAPSHOT_GAP_MS = 30 * 1000;
 
 function cloneJson(value) {
   if (value === null || value === undefined) return value;
@@ -330,6 +330,7 @@ function createSnapshotGapPoller(options = {}) {
   let lastSnapshotAtMs = Math.max(0, Number(options.lastSnapshotAtMs || 0));
   let lastGlobalSnapshotAtMs = Math.max(0, Number(options.lastGlobalSnapshotAtMs || 0));
   let lastAttemptAtMs = 0;
+  let lifecycleGeneration = 0;
 
   function currentIntervalMs() {
     if (typeof options.getIntervalMs !== 'function') return intervalMs;
@@ -363,7 +364,8 @@ function createSnapshotGapPoller(options = {}) {
   }
 
   function noteSnapshot(observedAtMs = now(), detail = {}) {
-    const value = Number(observedAtMs);
+    const scheduleAtMs = Number(detail.scheduleAtMs ?? observedAtMs);
+    const value = Number.isFinite(scheduleAtMs) ? scheduleAtMs : Number(observedAtMs);
     if (Number.isFinite(value)) {
       lastSnapshotAtMs = Math.max(lastSnapshotAtMs, value);
       if (detail.global === true) lastGlobalSnapshotAtMs = Math.max(lastGlobalSnapshotAtMs, value);
@@ -378,6 +380,7 @@ function createSnapshotGapPoller(options = {}) {
   async function run() {
     timer = null;
     if (stopped || inFlight) return;
+    const runGeneration = lifecycleGeneration;
     if (typeof options.isReady === 'function' && !options.isReady()) {
       schedule(notReadyRetryMs);
       return;
@@ -392,27 +395,43 @@ function createSnapshotGapPoller(options = {}) {
       return;
     }
     inFlight = true;
-    lastAttemptAtMs = now();
+    const attemptAtMs = now();
+    lastAttemptAtMs = attemptAtMs;
     try {
       const payload = await options.fetchSnapshot();
-      if (payload && typeof options.onSnapshot === 'function') {
-        await options.onSnapshot(payload, { source: 'gap-http', observedAtMs: now(), global: true });
+      if (payload && !stopped && runGeneration === lifecycleGeneration && typeof options.onSnapshot === 'function') {
+        await options.onSnapshot(payload, {
+          source: 'gap-http',
+          observedAtMs: now(),
+          scheduleAtMs: attemptAtMs,
+          global: true
+        });
       }
     } catch (err) {
-      if (typeof options.onError === 'function') options.onError(err);
+      if (!stopped && runGeneration === lifecycleGeneration && typeof options.onError === 'function') {
+        options.onError(err);
+      }
     } finally {
       inFlight = false;
-      schedule();
+      if (!stopped) schedule();
     }
   }
 
-  function start() {
-    if (!stopped) return;
+  function start(detail = {}) {
+    lifecycleGeneration += 1;
+    if (detail.reset === true) {
+      const snapshotAtMs = Math.max(0, Number(detail.snapshotAtMs || 0));
+      const globalSnapshotAtMs = Math.max(0, Number(detail.globalSnapshotAtMs ?? snapshotAtMs));
+      lastSnapshotAtMs = snapshotAtMs;
+      lastGlobalSnapshotAtMs = globalSnapshotAtMs;
+      lastAttemptAtMs = 0;
+    }
     stopped = false;
-    schedule(lastSnapshotAtMs ? null : 1000);
+    schedule(detail.immediate === true ? 0 : (lastSnapshotAtMs ? null : 1000));
   }
 
   function stop() {
+    lifecycleGeneration += 1;
     stopped = true;
     if (timer) clearTimer(timer);
     timer = null;
@@ -433,7 +452,8 @@ function createSnapshotGapPoller(options = {}) {
         lastGlobalSnapshotAtMs,
         lastAttemptAtMs,
         inFlight,
-        stopped
+        stopped,
+        lifecycleGeneration
       };
     }
   };

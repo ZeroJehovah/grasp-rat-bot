@@ -1885,19 +1885,22 @@ async function runBrowserlessRunner(config, deps = {}) {
   });
   const remoteProfitContext = atMs => remoteProfitWorker?.context?.(atMs) || null;
   const remoteProfitRealtimeSelf = () => remoteProfitRealtimeSelfFromLiveState(liveState, config.userId);
+  let onlineSnapshotSession = null;
   let activeRunKillConfirmations = [];
   const observeSnapshotPayload = (payload, detail = {}) => {
     const observedAtMs = Number(detail.observedAtMs ?? now());
     const snapshotSource = String(detail.source || 'snapshot');
     snapshotGapPoller?.noteSnapshot(observedAtMs, {
-      global: detail.global === true || snapshotSource !== 'ws'
+      global: detail.global === true || snapshotSource !== 'ws',
+      scheduleAtMs: detail.scheduleAtMs
     });
     let chatResult = null;
     let easyKillNameResult = null;
     let easyKillEvidenceResult = null;
     let damageNameResult = null;
-    const sessionOnline = liveState?.stats?.currentSession?.online === true;
-    const remoteSelf = remoteProfitRealtimeSelf();
+    const sessionOnline = onlineSnapshotSession?.active === true
+      || liveState?.stats?.currentSession?.online === true;
+    const remoteSelf = remoteProfitRealtimeSelf() || onlineSnapshotSession?.self || null;
     if (isRemoteProfitSnapshotEligible(snapshotSource, detail, sessionOnline, remoteSelf)) {
       const dynamicStatus = dynamicWhitelist.status?.() || {};
       const easyStatus = easyKillPlayerTracker.status?.(observedAtMs) || {};
@@ -2125,17 +2128,11 @@ async function runBrowserlessRunner(config, deps = {}) {
   config.sourceIps = sourceIpController.sourceIps();
   persisted = readBrowserlessStateFile(stateFile);
 
-  const highDropStatusAtStart = highDropPlayerTracker.status(now());
-  const lastHighDropSnapshotAtMs = Date.parse(highDropStatusAtStart.lastSnapshotAt || '');
-  const lastHighDropGlobalSnapshotAtMs = Date.parse(highDropStatusAtStart.lastGlobalSnapshotAt || '');
   snapshotGapPoller = deps.snapshotGapPoller || createSnapshotGapPoller({
     now,
-    intervalMs: DEFAULT_CHAT_IDLE_INTERVAL_MS,
+    intervalMs: DEFAULT_SNAPSHOT_GAP_MS,
     minimumIntervalMs: DEFAULT_CHAT_ACTIVE_INTERVAL_MS,
-    getIntervalMs: () => chatService.desiredSnapshotIntervalMs?.(now()) || DEFAULT_CHAT_IDLE_INTERVAL_MS,
-    lastSnapshotAtMs: Number.isFinite(lastHighDropSnapshotAtMs) ? lastHighDropSnapshotAtMs : 0,
     globalIntervalMs: DEFAULT_SNAPSHOT_GAP_MS,
-    lastGlobalSnapshotAtMs: Number.isFinite(lastHighDropGlobalSnapshotAtMs) ? lastHighDropGlobalSnapshotAtMs : 0,
     isReady: () => Boolean(config.userId && config.sessionToken),
     fetchSnapshot: async () => {
       const url = buildSnapshotProbeUrl({
@@ -2156,7 +2153,15 @@ async function runBrowserlessRunner(config, deps = {}) {
       if (!body.json || typeof body.json !== 'object') throw new Error('snapshot returned no JSON payload');
       return body.json;
     },
-    onSnapshot: observeSnapshotPayload,
+    onSnapshot: (payload, detail = {}) => {
+      logStore.append('runner', 'gameplay-snapshot-poll', {
+        observedAt: new Date(Number(detail.observedAtMs || now())).toISOString(),
+        tick: payload?.tick ?? null,
+        entityCount: Array.isArray(payload?.entities) ? payload.entities.length : 0,
+        intervalMs: DEFAULT_SNAPSHOT_GAP_MS
+      });
+      return observeSnapshotPayload(payload, detail);
+    },
     onError: err => {
       recordSupervisorError(err, { operation: 'shared-gap-snapshot' });
       logStore.append('runner', 'shared-gap-snapshot-error', { error: errorMessage(err) });
@@ -2422,6 +2427,68 @@ async function runBrowserlessRunner(config, deps = {}) {
     return true;
   };
 
+  const beginGameplaySnapshotSession = (entry = {}, carriedSnapshot = null) => {
+    const firstSelf = entry.firstSelf || entry.entry?.firstSelf || null;
+    const x = Number(firstSelf?.x);
+    const y = Number(firstSelf?.y);
+    const self = Number.isFinite(x) && Number.isFinite(y)
+      ? {
+          authority: 'realtime',
+          userId: Number(firstSelf?.userId ?? firstSelf?.user_id ?? config.userId) || config.userId,
+          x,
+          y,
+          hp: Number.isFinite(Number(firstSelf?.hp)) ? Number(firstSelf.hp) : null
+        }
+      : null;
+    onlineSnapshotSession = {
+      active: true,
+      runId: String(entry.runId || ''),
+      startedAtMs: now(),
+      self
+    };
+    remoteProfitWorker?.reset?.('gameplay-session-start');
+    const carriedAtMs = Number(carriedSnapshot?.observedAtMs || 0);
+    const carryEligible = Boolean(
+      carriedSnapshot?.payload
+      && typeof carriedSnapshot.payload === 'object'
+      && Number.isFinite(carriedAtMs)
+      && carriedAtMs > 0
+    );
+    if (carryEligible) {
+      observeSnapshotPayload(carriedSnapshot.payload, {
+        source: 'prelogin-http',
+        observedAtMs: carriedAtMs,
+        global: true,
+        carriedIntoSession: true
+      });
+    }
+    snapshotGapPoller?.start?.({
+      reset: true,
+      snapshotAtMs: carryEligible ? carriedAtMs : 0,
+      globalSnapshotAtMs: carryEligible ? carriedAtMs : 0,
+      immediate: !carryEligible
+    });
+    logStore.append('runner', 'gameplay-snapshot-session-start', {
+      runId: String(entry.runId || ''),
+      intervalMs: DEFAULT_SNAPSHOT_GAP_MS,
+      initialMode: carryEligible ? 'prelogin-snapshot-handoff' : 'post-login-immediate-fetch',
+      carriedSnapshotAt: carryEligible ? new Date(carriedAtMs).toISOString() : ''
+    });
+  };
+
+  const endGameplaySnapshotSession = reason => {
+    if (!onlineSnapshotSession?.active) return false;
+    const runId = onlineSnapshotSession.runId || '';
+    snapshotGapPoller?.stop?.();
+    onlineSnapshotSession = null;
+    remoteProfitWorker?.reset?.('gameplay-session-end');
+    logStore.append('runner', 'gameplay-snapshot-session-stop', {
+      runId,
+      reason: String(reason || 'canary-finish')
+    });
+    return true;
+  };
+
   const markSourceIpLoginFailure = (reason, canary = null) => {
     const current = readBrowserlessStateFile(stateFile);
     const preflight = normalizeSourceIpPreflight(
@@ -2447,6 +2514,19 @@ async function runBrowserlessRunner(config, deps = {}) {
   };
 
   let preparedSnapshotSafety = null;
+  let preparedSnapshotPayload = null;
+  const snapshotCarryRecord = (payload, detail = {}) => {
+    if (String(detail.source || '') !== 'prelogin-http' || !payload || typeof payload !== 'object') return null;
+    const observedAtMs = Number(detail.observedAtMs || now());
+    if (!Number.isFinite(observedAtMs) || observedAtMs <= 0) return null;
+    return { payload, observedAtMs };
+  };
+  const observePreparedSnapshotPayload = (payload, detail = {}) => {
+    const result = observeSnapshotPayload(payload, detail);
+    const carried = snapshotCarryRecord(payload, detail);
+    if (carried) preparedSnapshotPayload = carried;
+    return result;
+  };
   const waitForLoopPlan = async (loopPlan, resultForStop = null) => {
     loopPlan = resumeTransportRecoveryAfterCloudflareStop(
       loopPlan,
@@ -2675,6 +2755,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       }
       let probe;
       try {
+        preparedSnapshotPayload = null;
         probe = await (deps.runPreLoginSnapshotSafety || runPreLoginSnapshotSafety)({
           ...config,
           snapshotEdgeEnabled: false,
@@ -2684,7 +2765,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           now,
           sleep,
           fetchWithTimeout: sourceIpController.fetchWithTimeout,
-          onSnapshotPayload: observeSnapshotPayload,
+          onSnapshotPayload: observePreparedSnapshotPayload,
           easyKillPlayerTracker,
           damagePlayerTracker,
           dynamicWhitelist
@@ -2756,6 +2837,7 @@ async function runBrowserlessRunner(config, deps = {}) {
             throw interrupted;
           }
         }
+        preparedSnapshotPayload = null;
         preparedSnapshotSafety = await (deps.runPreLoginSnapshotSafety || runPreLoginSnapshotSafety)(
           config,
           readBrowserlessStateFile(stateFile),
@@ -2763,7 +2845,7 @@ async function runBrowserlessRunner(config, deps = {}) {
             now,
             sleep,
             fetchWithTimeout: sourceIpController.fetchWithTimeout,
-            onSnapshotPayload: observeSnapshotPayload,
+            onSnapshotPayload: observePreparedSnapshotPayload,
             onSnapshotSafety: recordSnapshotSafetyProgress,
             onSnapshotEdge: progress => logStore.append('runner', `snapshot-edge-${progress.type || 'progress'}`, progress),
             easyKillPlayerTracker,
@@ -3320,8 +3402,6 @@ async function runBrowserlessRunner(config, deps = {}) {
     }
   }
 
-  if (!config.once && !config.dryRun) snapshotGapPoller.start();
-
   logStore.append('runner', 'runner-start', {
     runtimeRevision: browserlessRuntimeRevision(),
     runtimeRevisionResolution: browserlessRuntimeRevisionStatus(),
@@ -3403,6 +3483,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       });
     } else {
       try {
+        preparedSnapshotPayload = null;
         const probe = await (deps.runPreLoginSnapshotSafety || runPreLoginSnapshotSafety)({
           ...config,
           snapshotEdgeEnabled: false,
@@ -3412,7 +3493,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           now,
           sleep,
           fetchWithTimeout: sourceIpController.fetchWithTimeout,
-          onSnapshotPayload: observeSnapshotPayload,
+          onSnapshotPayload: observePreparedSnapshotPayload,
           easyKillPlayerTracker,
           damagePlayerTracker,
           dynamicWhitelist
@@ -3427,6 +3508,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           nextRunAt: persistedDelayPlan.nextRunAt
         });
         if (selfPresent) {
+          preparedSnapshotSafety = probe;
           recordSnapshotSafetyProgress(probe);
           const currentBeforeResume = readBrowserlessStateFile(stateFile);
           const pendingExit = normalizePendingExit(currentBeforeResume?.runner?.pendingExit, now(), {
@@ -3861,6 +3943,14 @@ async function runBrowserlessRunner(config, deps = {}) {
     loginPointProvided = hasConfigNumber(config.loginPointX) && hasConfigNumber(config.loginPointY);
     if (!loginPointProvided && config.controlMode === 'read-only') {
       let bootstrap;
+      let bootstrapSnapshotPayload = null;
+      const bootstrapDailyFirstLogin = isFirstBrowserlessLoginOfDay(readBrowserlessStateFile(stateFile), now());
+      const observeBootstrapSnapshotPayload = (payload, detail = {}) => {
+        const result = observeSnapshotPayload(payload, detail);
+        const carried = snapshotCarryRecord(payload, detail);
+        if (carried) bootstrapSnapshotPayload = carried;
+        return result;
+      };
       try {
         markSourceIpSnapshotWait('source-ip-login-point-bootstrap-wait');
         bootstrap = await readOnlyCanary(config, {
@@ -3874,7 +3964,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           dynamicWhitelist,
           allowMissingLoginPointBootstrap: true,
           onSnapshotSafety: recordSnapshotSafetyProgress,
-          onSnapshotPayload: observeSnapshotPayload,
+          onSnapshotPayload: observeBootstrapSnapshotPayload,
           getRemoteProfitContext: remoteProfitContext,
           onRemoteProfitDecision: decision => remoteProfitWorker?.observeDecision?.(decision),
           onRemoteProfitRealtime: entities => remoteProfitWorker?.observeRealtimeEntities?.(entities),
@@ -3882,7 +3972,10 @@ async function runBrowserlessRunner(config, deps = {}) {
           fetchWithTimeout: sourceIpController.fetchWithTimeout,
           openBrowserlessWs: sourceIpController.openBrowserlessWs,
           onLoginTransportAttempt: markSourceIpLoginAttempt,
-          onLoginSuccess: markSourceIpLoginSuccess,
+          onLoginSuccess: entry => {
+            markSourceIpLoginSuccess(entry);
+            beginGameplaySnapshotSession(entry, bootstrapDailyFirstLogin ? null : bootstrapSnapshotPayload);
+          },
           onTransportOpen,
           onTransportClose,
           onTransportHealth: transportHealth => {
@@ -3897,6 +3990,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         bootstrap = buildRunnerErrorCanary(err, config, { now, runId: 'login-point-bootstrap-error' });
         logStore.append('runner', 'runner-canary-error', bootstrap);
       }
+      endGameplaySnapshotSession(bootstrap?.reason || bootstrap?.error || 'login-point-bootstrap-finish');
       const learned = learnedLoginPointFromCanary(bootstrap);
       if (learned.loginPoint) {
         updateState({
@@ -3961,10 +4055,18 @@ async function runBrowserlessRunner(config, deps = {}) {
         ? 'daily-first-login-invulnerability'
         : '';
       const precheckedSnapshotSafety = bypassPreLoginSafetyReason ? null : preparedSnapshotSafety;
+      let loginSnapshotPayload = bypassPreLoginSafetyReason ? null : preparedSnapshotPayload;
       preparedSnapshotSafety = null;
+      preparedSnapshotPayload = null;
       if (!bypassPreLoginSafetyReason) {
         markSourceIpSnapshotWait('source-ip-snapshot-safety-wait');
       }
+      const observeLoginSnapshotPayload = (payload, detail = {}) => {
+        const result = observeSnapshotPayload(payload, detail);
+        const carried = snapshotCarryRecord(payload, detail);
+        if (carried) loginSnapshotPayload = carried;
+        return result;
+      };
       const publishDecisionLiveState = decision => {
         const currentBeforeDecision = liveState || stateBeforeCanary;
         const decisionPatch = decisionStatePatch(decision);
@@ -4000,7 +4102,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         precheckedSnapshotSafety,
         transportRecoveryEscalation,
         onSnapshotSafety: recordSnapshotSafetyProgress,
-        onSnapshotPayload: observeSnapshotPayload,
+        onSnapshotPayload: observeLoginSnapshotPayload,
         getRemoteProfitContext: remoteProfitContext,
         onRemoteProfitDecision: decision => remoteProfitWorker?.observeDecision?.(decision),
         onRemoteProfitRealtime: entities => remoteProfitWorker?.observeRealtimeEntities?.(entities),
@@ -4009,7 +4111,10 @@ async function runBrowserlessRunner(config, deps = {}) {
         fetchWithTimeout: sourceIpController.fetchWithTimeout,
         openBrowserlessWs: sourceIpController.openBrowserlessWs,
         onLoginTransportAttempt: markSourceIpLoginAttempt,
-        onLoginSuccess: markSourceIpLoginSuccess,
+        onLoginSuccess: entry => {
+          markSourceIpLoginSuccess(entry);
+          beginGameplaySnapshotSession(entry, loginSnapshotPayload);
+        },
         onTransportOpen,
         onTransportClose,
         onTransportHealth: transportHealth => {
@@ -4048,6 +4153,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       canary = buildRunnerErrorCanary(err, config, { now });
       logStore.append('runner', 'runner-canary-error', canary);
     }
+    endGameplaySnapshotSession(canary?.reason || canary?.error || 'canary-finish');
     // Finalize any still-open per-battle log when the canary run ends so the
     // last engagement is compressed and indexed before the next loop/session.
     try {
@@ -4602,10 +4708,18 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
     let canarySourceIps = [];
     let bypassReason = '';
     let phaseBeforeCanaryReturn = '';
+    const snapshotSessionEvents = [];
     const result = await runBrowserlessRunner(config, {
       ...baseDeps,
       now: () => nowMs,
       monotonicNow: () => monotonicMs,
+      snapshotGapPoller: {
+        noteSnapshot() {},
+        refreshSchedule() {},
+        start(detail = {}) { snapshotSessionEvents.push({ type: 'start', detail }); },
+        stop() { snapshotSessionEvents.push({ type: 'stop' }); },
+        status() { return { intervalMs: DEFAULT_SNAPSHOT_GAP_MS, stopped: true }; }
+      },
       discoverSourceIps: () => ['10.0.0.12', '10.0.0.10', '10.0.0.9', '10.0.0.11'],
       sourceIpPreflightRequest: async (_origin, ip) => {
         order.push(ip);
@@ -4644,6 +4758,11 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
           && phaseBeforeCanaryReturn === 'active'
           && loginSuccessLogCount === 1
           && bypassReason === 'daily-first-login-invulnerability'
+          && snapshotSessionEvents.length === 2
+          && snapshotSessionEvents[0].type === 'start'
+          && snapshotSessionEvents[0].detail.immediate === true
+          && snapshotSessionEvents[0].detail.snapshotAtMs === 0
+          && snapshotSessionEvents[1].type === 'stop'
           && logSafe
       ),
       order,
@@ -4654,7 +4773,138 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
       phaseBeforeCanaryReturn,
       loginSuccessLogCount,
       bypassReason,
+      snapshotSessionEvents,
       logSafe
+    };
+  })();
+
+  const preloginSnapshotHandoff = await (async () => {
+    const config = buildConfig('prelogin-snapshot-handoff');
+    let nowMs = Date.UTC(2026, 7, 2, 1, 30, 0);
+    const snapshotObservedAtMs = nowMs - 250;
+    updateBrowserlessStateFile(stateFilePath(config), {
+      stats: {
+        today: { day: browserlessDayKey(nowMs), sessionCount: 1 },
+        currentSession: { online: false }
+      }
+    }, { updatedAt: new Date(nowMs - 60000).toISOString() });
+    const snapshotSessionEvents = [];
+    const remotePublications = [];
+    const remoteResets = [];
+    const snapshotGapPoller = {
+      noteSnapshot() {},
+      refreshSchedule() {},
+      start(detail = {}) { snapshotSessionEvents.push({ type: 'start', detail }); },
+      stop() { snapshotSessionEvents.push({ type: 'stop' }); },
+      status() { return { intervalMs: DEFAULT_SNAPSHOT_GAP_MS, stopped: true }; }
+    };
+    const remoteProfitWorker = {
+      context: () => null,
+      observeDecision() {},
+      observeRealtimeEntities() {},
+      publish(payload) {
+        remotePublications.push(payload);
+        return Promise.resolve(null);
+      },
+      reset(reason) { remoteResets.push(reason); return true; },
+      status: () => ({ enabled: true }),
+      close: async () => ({})
+    };
+    let bypassReason = '';
+    const result = await runBrowserlessRunner(config, {
+      ...baseDeps,
+      now: () => nowMs,
+      snapshotGapPoller,
+      remoteProfitWorker,
+      discoverSourceIps: () => ['10.0.0.21', '10.0.0.22', '10.0.0.23'],
+      sourceIpPreflightRequest: async () => ({ status: 200 }),
+      runReadOnlyOnce: async (_runtimeConfig, options) => {
+        bypassReason = options.bypassPreLoginSafetyReason || '';
+        options.onSnapshotPayload?.({
+          tick: 123,
+          entities: [{ user_id: 99, x: 1000, y: 0, hp: 50, drop: 500 }]
+        }, {
+          source: 'prelogin-http',
+          observedAtMs: snapshotObservedAtMs
+        });
+        return successfulCanary(nowMs, options, 'prelogin-snapshot-handoff-success');
+      }
+    });
+    const publication = remotePublications[0] || null;
+    return {
+      ok: Boolean(
+        result.ok
+          && bypassReason === ''
+          && snapshotSessionEvents.length === 2
+          && snapshotSessionEvents[0].type === 'start'
+          && snapshotSessionEvents[0].detail.immediate === false
+          && snapshotSessionEvents[0].detail.snapshotAtMs === snapshotObservedAtMs
+          && snapshotSessionEvents[1].type === 'stop'
+          && remotePublications.length === 1
+          && publication.source === 'prelogin-http'
+          && publication.observedAtMs === snapshotObservedAtMs
+          && publication.self?.authority === 'realtime'
+          && remoteResets.join(',') === 'gameplay-session-start,gameplay-session-end'
+      ),
+      bypassReason,
+      snapshotSessionEvents,
+      remotePublicationCount: remotePublications.length,
+      remoteSource: publication?.source || '',
+      remoteResets
+    };
+  })();
+
+  const healthyNoPrecheck = await (async () => {
+    const config = buildConfig('healthy-no-precheck');
+    const nowMs = Date.UTC(2026, 7, 2, 1, 45, 0);
+    updateBrowserlessStateFile(stateFilePath(config), {
+      stats: {
+        today: { day: browserlessDayKey(nowMs), sessionCount: 1 },
+        currentSession: { online: false }
+      },
+      lastKnown: { hp: 100 }
+    }, { updatedAt: new Date(nowMs - 60000).toISOString() });
+    const snapshotSessionEvents = [];
+    let bypassReason = '';
+    let observedPreLoginPayloadCount = 0;
+    const result = await runBrowserlessRunner(config, {
+      ...baseDeps,
+      now: () => nowMs,
+      snapshotGapPoller: {
+        noteSnapshot() {},
+        refreshSchedule() {},
+        start(detail = {}) { snapshotSessionEvents.push({ type: 'start', detail }); },
+        stop() { snapshotSessionEvents.push({ type: 'stop' }); },
+        status() { return { intervalMs: DEFAULT_SNAPSHOT_GAP_MS, stopped: true }; }
+      },
+      discoverSourceIps: () => ['10.0.0.31', '10.0.0.32', '10.0.0.33'],
+      sourceIpPreflightRequest: async () => ({ status: 200 }),
+      runReadOnlyOnce: async (_runtimeConfig, options) => {
+        bypassReason = options.bypassPreLoginSafetyReason || '';
+        const originalObserver = options.onSnapshotPayload;
+        options.onSnapshotPayload = (...args) => {
+          observedPreLoginPayloadCount += 1;
+          return originalObserver?.(...args);
+        };
+        return successfulCanary(nowMs, options, 'healthy-no-precheck-success');
+      }
+    });
+    return {
+      ok: Boolean(
+        result.ok
+          && config.loginPointHp === 100
+          && bypassReason === ''
+          && observedPreLoginPayloadCount === 0
+          && snapshotSessionEvents.length === 2
+          && snapshotSessionEvents[0].type === 'start'
+          && snapshotSessionEvents[0].detail.immediate === true
+          && snapshotSessionEvents[0].detail.snapshotAtMs === 0
+          && snapshotSessionEvents[1].type === 'stop'
+      ),
+      loginPointHp: config.loginPointHp,
+      bypassReason,
+      observedPreLoginPayloadCount,
+      snapshotSessionEvents
     };
   })();
 
@@ -5076,6 +5326,8 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
   return {
     ok: Boolean(
       immediate.ok
+        && preloginSnapshotHandoff.ok
+        && healthyNoPrecheck.ok
         && deferredRestartReuse.ok
         && snapshotWaitReuse.ok
         && loginFailureRetest.ok
@@ -5085,6 +5337,8 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
         && cachedProbeSelection.ok
     ),
     immediate,
+    preloginSnapshotHandoff,
+    healthyNoPrecheck,
     deferredRestartReuse,
     snapshotWaitReuse,
     loginFailureRetest,
@@ -5865,6 +6119,68 @@ async function runBrowserlessRunnerSelfTest() {
       fetchSnapshot: async () => ({})
     });
     const dynamicSnapshotPollerStatus = dynamicSnapshotPoller.status();
+    const fixedSnapshotScheduleDelays = [];
+    const fixedSnapshotPoller = createSnapshotGapPoller({
+      now: () => Date.UTC(2026, 6, 8, 1, 3, 0),
+      intervalMs: DEFAULT_SNAPSHOT_GAP_MS,
+      minimumIntervalMs: DEFAULT_CHAT_ACTIVE_INTERVAL_MS,
+      globalIntervalMs: DEFAULT_SNAPSHOT_GAP_MS,
+      setTimeout: (_callback, delayMs) => {
+        fixedSnapshotScheduleDelays.push(delayMs);
+        return { unref() {} };
+      },
+      clearTimeout() {},
+      fetchSnapshot: async () => ({})
+    });
+    const fixedSnapshotAtMs = Date.UTC(2026, 6, 8, 1, 3, 0);
+    fixedSnapshotPoller.start({
+      reset: true,
+      snapshotAtMs: fixedSnapshotAtMs,
+      globalSnapshotAtMs: fixedSnapshotAtMs,
+      immediate: false
+    });
+    fixedSnapshotPoller.stop();
+    fixedSnapshotPoller.start({ reset: true, immediate: true });
+    fixedSnapshotPoller.stop();
+    let resolveStaleSnapshot;
+    const rolloverTimers = [];
+    const rolloverSnapshotAtMs = Date.UTC(2026, 6, 8, 1, 4, 0);
+    const rolloverSnapshotPoller = createSnapshotGapPoller({
+      now: () => rolloverSnapshotAtMs,
+      intervalMs: DEFAULT_SNAPSHOT_GAP_MS,
+      minimumIntervalMs: DEFAULT_CHAT_ACTIVE_INTERVAL_MS,
+      globalIntervalMs: DEFAULT_SNAPSHOT_GAP_MS,
+      setTimeout: (callback, delayMs) => {
+        const handle = { callback, delayMs, cleared: false, unref() {} };
+        rolloverTimers.push(handle);
+        return handle;
+      },
+      clearTimeout: handle => { handle.cleared = true; },
+      fetchSnapshot: () => new Promise(resolve => { resolveStaleSnapshot = resolve; })
+    });
+    rolloverSnapshotPoller.start({ reset: true, immediate: true });
+    const staleSnapshotRun = rolloverTimers[0].callback();
+    rolloverSnapshotPoller.stop();
+    rolloverSnapshotPoller.start({
+      reset: true,
+      snapshotAtMs: rolloverSnapshotAtMs,
+      globalSnapshotAtMs: rolloverSnapshotAtMs,
+      immediate: false
+    });
+    resolveStaleSnapshot({ tick: 1, entities: [] });
+    await staleSnapshotRun;
+    rolloverSnapshotPoller.stop();
+    const fixedSnapshotPollerTest = {
+      ok: DEFAULT_SNAPSHOT_GAP_MS === 30000
+        && fixedSnapshotScheduleDelays[0] === 30000
+        && fixedSnapshotScheduleDelays[1] === 0
+        && rolloverTimers[1].delayMs === 30000
+        && rolloverTimers[1].cleared === true
+        && rolloverTimers[2].delayMs === 30000,
+      intervalMs: DEFAULT_SNAPSHOT_GAP_MS,
+      scheduleDelays: fixedSnapshotScheduleDelays,
+      rolloverScheduleDelays: rolloverTimers.map(timer => timer.delayMs)
+    };
     const routeAction = {
       kind: 'coin',
       target: { id: 'route-a', x: 20, y: 0, amount: 4 },
@@ -7431,6 +7747,7 @@ async function runBrowserlessRunnerSelfTest() {
         && chatHistoryStore.ok
         && chatHistoryWorker.ok
         && dynamicSnapshotPollerStatus.currentIntervalMs === DEFAULT_CHAT_ACTIVE_INTERVAL_MS
+        && fixedSnapshotPollerTest.ok
         && nearbyCoinRoutePanelTest.ok
         && nearbySelectedPlayerCoordinatesTest.ok
         && nearbyMapCoordinatesTest.ok
@@ -7502,6 +7819,7 @@ async function runBrowserlessRunnerSelfTest() {
       chatService,
       chatHistoryStore,
       chatHistoryWorker,
+      fixedSnapshotPoller: fixedSnapshotPollerTest,
       dynamicSnapshotPollerStatus,
       nearbyCoinRoutePanelTest,
       nearbySelectedPlayerCoordinatesTest,

@@ -70,10 +70,14 @@ async function runRemoteProfitWorkerSelfTest() {
     assert.strictEqual(isRemoteProfitSnapshotEligible(
       'gap-http', { global: true }, true, { authority: 'realtime', x: 0, y: 0 }
     ), true);
+    assert.strictEqual(isRemoteProfitSnapshotEligible(
+      'prelogin-http', { global: true, carriedIntoSession: true }, true,
+      { authority: 'realtime', x: 0, y: 0 }
+    ), true);
     for (const detail of [
       { source: 'ws', detail: { global: true } },
       { source: 'gap-http', detail: { global: false } },
-      { source: 'pre-login', detail: { global: true } },
+      { source: 'prelogin-http', detail: { global: true } },
       { source: 'exit-verification', detail: { global: true } }
     ]) {
       assert.strictEqual(isRemoteProfitSnapshotEligible(
@@ -105,11 +109,13 @@ async function runRemoteProfitWorkerSelfTest() {
     assert.strictEqual(remoteProfitRealtimeSelfFromLiveState({
       current: { self: { authority: 'realtime', x: null, y: 0 } }
     }, 1), null);
+    assert.strictEqual(worker.reset('self-test-session-boundary'), true);
+    assert.strictEqual(worker.context(Date.now()), null);
     const busyPending = worker.publish(requestPayload(3));
     const busyImmediate = await worker.publish(requestPayload(4));
     assert.strictEqual(busyImmediate, null);
     await busyPending;
-    return { ok: true, cases: 17, status };
+    return { ok: true, cases: 20, status };
   } finally {
     await worker.close();
   }
