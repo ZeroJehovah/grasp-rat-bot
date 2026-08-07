@@ -7017,7 +7017,7 @@ async function runBrowserlessRunnerSelfTest() {
       const panelDetailTest = {
         ok: Boolean(
           pageHtml.includes('>Drop排行</h2>')
-          && pageHtml.includes('grid-template-columns:minmax(100px,1.8fr) minmax(56px,.5fr) minmax(72px,.58fr) minmax(64px,.5fr)')
+          && pageHtml.includes('grid-template-columns:minmax(100px,1.8fr) minmax(48px,.42fr) minmax(66px,.52fr) minmax(64px,.5fr)')
           && pageHtml.includes('id="transportHealthMode"')
           && pageHtml.includes('id="transportLatency"')
           && pageHtml.includes('id="transportFrameLoss"')
