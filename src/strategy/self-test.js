@@ -177,6 +177,7 @@ const {
 } = require('./chase-mode');
 const { COMBAT_CONSTANTS, validateCombatConstants } = require('./combat-constants');
 const {
+  combatDamageEfficiencyThresholdCore,
   combatPressurePhaseCore,
   combatPressureStrafeCore,
   combatPressureTargetRangeCore
@@ -2218,6 +2219,148 @@ function runStrategyModuleSelfTests() {
       && pressureStrafeLong.segmentIndex > 128
       && pressureStrafeLong.dx === 0
       && Math.abs(pressureStrafeLong.dy) === 1
+  });
+
+  const efficiencyThreshold100 = combatDamageEfficiencyThresholdCore(100, {
+    profitThresholdCoinsPer10Stamina: 1
+  });
+  const efficiencyThreshold50 = combatDamageEfficiencyThresholdCore(50, {
+    profitThresholdCoinsPer10Stamina: 1
+  });
+  const measuredEfficiencyOptions = {
+    combatControlIntervalMs: 50,
+    combatServerTickMs: 50,
+    combatBulletSpeedPerTick: 500,
+    combatMoveSpeedPerTick: 50,
+    combatBulletHitRadiusCm: 90,
+    combatFrameJitterMs: 50,
+    combatReactionSafetyMarginMs: 100,
+    combatClosePressureMinRangeCm: 4500,
+    combatClosePressureMaxRangeCm: 5500,
+    movementExecutionTiming: { p90Ticks: 5 },
+    profitThresholdCoinsPer10Stamina: 1
+  };
+  const measuredEfficiencyStart = {
+    id: 'measured-target',
+    combatPhase: 'normal-combat',
+    firstSeenAt: 1000,
+    firstHp: 100,
+    minHp: 100,
+    combatEfficiency: {
+      startedAt: 1000,
+      startDamageTotal: 0,
+      startStaminaMilli: 0,
+      staminaKnown: true
+    }
+  };
+  const measuredEfficiencyLow = combatPressurePhaseCore(measuredEfficiencyStart, {
+    targetId: 'measured-target',
+    nowMs: 31000,
+    engagedAt: 1000,
+    firstSeenAt: 1000,
+    firstHp: 100,
+    minHp: 97,
+    targetHp: 97,
+    damageFromStart: 3,
+    damageKnown: true,
+    targetDamageTotal: 3,
+    totalStaminaSpentMilli: 40000,
+    targetDrop: 100,
+    distance: 12000
+  }, measuredEfficiencyOptions);
+  const measuredEfficiencyHigh = combatPressurePhaseCore({
+    id: 'measured-target',
+    combatPhase: measuredEfficiencyLow.phase,
+    phaseStartedAt: measuredEfficiencyLow.phaseStartedAt,
+    closePressure: measuredEfficiencyLow,
+    combatEfficiency: measuredEfficiencyLow.combatEfficiency
+  }, {
+    targetId: 'measured-target',
+    nowMs: 61000,
+    engagedAt: 1000,
+    firstSeenAt: 1000,
+    firstHp: 100,
+    minHp: 89,
+    targetHp: 89,
+    damageFromStart: 11,
+    damageKnown: true,
+    targetDamageTotal: 11,
+    totalStaminaSpentMilli: 80000,
+    targetDrop: 100,
+    distance: 5000
+  }, measuredEfficiencyOptions);
+  const measuredEfficiencyExit = combatPressurePhaseCore({
+    id: 'measured-target',
+    combatPhase: measuredEfficiencyLow.phase,
+    phaseStartedAt: measuredEfficiencyLow.phaseStartedAt,
+    closePressure: measuredEfficiencyLow,
+    combatEfficiency: measuredEfficiencyLow.combatEfficiency
+  }, {
+    targetId: 'measured-target',
+    nowMs: 61000,
+    engagedAt: 1000,
+    firstSeenAt: 1000,
+    firstHp: 100,
+    minHp: 94,
+    targetHp: 94,
+    damageFromStart: 6,
+    damageKnown: true,
+    targetDamageTotal: 6,
+    totalStaminaSpentMilli: 80000,
+    targetDrop: 100,
+    distance: 6000
+  }, measuredEfficiencyOptions);
+  const measuredEfficiencyDrop50 = combatPressurePhaseCore({
+    id: 'drop50-target',
+    combatPhase: 'normal-combat',
+    firstSeenAt: 1000,
+    firstHp: 100,
+    minHp: 94,
+    combatEfficiency: {
+      startedAt: 1000,
+      startDamageTotal: 0,
+      startStaminaMilli: 0,
+      staminaKnown: true
+    }
+  }, {
+    targetId: 'drop50-target',
+    nowMs: 31000,
+    engagedAt: 1000,
+    firstSeenAt: 1000,
+    firstHp: 100,
+    minHp: 94,
+    targetHp: 94,
+    damageFromStart: 6,
+    damageKnown: true,
+    targetDamageTotal: 6,
+    totalStaminaSpentMilli: 40000,
+    targetDrop: 50,
+    distance: 12000
+  }, measuredEfficiencyOptions);
+  results.push({
+    name: 'combat-efficiency-uses-total-stamina-and-dynamic-drop-threshold',
+    passed: efficiencyThreshold100.requiredHpPerStamina === 0.1
+      && efficiencyThreshold100.rewardMultiplier === 1
+      && efficiencyThreshold50.requiredHpPerStamina === 0.2
+      && efficiencyThreshold50.rewardMultiplier === 0.5
+      && measuredEfficiencyLow.active === true
+      && measuredEfficiencyLow.attackEfficiency.targetDamageHp === 3
+      && measuredEfficiencyLow.attackEfficiency.staminaSpent === 40
+      && measuredEfficiencyLow.attackEfficiency.hpPerStamina === 0.075
+      && measuredEfficiencyLow.attackEfficiency.requiredHpPerStamina === 0.1
+      && measuredEfficiencyLow.attackEfficiency.low === true
+      && measuredEfficiencyHigh.active === false
+      && measuredEfficiencyHigh.attackEfficiency.acceptable === true
+      && measuredEfficiencyExit.active === true
+      && measuredEfficiencyExit.attackEfficiency.targetDamageHp === 3
+      && measuredEfficiencyExit.attackEfficiency.hpPerStamina === 0.075
+      && measuredEfficiencyExit.attackEfficiency.low === true
+      && measuredEfficiencyExit.distanceControlFailed === true
+      && measuredEfficiencyExit.exitRequired === true
+      && measuredEfficiencyExit.exitRule === 'closer-range-control-failed'
+      && measuredEfficiencyDrop50.active === true
+      && measuredEfficiencyDrop50.attackEfficiency.requiredHpPerStamina === 0.2
+      && measuredEfficiencyDrop50.attackEfficiency.low === true
   });
 
   const pressurePhaseOptions = {

@@ -14,6 +14,13 @@ const DEFAULT_PLAYER_SPEED_CM_PER_TICK = 50;
 const DEFAULT_BULLET_HIT_RADIUS_CM = 90;
 const DEFAULT_REACTION_RANGE_MIN_CM = 4500;
 const DEFAULT_REACTION_RANGE_MAX_CM = 7000;
+const DEFAULT_EFFICIENCY_TARGET_HP = 100;
+const DEFAULT_EFFICIENCY_BASE_REWARD_COINS = 100;
+const DEFAULT_EFFICIENCY_DROP_REFERENCE_COINS = 100;
+const DEFAULT_EFFICIENCY_MIN_REWARD_MULTIPLIER = 0.5;
+const DEFAULT_EFFICIENCY_MAX_REWARD_MULTIPLIER = 1;
+const DEFAULT_PROFIT_THRESHOLD_COINS_PER_10_STAMINA = 1;
+const STAMINA_MILLI_PER_UNIT = 1000;
 const PRESSURE_RANGE_CACHE = new WeakMap();
 
 function numberOrNull(value) {
@@ -190,10 +197,56 @@ function ordinaryProfitEngagement(input = {}) {
   return values.some(value => ['profit', 'engaged', 'reengage', 'afk-profit'].includes(value));
 }
 
+function combatDamageEfficiencyThresholdCore(targetDrop, options = {}) {
+  const targetHpBasis = Math.max(0, Number(
+    options.combatEfficiencyTargetHp ?? DEFAULT_EFFICIENCY_TARGET_HP
+  ));
+  const baseRewardCoins = Math.max(0, Number(
+    options.combatEfficiencyBaseRewardCoins ?? DEFAULT_EFFICIENCY_BASE_REWARD_COINS
+  ));
+  const dropReferenceCoins = Math.max(1, Number(
+    options.combatEfficiencyDropReferenceCoins ?? DEFAULT_EFFICIENCY_DROP_REFERENCE_COINS
+  ));
+  const minRewardMultiplier = clamp(Number(
+    options.combatEfficiencyMinRewardMultiplier ?? DEFAULT_EFFICIENCY_MIN_REWARD_MULTIPLIER
+  ), 0, 1);
+  const maxRewardMultiplier = clamp(Number(
+    options.combatEfficiencyMaxRewardMultiplier ?? DEFAULT_EFFICIENCY_MAX_REWARD_MULTIPLIER
+  ), minRewardMultiplier, 1);
+  const normalizedDrop = Math.max(0, numberOrNull(targetDrop) ?? 0);
+  const rewardMultiplier = clamp(
+    normalizedDrop / dropReferenceCoins,
+    minRewardMultiplier,
+    maxRewardMultiplier
+  );
+  const effectiveRewardCoins = baseRewardCoins * rewardMultiplier;
+  const thresholdCoinsPer10Stamina = Math.max(0, Number(
+    options.profitThresholdCoinsPer10Stamina
+      ?? DEFAULT_PROFIT_THRESHOLD_COINS_PER_10_STAMINA
+  ));
+  const requiredHpPerStamina = effectiveRewardCoins > 0
+    ? targetHpBasis * thresholdCoinsPer10Stamina / (effectiveRewardCoins * 10)
+    : Infinity;
+  return {
+    targetDrop: normalizedDrop,
+    targetHpBasis,
+    baseRewardCoins,
+    dropReferenceCoins,
+    minRewardMultiplier,
+    maxRewardMultiplier,
+    rewardMultiplier: Number(rewardMultiplier.toFixed(4)),
+    effectiveRewardCoins: Number(effectiveRewardCoins.toFixed(4)),
+    thresholdCoinsPer10Stamina,
+    requiredHpPerStamina: Number.isFinite(requiredHpPerStamina)
+      ? Number(requiredHpPerStamina.toFixed(6))
+      : null
+  };
+}
+
 /**
- * Resolve time-bounded close pressure for one target. Target HP progress is
- * the only efficiency success signal; shot count remains diagnostic so a fire
- * blocker cannot prevent distance control or stop-loss.
+ * Resolve time-bounded close pressure for one target. Every completed window
+ * compares cumulative target HP loss with the actual total stamina spent.
+ * Shot count remains diagnostic and never gates distance control or stop-loss.
  */
 function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
   const nowMs = Math.max(0, Number(input.nowMs ?? Date.now()));
@@ -216,6 +269,12 @@ function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
   const previousClosePressure = previous?.closePressure && typeof previous.closePressure === 'object'
     ? previous.closePressure
     : previous;
+  const previousEfficiency = sameTarget
+    ? (previous?.combatEfficiency
+      || previousClosePressure?.combatEfficiency
+      || previousClosePressure?.efficiencyWindow
+      || null)
+    : null;
   const targetDistance = numberOrNull(input.distance ?? input.targetDistance);
   const acceptedShotsSinceDamage = Math.max(0, Math.round(Number(input.acceptedShotsSinceDamage || 0)));
   const damageProgressAt = Math.max(0, Number(input.damageProgressAt || input.lastDamageAt || startedAt || nowMs));
@@ -233,17 +292,65 @@ function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
     Number(options.combatEfficiencySampleGapCapMs
       ?? Math.max(250, Number(options.combatControlIntervalMs || DEFAULT_CONTROL_INTERVAL_MS) * 5))
   );
-  const sameDamageGeneration = Boolean(
-    previousPhase === 'close-pressure'
-      && Number(previousClosePressure?.damageProgressAt || 0) === damageProgressAt
+  const targetDamageTotal = Math.max(0, Number(
+    input.targetDamageTotal ?? input.totalTargetDamage ?? damageFromStart ?? 0
+  ));
+  const totalStaminaValue = numberOrNull(
+    input.totalStaminaSpentMilli ?? input.combatStaminaSpentMilli ?? input.totalStaminaSpent
   );
-  const lowEfficiencyTrigger = Boolean(damageKnown && noDamageMs >= evaluationWindowMs);
-  const active = Boolean(!hardSafety && sameTarget && (sameDamageGeneration || lowEfficiencyTrigger));
-  const phase = active ? 'close-pressure' : 'normal-combat';
-  const phaseStartedAt = active
-    ? (sameDamageGeneration && Number(previous.phaseStartedAt || 0) > 0
-        ? Number(previous.phaseStartedAt)
-        : nowMs)
+  const staminaKnown = totalStaminaValue !== null;
+  const totalStaminaSpentMilli = staminaKnown ? Math.max(0, totalStaminaValue) : null;
+  const efficiencyThreshold = combatDamageEfficiencyThresholdCore(
+    input.targetDrop ?? input.drop,
+    options
+  );
+  const priorWindowStartedAt = Math.max(0, Number(previousEfficiency?.startedAt || 0));
+  let windowStartedAt = priorWindowStartedAt
+    || Math.max(0, startedAt ?? nowMs);
+  let windowStartDamageTotal = Math.max(0, Number(previousEfficiency?.startDamageTotal || 0));
+  let windowStartStaminaMilli = Math.max(0, Number(previousEfficiency?.startStaminaMilli || 0));
+  const staminaCounterReset = Boolean(
+    staminaKnown
+      && previousEfficiency?.staminaKnown === true
+      && totalStaminaSpentMilli < windowStartStaminaMilli
+  );
+  const damageCounterReset = targetDamageTotal < windowStartDamageTotal;
+  if (staminaCounterReset || damageCounterReset) {
+    windowStartedAt = nowMs;
+    windowStartDamageTotal = targetDamageTotal;
+    windowStartStaminaMilli = totalStaminaSpentMilli ?? 0;
+  }
+  const windowElapsedMs = Math.max(0, nowMs - windowStartedAt);
+  const windowDamageHp = Math.max(0, targetDamageTotal - windowStartDamageTotal);
+  const windowStaminaMilli = staminaKnown
+    ? Math.max(0, totalStaminaSpentMilli - windowStartStaminaMilli)
+    : null;
+  const windowStaminaUnits = windowStaminaMilli === null
+    ? null
+    : windowStaminaMilli / STAMINA_MILLI_PER_UNIT;
+  const damageEfficiencyHpPerStamina = windowStaminaUnits === null
+    ? null
+    : (windowStaminaUnits > 0
+        ? windowDamageHp / windowStaminaUnits
+        : (windowDamageHp > 0 ? Infinity : 0));
+  const windowComplete = windowElapsedMs >= evaluationWindowMs;
+  const efficiencyMeasurable = damageEfficiencyHpPerStamina !== null;
+  const lowDamageEfficiency = Boolean(
+    windowComplete
+      && (efficiencyMeasurable
+        ? damageEfficiencyHpPerStamina < Number(efficiencyThreshold.requiredHpPerStamina ?? Infinity)
+        : windowDamageHp <= 0)
+  );
+  const efficiencyAcceptable = Boolean(windowComplete && !lowDamageEfficiency);
+  const wasActive = Boolean(
+    !hardSafety
+      && sameTarget
+      && previousPhase === 'close-pressure'
+      && previousClosePressure?.active === true
+  );
+  let active = wasActive;
+  let phaseStartedAt = wasActive
+    ? Math.max(0, Number(previous.phaseStartedAt || previousClosePressure.phaseStartedAt || nowMs))
     : nowMs;
 
   let stepIndex = 0;
@@ -253,112 +360,216 @@ function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
   let bestDistanceCm = null;
   let goalReachedAt = 0;
   let stepAdvanced = false;
-  let completedSteps = active && sameDamageGeneration
+  let completedSteps = wasActive
     ? Math.max(0, Math.round(Number(previousClosePressure?.completedSteps || 0)))
     : 0;
-  let closerTimeMs = active && sameDamageGeneration
+  let closerTimeMs = wasActive
     ? Math.max(0, Number(previousClosePressure?.closerTimeMs || 0))
     : 0;
-  let lastObservedAt = active && sameDamageGeneration
+  let lastObservedAt = wasActive
     ? Math.max(0, Number(previousClosePressure?.lastObservedAt || 0))
     : nowMs;
-  let previousWithinGoal = active && sameDamageGeneration
+  let previousWithinGoal = wasActive
     ? previousClosePressure?.withinGoal === true
     : false;
-  let lastCompletedWindow = active && sameDamageGeneration
-    ? (previousClosePressure?.lastCompletedWindow || null)
-    : null;
-  if (active) {
-    if (sameDamageGeneration && Number(previousClosePressure?.stepIndex || 0) > 0) {
-      stepIndex = Math.max(1, Math.round(Number(previousClosePressure.stepIndex)));
-      stepStartedAt = Math.max(0, Number(previousClosePressure.stepStartedAt || nowMs));
-      stepStartDistanceCm = numberOrNull(previousClosePressure.stepStartDistanceCm)
-        ?? targetDistance
-        ?? numberOrNull(previous.distance);
-      goalDistanceCm = numberOrNull(previousClosePressure.goalDistanceCm)
-        ?? Math.max(minimumDistanceCm, Number(stepStartDistanceCm ?? ballisticRange.rangeCm) - stepCm);
-      const priorBestDistance = numberOrNull(previousClosePressure.bestDistanceCm);
-      bestDistanceCm = targetDistance === null
-        ? priorBestDistance
-        : Math.min(priorBestDistance ?? targetDistance, targetDistance);
-      goalReachedAt = Math.max(0, Number(previousClosePressure.goalReachedAt || 0));
-    } else {
-      stepIndex = 1;
-      stepStartedAt = nowMs;
-      stepStartDistanceCm = targetDistance ?? numberOrNull(previous.distance);
-      const startDistance = stepStartDistanceCm ?? ballisticRange.rangeCm + stepCm;
-      goalDistanceCm = Math.max(
-        minimumDistanceCm,
-        Math.min(ballisticRange.rangeCm, startDistance - stepCm)
-      );
-      bestDistanceCm = targetDistance;
-      lastObservedAt = nowMs;
-    }
+  let lastCompletedWindow = previousEfficiency?.lastCompletedWindow
+    || previousClosePressure?.lastCompletedWindow
+    || null;
+  let distanceControlFailed = false;
+  let minimumRangeNoProgress = false;
+  let exitRequired = false;
+  let justCompletedWindow = null;
 
-    const withinGoalBeforeAdvance = Boolean(
+  if (wasActive) {
+    stepIndex = Math.max(1, Math.round(Number(previousClosePressure.stepIndex || 1)));
+    stepStartedAt = Math.max(0, Number(previousClosePressure.stepStartedAt || windowStartedAt || nowMs));
+    stepStartDistanceCm = numberOrNull(previousClosePressure.stepStartDistanceCm)
+      ?? targetDistance
+      ?? numberOrNull(previous.distance);
+    goalDistanceCm = numberOrNull(previousClosePressure.goalDistanceCm)
+      ?? Math.max(minimumDistanceCm, Number(stepStartDistanceCm ?? ballisticRange.rangeCm) - stepCm);
+    const priorBestDistance = numberOrNull(previousClosePressure.bestDistanceCm);
+    bestDistanceCm = targetDistance === null
+      ? priorBestDistance
+      : Math.min(priorBestDistance ?? targetDistance, targetDistance);
+    goalReachedAt = Math.max(0, Number(previousClosePressure.goalReachedAt || 0));
+    const withinGoalBeforeEvaluation = Boolean(
       targetDistance !== null && targetDistance <= goalDistanceCm + arrivalToleranceCm
     );
-    if (sameDamageGeneration && lastObservedAt > 0 && nowMs > lastObservedAt
+    if (lastObservedAt > 0 && nowMs > lastObservedAt
       && previousWithinGoal && targetDistance !== null) {
       closerTimeMs += Math.min(sampleGapCapMs, nowMs - lastObservedAt);
     }
-    if (withinGoalBeforeAdvance && !goalReachedAt) {
-      goalReachedAt = nowMs;
-    }
+    if (withinGoalBeforeEvaluation && !goalReachedAt) goalReachedAt = nowMs;
     lastObservedAt = nowMs;
-    previousWithinGoal = withinGoalBeforeAdvance;
+    previousWithinGoal = withinGoalBeforeEvaluation;
+    const closeRatioAtEvaluation = windowElapsedMs > 0
+      ? Math.min(1, closerTimeMs / windowElapsedMs)
+      : 0;
 
-    const elapsedMs = Math.max(0, nowMs - stepStartedAt);
-    const closeRatio = elapsedMs > 0 ? Math.min(1, closerTimeMs / elapsedMs) : 0;
-    const windowComplete = elapsedMs >= evaluationWindowMs;
-    const distanceControlFailed = Boolean(windowComplete && closeRatio < requiredCloserRatio);
-    const minimumRangeNoProgress = Boolean(
-      windowComplete
-        && !distanceControlFailed
-        && goalDistanceCm <= minimumDistanceCm
-    );
-    if (windowComplete && !distanceControlFailed && !minimumRangeNoProgress) {
-      lastCompletedWindow = {
+    if (windowComplete) {
+      justCompletedWindow = {
+        phase: 'close-pressure',
         stepIndex,
-        startedAt: stepStartedAt,
+        startedAt: windowStartedAt,
         endedAt: nowMs,
-        elapsedMs: Math.round(elapsedMs),
+        elapsedMs: Math.round(windowElapsedMs),
+        targetDamageHp: Number(windowDamageHp.toFixed(3)),
+        staminaSpentMilli: windowStaminaMilli === null ? null : Math.round(windowStaminaMilli),
+        staminaSpent: windowStaminaUnits === null ? null : Number(windowStaminaUnits.toFixed(3)),
+        damageEfficiencyHpPerStamina: Number.isFinite(damageEfficiencyHpPerStamina)
+          ? Number(damageEfficiencyHpPerStamina.toFixed(6))
+          : null,
+        requiredHpPerStamina: efficiencyThreshold.requiredHpPerStamina,
+        lowDamageEfficiency,
+        efficiencyMeasurable,
         closerTimeMs: Math.round(closerTimeMs),
-        closerRatio: Number(closeRatio.toFixed(3)),
-        outsideCloserRatio: Number((1 - closeRatio).toFixed(3)),
-        goalDistanceCm: Math.round(goalDistanceCm)
+        closerRatio: Number(closeRatioAtEvaluation.toFixed(3)),
+        outsideCloserRatio: Number((1 - closeRatioAtEvaluation).toFixed(3)),
+        goalDistanceCm: Math.round(goalDistanceCm),
+        rewardMultiplier: efficiencyThreshold.rewardMultiplier,
+        effectiveRewardCoins: efficiencyThreshold.effectiveRewardCoins,
+        targetDrop: efficiencyThreshold.targetDrop
       };
-      completedSteps = Math.max(completedSteps, stepIndex);
-      stepIndex += 1;
-      stepStartedAt = nowMs;
-      stepStartDistanceCm = targetDistance ?? bestDistanceCm ?? goalDistanceCm;
-      goalDistanceCm = Math.max(minimumDistanceCm, goalDistanceCm - stepCm);
-      bestDistanceCm = targetDistance;
-      goalReachedAt = 0;
-      closerTimeMs = 0;
-      lastObservedAt = nowMs;
-      previousWithinGoal = Boolean(
-        targetDistance !== null && targetDistance <= goalDistanceCm + arrivalToleranceCm
-      );
-      stepAdvanced = true;
+      lastCompletedWindow = justCompletedWindow;
+      if (efficiencyAcceptable) {
+        active = false;
+        windowStartedAt = nowMs;
+        windowStartDamageTotal = targetDamageTotal;
+        windowStartStaminaMilli = totalStaminaSpentMilli ?? 0;
+      } else if (lowDamageEfficiency) {
+        distanceControlFailed = closeRatioAtEvaluation < requiredCloserRatio;
+        minimumRangeNoProgress = !distanceControlFailed && goalDistanceCm <= minimumDistanceCm;
+        exitRequired = distanceControlFailed || minimumRangeNoProgress;
+        if (!exitRequired) {
+          completedSteps = Math.max(completedSteps, stepIndex);
+          stepIndex += 1;
+          stepStartedAt = nowMs;
+          stepStartDistanceCm = targetDistance ?? bestDistanceCm ?? goalDistanceCm;
+          goalDistanceCm = Math.max(minimumDistanceCm, goalDistanceCm - stepCm);
+          bestDistanceCm = targetDistance;
+          goalReachedAt = 0;
+          closerTimeMs = 0;
+          lastObservedAt = nowMs;
+          previousWithinGoal = Boolean(
+            targetDistance !== null && targetDistance <= goalDistanceCm + arrivalToleranceCm
+          );
+          stepAdvanced = true;
+          windowStartedAt = nowMs;
+          windowStartDamageTotal = targetDamageTotal;
+          windowStartStaminaMilli = totalStaminaSpentMilli ?? 0;
+        }
+      }
     }
+  } else if (!hardSafety && sameTarget && lowDamageEfficiency) {
+    active = true;
+    phaseStartedAt = nowMs;
+    stepIndex = 1;
+    stepStartedAt = nowMs;
+    stepStartDistanceCm = targetDistance ?? numberOrNull(previous.distance);
+    const startDistance = stepStartDistanceCm ?? ballisticRange.rangeCm + stepCm;
+    goalDistanceCm = Math.max(
+      minimumDistanceCm,
+      Math.min(ballisticRange.rangeCm, startDistance - stepCm)
+    );
+    bestDistanceCm = targetDistance;
+    goalReachedAt = 0;
+    closerTimeMs = 0;
+    lastObservedAt = nowMs;
+    previousWithinGoal = Boolean(
+      targetDistance !== null && targetDistance <= goalDistanceCm + arrivalToleranceCm
+    );
+    justCompletedWindow = {
+      phase: 'normal-combat',
+      stepIndex: 0,
+      startedAt: windowStartedAt,
+      endedAt: nowMs,
+      elapsedMs: Math.round(windowElapsedMs),
+      targetDamageHp: Number(windowDamageHp.toFixed(3)),
+      staminaSpentMilli: windowStaminaMilli === null ? null : Math.round(windowStaminaMilli),
+      staminaSpent: windowStaminaUnits === null ? null : Number(windowStaminaUnits.toFixed(3)),
+      damageEfficiencyHpPerStamina: Number.isFinite(damageEfficiencyHpPerStamina)
+        ? Number(damageEfficiencyHpPerStamina.toFixed(6))
+        : null,
+      requiredHpPerStamina: efficiencyThreshold.requiredHpPerStamina,
+      lowDamageEfficiency: true,
+      efficiencyMeasurable,
+      closerTimeMs: 0,
+      closerRatio: 0,
+      outsideCloserRatio: 1,
+      goalDistanceCm: null,
+      rewardMultiplier: efficiencyThreshold.rewardMultiplier,
+      effectiveRewardCoins: efficiencyThreshold.effectiveRewardCoins,
+      targetDrop: efficiencyThreshold.targetDrop
+    };
+    lastCompletedWindow = justCompletedWindow;
+    windowStartedAt = nowMs;
+    windowStartDamageTotal = targetDamageTotal;
+    windowStartStaminaMilli = totalStaminaSpentMilli ?? 0;
+  } else if (!wasActive && windowComplete) {
+    justCompletedWindow = {
+      phase: 'normal-combat',
+      stepIndex: 0,
+      startedAt: windowStartedAt,
+      endedAt: nowMs,
+      elapsedMs: Math.round(windowElapsedMs),
+      targetDamageHp: Number(windowDamageHp.toFixed(3)),
+      staminaSpentMilli: windowStaminaMilli === null ? null : Math.round(windowStaminaMilli),
+      staminaSpent: windowStaminaUnits === null ? null : Number(windowStaminaUnits.toFixed(3)),
+      damageEfficiencyHpPerStamina: Number.isFinite(damageEfficiencyHpPerStamina)
+        ? Number(damageEfficiencyHpPerStamina.toFixed(6))
+        : null,
+      requiredHpPerStamina: efficiencyThreshold.requiredHpPerStamina,
+      lowDamageEfficiency: false,
+      efficiencyMeasurable,
+      closerTimeMs: 0,
+      closerRatio: 0,
+      outsideCloserRatio: 1,
+      goalDistanceCm: null,
+      rewardMultiplier: efficiencyThreshold.rewardMultiplier,
+      effectiveRewardCoins: efficiencyThreshold.effectiveRewardCoins,
+      targetDrop: efficiencyThreshold.targetDrop
+    };
+    lastCompletedWindow = justCompletedWindow;
+    windowStartedAt = nowMs;
+    windowStartDamageTotal = targetDamageTotal;
+    windowStartStaminaMilli = totalStaminaSpentMilli ?? 0;
   }
 
+  if (active && !wasActive && stepIndex === 0) {
+    // Defensive fallback for callers that restore only the phase marker.
+    stepIndex = 1;
+    stepStartedAt = nowMs;
+    stepStartDistanceCm = targetDistance ?? numberOrNull(previous.distance);
+    const startDistance = stepStartDistanceCm ?? ballisticRange.rangeCm + stepCm;
+    goalDistanceCm = Math.max(
+      minimumDistanceCm,
+      Math.min(ballisticRange.rangeCm, startDistance - stepCm)
+    );
+    bestDistanceCm = targetDistance;
+    lastObservedAt = nowMs;
+  }
+
+  if (!active && !exitRequired) {
+    stepIndex = 0;
+    stepStartedAt = 0;
+    stepStartDistanceCm = null;
+    goalDistanceCm = null;
+    bestDistanceCm = null;
+    goalReachedAt = 0;
+    closerTimeMs = 0;
+    lastObservedAt = nowMs;
+    previousWithinGoal = false;
+  }
+
+  const phase = active ? 'close-pressure' : 'normal-combat';
+  if (!active) phaseStartedAt = nowMs;
   const withinGoal = Boolean(
     active && targetDistance !== null && targetDistance <= goalDistanceCm + arrivalToleranceCm
   );
   const stepElapsedMs = active && stepStartedAt > 0 ? Math.max(0, nowMs - stepStartedAt) : 0;
   const closerRatio = stepElapsedMs > 0 ? Math.min(1, closerTimeMs / stepElapsedMs) : 0;
-  const stepWindowComplete = Boolean(active && stepElapsedMs >= evaluationWindowMs);
-  const distanceControlFailed = Boolean(
-    stepWindowComplete && closerRatio < requiredCloserRatio
-  );
-  const minimumRangeNoProgress = Boolean(
-    stepWindowComplete
-      && !distanceControlFailed
-      && goalDistanceCm <= minimumDistanceCm
-  );
-  const exitRequired = distanceControlFailed || minimumRangeNoProgress;
+  const stepWindowComplete = Boolean(active && !stepAdvanced && windowComplete);
   const range = active ? {
     ...ballisticRange,
     rangeCm: Math.round(goalDistanceCm),
@@ -372,8 +583,22 @@ function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
   const pressureAttackCommitted = active;
   const subphase = active ? (withinGoal ? 'pressure-attack' : 'closing') : 'normal-combat';
   const triggerReason = active
-    ? (sameDamageGeneration ? 'no-damage-window-latched' : 'no-damage-window-threshold')
+    ? (wasActive ? 'low-damage-efficiency-window-latched' : 'low-damage-efficiency-window-threshold')
     : '';
+  const currentEfficiency = {
+    startedAt: windowStartedAt,
+    startDamageTotal: Number(windowStartDamageTotal.toFixed(3)),
+    startStaminaMilli: Math.round(windowStartStaminaMilli),
+    staminaKnown,
+    targetDamageTotal: Number(targetDamageTotal.toFixed(3)),
+    totalStaminaSpentMilli: totalStaminaSpentMilli === null ? null : Math.round(totalStaminaSpentMilli),
+    elapsedMs: Math.round(Math.max(0, nowMs - windowStartedAt)),
+    targetDamageHp: Number(Math.max(0, targetDamageTotal - windowStartDamageTotal).toFixed(3)),
+    staminaSpentMilli: totalStaminaSpentMilli === null
+      ? null
+      : Math.round(Math.max(0, totalStaminaSpentMilli - windowStartStaminaMilli)),
+    lastCompletedWindow
+  };
   return {
     phase,
     active,
@@ -381,7 +606,7 @@ function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
     targetId,
     ordinaryProfit,
     engagedMs: Math.round(engagedMs),
-    noDamageTrigger: lowEfficiencyTrigger,
+    noDamageTrigger: Boolean(lowDamageEfficiency && windowDamageHp <= 0),
     noDamageMs: Math.round(noDamageMs),
     maxDurationTrigger: false,
     triggerReason,
@@ -401,7 +626,7 @@ function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
     arrivalToleranceCm: Math.round(arrivalToleranceCm),
     damageProgressAt,
     generationStartedAt: phaseStartedAt,
-    generationDeadlineAt: active ? stepStartedAt + evaluationWindowMs : 0,
+    generationDeadlineAt: active ? windowStartedAt + evaluationWindowMs : 0,
     generationElapsedMs: active ? Math.round(Math.max(0, nowMs - phaseStartedAt)) : 0,
     generationTimedOut: false,
     generationStepLimitReached: minimumRangeNoProgress,
@@ -413,11 +638,25 @@ function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
     generationMovementStamina: Math.max(0, Number(input.movementStaminaSinceDamage || 0)),
     lastTargetDamageAt: damageProgressAt,
     attackEfficiency: {
-      basis: 'realtime-target-hp-progress',
+      basis: 'realtime-target-hp-loss-per-actual-total-stamina',
       windowMs: Math.round(evaluationWindowMs),
-      targetDamageObserved: false,
-      low: lowEfficiencyTrigger
+      windowComplete,
+      measurable: efficiencyMeasurable,
+      targetDamageObserved: windowDamageHp > 0,
+      targetDamageHp: Number(windowDamageHp.toFixed(3)),
+      staminaSpentMilli: windowStaminaMilli === null ? null : Math.round(windowStaminaMilli),
+      staminaSpent: windowStaminaUnits === null ? null : Number(windowStaminaUnits.toFixed(3)),
+      hpPerStamina: Number.isFinite(damageEfficiencyHpPerStamina)
+        ? Number(damageEfficiencyHpPerStamina.toFixed(6))
+        : null,
+      requiredHpPerStamina: efficiencyThreshold.requiredHpPerStamina,
+      low: lowDamageEfficiency,
+      acceptable: efficiencyAcceptable,
+      reward: efficiencyThreshold,
+      completed: justCompletedWindow
     },
+    combatEfficiency: currentEfficiency,
+    efficiencyWindow: currentEfficiency,
     range,
     subphase,
     pressureAttackCommitted,
@@ -445,6 +684,7 @@ function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
     outsideCloserRatio: Number((1 - closerRatio).toFixed(3)),
     distanceControlFailed,
     minimumRangeNoProgress,
+    minimumRangeLowEfficiency: minimumRangeNoProgress,
     exitRequired,
     exitRule: distanceControlFailed
       ? 'closer-range-control-failed'
@@ -540,6 +780,7 @@ function combatPressureStrafeCore(self = {}, target = {}, phase = {}, options = 
 }
 
 module.exports = {
+  combatDamageEfficiencyThresholdCore,
   combatPressureTargetRangeCore,
   combatPressurePhaseCore,
   combatPressureStrafeCore

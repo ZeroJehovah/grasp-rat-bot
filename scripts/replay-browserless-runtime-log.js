@@ -3872,6 +3872,11 @@ function replayCombatClosePressure(options) {
       damageFromStart,
       damageKnown: damageFromStart !== null,
       damageProgressAt,
+      targetDamageTotal: Math.max(0, Number(row.detail.metrics?.targetDamage ?? damageFromStart ?? 0)),
+      totalStaminaSpentMilli: Number.isFinite(Number(row.detail.metrics?.totalStaminaSpent))
+        ? Math.max(0, Number(row.detail.metrics.totalStaminaSpent))
+        : null,
+      targetDrop: row.detail.target?.drop,
       acceptedShotsSinceDamage: Math.max(0, acceptedShots - acceptedShotsAtDamage),
       distance: numberOrNull(row.detail.target?.distance)
     }, pressureOptions);
@@ -3881,6 +3886,7 @@ function replayCombatClosePressure(options) {
       combatPhase: phase.phase,
       phaseStartedAt: phase.phaseStartedAt,
       closePressure: phase.active ? phase : null,
+      combatEfficiency: phase.combatEfficiency,
       firstHp,
       minHp,
       hp
@@ -4129,6 +4135,12 @@ function replayCombatEfficiencyWindowGrid(options) {
         damageFromStart: firstHp !== null && minHp !== null ? Math.max(0, firstHp - minHp) : null,
         damageKnown: firstHp !== null && minHp !== null,
         damageProgressAt,
+        targetDamageTotal: Math.max(0, Number(metrics.targetDamage
+          ?? (firstHp !== null && minHp !== null ? firstHp - minHp : 0))),
+        totalStaminaSpentMilli: Number.isFinite(Number(metrics.totalStaminaSpent))
+          ? Math.max(0, Number(metrics.totalStaminaSpent))
+          : null,
+        targetDrop: row.detail.target?.drop,
         acceptedShotsSinceDamage: Math.max(0, acceptedShots - acceptedShotsAtDamage),
         shootingStaminaSinceDamage: Math.max(0, Number(metrics.shootingStaminaSpent || 0)),
         movementStaminaSinceDamage: Math.max(0, Number(metrics.movementStaminaSpent || 0)),
@@ -4146,6 +4158,7 @@ function replayCombatEfficiencyWindowGrid(options) {
         combatPhase: phase.phase,
         phaseStartedAt: phase.phaseStartedAt,
         closePressure: phase.active ? phase : null,
+        combatEfficiency: phase.combatEfficiency,
         firstHp,
         minHp,
         hp

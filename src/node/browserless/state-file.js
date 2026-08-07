@@ -2868,6 +2868,34 @@ function compactExit(event) {
           requiredCloserRatio: compactNumber(missClose.requiredCloserRatio),
           acceptedShotsSinceDamage: compactNumber(missClose.acceptedShotsSinceDamage),
           damageFromStart: compactNumber(missClose.damageFromStart),
+          targetDamageHp: compactNumber(missClose.attackEfficiency?.targetDamageHp
+            ?? missClose.lastCompletedWindow?.targetDamageHp),
+          staminaSpentMilli: compactNumber(missClose.attackEfficiency?.staminaSpentMilli
+            ?? missClose.lastCompletedWindow?.staminaSpentMilli),
+          damageEfficiencyHpPerStamina: compactNumber(
+            missClose.attackEfficiency?.hpPerStamina
+              ?? missClose.lastCompletedWindow?.damageEfficiencyHpPerStamina
+          ),
+          requiredHpPerStamina: compactNumber(
+            missClose.attackEfficiency?.requiredHpPerStamina
+              ?? missClose.lastCompletedWindow?.requiredHpPerStamina
+          ),
+          efficiencyLow: compactBoolean(missClose.attackEfficiency?.low
+            ?? missClose.lastCompletedWindow?.lowDamageEfficiency),
+          efficiencyMeasurable: compactBoolean(missClose.attackEfficiency?.measurable
+            ?? missClose.lastCompletedWindow?.efficiencyMeasurable),
+          rewardMultiplier: compactNumber(
+            missClose.attackEfficiency?.reward?.rewardMultiplier
+              ?? missClose.lastCompletedWindow?.rewardMultiplier
+          ),
+          effectiveRewardCoins: compactNumber(
+            missClose.attackEfficiency?.reward?.effectiveRewardCoins
+              ?? missClose.lastCompletedWindow?.effectiveRewardCoins
+          ),
+          targetDrop: compactNumber(
+            missClose.attackEfficiency?.reward?.targetDrop
+              ?? missClose.lastCompletedWindow?.targetDrop
+          ),
           stepTimedOut: compactBoolean(missClose.stepTimedOut),
           distanceControlFailed: compactBoolean(missClose.distanceControlFailed),
           minimumRangeNoProgress: compactBoolean(missClose.minimumRangeNoProgress),

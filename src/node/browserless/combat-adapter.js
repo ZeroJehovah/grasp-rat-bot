@@ -3170,7 +3170,8 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   const threatBulletIds = appendUniqueStringsBounded(previousThreatBulletIds, targetBulletIds, 200);
   const initialStamina1d = Number(previousMetrics.initialStamina1d);
   const currentStamina1d = Number(self?.stamina_1d_remaining_milli ?? self?.stamina1dRemainingMilli);
-  const totalStaminaSpent = Number.isFinite(initialStamina1d) && Number.isFinite(currentStamina1d)
+  const staminaSpentKnown = Number.isFinite(initialStamina1d) && Number.isFinite(currentStamina1d);
+  const totalStaminaSpent = staminaSpentKnown
     ? Math.max(0, initialStamina1d - currentStamina1d)
     : 0;
   const shootingStaminaSpent = Number(previousMetrics.acceptedShots || 0)
@@ -3264,6 +3265,7 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     firstDamageAt: damaged ? (Number(previousMetrics.firstDamageAt || 0) || nowMs) : Number(previousMetrics.firstDamageAt || 0),
     threatBulletIds,
     threatBulletCount: threatBulletIds.length,
+    staminaSpentKnown,
     totalStaminaSpent,
     shootingStaminaSpent,
     movementStaminaSpent,
@@ -3607,6 +3609,13 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
           combatTargetState.damageFromStart !== null
             && combatTargetState.damageFromStart !== undefined
         ),
+        targetDamageTotal: Math.max(0, Number(stateful?.combatMetrics?.targetDamage || 0)),
+        totalStaminaSpentMilli: stateful?.combatMetrics?.staminaSpentKnown === false
+          ? null
+          : (Number.isFinite(Number(stateful?.combatMetrics?.totalStaminaSpent))
+          ? Math.max(0, Number(stateful.combatMetrics.totalStaminaSpent))
+          : null),
+        targetDrop: combatTargetState.drop ?? target.drop,
         hardSafety: combatTargetState.hardSafety,
         distance: Number(target.distance),
         acceptedShotsSinceDamage: Math.max(
@@ -3632,7 +3641,11 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
         ))
       }
     : (!target && retainedCombatTargetState?.closePressure?.active === true
-        ? {
+        ? (() => {
+            const retainedMetrics = stateful?.combatMetricsByTarget?.[String(retainedCombatTargetState.id)]
+              || stateful?.combatMetrics
+              || {};
+            return {
             targetId: retainedCombatTargetState.id,
             nowMs: options.nowMs,
             engagedAt: retainedCombatTargetState.firstSeenAt ?? retainedCombatTargetState.at,
@@ -3643,6 +3656,15 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
             hp: retainedCombatTargetState.hp,
             damageFromStart: retainedCombatTargetState.damageFromStart,
             damageKnown: true,
+            targetDamageTotal: Math.max(0, Number(
+              retainedMetrics.targetDamage ?? retainedCombatTargetState.damageFromStart ?? 0
+            )),
+            totalStaminaSpentMilli: retainedMetrics.staminaSpentKnown === false
+              ? null
+              : (Number.isFinite(Number(retainedMetrics.totalStaminaSpent))
+              ? Math.max(0, Number(retainedMetrics.totalStaminaSpent))
+              : null),
+            targetDrop: retainedCombatTargetState.drop,
             hardSafety: retainedCombatTargetState.hardSafety,
             distance: null,
             acceptedShotsSinceDamage: Math.max(0, Number(
@@ -3662,7 +3684,8 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
             ordinaryProfit: ['profit', 'engaged', 'reengage', 'afk-profit'].includes(String(
               retainedCombatTargetState.originIntent || retainedCombatTargetState.intent || ''
             ))
-          }
+            };
+          })()
         : null);
   const combatPhase = combatPhaseState
     ? withOptionOverrides(options, {
@@ -3679,6 +3702,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     combatPhaseOwner.combatPhase = combatPhase.phase;
     combatPhaseOwner.phaseStartedAt = combatPhase.phaseStartedAt;
     combatPhaseOwner.closePressure = combatPhase.active ? combatPhase : null;
+    combatPhaseOwner.combatEfficiency = combatPhase.combatEfficiency || null;
     if (stateful?.combatEngagements && combatPhaseOwner.id !== null && combatPhaseOwner.id !== undefined) {
       stateful.combatEngagements[String(combatPhaseOwner.id)] = combatPhaseOwner;
     }

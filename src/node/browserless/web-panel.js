@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.07.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.07.2';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -100,6 +100,20 @@ function missCloseExitReasonTextCore(missClose = {}) {
   const startDistance = distance(missClose.stepStartDistanceCm);
   const goalDistance = distance(missClose.goalDistanceCm);
   const currentDistance = distance(missClose.targetDistance);
+  const attackEfficiency = missClose.attackEfficiency || {};
+  const targetDamageHp = number(missClose.targetDamageHp ?? attackEfficiency.targetDamageHp);
+  const staminaSpentMilli = number(missClose.staminaSpentMilli ?? attackEfficiency.staminaSpentMilli);
+  const damageEfficiencyHpPerStamina = number(
+    missClose.damageEfficiencyHpPerStamina ?? attackEfficiency.hpPerStamina
+  );
+  const requiredHpPerStamina = number(
+    missClose.requiredHpPerStamina ?? attackEfficiency.requiredHpPerStamina
+  );
+  const efficiencyLow = missClose.efficiencyLow ?? attackEfficiency.low;
+  const hasEfficiency = targetDamageHp !== null
+    || staminaSpentMilli !== null
+    || damageEfficiencyHpPerStamina !== null
+    || requiredHpPerStamina !== null;
   const acceptedShotsSinceDamage = number(missClose.acceptedShotsSinceDamage);
   const closerRatio = number(missClose.closerRatio);
   const requiredCloserRatio = number(missClose.requiredCloserRatio);
@@ -108,7 +122,15 @@ function missCloseExitReasonTextCore(missClose = {}) {
     && acceptedShotsSinceDamage === null && closerRatio === null) return '';
   const duration = timeoutMs === null ? '持续一段时间' : `连续 ${Math.max(1, Math.round(timeoutMs / 1000))} 秒`;
   let text;
-  if (minimumRangeNoProgress) {
+  if (hasEfficiency && minimumRangeNoProgress) {
+    text = goalDistance
+      ? `${duration}在最低 ${goalDistance} 近距内伤害效率仍低于门槛`
+      : `${duration}在最低近距内伤害效率仍低于门槛`;
+  } else if (hasEfficiency && goalDistance) {
+    text = `${duration}伤害效率低于门槛且无法稳定保持在 ${goalDistance} 内`;
+  } else if (hasEfficiency) {
+    text = `${duration}伤害效率低于门槛且无法稳定保持更近距离`;
+  } else if (minimumRangeNoProgress) {
     text = goalDistance
       ? `${duration}在最低 ${goalDistance} 近距内仍未造成伤害`
       : `${duration}在最低近距内仍未造成伤害`;
@@ -124,6 +146,17 @@ function missCloseExitReasonTextCore(missClose = {}) {
   }
   if (startDistance && startDistance !== goalDistance) evidence.push(`起点 ${startDistance}`);
   if (currentDistance) evidence.push(`退出时 ${currentDistance}`);
+  if (hasEfficiency) {
+    const actual = damageEfficiencyHpPerStamina === null
+      ? '--'
+      : damageEfficiencyHpPerStamina.toFixed(3);
+    const required = requiredHpPerStamina === null ? '--' : requiredHpPerStamina.toFixed(3);
+    evidence.push(`效率 ${actual} HP/体力，门槛 ${required}`);
+    if (targetDamageHp !== null || staminaSpentMilli !== null) {
+      evidence.push(`窗口掉血 ${targetDamageHp === null ? '--' : targetDamageHp}`
+        + `，消耗 ${staminaSpentMilli === null ? '--' : Math.round(staminaSpentMilli / 1000)} 体力`);
+    }
+  }
   if (acceptedShotsSinceDamage !== null && acceptedShotsSinceDamage > 0) {
     evidence.push(`${Math.round(acceptedShotsSinceDamage)} 发未造成新伤害`);
   }

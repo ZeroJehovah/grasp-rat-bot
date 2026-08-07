@@ -1166,6 +1166,12 @@ function runCombatEfficiencyDistanceControlScenario(frames, targetId, options) {
       damageFromStart: firstHp !== null && minHp !== null ? Math.max(0, firstHp - minHp) : null,
       damageKnown: firstHp !== null && minHp !== null,
       damageProgressAt,
+      targetDamageTotal: Math.max(0, Number(metrics.targetDamage
+        ?? (firstHp !== null && minHp !== null ? firstHp - minHp : 0))),
+      totalStaminaSpentMilli: Number.isFinite(Number(metrics.totalStaminaSpent))
+        ? Math.max(0, Number(metrics.totalStaminaSpent))
+        : null,
+      targetDrop: frame.target?.drop ?? frame.nearbyEntity?.drop,
       acceptedShotsSinceDamage: Math.max(0, Number(metrics.acceptedShots || 0)),
       distance: targetDistance
     }, options);
@@ -1175,6 +1181,7 @@ function runCombatEfficiencyDistanceControlScenario(frames, targetId, options) {
       combatPhase: phase.phase,
       phaseStartedAt: phase.phaseStartedAt,
       closePressure: phase.active ? phase : null,
+      combatEfficiency: phase.combatEfficiency,
       hp: retainedHp,
       firstHp,
       minHp,
@@ -1187,7 +1194,9 @@ function runCombatEfficiencyDistanceControlScenario(frames, targetId, options) {
         noDamageMs: phase.noDamageMs,
         distanceCm: targetDistance === null ? null : Math.round(targetDistance),
         goalDistanceCm: phase.goalDistanceCm,
-        acceptedShotsSinceDamage: phase.acceptedShotsSinceDamage
+        acceptedShotsSinceDamage: phase.acceptedShotsSinceDamage,
+        damageEfficiencyHpPerStamina: phase.lastCompletedWindow?.damageEfficiencyHpPerStamina ?? null,
+        requiredHpPerStamina: phase.lastCompletedWindow?.requiredHpPerStamina ?? null
       };
     }
     if (!exitFrame && phase.exitRequired) {
@@ -1220,7 +1229,14 @@ function runCombatEfficiencyDistanceControlScenario(frames, targetId, options) {
       closerTimeMs: exitPhase.closerTimeMs,
       closerRatio: exitPhase.closerRatio,
       outsideCloserRatio: exitPhase.outsideCloserRatio,
-      acceptedShotsSinceDamage: exitPhase.acceptedShotsSinceDamage
+      acceptedShotsSinceDamage: exitPhase.acceptedShotsSinceDamage,
+      targetDamageHp: exitPhase.lastCompletedWindow?.targetDamageHp ?? null,
+      staminaSpentMilli: exitPhase.lastCompletedWindow?.staminaSpentMilli ?? null,
+      damageEfficiencyHpPerStamina: exitPhase.lastCompletedWindow?.damageEfficiencyHpPerStamina ?? null,
+      requiredHpPerStamina: exitPhase.lastCompletedWindow?.requiredHpPerStamina ?? null,
+      rewardMultiplier: exitPhase.lastCompletedWindow?.rewardMultiplier ?? null,
+      effectiveRewardCoins: exitPhase.lastCompletedWindow?.effectiveRewardCoins ?? null,
+      targetDrop: exitPhase.lastCompletedWindow?.targetDrop ?? null
     } : null,
     savedFrames: exitIndex >= 0 ? Math.max(0, frames.length - exitIndex - 1) : 0,
     savedMs: exitFrame ? Math.max(0, Math.round(lastFrame.at - exitFrame.at)) : 0,
