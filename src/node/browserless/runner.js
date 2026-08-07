@@ -30,10 +30,12 @@ const {
 const { startStatusServer } = require('./status-server');
 const {
   BROWSERLESS_WEB_PANEL_VERSION,
+  appendMapTrailSampleCore,
   groupBlockingFactorsCore,
   highDropRankValueCore,
   isStaminaExhaustionExitReasonCore,
-  lastExitPanelVisibleCore
+  lastExitPanelVisibleCore,
+  mapTrailOpacityCore
 } = require('./web-panel');
 const {
   createRemoteProfitWorker,
@@ -5953,6 +5955,43 @@ async function runBrowserlessRunnerSelfTest() {
       coin: nearbyMapCompact.nearby?.c?.find(row => row[0] === 'route-a') || null,
       player: nearbyMapCompact.nearby?.p?.find(row => row[0] === 'Pyro') || null
     };
+    const mapTrailNowMs = Date.parse('2026-07-26T01:00:30.000Z');
+    let mapTrailSamples = appendMapTrailSampleCore([], {
+      x: 0,
+      y: 0,
+      at: mapTrailNowMs - 30000
+    }, mapTrailNowMs);
+    mapTrailSamples = appendMapTrailSampleCore(mapTrailSamples, {
+      x: 1000,
+      y: 0,
+      at: mapTrailNowMs - 15000
+    }, mapTrailNowMs);
+    const unchangedMapTrailSamples = appendMapTrailSampleCore(mapTrailSamples, {
+      x: 1000,
+      y: 0,
+      at: mapTrailNowMs - 3000
+    }, mapTrailNowMs);
+    const resumedMapTrailSamples = appendMapTrailSampleCore(unchangedMapTrailSamples, {
+      x: 1000,
+      y: 0,
+      at: mapTrailNowMs - 1000,
+      breakBefore: true
+    }, mapTrailNowMs);
+    const prunedMapTrailSamples = appendMapTrailSampleCore(
+      resumedMapTrailSamples,
+      null,
+      mapTrailNowMs + 16000
+    );
+    const mapTrailCoreTest = {
+      ok: mapTrailSamples.length === 2
+        && unchangedMapTrailSamples.length === 2
+        && resumedMapTrailSamples.length === 3
+        && resumedMapTrailSamples[2].breakBefore === true
+        && prunedMapTrailSamples.length === 1
+        && mapTrailOpacityCore(mapTrailNowMs - 1000, mapTrailNowMs) > mapTrailOpacityCore(mapTrailNowMs - 29000, mapTrailNowMs),
+      sampleCount: resumedMapTrailSamples.length,
+      prunedCount: prunedMapTrailSamples.length
+    };
     const nearbyMapLegacyCompact = buildCompactBrowserlessStatus({
       updatedAt: '2026-07-26T01:00:00.000Z',
       current: {
@@ -7142,6 +7181,7 @@ async function runBrowserlessRunnerSelfTest() {
         nearbyFleeTargetPanel: nearbyFleeTargetPanelTest,
         nearbySelectedPlayerCoordinates: nearbySelectedPlayerCoordinatesTest,
         nearbyMapCoordinates: nearbyMapCoordinatesTest,
+        nearbyMapTrails: mapTrailCoreTest,
         nearbyMapLegacyCompatibility: nearbyMapLegacyCompatibilityTest,
         realtimeLootSafetyArbitration: realtimeLootSafetyArbitrationTest
       };
@@ -7154,10 +7194,16 @@ async function runBrowserlessRunnerSelfTest() {
           && pageHtml.indexOf('id="mapPanel"') < pageHtml.indexOf('id="nearbyGrid"')
           && pageHtml.includes('MAP_STALE_MS = 15000')
           && pageHtml.includes('MAP_MOVE_ANIMATION_MS = 260')
+          && pageHtml.includes('MAP_TRAIL_MAX_AGE_MS = 30000')
+          && pageHtml.includes('MAP_TRAIL_MAX_SAMPLES = 16')
           && pageHtml.includes('const sourceIpDeferredDetailText = status => dailyFirstLoginExempt(status)')
           && pageHtml.includes('每日首次登录豁免仍有效，届时直接使用主 IP 登录')
           && pageHtml.includes('先使用主 IP 做快照安全检查')
           && pageHtml.includes('function startMapMarkerAnimation(scene, markers, animate = true)')
+          && pageHtml.includes('function recordMapTrailObservation(status, markers, nowMs)')
+          && pageHtml.includes('function drawMapTrails(context, scene, markers, frame)')
+          && pageHtml.includes('context.lineWidth = .6')
+          && pageHtml.includes('context.globalAlpha = mapTrailOpacity(sample.at, scene.trailNowMs, MAP_TRAIL_MAX_AGE_MS)')
           && pageHtml.includes("mapKey: mapMarkerKey('coin', item?.[0])")
           && pageHtml.includes("mapKey: mapMarkerKey('player', item?.[9], name)")
           && pageHtml.includes("window.matchMedia('(prefers-reduced-motion: reduce)').matches")

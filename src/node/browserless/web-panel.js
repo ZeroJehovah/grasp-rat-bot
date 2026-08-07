@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.07.3';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.07.4';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -36,6 +36,44 @@ function interpolateMapMarkerCore(marker, previous, progress) {
     px: previousX + (nextX - previousX) * clampedProgress,
     py: previousY + (nextY - previousY) * clampedProgress
   };
+}
+
+function appendMapTrailSampleCore(samples, sample, nowMs, maxAgeMs = 30000, maxSamples = 16) {
+  const now = Number(nowMs);
+  const maxAge = Math.max(0, Number(maxAgeMs) || 0);
+  const limit = Math.max(2, Math.round(Number(maxSamples) || 16));
+  if (!Number.isFinite(now)) return [];
+  const cutoff = now - maxAge;
+  const retained = (Array.isArray(samples) ? samples : [])
+    .filter(item => item?.x !== null && item?.x !== undefined && item?.x !== ''
+      && item?.y !== null && item?.y !== undefined && item?.y !== ''
+      && item?.at !== null && item?.at !== undefined && item?.at !== ''
+      && Number.isFinite(Number(item.x))
+      && Number.isFinite(Number(item.y))
+      && Number.isFinite(Number(item.at))
+      && Number(item.at) >= cutoff
+      && Number(item.at) <= now)
+    .slice(-limit);
+  if (!sample || sample.x === null || sample.x === undefined || sample.x === ''
+    || sample.y === null || sample.y === undefined || sample.y === ''
+    || sample.at === null || sample.at === undefined || sample.at === '') return retained;
+  const x = Number(sample?.x);
+  const y = Number(sample?.y);
+  const at = Number(sample?.at);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(at) || at < cutoff || at > now) {
+    return retained;
+  }
+  const previous = retained.at(-1);
+  if (previous && at <= Number(previous.at)) return retained;
+  if (previous && !sample?.breakBefore && x === Number(previous.x) && y === Number(previous.y)) return retained;
+  return [...retained, { x, y, at, breakBefore: Boolean(sample?.breakBefore) }].slice(-limit);
+}
+
+function mapTrailOpacityCore(sampleAtMs, nowMs, maxAgeMs = 30000) {
+  const maxAge = Math.max(1, Number(maxAgeMs) || 30000);
+  const age = Math.max(0, Number(nowMs) - Number(sampleAtMs));
+  const freshness = Math.max(0, Math.min(1, 1 - age / maxAge));
+  return 0.06 + freshness * 0.36;
 }
 
 function highDropRankValueCore(item) {
@@ -620,6 +658,8 @@ function renderBrowserlessWebPanel() {
     const AUTO_REFRESH_MS = 3000;
     const MAP_STALE_MS = 15000;
     const MAP_MOVE_ANIMATION_MS = 260;
+    const MAP_TRAIL_MAX_AGE_MS = 30000;
+    const MAP_TRAIL_MAX_SAMPLES = 16;
     let autoRefreshTimer = 0;
     let countdownTimer = 0;
     let refreshInFlight = null;
@@ -634,6 +674,9 @@ function renderBrowserlessWebPanel() {
     let mapAnimationFrame = 0;
     let mapRenderedMarkerPositions = new Map();
     let mapRenderedCanvasSize = 0;
+    let mapTrailHistory = new Map();
+    let mapTrailObservationAtMs = 0;
+    let mapTrailSessionKey = '';
     let panelCollapseState = readPanelCollapseState();
 
     const groupChatMessagesForDisplay = ${groupChatMessagesForDisplay.toString()};
@@ -649,6 +692,8 @@ function renderBrowserlessWebPanel() {
     const mapMarkerKey = ${mapMarkerKeyCore.toString()};
     const mapAnimationProgress = ${mapAnimationProgressCore.toString()};
     const interpolateMapMarker = ${interpolateMapMarkerCore.toString()};
+    const appendMapTrailSample = ${appendMapTrailSampleCore.toString()};
+    const mapTrailOpacity = ${mapTrailOpacityCore.toString()};
     const transportMetricValueClass = ${transportMetricValueClassCore.toString()};
 
     const value = v => v === null || v === undefined || v === '' ? '--' : String(v);
@@ -2103,6 +2148,112 @@ function renderBrowserlessWebPanel() {
       names.delete('');
       return names;
     }
+    function clearMapTrails() {
+      mapTrailHistory = new Map();
+      mapTrailObservationAtMs = 0;
+      mapTrailSessionKey = '';
+    }
+    function mapTrailSessionIdentity(status) {
+      return [
+        status.session?.userId ?? 'self',
+        status.stats?.currentSession?.enteredAt || status.game?.enteredAt || ''
+      ].join(':');
+    }
+    function mapTrailObservedAtMs(status, nowMs) {
+      const parsed = Date.parse(String(status.nearby?.observedAt || status.updatedAt || ''));
+      return Number.isFinite(parsed) ? Math.min(nowMs, parsed) : nowMs;
+    }
+    function recordMapTrailObservation(status, markers, nowMs) {
+      const sessionKey = mapTrailSessionIdentity(status);
+      if (mapTrailSessionKey && mapTrailSessionKey !== sessionKey) clearMapTrails();
+      mapTrailSessionKey = sessionKey;
+      const observedAtMs = mapTrailObservedAtMs(status, nowMs);
+      if (observedAtMs <= mapTrailObservationAtMs) return;
+      const selfKey = mapMarkerKey('self', status.session?.userId, 'current');
+      const observedKeys = new Set();
+      const records = [{
+        key: selfKey,
+        x: number(status.self?.x),
+        y: number(status.self?.y),
+        color: '#eef2f5'
+      }];
+      for (const marker of markers) {
+        if (marker.kind !== 'player' || !marker.mapKey) continue;
+        records.push({
+          key: marker.mapKey,
+          x: number(marker.worldX),
+          y: number(marker.worldY),
+          color: marker.color
+        });
+      }
+      for (const record of records) {
+        if (!record.key || record.x === null || record.y === null) continue;
+        observedKeys.add(record.key);
+        const previous = mapTrailHistory.get(record.key) || null;
+        const samples = appendMapTrailSample(previous?.samples, {
+          x: record.x,
+          y: record.y,
+          at: observedAtMs,
+          breakBefore: Boolean(previous && previous.present === false)
+        }, nowMs, MAP_TRAIL_MAX_AGE_MS, MAP_TRAIL_MAX_SAMPLES);
+        if (!samples.length) continue;
+        mapTrailHistory.set(record.key, {
+          color: record.color,
+          samples,
+          present: true
+        });
+      }
+      for (const [key, entry] of mapTrailHistory.entries()) {
+        if (observedKeys.has(key)) continue;
+        entry.present = false;
+        const samples = appendMapTrailSample(
+          entry.samples,
+          null,
+          nowMs,
+          MAP_TRAIL_MAX_AGE_MS,
+          MAP_TRAIL_MAX_SAMPLES
+        );
+        if (samples.length) entry.samples = samples;
+        else mapTrailHistory.delete(key);
+      }
+      mapTrailObservationAtMs = observedAtMs;
+    }
+    function drawMapTrails(context, scene, markers, frame) {
+      const currentMarkers = new Map(
+        markers.filter(marker => marker.mapKey).map(marker => [marker.mapKey, marker])
+      );
+      currentMarkers.set(scene.selfMapKey, { px: frame.center, py: frame.center });
+      context.save();
+      context.lineCap = 'round';
+      context.lineJoin = 'round';
+      context.lineWidth = .6;
+      for (const [key, entry] of mapTrailHistory.entries()) {
+        const samples = entry.samples.filter(sample => scene.trailNowMs - Number(sample.at) <= MAP_TRAIL_MAX_AGE_MS);
+        if (samples.length < 2) continue;
+        const currentMarker = entry.present ? currentMarkers.get(key) : null;
+        for (let index = 1; index < samples.length; index += 1) {
+          const previous = samples[index - 1];
+          const sample = samples[index];
+          if (sample.breakBefore) continue;
+          const previousX = frame.center + (Number(previous.x) - scene.selfX) * scene.scale;
+          const previousY = frame.center + (Number(previous.y) - scene.selfY) * scene.scale;
+          const sampleX = currentMarker && index === samples.length - 1
+            ? currentMarker.px
+            : frame.center + (Number(sample.x) - scene.selfX) * scene.scale;
+          const sampleY = currentMarker && index === samples.length - 1
+            ? currentMarker.py
+            : frame.center + (Number(sample.y) - scene.selfY) * scene.scale;
+          if (Math.hypot(sampleX - previousX, sampleY - previousY) < .2) continue;
+          context.globalAlpha = mapTrailOpacity(sample.at, scene.trailNowMs, MAP_TRAIL_MAX_AGE_MS);
+          context.strokeStyle = entry.color;
+          context.beginPath();
+          context.moveTo(previousX, previousY);
+          context.lineTo(sampleX, sampleY);
+          context.stroke();
+        }
+      }
+      context.restore();
+    }
     function drawMapTargetPath(context, center, markers, color) {
       if (!markers.length) return;
       context.save();
@@ -2182,6 +2333,7 @@ function renderBrowserlessWebPanel() {
       context.beginPath();
       context.arc(frame.center, frame.center, frame.radius, 0, Math.PI * 2);
       context.clip();
+      drawMapTrails(context, scene, markers, frame);
       const coinMarkers = markers.filter(marker => marker.kind === 'coin');
       const routeMarkers = coinMarkers.filter(marker => marker.routeOrder > 0).sort((a, b) => a.routeOrder - b.routeOrder);
       drawMapTargetPath(context, frame.center, routeMarkers.length ? routeMarkers : coinMarkers.filter(marker => marker.selected), '#fbbf24');
@@ -2259,6 +2411,7 @@ function renderBrowserlessWebPanel() {
       mapEmptyReason = unavailable;
       hideMapTooltip();
       if (unavailable) {
+        clearMapTrails();
         cancelMapMarkerAnimation(true);
         context.clearRect(0, 0, size, size);
         drawMapBase(context, size, attackRange, visibleRange || 1);
@@ -2329,6 +2482,8 @@ function renderBrowserlessWebPanel() {
           targetRole,
           direction: afk ? null : mapVelocity(item?.[14], item?.[15]),
           invulnerable,
+          worldX: x,
+          worldY: y,
           label,
           mapCenter: frame.center,
           tooltip: [
@@ -2345,13 +2500,20 @@ function renderBrowserlessWebPanel() {
       } else {
         setMapHeader('', visibleRange, markers.filter(marker => marker.kind === 'coin').length, markers.filter(marker => marker.kind === 'player').length);
       }
+      const trailNowMs = Date.now();
+      recordMapTrailObservation(status, markers, trailNowMs);
       startMapMarkerAnimation({
         context,
         size,
         status,
         visibleRange,
         attackRange,
-        emptyReason
+        emptyReason,
+        selfX,
+        selfY,
+        scale,
+        selfMapKey: mapMarkerKey('self', status.session?.userId, 'current'),
+        trailNowMs
       }, markers, options.animate !== false);
     }
     function hideMapTooltip() {
@@ -3533,6 +3695,7 @@ function renderBrowserlessWebPanel() {
 
 module.exports = {
   BROWSERLESS_WEB_PANEL_VERSION,
+  appendMapTrailSampleCore,
   estimatedHighDropQuotaCore,
   formatSpentStaminaCore,
   groupBlockingFactorsCore,
@@ -3543,6 +3706,7 @@ module.exports = {
   lastExitPanelVisibleCore,
   mapAnimationProgressCore,
   mapMarkerKeyCore,
+  mapTrailOpacityCore,
   missCloseExitReasonTextCore,
   recoveryContactExitReasonTextCore,
   nearbyCoinIconCore,
