@@ -8658,7 +8658,77 @@ async function runSelfTest() {
           row?.[7]
         ].join('|');
       })(),
-      want: 'flee|safety|avoid-invulnerable-target||true|2500|9600|true|snapshot|9600|2500|1|Passive'
+      want: 'flee|safety|avoid-invulnerable-target||true|1250|9600|true|snapshot|9600|1250|1|Passive'
+    },
+    {
+      name: 'browserless invulnerability ticks use the 50ms server clock for early AFK approach and panel',
+      got: (() => {
+        const state = {
+          userId: 7,
+          realtime: {
+            tick: 54,
+            frameAgeMs: 0,
+            self: fullStamina5s({
+              entity_id: 1,
+              user_id: 7,
+              name: 'self',
+              x: 0,
+              y: 0,
+              hp: 100,
+              max_hp: 100
+            }),
+            entities: [
+              fullStamina5s({
+                entity_id: 1,
+                user_id: 7,
+                name: 'self',
+                x: 0,
+                y: 0,
+                hp: 100,
+                max_hp: 100
+              }),
+              fullStamina5s({
+                entity_id: 2,
+                user_id: 2634,
+                name: '雁盛',
+                x: 42290,
+                y: 0,
+                hp: 100,
+                current_join_mode: 'Passive',
+                drop: 14,
+                invulnerable_remaining_ticks: 2400
+              })
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+        };
+        const input = buildBrowserlessStrategyInput(state, {
+          controlMode: 'profit-live',
+          nowMs: 1200,
+          tickMs: 120
+        }, {});
+        state.realtime.entities[1].invulnerable_remaining_ticks = 700;
+        const decision = buildBrowserlessDecision(state, {}, {
+          controlMode: 'profit-live',
+          nowMs: 1200,
+          tickMs: 120,
+          afkAttackCommitRangeCm: 5000,
+          invulnerableProfitMoveSpeedCmPerSec: 1000
+        });
+        const target = input.visibleTargets.find(entity => Number(entity.user_id) === 2634);
+        const row = decision.input.nearby.p.find(item => item[0] === '雁盛');
+        return [
+          target?.invulnerableRemainingMs,
+          row?.[4],
+          decision.kind,
+          decision.action.kind,
+          decision.action.target?.userId,
+          decision.action.target?.invulnerableRemainingMs
+        ].join('|');
+      })(),
+      want: '120000|35000|profit-candidate|seek-enemy|2634|35000'
     },
     {
       name: 'browserless raw camel invulnerability countdown converts once for target and nearby panel',

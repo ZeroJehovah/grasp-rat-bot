@@ -2750,7 +2750,11 @@ function protocolInvulnerabilityRemainingMs(target, options = {}) {
 }
 
 function invulnerableRemainingMsFromTicksOrFlag(target, options = {}) {
-  const tickMs = Math.max(1, Number(options.tickMs ?? BROWSER_RUNTIME_DEFAULTS.tickMs ?? 120) || 120);
+  const tickMs = Math.max(1, Number(
+    options.combatServerTickMs
+      ?? BROWSER_RUNTIME_DEFAULTS.combatServerTickMs
+      ?? 50
+  ) || 50);
   const remainingTicks = positiveFieldValue(target, INVULNERABLE_TICK_FIELDS);
   const genericRemaining = positiveFieldValue(target, INVULNERABLE_GENERIC_REMAINING_FIELDS);
   const resolvedTicks = remainingTicks !== null ? remainingTicks : genericRemaining;
