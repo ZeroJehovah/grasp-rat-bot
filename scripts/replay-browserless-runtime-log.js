@@ -97,6 +97,7 @@ function parseArgs(argv) {
     trajectoryRouteSelectionMode: 'weighted',
     trajectoryImprovementGate: true,
     trajectoryRouteSequencePhase: 0,
+    dynamicRouteNoProgressLevel: null,
     cutoffAt: '',
     expectCases: 0,
     expectTailLoss: null,
@@ -128,6 +129,7 @@ function parseArgs(argv) {
     else if (arg === '--trajectory-route-selection-mode') options.trajectoryRouteSelectionMode = String(argv[++index] || 'weighted');
     else if (arg === '--trajectory-improvement-gate') options.trajectoryImprovementGate = String(argv[++index] || 'on') !== 'off';
     else if (arg === '--trajectory-route-sequence-phase') options.trajectoryRouteSequencePhase = Number(argv[++index] || 0);
+    else if (arg === '--dynamic-route-no-progress-level') options.dynamicRouteNoProgressLevel = Number(argv[++index]);
     else if (arg === '--cutoff-at') options.cutoffAt = String(argv[++index] || '');
     else if (arg === '--expect-cases') options.expectCases = Number(argv[++index] || 0);
     else if (arg === '--expect-tail-loss') options.expectTailLoss = Number(argv[++index]);
@@ -1087,7 +1089,8 @@ function replayCombat(options) {
       // to this offline replay path so the production weighted selector can
       // be compared on identical accepted-shot opportunities.
       trajectoryRouteSelectionMode: options.trajectoryRouteSelectionMode,
-      combatDynamicRouteSequencePhase: options.trajectoryRouteSequencePhase
+      combatDynamicRouteSequencePhase: options.trajectoryRouteSequencePhase,
+      combatDynamicRouteNoProgressLevel: options.dynamicRouteNoProgressLevel ?? undefined
     });
     const replayDynamicBehaviorEligible = dynamicBehaviorTrajectoryEligibilityCore(
       state.opponentBehaviorState || replayBehavior
