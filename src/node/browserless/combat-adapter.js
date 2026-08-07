@@ -3402,6 +3402,10 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     ? options.whitelistCheck
     : null;
   const configuredTargetWhitelist = targetWhitelistFromOptions(options);
+  const establishedDefensiveTargetId = [stateful?.combatTarget?.intent, stateful?.combatTarget?.originIntent]
+    .some(intent => String(intent || '') === 'defensive')
+    ? String(stateful?.combatTarget?.id ?? '')
+    : '';
   const context = {
     userId: selfUserId,
     bullets,
@@ -3409,6 +3413,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     incomingBulletOwnerId: incomingBullet?.ownerId,
     unknownIncoming: Boolean(incomingBullet && (incomingBullet.ownerId === null || incomingBullet.ownerId === undefined)),
     easyKillPreferredTargetId: options.easyKillPreferredTargetId,
+    defensiveEngagementTargetId: establishedDefensiveTargetId,
     recoveringSelf: Boolean(
       self
         && selfHp !== null
@@ -3515,7 +3520,9 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
           incomingOverride: Boolean((bullets || []).some(bullet => (
             String(bullet?.ownerId ?? '') === String(combatTargetId(currentVisibleTarget) || '')
               && incomingBulletHasCollisionRiskCore(bullet, options)
-          )))
+          ))),
+          defensiveEngagement: [stateful?.combatTarget?.intent, stateful?.combatTarget?.originIntent]
+            .some(intent => String(intent || '') === 'defensive')
         }))
   );
   const urgentSafety = defensiveTargetOverridesEngagedCore(engagedTarget || currentVisibleTarget, defensiveTarget, options)

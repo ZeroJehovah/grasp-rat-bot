@@ -228,6 +228,60 @@ async function runDynamicWhitelistSelfTest() {
     }
 
     {
+      const healthyPassThrough = buildBrowserlessDecision(
+        decisionState({ hp: 81, withBullet: false, targetDistance: 1 }),
+        {},
+        decisionOptions({ dailyDamageUserIds: [8], dynamicWhitelistEnabledUserIds: [] })
+      );
+      const boundaryContact = buildBrowserlessDecision(
+        decisionState({ hp: 80, withBullet: false, targetDistance: 9000 }),
+        {},
+        decisionOptions()
+      );
+      const healthyIncoming = buildBrowserlessDecision(
+        decisionState({ hp: 100, targetHp: 50, targetDistance: 5000 }),
+        {},
+        decisionOptions()
+      );
+      const defensiveState = {
+        combatTarget: {
+          id: '8',
+          at: 2000,
+          firstSeenAt: 2000,
+          lastInRangeAt: 2000,
+          hp: 50,
+          intent: 'defensive',
+          originIntent: 'defensive',
+          active: true
+        },
+        combatMetrics: {
+          targetId: '8',
+          startedAt: 2000,
+          lastObservedAt: 2000,
+          acceptedShots: 0,
+          lastTargetHp: 50
+        }
+      };
+      const continuedDefense = buildBrowserlessDecision(
+        decisionState({ hp: 100, targetHp: 50, targetDistance: 5000, nowMs: 2050, tick: 63, withBullet: false }),
+        defensiveState,
+        decisionOptions({ nowMs: 2050 })
+      );
+      assert.strictEqual(healthyPassThrough.combat.target, null);
+      assert.strictEqual(healthyPassThrough.whitelistSafety.targets[0].policy.reason, 'dynamic-whitelist-healthy-pass-through');
+      assert.strictEqual(healthyPassThrough.whitelistSafety.targets[0].policy.proactiveCombatHpEligible, false);
+      assert.strictEqual(boundaryContact.reason, 'combat-live-realtime');
+      assert.strictEqual(boundaryContact.combat.target.combatIntent, 'whitelist-proximity');
+      assert.strictEqual(healthyIncoming.reason, 'incoming-bullet-dodge');
+      assert.strictEqual(healthyIncoming.combat.target.combatIntent, 'defensive');
+      assert.strictEqual(healthyIncoming.whitelistSafety.incoming.collisionBulletCount > 0, true);
+      assert.strictEqual(continuedDefense.reason, 'combat-live-realtime');
+      assert.strictEqual(String(continuedDefense.combat.target.userId), '8');
+      assert.strictEqual(defensiveState.combatTarget.originIntent, 'defensive');
+      cases.push('healthy-pass-through-keeps-current-incoming-fire-defense');
+    }
+
+    {
       const low = buildBrowserlessDecision(decisionState({ hp: 40 }), {}, decisionOptions());
       const extendedRecovery = buildBrowserlessDecision(
         decisionState({ hp: 40, withBullet: false, targetDistance: 20000 }),
@@ -448,11 +502,16 @@ async function runDynamicWhitelistSelfTest() {
           {},
           decisionOptions({ dailyDamageUserIds: [8] })
         );
-        assert.strictEqual(decision.reason, 'combat-live-realtime', contact.name);
-        assert.strictEqual(String(decision.combat.target.userId), '8', contact.name);
+        assert.notStrictEqual(decision.reason, 'combat-live-realtime', contact.name);
+        assert.strictEqual(decision.combat.target, null, contact.name);
+        assert.strictEqual(
+          decision.whitelistSafety.targets[0].policy.reason,
+          'dynamic-whitelist-healthy-pass-through',
+          contact.name
+        );
         assert.notStrictEqual(decision.action?.kind, 'safety-exit', contact.name);
       }
-      cases.push('observed-low-stamina-dynamic-contacts-remain-in-combat');
+      cases.push('observed-healthy-dynamic-contacts-pass-through-despite-daily-damage');
     }
 
     {
@@ -597,7 +656,7 @@ async function runDynamicWhitelistSelfTest() {
         assert.strictEqual(policy.damagedSelfToday, false);
         assert.strictEqual(policy.proactiveCombatRangeCm, 6500);
         assert.strictEqual(policy.distanceCm, 13000);
-        assert.strictEqual(policy.reason, 'dynamic-whitelist-distance-guard');
+        assert.strictEqual(policy.reason, 'dynamic-whitelist-healthy-pass-through');
       } finally {
         await worker.close();
       }

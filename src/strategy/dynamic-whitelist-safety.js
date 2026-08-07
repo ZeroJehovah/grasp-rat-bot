@@ -3,6 +3,7 @@
 const DEFAULT_PROXIMITY_BASE_RANGE_CM = 6500;
 const DEFAULT_COMBAT_ATTACK_RANGE_CM = 14500;
 const DEFAULT_LOW_HP_THRESHOLD = 50;
+const DEFAULT_PROACTIVE_COMBAT_MAX_HP = 80;
 const DEFAULT_RISK_HP_RATIO = 0.5;
 const DEFAULT_BULLET_HIT_RADIUS_CM = 90;
 
@@ -64,6 +65,11 @@ function lowHpThreshold(options = {}) {
       ?? options.lowHpThreshold
   );
   return Math.max(0, configured ?? DEFAULT_LOW_HP_THRESHOLD);
+}
+
+function proactiveCombatMaxHp(options = {}) {
+  const configured = numberOrNull(options.dynamicWhitelistProactiveCombatMaxHp);
+  return Math.max(0, configured ?? DEFAULT_PROACTIVE_COMBAT_MAX_HP);
 }
 
 function dynamicWhitelistCombatRangeCore(self, options = {}) {
@@ -179,6 +185,8 @@ function evaluateDynamicWhitelistContactCore(self, target, context = {}, options
     : 0;
   const selfHp = rangeModel.selfHp;
   const lowHp = selfHp !== null && selfHp <= rangeModel.lowHpThreshold;
+  const proactiveCombatHpThreshold = proactiveCombatMaxHp(options);
+  const proactiveCombatHpEligible = selfHp !== null && selfHp <= proactiveCombatHpThreshold;
   const recovering = context.recovering === true;
   const recoveryRadiusCm = Math.max(0, numberOrNull(context.recoveryRadiusCm) ?? 0);
   const lowHpSafetyRadiusCm = recovering
@@ -204,6 +212,7 @@ function evaluateDynamicWhitelistContactCore(self, target, context = {}, options
       && dynamicWhitelistMember
       && !creatorProtected
       && !lowHp
+      && proactiveCombatHpEligible
       && selfHp !== null
       && (ordinaryRangeOverride || rangeModel.valid)
       && inProactiveRange
@@ -212,6 +221,7 @@ function evaluateDynamicWhitelistContactCore(self, target, context = {}, options
   if (creatorProtected) reason = 'creator-hard-protection';
   else if (legacyWhitelistProtected) reason = 'legacy-whitelist-hard-protection';
   else if (dynamicWhitelistMember && lowHpSafetyExit) reason = 'dynamic-whitelist-low-hp-contact';
+  else if (dynamicWhitelistMember && !proactiveCombatHpEligible) reason = 'dynamic-whitelist-healthy-pass-through';
   else if (dynamicWhitelistMember && damagedSelfToday) reason = 'dynamic-whitelist-damaged-today';
   else if (dynamicWhitelistMember) reason = 'dynamic-whitelist-distance-guard';
   return {
@@ -230,6 +240,8 @@ function evaluateDynamicWhitelistContactCore(self, target, context = {}, options
     risk: rangeModel.risk,
     lowHp,
     lowHpThreshold: rangeModel.lowHpThreshold,
+    proactiveCombatHpThreshold,
+    proactiveCombatHpEligible,
     distanceCm,
     attackRangeCm,
     proactiveCombatRangeCm,
@@ -328,7 +340,9 @@ function dynamicWhitelistIncomingOverrideCore(target, incoming, context = {}, op
 function dynamicWhitelistDistanceGuardBlocksCombatCore(target, context = {}) {
   const policy = target?.whitelistContactPolicy || null;
   if (!policy?.dynamicWhitelistMember || policy.creatorProtected) return false;
-  if (context.incomingOverride === true || context.recentInjury === true) return false;
+  if (context.incomingOverride === true
+    || context.recentInjury === true
+    || context.defensiveEngagement === true) return false;
   return policy.proactiveCombatEligible !== true;
 }
 
@@ -336,6 +350,7 @@ module.exports = {
   DEFAULT_COMBAT_ATTACK_RANGE_CM,
   DEFAULT_LOW_HP_THRESHOLD,
   DEFAULT_PROXIMITY_BASE_RANGE_CM,
+  DEFAULT_PROACTIVE_COMBAT_MAX_HP,
   dynamicWhitelistCombatRangeCore,
   dynamicWhitelistDistanceGuardBlocksCombatCore,
   dynamicWhitelistIncomingOverrideCore,

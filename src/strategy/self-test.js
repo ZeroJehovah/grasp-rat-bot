@@ -273,15 +273,24 @@ function runStrategyModuleSelfTests() {
   );
   const fullHpInside = dynamicPolicy(100, 6500);
   const fullHpOutside = dynamicPolicy(100, 6501);
+  const eightyOneInside = dynamicPolicy(81, 1);
+  const eightyInside = dynamicPolicy(80, 9700);
+  const eightyOutside = dynamicPolicy(80, 9701);
   const seventyFiveInside = dynamicPolicy(75, 10500);
   const seventyFiveOutside = dynamicPolicy(75, 10501);
   const fiftyOneRange = dynamicWhitelistCombatRangeCore(dynamicSelf(51), { combatAttackRange: 14500 });
   const fiftyOneInside = dynamicPolicy(51, 14340);
   const fiftyOneOutside = dynamicPolicy(51, 14341);
   results.push({
-    name: 'dynamic-whitelist-hp-scaled-proximity-boundaries',
-    passed: fullHpInside.proactiveCombatEligible === true
+    name: 'dynamic-whitelist-healthy-pass-through-and-hp-scaled-proximity-boundaries',
+    passed: fullHpInside.proactiveCombatEligible === false
       && fullHpOutside.proactiveCombatEligible === false
+      && fullHpInside.reason === 'dynamic-whitelist-healthy-pass-through'
+      && eightyOneInside.proactiveCombatEligible === false
+      && eightyOneInside.proactiveCombatHpEligible === false
+      && eightyInside.proactiveCombatEligible === true
+      && eightyInside.proactiveCombatHpEligible === true
+      && eightyOutside.proactiveCombatEligible === false
       && seventyFiveInside.proactiveCombatEligible === true
       && seventyFiveOutside.proactiveCombatEligible === false
       && fiftyOneRange.rangeCm === 14340
@@ -309,6 +318,8 @@ function runStrategyModuleSelfTests() {
 
   const damagedInside = dynamicPolicy(80, 14500, { damagedSelfToday: true });
   const damagedOutside = dynamicPolicy(80, 14501, { damagedSelfToday: true });
+  const healthyDamagedInside = dynamicPolicy(81, 1, { damagedSelfToday: true });
+  const healthyDisabledInside = dynamicPolicy(100, 1, { dynamicWhitelistEnabled: false });
   const disabledWithoutMaxHp = evaluateDynamicWhitelistContactCore(
     { hp: 80, stamina_5s_remaining_milli: 10000 },
     dynamicTarget(14500),
@@ -321,6 +332,9 @@ function runStrategyModuleSelfTests() {
     passed: damagedInside.proactiveCombatEligible === true
       && damagedInside.ordinaryRangeOverride === true
       && damagedOutside.proactiveCombatEligible === false
+      && healthyDamagedInside.proactiveCombatEligible === false
+      && healthyDamagedInside.reason === 'dynamic-whitelist-healthy-pass-through'
+      && healthyDisabledInside.proactiveCombatEligible === false
       && disabledWithoutMaxHp.proactiveCombatEligible === true
       && proportionalRange.rangeCm === 10500
   });

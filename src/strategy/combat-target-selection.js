@@ -325,6 +325,12 @@ function isCombatEligibleThreat(entity, options = {}) {
   const recentInjury = recentInjuryMatchesTarget(entity, options);
   const dynamicPolicy = entity.whitelistContactPolicy || null;
   const dynamicWhitelistMember = Boolean(entity.dynamicWhitelistMember || dynamicPolicy?.dynamicWhitelistMember);
+  const defensiveEngagement = Boolean(
+    options.defensiveEngagementTargetId !== null
+      && options.defensiveEngagementTargetId !== undefined
+      && options.defensiveEngagementTargetId !== ''
+      && String(targetId(entity) || '') === String(options.defensiveEngagementTargetId)
+  );
   const creatorProtected = Boolean(entity.creatorProtected || dynamicPolicy?.creatorProtected);
   const legacyWhitelistProtected = Boolean(
     entity.legacyWhitelistProtected
@@ -338,7 +344,7 @@ function isCombatEligibleThreat(entity, options = {}) {
 
   // Realtime collision-path fire and recent attributable injury outrank the
   // dynamic whitelist distance guard and the easy-kill trust exemption.
-  if (incomingOverride.defensiveTargetEligible || recentInjury) return true;
+  if (incomingOverride.defensiveTargetEligible || recentInjury || defensiveEngagement) return true;
 
   if (dynamicWhitelistMember) return dynamicPolicy?.proactiveCombatEligible === true;
 
@@ -846,7 +852,8 @@ function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bu
       };
   if (visibleTarget && dynamicWhitelistDistanceGuardBlocksCombatCore(visibleTarget, {
     incomingOverride: incomingOwnerMatchesTarget(visibleTarget, context),
-    recentInjury: recentInjuryMatchesTarget(visibleTarget, context)
+    recentInjury: recentInjuryMatchesTarget(visibleTarget, context),
+    defensiveEngagement: String(engaged.intent || engaged.originIntent || '') === 'defensive'
   })) {
     if (state && typeof state === 'object') state.combatTarget = null;
     return null;

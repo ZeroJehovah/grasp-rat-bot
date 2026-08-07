@@ -2009,6 +2009,8 @@ function summarizeWhitelistContactPolicy(policy) {
     damagedSelfToday: Boolean(policy.damagedSelfToday),
     legacyWhitelistProtected: Boolean(policy.legacyWhitelistProtected),
     proactiveCombatEligible: Boolean(policy.proactiveCombatEligible),
+    proactiveCombatHpEligible: Boolean(policy.proactiveCombatHpEligible),
+    proactiveCombatHpThreshold: numberOrNull(policy.proactiveCombatHpThreshold),
     proactiveCombatRangeCm: numberOrNull(policy.proactiveCombatRangeCm),
     incomingDodgeRequired: Boolean(policy.incomingDodgeRequired),
     lowHpSafetyExit: Boolean(policy.lowHpSafetyExit),

@@ -211,10 +211,13 @@ function runRecoveryContactSelfTest() {
         dynamicWhitelistEnabledUserIds: [8]
       })
     );
-    assert.strictEqual(decision.reason, 'combat-live-realtime');
-    assert.strictEqual(decision.combat.target.combatIntent, 'whitelist-proximity');
-    assert.strictEqual(decision.combat.target.whitelistContactPolicy.proactiveCombatEligible, true);
-    cases.push('healthy-recovery-allows-dynamic-whitelist-proximity-combat');
+    assert.strictEqual(decision.reason, 'wait-for-full-stamina-and-hp');
+    assert.strictEqual(decision.combat.target, null);
+    assert.strictEqual(
+      decision.whitelistSafety.targets[0].policy.reason,
+      'dynamic-whitelist-healthy-pass-through'
+    );
+    cases.push('healthy-recovery-allows-dynamic-whitelist-pass-through');
   }
 
   {
