@@ -47,6 +47,7 @@ function defaultBrowserlessState() {
       combatEnabled: false,
       confirmedLeave: null,
       pendingExit: null,
+      lastLoginAt: '',
       restartDrain: null,
       currentAction: null,
       lastRun: null,

@@ -176,6 +176,7 @@ function publicConfig(config) {
     sourceIpProbeTimeoutMs: Number(config.sourceIpProbeTimeoutMs || 0),
     decisionIntervalMs: Number(config.decisionIntervalMs || 0),
     loopDelayMs: Number(config.loopDelayMs || 0),
+    loginIntervalMs: Math.max(60000, Number(config.loginIntervalMs || 0)),
     actionSettlementRecoveryMaxMs: actionSettlementRecoveryMaxMs(config),
     dailyFirstLoginDelayMs: Number(config.dailyFirstLoginDelayMs || 0),
     loginPointSafetySuccessRequired: Number(config.loginPointSafetySuccessRequired || 0),
@@ -681,6 +682,28 @@ function browserlessDailyFirstLoginDelayPlan(state, config = {}, nowMs = Date.no
     error: 'daily-first-login-delay',
     safetyReason: '',
     explicitDelay: true,
+    notBeforeAt: new Date(notBeforeMs).toISOString()
+  };
+}
+
+function browserlessLoginIntervalDelayPlan(state, config = {}, nowMs = Date.now()) {
+  if (state?.stats?.currentSession?.online) return null;
+  const nowValue = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  const lastLoginAtMs = parseIsoTimeMs(state?.runner?.lastLoginAt);
+  if (!lastLoginAtMs) return null;
+  const intervalMs = Math.max(60000, Number(config.loginIntervalMs ?? 60000));
+  const notBeforeMs = lastLoginAtMs + intervalMs;
+  const delayMs = Math.max(0, notBeforeMs - nowValue);
+  if (delayMs <= 0) return null;
+  return {
+    continue: true,
+    reason: 'login-interval',
+    delayMs,
+    previousRunId: '',
+    error: 'login-interval',
+    safetyReason: '',
+    explicitDelay: true,
+    explicitCooldown: true,
     notBeforeAt: new Date(notBeforeMs).toISOString()
   };
 }
@@ -2344,6 +2367,10 @@ async function runBrowserlessRunner(config, deps = {}) {
   };
 
   const markSourceIpLoginSuccess = canary => {
+    const loginAt = canary?.firstSelfAt || new Date(now()).toISOString();
+    const loginPatch = { runner: { lastLoginAt: loginAt } };
+    updateState(loginPatch, { updatedAt: loginAt });
+    if (liveState) patchLiveState(loginPatch, { updatedAt: loginAt });
     const current = liveState || readBrowserlessStateFile(stateFile);
     const preflight = normalizeSourceIpPreflight(
       current.network?.sourceIpPreflight,
@@ -2367,6 +2394,7 @@ async function runBrowserlessRunner(config, deps = {}) {
     });
     logStore.append('runner', 'source-ip-login-success', {
       runId: canary?.runId || '',
+      loginAt,
       sourceIp: current.network.sourceIp || '',
       lifecycleSourceIps
     });
@@ -3596,11 +3624,20 @@ async function runBrowserlessRunner(config, deps = {}) {
       if (stopped) return stopped;
       continue;
     }
+    const sessionOnline = Boolean(loopState?.stats?.currentSession?.online);
     const transportRecoveryState = normalizeTransportRecovery(
       loopState?.runner?.transportRecovery,
       now(),
       config
     );
+    const loginIntervalPlan = !activePendingExit && !transportRecoveryState
+      ? browserlessLoginIntervalDelayPlan(loopState, config, now())
+      : null;
+    if (loginIntervalPlan) {
+      const stopped = await waitForLoopPlan(loginIntervalPlan);
+      if (stopped) return stopped;
+      continue;
+    }
     if (transportRecoveryState && !transportRecoveryState.expired && !preparedSnapshotSafety) {
       const stopped = await waitForLoopPlan({
         continue: true,
@@ -3625,7 +3662,6 @@ async function runBrowserlessRunner(config, deps = {}) {
     // after all existing waits/recovery branches have settled; an active
     // session and pending-exit recovery keep their already-bound lifecycle.
     let loginPreflightResult = null;
-    const sessionOnline = Boolean(loopState?.stats?.currentSession?.online);
     if (!deps.disableSourceIpPreflight && !activePendingExit && !transportRecoveryState && !sessionOnline) {
       try {
         loginPreflightResult = await runLoginSourceIpPreflight();
@@ -4578,6 +4614,7 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
           && JSON.stringify(canarySourceIps) === JSON.stringify(['10.0.0.9', '10.0.0.10', '10.0.0.11'])
           && JSON.stringify(state.network.lifecycleSourceIps) === JSON.stringify(canarySourceIps)
           && state.network.sourceIpPreflight.phase === 'active'
+          && state.runner.lastLoginAt === new Date(nowMs).toISOString()
           && phaseBeforeCanaryReturn === 'active'
           && loginSuccessLogCount === 1
           && bypassReason === 'daily-first-login-invulnerability'
@@ -4587,6 +4624,7 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
       sourceIp: canarySourceIp,
       sourceIps: canarySourceIps,
       phase: state.network.sourceIpPreflight.phase,
+      lastLoginAt: state.runner.lastLoginAt,
       phaseBeforeCanaryReturn,
       loginSuccessLogCount,
       bypassReason,
@@ -5460,6 +5498,42 @@ async function runBrowserlessRunnerSelfTest() {
       '1234'
     ], {});
     const singleBlockerConfigOk = singleBlockerConfig.loginPointSingleBlockerBypassMs === 1234;
+    const loginIntervalConfig = parseBrowserlessRunnerArgs([
+      '--login-interval-ms', '30000'
+    ], {});
+    const loginIntervalNowMs = Date.parse('2026-08-07T03:00:30.000Z');
+    const loginIntervalState = {
+      runner: { lastLoginAt: '2026-08-07T03:00:00.000Z' },
+      stats: { currentSession: { online: false } }
+    };
+    const loginIntervalPlan = browserlessLoginIntervalDelayPlan(
+      loginIntervalState,
+      loginIntervalConfig,
+      loginIntervalNowMs
+    );
+    const loginIntervalExpired = browserlessLoginIntervalDelayPlan(
+      loginIntervalState,
+      loginIntervalConfig,
+      loginIntervalNowMs + 30000
+    );
+    const loginIntervalTakeover = browserlessLoginIntervalDelayPlan({
+      ...loginIntervalState,
+      stats: { currentSession: { online: true } }
+    }, loginIntervalConfig, loginIntervalNowMs);
+    const loginIntervalSelfTest = {
+      ok: Boolean(
+        loginIntervalConfig.loginIntervalMs === 60000
+          && loginIntervalPlan?.reason === 'login-interval'
+          && loginIntervalPlan?.delayMs === 30000
+          && loginIntervalPlan?.explicitCooldown === true
+          && loginIntervalExpired === null
+          && loginIntervalTakeover === null
+      ),
+      configuredMs: loginIntervalConfig.loginIntervalMs,
+      remainingMs: loginIntervalPlan?.delayMs ?? null,
+      expired: loginIntervalExpired === null,
+      takeoverBypassed: loginIntervalTakeover === null
+    };
     const transportHealthConfig = parseBrowserlessRunnerArgs([
       '--transport-health-window-ms', '12000',
       '--transport-health-active-warmup-ms', '1100',
@@ -7277,6 +7351,7 @@ async function runBrowserlessRunnerSelfTest() {
       },
       loginPointSingleBlocker,
       singleBlockerConfigOk,
+      loginIntervalSelfTest,
       transportHealthConfigOk,
       staleRestartDrainCleared,
       pendingDeadlineSelfTest,
@@ -7326,6 +7401,7 @@ module.exports = {
   CONFIRMED_LEAVE_SNAPSHOT_IGNORE_MS,
   browserlessDayKey,
   browserlessDailyFirstLoginDelayPlan,
+  browserlessLoginIntervalDelayPlan,
   browserlessLoopPlan,
   browserlessTerminalStopRequestsRuntimeClose,
   closeBrowserlessStatusHandle,

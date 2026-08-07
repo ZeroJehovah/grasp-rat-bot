@@ -48,6 +48,7 @@ const DEFAULTS = {
   sourceIpProbeTimeoutMs: 60000,
   decisionIntervalMs: 1000,
   loopDelayMs: 30000,
+  loginIntervalMs: 60000,
   actionSettlementRecoveryMaxMs: 10000,
   dailyFirstLoginDelayMs: 120000,
   loginPointSafetySuccessRequired: 1,
@@ -217,6 +218,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     sourceIpProbeTimeoutMs: numberEnv(env.GRASP_RAT_BROWSERLESS_SOURCE_IP_PROBE_TIMEOUT_MS, DEFAULTS.sourceIpProbeTimeoutMs),
     decisionIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_DECISION_INTERVAL_MS, DEFAULTS.decisionIntervalMs),
     loopDelayMs: numberEnv(env.GRASP_RAT_BROWSERLESS_LOOP_DELAY_MS, DEFAULTS.loopDelayMs),
+    loginIntervalMs: Math.max(60000, numberEnv(
+      env.GRASP_RAT_BROWSERLESS_LOGIN_INTERVAL_MS,
+      DEFAULTS.loginIntervalMs
+    )),
     actionSettlementRecoveryMaxMs: Math.min(30000, Math.max(3000, numberEnv(
       env.GRASP_RAT_BROWSERLESS_ACTION_SETTLEMENT_RECOVERY_MAX_MS,
       DEFAULTS.actionSettlementRecoveryMaxMs
@@ -429,6 +434,8 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.decisionIntervalMs = numberEnv(argv[++i], config.decisionIntervalMs);
     } else if (arg === '--loop-delay-ms') {
       config.loopDelayMs = numberEnv(argv[++i], config.loopDelayMs);
+    } else if (arg === '--login-interval-ms') {
+      config.loginIntervalMs = Math.max(60000, numberEnv(argv[++i], config.loginIntervalMs));
     } else if (arg === '--action-settlement-recovery-max-ms') {
       config.actionSettlementRecoveryMaxMs = Math.min(30000, Math.max(3000, numberEnv(
         argv[++i], config.actionSettlementRecoveryMaxMs
@@ -655,6 +662,7 @@ function usage() {
     '  --action-settlement-recovery-max-ms <ms>  Bounded non-combat settlement recovery window (3000-30000). Default: 10000',
     '  --daily-first-login-delay-ms <ms>  Earliest UTC+8 daily first login after midnight. Default: 120000',
     '  --login-point-safety-success-required <n>  Legacy consecutive checks when snapshot edge mode is disabled. Default: 1',
+    '  --login-interval-ms <ms>  Hard minimum between successful logins; values below 60000 are clamped. Default: 60000',
     '  --login-point-safety-probe-interval-ms <ms>  Delay between those checks. Default: 30000',
     '  --[no-]snapshot-edge-enabled  Wait for a post-baseline snapshot version and evaluate it once. Default: enabled',
     '  --snapshot-edge-interval-ms <ms>  Snapshot version probe interval; values below 30000 are clamped. Default: 30000',
