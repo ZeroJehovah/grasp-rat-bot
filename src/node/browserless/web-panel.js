@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.07.2';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.07.3';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -391,7 +391,7 @@ function renderBrowserlessWebPanel() {
     .coin-row{grid-template-columns:minmax(48px,1fr) minmax(34px,.5fr) minmax(46px,.65fr)}
     .player-row{grid-template-columns:minmax(150px,2.8fr) minmax(40px,.55fr) minmax(42px,.55fr) minmax(42px,.5fr) minmax(52px,.65fr)}
     .high-drop-list{display:grid;gap:0;min-width:0}
-    .high-drop-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.35fr) minmax(72px,.8fr);gap:10px;align-items:center;min-height:26px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)}
+    .high-drop-row{display:grid;grid-template-columns:minmax(120px,2fr) minmax(78px,.55fr) minmax(64px,.45fr);gap:8px;align-items:center;min-height:26px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)}
     .high-drop-row:last-child{border-bottom:0}
     .high-drop-head{position:sticky;top:0;z-index:1;color:var(--muted);font-size:11px;font-weight:700;background:var(--panel)}
     .high-drop-cell{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -401,7 +401,11 @@ function renderBrowserlessWebPanel() {
     .high-drop-name.offline,.high-drop-name.unknown{color:var(--muted)}
     .high-drop-values{color:var(--coin);font-variant-numeric:tabular-nums}
     .high-drop-values.offline,.high-drop-values.unknown{color:var(--muted)}
-    .player-insights-body{height:164px;overflow-y:auto;scrollbar-gutter:stable}
+    .high-drop-values .high-drop-current{color:var(--coin)}
+    .high-drop-values .high-drop-delta{color:var(--text)}
+    .high-drop-values .high-drop-delta.positive{color:var(--red)}
+    .high-drop-values .high-drop-delta.negative{color:var(--green)}
+    .player-insights-body{height:186px;overflow-y:auto;scrollbar-gutter:stable}
     .player-memory-list{display:flex;flex-wrap:wrap;gap:6px 5px;min-height:24px;align-items:center;align-content:flex-start}
     .player-memory-name{display:inline-flex;align-items:center;max-width:100%;height:26px;box-sizing:border-box;padding:2px 5px;border:1px solid transparent;border-radius:4px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .player-memory-empty{color:var(--muted)}
@@ -467,13 +471,10 @@ function renderBrowserlessWebPanel() {
             <dl>
               <dt>网页版本</dt><dd id="webVersion">${BROWSERLESS_WEB_PANEL_VERSION}</dd>
               <dt>刷新时间</dt><dd id="stamp">--</dd>
-              <dt>出口数量</dt><dd id="sourceIpCount">--</dd>
               <dt>当前出口</dt><dd id="sourceIp">--</dd>
-              <dt>出口预检阶段</dt><dd id="sourceIpPreflightPhase">--</dd>
-              <dt>出口预检进度</dt><dd id="sourceIpPreflightProgress">--</dd>
-              <dt>预检当前 IP</dt><dd id="sourceIpPreflightCurrentIp">--</dd>
-              <dt>预检最近结果</dt><dd id="sourceIpPreflightLastResult">--</dd>
-              <dt>预检下次重试</dt><dd id="sourceIpPreflightNextRetry">--</dd>
+              <dt>最近预检时间</dt><dd id="sourceIpProbeLastAt">--</dd>
+              <dt>最近预检结果</dt><dd id="sourceIpProbeLastResult">--</dd>
+              <dt>下次预检时间</dt><dd id="sourceIpProbeNextAt">--</dd>
               <dt>网络监控</dt><dd id="transportHealthMode">--</dd>
               <dt>实时延迟</dt><dd id="transportLatency">--</dd>
               <dt>本地排队</dt><dd id="transportQueue">--</dd>
@@ -741,13 +742,22 @@ function renderBrowserlessWebPanel() {
       const n = number(remainingMs);
       return n === null ? '--' : String(Math.max(0, Math.floor(n / 1000))) + '/' + maxSeconds;
     };
-    const sourceIpCountText = network => {
-      const total = number(network?.sourceIpCount);
-      const index = number(network?.sourceIpIndex);
-      if ((total === null || total <= 0) && index === null) return '--';
-      return (index === null || index <= 0 ? '?' : String(Math.round(index)))
-        + '/'
-        + (total === null || total <= 0 ? '?' : String(Math.round(total)));
+    const sourceIpProbeLastResultText = network => {
+      const round = network?.sourceIpProbe?.lastRound;
+      if (!round) return '--';
+      const success = number(round.successCount);
+      const total = number(round.requestCount);
+      const failure = number(round.failureCount);
+      if (String(round.errorCategory || '')) return '失败：' + String(round.errorCategory);
+      if (success === null || total === null) return round.ok ? '完成' : '未完成';
+      return (round.ok ? '完成：' : '失败：') + Math.round(success) + '/' + Math.round(total) + ' 可用'
+        + (failure > 0 ? '，' + Math.round(failure) + ' 个异常' : '');
+    };
+    const sourceIpProbeNextText = network => {
+      const nextRoundAt = network?.sourceIpProbe?.nextRoundAt;
+      if (!nextRoundAt) return '--';
+      if (network?.sourceIpProbe?.inFlight) return fullStamp(nextRoundAt) + '（正在预检）';
+      return fullStamp(nextRoundAt) + '（' + countdownUntil(nextRoundAt) + '后）';
     };
     const sourceIpPreflightPhaseText = network => {
       const preflight = network?.sourceIpPreflight || {};
@@ -2526,15 +2536,14 @@ function renderBrowserlessWebPanel() {
       fragment.appendChild(createNearbySummaryRow('player', '已折叠' + hiddenLowAfkCount + '个低收益挂机玩家'));
       node.replaceChildren(fragment);
     }
-    function highDropValueText(item) {
-      const values = [item?.[1], item?.[2], item?.[3]];
-      const merged = [];
-      for (const current of values) {
-        const next = number(current);
-        if (next === null) continue;
-        if (!merged.length || merged[merged.length - 1] !== next) merged.push(next);
-      }
-      return merged.length ? merged.map(integer).join(' -> ') : '--';
+    function highDropValueParts(item) {
+      const initial = number(item?.[1]);
+      const current = number(item?.[3]) ?? number(item?.[2]) ?? initial;
+      if (current === null) return null;
+      return {
+        current: Math.max(0, Math.round(current)),
+        delta: initial === null ? null : Math.round(current - initial)
+      };
     }
     function createHighDropRow(name, drops, estimatedQuota, head = false, online = undefined, self = false) {
       const row = document.createElement('div');
@@ -2556,7 +2565,20 @@ function renderBrowserlessWebPanel() {
       }
       const dropCell = document.createElement('div');
       dropCell.className = 'high-drop-cell' + (head ? '' : (showPresence ? ' high-drop-values ' + onlineClass + (self ? ' self' : '') : ' muted'));
-      dropCell.textContent = value(drops);
+      if (head || !drops || typeof drops !== 'object') {
+        dropCell.textContent = value(drops);
+      } else {
+        const current = document.createElement('span');
+        current.className = 'high-drop-current';
+        current.textContent = integer(drops.current);
+        dropCell.append(current);
+        if (drops.delta !== null) {
+          const delta = document.createElement('span');
+          delta.className = 'high-drop-delta ' + (drops.delta > 0 ? 'positive' : (drops.delta < 0 ? 'negative' : 'zero'));
+          delta.textContent = '(' + (drops.delta > 0 ? '+' : '') + String(drops.delta) + ')';
+          dropCell.append(delta);
+        }
+      }
       const quotaCell = document.createElement('div');
       quotaCell.className = 'high-drop-cell' + (head ? '' : (showPresence ? ' high-drop-values ' + onlineClass + (self ? ' self' : '') : ' muted'));
       quotaCell.textContent = value(estimatedQuota);
@@ -2604,7 +2626,7 @@ function renderBrowserlessWebPanel() {
           const item = entry.item;
           fragment.appendChild(createHighDropRow(
             item?.[0],
-            highDropValueText(item),
+            highDropValueParts(item),
             integer(estimatedHighDropQuota(item?.[1], item?.[2], item?.[3])),
             false,
             entry.online,
@@ -3259,18 +3281,11 @@ function renderBrowserlessWebPanel() {
       setClass('stamp', statusClass);
       const stampNode = document.getElementById('stamp');
       if (stampNode) stampNode.title = '';
-      setText('sourceIpCount', sourceIpCountText(s.network));
       setText('sourceIp', s.network?.sourceIp);
-      setText('sourceIpPreflightPhase', sourceIpPreflightPhaseText(s.network));
-      setText('sourceIpPreflightProgress', sourceIpPreflightProgressText(s.network));
-      setText('sourceIpPreflightCurrentIp', s.network?.sourceIpPreflight?.currentIp || '--');
-      setText('sourceIpPreflightLastResult', sourceIpPreflightLastResultText(s.network));
-      setText('sourceIpPreflightNextRetry', countdownUntil(
-        s.network?.sourceIpPreflight?.phase === 'insufficient'
-          ? s.stats?.offline?.nextReconnectAt
-          : s.network?.sourceIpPreflight?.nextRetryAt
-      ));
-      setClass('sourceIpPreflightPhase', String(s.network?.sourceIpPreflight?.phase || '').includes('insufficient') ? 'bad' : '');
+      setText('sourceIpProbeLastAt', fullStamp(s.network?.sourceIpProbe?.lastRound?.roundCompletedAt));
+      setText('sourceIpProbeLastResult', sourceIpProbeLastResultText(s.network));
+      setText('sourceIpProbeNextAt', sourceIpProbeNextText(s.network));
+      setClass('sourceIpProbeLastResult', s.network?.sourceIpProbe?.lastRound?.ok === false ? 'bad' : '');
       const transportHealth = s.network?.transportHealth || null;
       setText('transportHealthMode', transportModeText(transportHealth));
       const metricClass = transportMetricClass(transportHealth);

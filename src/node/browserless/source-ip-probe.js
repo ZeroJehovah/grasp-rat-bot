@@ -14,7 +14,7 @@ const {
   uniqueIpv4
 } = require('./source-ip-preflight');
 
-const SOURCE_IP_PROBE_SCHEMA_VERSION = 1;
+const SOURCE_IP_PROBE_SCHEMA_VERSION = 2;
 const SOURCE_IP_PROBE_RETENTION_MS = 24 * 60 * 60 * 1000;
 const SOURCE_IP_PROBE_HALF_LIFE_MS = 6 * 60 * 60 * 1000;
 const SOURCE_IP_PROBE_REQUIRED_COUNT = 3;
@@ -97,11 +97,34 @@ function normalizeProbeHistory(value = {}, nowMs = Date.now(), retentionMs = SOU
     samples.push(sample);
   }
   samples.sort((left, right) => Date.parse(left.observedAt) - Date.parse(right.observedAt));
+  const rawLastRound = input.lastCompletedRound && typeof input.lastCompletedRound === 'object'
+    ? input.lastCompletedRound
+    : null;
+  const lastCompletedAtMs = Date.parse(String(rawLastRound?.roundCompletedAt || ''));
+  const nextRoundAtMs = Date.parse(String(input.nextRoundAt || ''));
+  const updatedAtMs = Date.parse(String(input.updatedAt || ''));
+  const lastCompletedRound = Number.isFinite(lastCompletedAtMs)
+    ? {
+        ok: Boolean(rawLastRound.ok),
+        roundStartedAt: Number.isFinite(Date.parse(String(rawLastRound.roundStartedAt || '')))
+          ? new Date(Date.parse(rawLastRound.roundStartedAt)).toISOString()
+          : '',
+        roundCompletedAt: new Date(lastCompletedAtMs).toISOString(),
+        elapsedMs: Math.max(0, Math.round(Number(rawLastRound.elapsedMs || 0))),
+        discoveredCount: Math.max(0, Math.round(Number(rawLastRound.discoveredCount || 0))),
+        requestCount: Math.max(0, Math.round(Number(rawLastRound.requestCount || 0))),
+        successCount: Math.max(0, Math.round(Number(rawLastRound.successCount || 0))),
+        failureCount: Math.max(0, Math.round(Number(rawLastRound.failureCount || 0))),
+        errorCategory: String(rawLastRound.errorCategory || '').slice(0, 48)
+      }
+    : null;
   return {
     schemaVersion: SOURCE_IP_PROBE_SCHEMA_VERSION,
-    updatedAt: new Date(currentMs).toISOString(),
+    updatedAt: Number.isFinite(updatedAtMs) ? new Date(updatedAtMs).toISOString() : new Date(currentMs).toISOString(),
     retentionMs: keepMs,
-    samples: samples.slice(-SOURCE_IP_PROBE_MAX_SAMPLES)
+    samples: samples.slice(-SOURCE_IP_PROBE_MAX_SAMPLES),
+    lastCompletedRound,
+    nextRoundAt: Number.isFinite(nextRoundAtMs) ? new Date(nextRoundAtMs).toISOString() : ''
   };
 }
 
@@ -148,7 +171,10 @@ function createSourceIpProbeStore(options = {}) {
     const current = normalizeProbeHistory(history, now(), retentionMs);
     const changed = JSON.stringify(current) !== JSON.stringify(history);
     history = current;
-    if (changed) persist();
+    if (changed) {
+      history.updatedAt = new Date(now()).toISOString();
+      persist();
+    }
     return cloneJson(history);
   }
 
@@ -162,10 +188,37 @@ function createSourceIpProbeStore(options = {}) {
       if (!normalized) throw new Error('invalid source IP probe sample');
       history = normalizeProbeHistory({
         ...history,
+        updatedAt: new Date(now()).toISOString(),
         samples: [...history.samples, normalized]
       }, now(), retentionMs);
       persist();
       return cloneJson(normalized);
+    },
+    commitRound(samples, summary, nextRoundAt) {
+      const normalizedSamples = (Array.isArray(samples) ? samples : []).map(sample => {
+        const normalized = normalizeProbeSample(sample, now());
+        if (!normalized) throw new Error('invalid source IP probe sample');
+        return normalized;
+      });
+      history = normalizeProbeHistory({
+        ...history,
+        updatedAt: new Date(now()).toISOString(),
+        samples: [...history.samples, ...normalizedSamples],
+        lastCompletedRound: summary,
+        nextRoundAt
+      }, now(), retentionMs);
+      persist();
+      return cloneJson(history);
+    },
+    initializeSchedule(nextRoundAt) {
+      if (history.nextRoundAt) return cloneJson(history);
+      history = normalizeProbeHistory({
+        ...history,
+        updatedAt: new Date(now()).toISOString(),
+        nextRoundAt
+      }, now(), retentionMs);
+      persist();
+      return cloneJson(history);
     },
     prune,
     status() {
@@ -175,7 +228,9 @@ function createSourceIpProbeStore(options = {}) {
         updatedAt: current.updatedAt,
         retentionMs,
         sampleCount: current.samples.length,
-        sourceIpCount: new Set(current.samples.map(sample => sample.ip)).size
+        sourceIpCount: new Set(current.samples.map(sample => sample.ip)).size,
+        lastCompletedRound: current.lastCompletedRound,
+        nextRoundAt: current.nextRoundAt
       };
     }
   };
@@ -438,22 +493,27 @@ function createSourceIpProbeScheduler(options = {}) {
   let stopped = true;
   let timer = null;
   let activeRoundPromise = null;
-  let lastRound = null;
-  let nextRoundAtMs = 0;
+  const initialStoreStatus = store.status();
+  let lastRound = initialStoreStatus.lastCompletedRound || null;
+  let nextRoundAtMs = Date.parse(initialStoreStatus.nextRoundAt || '') || 0;
 
   const safeCallback = (callback, ...args) => {
     if (typeof callback !== 'function') return;
     try { callback(...args); } catch (_) {}
   };
 
-  function scheduleNextRound() {
-    if (stopped) return 0;
-    const delayMs = randomIntegerInclusive(
+  function randomNextRoundAtMs() {
+    return now() + randomIntegerInclusive(
       SOURCE_IP_PROBE_BETWEEN_ROUND_MIN_MS,
       SOURCE_IP_PROBE_BETWEEN_ROUND_MAX_MS,
       random
     );
-    nextRoundAtMs = now() + delayMs;
+  }
+
+  function scheduleRoundAt(targetMs) {
+    if (stopped) return 0;
+    nextRoundAtMs = Math.max(0, Number(targetMs) || 0);
+    const delayMs = Math.max(0, nextRoundAtMs - now());
     if (timer) clearTimer(timer);
     timer = setTimer(() => {
       timer = null;
@@ -479,9 +539,18 @@ function createSourceIpProbeScheduler(options = {}) {
         errorCategory: 'discovery',
         error: error?.message || String(error)
       };
-      lastRound = summary;
       safeCallback(options.onError, error, { operation: 'source-ip-probe-discovery' });
-      if (scheduleNext) scheduleNextRound();
+      if (!stopped) {
+        const nextAtMs = randomNextRoundAtMs();
+        try {
+          store.commitRound([], summary, new Date(nextAtMs).toISOString());
+          lastRound = summary;
+          safeCallback(options.onRound, summary);
+        } catch (storeError) {
+          safeCallback(options.onError, storeError, { operation: 'source-ip-probe-persist-round' });
+        }
+        if (scheduleNext) scheduleRoundAt(nextAtMs);
+      }
       return summary;
     }
     let requestCount = 0;
@@ -517,11 +586,6 @@ function createSourceIpProbeScheduler(options = {}) {
         totalMs: numberOrNull(timing.totalMs),
         errorCategory: error ? sourceIpPreflightErrorCategory(error) : ''
       };
-      try {
-        store.record(sample);
-      } catch (storeError) {
-        safeCallback(options.onError, storeError, { operation: 'source-ip-probe-persist', ip });
-      }
       const result = {
         ...sample,
         ok: isProbeSuccessStatus(status),
@@ -564,9 +628,21 @@ function createSourceIpProbeScheduler(options = {}) {
         errorCategory: result.errorCategory
       }))
     };
-    lastRound = summary;
-    if (scheduleNext && !stopped) scheduleNextRound();
-    safeCallback(options.onRound, summary);
+    if (!stopped && results.length === ips.length) {
+      const nextAtMs = randomNextRoundAtMs();
+      try {
+        store.commitRound(
+          results,
+          summary,
+          new Date(nextAtMs).toISOString()
+        );
+        lastRound = summary;
+        safeCallback(options.onRound, summary);
+      } catch (storeError) {
+        safeCallback(options.onError, storeError, { operation: 'source-ip-probe-persist-round' });
+      }
+      if (scheduleNext) scheduleRoundAt(nextAtMs);
+    }
     return summary;
   }
 
@@ -586,11 +662,19 @@ function createSourceIpProbeScheduler(options = {}) {
     start() {
       if (!stopped) return activeRoundPromise || Promise.resolve(lastRound);
       stopped = false;
-      return runRound();
+      const persistedNextAtMs = Date.parse(store.status().nextRoundAt || '') || 0;
+      if (persistedNextAtMs > now()) {
+        scheduleRoundAt(persistedNextAtMs);
+        return Promise.resolve(lastRound);
+      }
+      if (persistedNextAtMs > 0) return runRound();
+      const initialNextAtMs = randomNextRoundAtMs();
+      store.initializeSchedule(new Date(initialNextAtMs).toISOString());
+      scheduleRoundAt(initialNextAtMs);
+      return Promise.resolve(lastRound);
     },
     stop() {
       stopped = true;
-      nextRoundAtMs = 0;
       if (timer) clearTimer(timer);
       timer = null;
     },
@@ -615,7 +699,7 @@ function createSourceIpProbeScheduler(options = {}) {
         retentionMs,
         stopped,
         inFlight: Boolean(activeRoundPromise),
-        nextRoundAt: nextRoundAtMs ? new Date(nextRoundAtMs).toISOString() : '',
+        nextRoundAt: nextRoundAtMs ? new Date(nextRoundAtMs).toISOString() : store.status().nextRoundAt,
         lastRound,
         store: store.status()
       };
@@ -657,9 +741,12 @@ async function runSourceIpProbeSelfTest() {
     const waits = [];
     let activeRequests = 0;
     let maxActiveRequests = 0;
+    const schedulerFile = path.join(tmp, 'scheduler.json');
+    const schedulerStore = createSourceIpProbeStore({ file: schedulerFile, now: () => nowMs });
+    schedulerStore.initializeSchedule(new Date(nowMs - 1).toISOString());
     const scheduler = createSourceIpProbeScheduler({
       gameOrigin: 'https://game.example',
-      file: path.join(tmp, 'scheduler.json'),
+      store: schedulerStore,
       now: () => nowMs,
       monotonicNow: () => 0,
       random: () => 0,
@@ -686,7 +773,54 @@ async function runSourceIpProbeSelfTest() {
     });
     const round = await scheduler.start();
     const scheduledDelay = Date.parse(scheduler.status().nextRoundAt) - nowMs;
+    const completedHistory = schedulerStore.snapshot();
     scheduler.stop();
+    let restartRequestCount = 0;
+    const restartedScheduler = createSourceIpProbeScheduler({
+      gameOrigin: 'https://game.example',
+      file: schedulerFile,
+      now: () => nowMs,
+      random: () => 0,
+      discoverIps: () => ['10.0.0.11'],
+      request: async () => { restartRequestCount += 1; return { status: 200 }; }
+    });
+    const restartedRound = await restartedScheduler.start();
+    const restartedNextRoundAt = restartedScheduler.status().nextRoundAt;
+    restartedScheduler.stop();
+
+    const initialScheduleFile = path.join(tmp, 'initial-schedule.json');
+    let initialRequestCount = 0;
+    const initialScheduler = createSourceIpProbeScheduler({
+      gameOrigin: 'https://game.example',
+      file: initialScheduleFile,
+      now: () => nowMs,
+      random: () => 0,
+      discoverIps: () => ['10.0.0.31'],
+      request: async () => { initialRequestCount += 1; return { status: 200 }; }
+    });
+    const initialRound = await initialScheduler.start();
+    const initialDelay = Date.parse(initialScheduler.status().nextRoundAt) - nowMs;
+    initialScheduler.stop();
+
+    const interruptedFile = path.join(tmp, 'interrupted.json');
+    const interruptedStore = createSourceIpProbeStore({ file: interruptedFile, now: () => nowMs });
+    const interruptedNextRoundAt = new Date(nowMs - 1).toISOString();
+    interruptedStore.initializeSchedule(interruptedNextRoundAt);
+    let interruptedScheduler;
+    interruptedScheduler = createSourceIpProbeScheduler({
+      gameOrigin: 'https://game.example',
+      store: interruptedStore,
+      now: () => nowMs,
+      random: () => 0,
+      discoverIps: () => ['10.0.0.41', '10.0.0.42'],
+      request: async () => {
+        interruptedScheduler.stop();
+        return { status: 200 };
+      },
+      sleep: async () => {}
+    });
+    const interruptedRound = await interruptedScheduler.start();
+    const interruptedHistory = interruptedStore.snapshot();
     const schedulerOk = Boolean(
       round.ok
         && JSON.stringify(requestOrder) === JSON.stringify(['10.0.0.11', '10.0.0.12', '10.0.0.13'])
@@ -695,6 +829,21 @@ async function runSourceIpProbeSelfTest() {
         && scheduledDelay >= SOURCE_IP_PROBE_BETWEEN_ROUND_MIN_MS
         && scheduledDelay <= SOURCE_IP_PROBE_BETWEEN_ROUND_MAX_MS
         && maxActiveRequests === 1
+        && completedHistory.schemaVersion === SOURCE_IP_PROBE_SCHEMA_VERSION
+        && completedHistory.samples.length === 3
+        && completedHistory.lastCompletedRound?.ok === true
+        && completedHistory.nextRoundAt === scheduler.status().nextRoundAt
+        && restartedRound?.ok === true
+        && restartRequestCount === 0
+        && restartedNextRoundAt === completedHistory.nextRoundAt
+        && initialRound === null
+        && initialRequestCount === 0
+        && initialDelay >= SOURCE_IP_PROBE_BETWEEN_ROUND_MIN_MS
+        && initialDelay <= SOURCE_IP_PROBE_BETWEEN_ROUND_MAX_MS
+        && interruptedRound.stopped === true
+        && interruptedHistory.samples.length === 0
+        && interruptedHistory.lastCompletedRound === null
+        && interruptedHistory.nextRoundAt === interruptedNextRoundAt
         && round.results.every(result => (
           result.dnsMs === 1.1
             && result.tcpMs === 2.2
@@ -735,6 +884,9 @@ async function runSourceIpProbeSelfTest() {
         waits,
         scheduledDelay,
         maxActiveRequests,
+        restartRequestCount,
+        initialRequestCount,
+        interruptedSampleCount: interruptedHistory.samples.length,
         phaseAwareOk
       }
     };

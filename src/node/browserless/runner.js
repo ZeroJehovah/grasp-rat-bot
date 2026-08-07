@@ -3040,8 +3040,13 @@ async function runBrowserlessRunner(config, deps = {}) {
     const sourceStarted = performance.now();
     const remoteProfitStatus = remoteProfitWorker?.status?.(now()) || null;
     const baseState = liveState || readBrowserlessStateFile(stateFile);
+    const sourceIpProbeStatus = deps.sourceIpProbe?.status?.() || null;
     const source = {
       ...baseState,
+      network: {
+        ...(baseState.network || {}),
+        sourceIpProbe: sourceIpProbeStatus
+      },
       runner: {
         ...(baseState.runner || {}),
         remoteProfit: remoteProfitStatus

@@ -34372,7 +34372,13 @@ async function runSelfTest() {
             /程序状态/.test(panelText),
             /账号状态/.test(panelText),
             /角色状态/.test(panelText),
-            /id="sourceIpCount"/.test(panelText),
+            !/id="sourceIpCount"/.test(panelText)
+              && !/id="sourceIpPreflightPhase"/.test(panelText)
+              && !/id="sourceIpPreflightProgress"/.test(panelText)
+              && !/id="sourceIpPreflightCurrentIp"/.test(panelText)
+              && /id="sourceIpProbeLastAt"/.test(panelText)
+              && /id="sourceIpProbeLastResult"/.test(panelText)
+              && /id="sourceIpProbeNextAt"/.test(panelText),
             /id="accountStatus"/.test(panelText),
             /id="roleStatus"/.test(panelText),
             /当前动作/.test(panelText),
@@ -34589,10 +34595,10 @@ async function runSelfTest() {
           /\.high-drop-name\.self\.online,\.high-drop-values\.self\.online\{color:var\(--green\)\}/.test(panelText),
           /\.high-drop-values\.offline,\.high-drop-values\.unknown\{color:var\(--muted\)\}/.test(panelText),
           /class="player-insights-grid"/.test(panelText),
-          /\.player-insights-body\{height:164px;overflow-y:auto;scrollbar-gutter:stable\}/.test(panelText),
-          /function highDropValueText/.test(panelScript),
-          /merged\[merged.length - 1\] !== next/.test(panelScript),
-          /join\('\s*->\s*'\)/.test(panelScript),
+          /\.player-insights-body\{height:186px;overflow-y:auto;scrollbar-gutter:stable\}/.test(panelText),
+          /function highDropValueParts/.test(panelScript),
+          /current: Math\.max\(0, Math\.round\(current\)\)/.test(panelScript),
+          /delta: initial === null \? null : Math\.round\(current - initial\)/.test(panelScript),
           panelScript.includes("{ text: '更新于', className: 'meta-label' }"),
           panelScript.includes("{ text: stamp(status.highDropPlayers?.lastSnapshotAt) }")
             && !panelScript.includes("{ text: stamp(status.highDropPlayers?.lastSnapshotAt), className: 'coin' }"),
@@ -34604,12 +34610,47 @@ async function runSelfTest() {
           estimatedHighDropQuotaCore(null, 500, 500) === null,
           panelScript.includes('rankedItems.push({')
             && panelScript.includes('rankedItems.sort((left, right) => highDropRankValue(right.item) - highDropRankValue(left.item)'),
-          /\.high-drop-row\{display:grid;grid-template-columns:[^}]*minmax\(72px,\.8fr\)/.test(panelText),
+          /\.high-drop-row\{display:grid;grid-template-columns:minmax\(120px,2fr\) minmax\(78px,\.55fr\) minmax\(64px,\.45fr\)/.test(panelText)
+            && panelScript.includes("delta.textContent = '(' + (drops.delta > 0 ? '+' : '') + String(drops.delta) + ')'")
+            && panelText.includes('.high-drop-values .high-drop-delta.positive{color:var(--red)}')
+            && panelText.includes('.high-drop-values .high-drop-delta.negative{color:var(--green)}'),
           !panelScript.includes("'我 · ' + self.name"),
           panelText.indexOf('id="highDropPlayers"') < panelText.indexOf('id="nearbyGrid"')
         ].join('|');
       })(),
       want: '2026-07-14|ws|gap-http|alice-renamed,520,700,600,8,true|bob,500,500,450,9,false|2|false|false|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+    },
+    {
+      name: 'browserless compact status exposes completed source IP probe schedule',
+      got: (() => {
+        const compact = buildCompactBrowserlessStatus({
+          network: {
+            sourceIpProbe: {
+              inFlight: false,
+              nextRoundAt: '2026-08-07T02:45:00.000Z',
+              lastRound: {
+                ok: true,
+                roundStartedAt: '2026-08-07T02:00:00.000Z',
+                roundCompletedAt: '2026-08-07T02:15:00.000Z',
+                elapsedMs: 900000,
+                discoveredCount: 22,
+                requestCount: 22,
+                successCount: 21,
+                failureCount: 1
+              }
+            }
+          }
+        });
+        const probe = compact.network.sourceIpProbe;
+        return [
+          probe.lastRound.roundCompletedAt,
+          probe.lastRound.successCount,
+          probe.lastRound.failureCount,
+          probe.nextRoundAt,
+          probe.inFlight
+        ].join('|');
+      })(),
+      want: '2026-08-07T02:15:00.000Z|21|1|2026-08-07T02:45:00.000Z|false'
     },
     {
       name: 'browserless web panel keeps compact timestamped chat below role status',

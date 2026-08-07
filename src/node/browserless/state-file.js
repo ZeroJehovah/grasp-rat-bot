@@ -439,6 +439,30 @@ function compactSourceIpPreflight(network = {}) {
   };
 }
 
+function compactSourceIpProbe(network = {}) {
+  const probe = network.sourceIpProbe && typeof network.sourceIpProbe === 'object'
+    ? network.sourceIpProbe
+    : {};
+  const lastRound = probe.lastRound && typeof probe.lastRound === 'object'
+    ? probe.lastRound
+    : null;
+  return {
+    inFlight: Boolean(probe.inFlight),
+    nextRoundAt: compactString(probe.nextRoundAt, 48),
+    lastRound: lastRound ? {
+      ok: Boolean(lastRound.ok),
+      roundStartedAt: compactString(lastRound.roundStartedAt, 48),
+      roundCompletedAt: compactString(lastRound.roundCompletedAt, 48),
+      elapsedMs: compactNumber(lastRound.elapsedMs),
+      discoveredCount: compactNumber(lastRound.discoveredCount),
+      requestCount: compactNumber(lastRound.requestCount),
+      successCount: compactNumber(lastRound.successCount),
+      failureCount: compactNumber(lastRound.failureCount),
+      errorCategory: compactString(lastRound.errorCategory, 48)
+    } : null
+  };
+}
+
 function compactBoolean(value) {
   return value === null || value === undefined ? null : Boolean(value);
 }
@@ -3409,6 +3433,7 @@ function browserlessCompactStatusSource(state = {}) {
       lifecyclePreparedAt: compactString(state.network?.lifecyclePreparedAt, 48),
       sourceIpRiskCount: sourceIpRiskCount(state.network || {}),
       sourceIpPreflight: compactSourceIpPreflight(state.network || {}),
+      sourceIpProbe: compactSourceIpProbe(state.network || {}),
       lastSelectedAt: compactString(state.network?.lastSelectedAt, 48),
       lastSelectionReason: compactString(state.network?.lastSelectionReason, 120),
       transportHealth: compactTransportHealth(state.network?.transportHealth)
@@ -3525,6 +3550,7 @@ function buildCompactBrowserlessStatus(state, config = {}) {
       lifecyclePreparedAt: normalized.network.lifecyclePreparedAt || '',
       sourceIpRiskCount: sourceIpRiskCount(normalized.network),
       sourceIpPreflight: compactSourceIpPreflight(normalized.network),
+      sourceIpProbe: compactSourceIpProbe(normalized.network),
       lastSelectedAt: normalized.network.lastSelectedAt || '',
       lastSelectionReason: compactString(normalized.network.lastSelectionReason, 120),
       transportHealth: compactTransportHealth(normalized.network.transportHealth)
