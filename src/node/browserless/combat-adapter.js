@@ -3464,6 +3464,15 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       combatScore: calculateCombatTargetPriority(self, target, context)
     }))
     .sort((a, b) => Number(b.combatScore || 0) - Number(a.combatScore || 0));
+  let retainedCombatTargetState = stateful?.combatTarget || null;
+  if (!retainedCombatTargetState && stateful?.combatEngagements) {
+    for (const remembered of Object.values(stateful.combatEngagements)) {
+      if (remembered?.combatPhase !== 'close-pressure' && remembered?.closePressure?.active !== true) continue;
+      if (!retainedCombatTargetState || Number(remembered.at || 0) > Number(retainedCombatTargetState.at || 0)) {
+        retainedCombatTargetState = remembered;
+      }
+    }
+  }
   const engagedTarget = withOptionOverrides(options, context, mergedOptions => (
     pickEngagedCombatTargetCore(self, candidates, targets, bullets, stateful, mergedOptions)
   ));
@@ -3563,7 +3572,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     ? { ...contactTarget, combatIntent: 'defensive', contactEntryOnly: true }
     : null);
   if (stateful && (!self || !target)) stateful.combatMovementStability = null;
-  const previousCombatTargetState = stateful?.combatTarget || null;
+  const previousCombatTargetState = retainedCombatTargetState;
   if (!contactEntryOnly) withOptionOverrides(options, {
     bullets,
     currentTick: realtime.tick,
@@ -3622,7 +3631,39 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
           combatTargetState.originIntent || combatTargetState.intent || target.combatIntent || ''
         ))
       }
-    : null;
+    : (!target && retainedCombatTargetState?.closePressure?.active === true
+        ? {
+            targetId: retainedCombatTargetState.id,
+            nowMs: options.nowMs,
+            engagedAt: retainedCombatTargetState.firstSeenAt ?? retainedCombatTargetState.at,
+            firstSeenAt: retainedCombatTargetState.firstSeenAt,
+            firstHp: retainedCombatTargetState.firstHp,
+            minHp: retainedCombatTargetState.minHp,
+            targetHp: retainedCombatTargetState.hp,
+            hp: retainedCombatTargetState.hp,
+            damageFromStart: retainedCombatTargetState.damageFromStart,
+            damageKnown: true,
+            hardSafety: retainedCombatTargetState.hardSafety,
+            distance: null,
+            acceptedShotsSinceDamage: Math.max(0, Number(
+              retainedCombatTargetState.acceptedShotsSinceDamage || 0
+            )),
+            damageProgressAt: Number(retainedCombatTargetState.damageProgressAt
+              || retainedCombatTargetState.lastDamageAt
+              || retainedCombatTargetState.firstSeenAt
+              || options.nowMs),
+            lastDamageAt: retainedCombatTargetState.lastDamageAt,
+            movementStaminaSinceDamage: Number(retainedCombatTargetState.movementStaminaSinceDamage || 0),
+            shootingStaminaSinceDamage: Math.max(0, Number(
+              retainedCombatTargetState.acceptedShotsSinceDamage || 0
+            )) * Math.max(1, Number(options.combatShotStaminaCostMs ?? 500)),
+            originIntent: retainedCombatTargetState.originIntent,
+            intent: retainedCombatTargetState.intent,
+            ordinaryProfit: ['profit', 'engaged', 'reengage', 'afk-profit'].includes(String(
+              retainedCombatTargetState.originIntent || retainedCombatTargetState.intent || ''
+            ))
+          }
+        : null);
   const combatPhase = combatPhaseState
     ? withOptionOverrides(options, {
         movementExecutionTiming: state?.command?.movement?.timing || options.movementExecutionTiming,
@@ -3633,10 +3674,14 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
         mergedOptions
       ))
     : null;
-  if (combatTargetState && combatPhase) {
-    combatTargetState.combatPhase = combatPhase.phase;
-    combatTargetState.phaseStartedAt = combatPhase.phaseStartedAt;
-    combatTargetState.closePressure = combatPhase.active ? combatPhase : null;
+  const combatPhaseOwner = combatTargetState || (!target ? retainedCombatTargetState : null);
+  if (combatPhaseOwner && combatPhase) {
+    combatPhaseOwner.combatPhase = combatPhase.phase;
+    combatPhaseOwner.phaseStartedAt = combatPhase.phaseStartedAt;
+    combatPhaseOwner.closePressure = combatPhase.active ? combatPhase : null;
+    if (stateful?.combatEngagements && combatPhaseOwner.id !== null && combatPhaseOwner.id !== undefined) {
+      stateful.combatEngagements[String(combatPhaseOwner.id)] = combatPhaseOwner;
+    }
   }
   const metricsMatchTarget = Boolean(
     target
@@ -3939,26 +3984,14 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   let exitDecision = contactEntryOnly && exitEvaluation.exit?.rule !== 'critical-hp'
     ? null
     : exitEvaluation.exit;
-  if (!exitDecision && !contactEntryOnly && combatPhase?.stepTimedOut) {
+  if (!exitDecision && !contactEntryOnly && combatPhase?.exitRequired) {
     exitDecision = {
       shouldLeave: true,
-      policy: 'miss-close-timeout',
-      rule: 'miss-close-step-timeout',
+      policy: 'combat-efficiency-distance-control',
+      rule: combatPhase.exitRule || 'closer-range-control-failed',
       reason: 'combat-miss-close-timeout-leave',
       stopMotion: false,
       missClose: cloneJson(combatPhase)
-    };
-  }
-  if (!exitDecision && !contactEntryOnly && combatPhase?.generationLimitReached) {
-    exitDecision = {
-      shouldLeave: true,
-      policy: 'no-damage-generation-limit',
-      rule: combatPhase.generationTimedOut
-        ? 'no-damage-generation-deadline'
-        : 'no-damage-generation-step-limit',
-      reason: 'combat-no-damage-generation-limit-leave',
-      stopMotion: false,
-      noDamageGeneration: cloneJson(combatPhase)
     };
   }
   if (!exitDecision && !contactEntryOnly && exitEvaluation.exchangeStopLoss?.shouldExit) {
@@ -4544,7 +4577,11 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     exit: exitDecision
       ? {
           ...exitDecision,
-          target: summarizeCombatTarget(target)
+          target: summarizeCombatTarget(target || (retainedCombatTargetState ? {
+            ...retainedCombatTargetState,
+            user_id: retainedCombatTargetState.id,
+            authority: 'realtime-last-visible'
+          } : null))
         }
       : null,
     shooting: {

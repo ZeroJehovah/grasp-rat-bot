@@ -1583,6 +1583,7 @@ function combatReasonText(reason) {
   if (value === 'recovery-contact-no-dodge-budget-leave') return '回血接敌闪避储备不足';
   if (value === 'incoming-bullet-dodge') return '碰撞路径来弹闪避';
   if (value === 'combat-low-hp-no-damage-leave') return '低血且久攻未中';
+  if (value === 'combat-miss-close-timeout-leave') return '战斗低效且近距控制失败止损';
   if (value === 'combat-no-damage-generation-limit-leave') return '普通收益战斗无伤害止损';
   if (value === 'injury-leave') return '受伤';
   if (value === 'offline-leave') return '连接离线';

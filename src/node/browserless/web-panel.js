@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.04.2';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.07.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -96,17 +96,33 @@ function missCloseExitReasonTextCore(missClose = {}) {
     const parsed = number(value);
     return parsed === null ? '' : `${Math.round(parsed / 100)}m`;
   };
-  const timeoutMs = number(missClose.timeoutMs ?? missClose.stepElapsedMs);
+  const timeoutMs = number(missClose.evaluationWindowMs ?? missClose.timeoutMs ?? missClose.stepElapsedMs);
   const startDistance = distance(missClose.stepStartDistanceCm);
   const goalDistance = distance(missClose.goalDistanceCm);
   const currentDistance = distance(missClose.targetDistance);
   const acceptedShotsSinceDamage = number(missClose.acceptedShotsSinceDamage);
-  if (!timeoutMs && !startDistance && !goalDistance && !currentDistance && acceptedShotsSinceDamage === null) return '';
+  const closerRatio = number(missClose.closerRatio);
+  const requiredCloserRatio = number(missClose.requiredCloserRatio);
+  const minimumRangeNoProgress = missClose.minimumRangeNoProgress === true;
+  if (!timeoutMs && !startDistance && !goalDistance && !currentDistance
+    && acceptedShotsSinceDamage === null && closerRatio === null) return '';
   const duration = timeoutMs === null ? '持续一段时间' : `连续 ${Math.max(1, Math.round(timeoutMs / 1000))} 秒`;
-  let text = startDistance && goalDistance
-    ? `${duration}未能从 ${startDistance} 接近到 ${goalDistance}`
-    : (goalDistance ? `${duration}未能接近到 ${goalDistance}` : `${duration}未能完成接近目标`);
+  let text;
+  if (minimumRangeNoProgress) {
+    text = goalDistance
+      ? `${duration}在最低 ${goalDistance} 近距内仍未造成伤害`
+      : `${duration}在最低近距内仍未造成伤害`;
+  } else if (goalDistance) {
+    text = `${duration}无法稳定保持在 ${goalDistance} 内`;
+  } else {
+    text = `${duration}无法稳定保持更近距离`;
+  }
   const evidence = [];
+  if (closerRatio !== null) {
+    const required = requiredCloserRatio === null ? 0.5 : requiredCloserRatio;
+    evidence.push(`近距占比 ${Math.round(closerRatio * 100)}%，要求至少 ${Math.round(required * 100)}%`);
+  }
+  if (startDistance && startDistance !== goalDistance) evidence.push(`起点 ${startDistance}`);
   if (currentDistance) evidence.push(`退出时 ${currentDistance}`);
   if (acceptedShotsSinceDamage !== null && acceptedShotsSinceDamage > 0) {
     evidence.push(`${Math.round(acceptedShotsSinceDamage)} 发未造成新伤害`);
@@ -1153,7 +1169,7 @@ function renderBrowserlessWebPanel() {
       'realtime-transport-critical-latency': '实时传输延迟严重，已强制退出并等待确认离场',
       'outbound-control-unresponsive': '战斗中移动或射击指令持续失效，为避免原地承伤，主动退出',
       'combat-action-settlement-stalled': '战斗中移动指令失效，为避免原地承伤，主动退出',
-      'combat-miss-close-timeout-leave': '连续 30 秒无法完成当前 10 米接近目标，为避免低效追击而主动退出',
+      'combat-miss-close-timeout-leave': '攻击效率持续低下且无法保持更近距离，为避免无效体力消耗而主动退出',
       'combat-no-damage-generation-limit-leave': '普通收益战斗持续无伤害达到全局上限，主动退出止损',
       'defensive-exchange-no-progress-leave': '防守交战持续无进展，撤退后仍无法脱离，主动退出',
       'combat-exit-poor-exchange': '持续交战的伤害交换明显不利，主动退出',

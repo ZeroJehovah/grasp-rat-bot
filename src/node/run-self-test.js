@@ -21153,6 +21153,81 @@ async function runSelfTest() {
       want: 'true|true|true'
     },
     {
+      name: 'browserless combat efficiency stop-loss triggers without shots and counts missing target time outside closer range',
+      got: (() => {
+        const stateful = {};
+        const options = {
+          nowMs: 1000,
+          decisionState: stateful,
+          liveCombatEnabled: true,
+          combatAttackRange: 14500,
+          combatCriticalHp: 0,
+          combatLowHpLeaveThreshold: 0,
+          combatHighHpDisadvantageGap: 200,
+          combatEfficiencyWindowMs: 30000,
+          combatEfficiencyCloseStepCm: 1000,
+          combatEfficiencyMinimumDistanceCm: 1000,
+          combatEfficiencyRequiredCloserRatio: 0.5,
+          combatEfficiencySampleGapCapMs: 250
+        };
+        const frame = (nowMs, targetVisible = true) => {
+          const self = {
+            entity_id: 1,
+            user_id: 7,
+            x: 0,
+            y: 0,
+            hp: 100,
+            max_hp: 100,
+            stamina_5s_remaining_milli: 10000
+          };
+          const target = {
+            entity_id: 2,
+            user_id: 8,
+            name: 'active',
+            x: 6000,
+            y: 0,
+            hp: 100,
+            max_hp: 100,
+            current_join_mode: 'Active',
+            active: true,
+            firing: true,
+            drop: 12
+          };
+          return {
+            userId: 7,
+            realtime: {
+              tick: 100 + Math.round(nowMs / 50),
+              self,
+              entities: targetVisible ? [self, target] : [self],
+              bullets: []
+            }
+          };
+        };
+        buildBrowserlessCombatDryRun(frame(1000), { ...options, nowMs: 1000 });
+        const before = buildBrowserlessCombatDryRun(frame(30999), { ...options, nowMs: 30999 });
+        const pressure = buildBrowserlessCombatDryRun(frame(31000), { ...options, nowMs: 31000 });
+        let exit = pressure;
+        for (let nowMs = 31250; nowMs <= 61000; nowMs += 250) {
+          exit = buildBrowserlessCombatDryRun(frame(nowMs, false), { ...options, nowMs });
+        }
+        return [
+          stateful.combatMetrics?.acceptedShots || 0,
+          before.combatPhase?.active === false,
+          before.shooting.wouldShoot,
+          pressure.combatPhase?.active,
+          pressure.combatPhase?.goalDistanceCm,
+          pressure.shooting.wouldShoot,
+          exit.exit?.reason,
+          exit.exit?.rule,
+          exit.exit?.missClose?.closerRatio,
+          exit.exit?.missClose?.outsideCloserRatio,
+          exit.exit?.target?.name,
+          exit.exit?.target?.authority
+        ].join('|');
+      })(),
+      want: '0|true|true|true|5000|true|combat-miss-close-timeout-leave|closer-range-control-failed|0|1|active|realtime-last-visible'
+    },
+    {
       name: 'browserless combat finish pressure can shoot with reserve',
       got: (() => {
         const combat = buildBrowserlessCombatDryRun({
@@ -28607,20 +28682,16 @@ async function runSelfTest() {
           '250000',
           '--profit-pursuit-pressure-cycle-ms',
           '45000',
-          '--combat-miss-close-trigger-shots',
-          '11',
-          '--combat-miss-close-step-shots',
-          '12',
-          '--combat-miss-close-step-cm',
-          '1200',
-          '--combat-miss-close-minimum-distance-cm',
-          '800',
-          '--combat-miss-close-timeout-ms',
+          '--combat-efficiency-window-ms',
           '31000',
-          '--combat-miss-close-generation-max-ms',
-          '91000',
-          '--combat-miss-close-generation-max-steps',
-          '5',
+          '--combat-efficiency-close-step-cm',
+          '1200',
+          '--combat-efficiency-minimum-distance-cm',
+          '800',
+          '--combat-efficiency-required-closer-ratio',
+          '0.6',
+          '--combat-efficiency-sample-gap-cap-ms',
+          '300',
           '--combat-response-policy-shadow-confirm-ticks',
           '7',
           '--combat-response-policy-shadow-minimum-hold-ms',
@@ -28687,13 +28758,11 @@ async function runSelfTest() {
           config.browserlessProfitPursuitHardNoDamageMs,
           config.browserlessProfitPursuitHardMovementStaminaMs,
           config.browserlessProfitPursuitPressureCycleMs,
-          config.combatMissCloseTriggerShots,
-          config.combatMissCloseStepShots,
-          config.combatMissCloseStepCm,
-          config.combatMissCloseMinimumDistanceCm,
-          publicConfig(config).combatMissCloseTimeoutMs,
-          publicConfig(config).combatMissCloseGenerationMaxMs,
-          publicConfig(config).combatMissCloseGenerationMaxSteps,
+          config.combatEfficiencyWindowMs,
+          config.combatEfficiencyCloseStepCm,
+          config.combatEfficiencyMinimumDistanceCm,
+          publicConfig(config).combatEfficiencyRequiredCloserRatio,
+          publicConfig(config).combatEfficiencySampleGapCapMs,
           publicConfig(config).combatResponsePolicyShadowConfirmTicks,
           publicConfig(config).combatResponsePolicyShadowMinimumHoldMs,
           config.wsTraceEnabled,
@@ -28710,7 +28779,7 @@ async function runSelfTest() {
           config.logDir.endsWith('/tmp/grasp-rat-browserless-logs')
         ].join('|');
       })(),
-      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|90000|90000|4|15000|3500|2250|4500|150|300|800|3|4500|90|4500|90|99000|175000|175000|45000|120000|123000|30000|7|90000|150000|250000|45000|11|12|1200|800|31000|91000|5|7|600|true|true|4096|https://example.test/target-whitelist.json|true|1234|12|123|456|90|true|true'
+      want: 'true|false|false|combat-live|19999|cli-token|true|220|42|env-token|250|90000|90000|4|15000|3500|2250|4500|150|300|800|3|4500|90|4500|90|99000|175000|175000|45000|120000|123000|30000|7|90000|150000|250000|45000|31000|1200|800|0.6|300|7|600|true|true|4096|https://example.test/target-whitelist.json|true|1234|12|123|456|90|true|true'
     },
     {
       name: 'browserless deployment files define service env and install surface',
@@ -28740,8 +28809,8 @@ async function runSelfTest() {
           env.includes('GRASP_RAT_BROWSERLESS_STALE_SELF_CONFIRM_MS=2000'),
           env.includes('GRASP_RAT_BROWSERLESS_CENTER_ACTIVITY_RADIUS_CM=100000'),
           env.includes('GRASP_RAT_BROWSERLESS_OUTSIDE_CENTER_IDLE_EXIT_MS=180000'),
-          env.includes('GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_GENERATION_MAX_MS=90000'),
-          env.includes('GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_GENERATION_MAX_STEPS=4'),
+          env.includes('GRASP_RAT_BROWSERLESS_COMBAT_EFFICIENCY_WINDOW_MS=30000'),
+          env.includes('GRASP_RAT_BROWSERLESS_COMBAT_EFFICIENCY_REQUIRED_CLOSER_RATIO=0.5'),
           env.includes('GRASP_RAT_BROWSERLESS_COMBAT_RESPONSE_POLICY_SHADOW_CONFIRM_TICKS=6'),
           env.includes('GRASP_RAT_BROWSERLESS_COMBAT_RESPONSE_POLICY_SHADOW_MINIMUM_HOLD_MS=500'),
           env.includes('GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_MAX_MS=60000'),
@@ -28753,11 +28822,9 @@ async function runSelfTest() {
           env.includes('GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_HARD_NO_DAMAGE_MS=180000'),
           env.includes('GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_HARD_MOVEMENT_STAMINA_MS=300000'),
           env.includes('GRASP_RAT_BROWSERLESS_PROFIT_PURSUIT_PRESSURE_CYCLE_MS=60000'),
-          env.includes('GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_TRIGGER_SHOTS=10'),
-          env.includes('GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_STEP_SHOTS=10'),
-          env.includes('GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_STEP_CM=1000'),
-          env.includes('GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_MINIMUM_DISTANCE_CM=1000'),
-          env.includes('GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_TIMEOUT_MS=30000'),
+          env.includes('GRASP_RAT_BROWSERLESS_COMBAT_EFFICIENCY_CLOSE_STEP_CM=1000'),
+          env.includes('GRASP_RAT_BROWSERLESS_COMBAT_EFFICIENCY_MINIMUM_DISTANCE_CM=1000'),
+          env.includes('GRASP_RAT_BROWSERLESS_COMBAT_EFFICIENCY_SAMPLE_GAP_CAP_MS=250'),
           env.includes('GRASP_RAT_BROWSERLESS_WS_TRACE_ENABLED=false'),
           env.includes('GRASP_RAT_BROWSERLESS_SOURCE_IP_INTERFACE=enp0s6'),
           installer.includes('grasp-rat-browserless-runner'),
@@ -35156,15 +35223,23 @@ async function runSelfTest() {
                     reason: 'combat-miss-close-timeout-leave',
                     missClose: {
                       timeoutMs: 30000,
+                      evaluationWindowMs: 30000,
                       stepElapsedMs: 30033,
                       stepIndex: 1,
                       stepStartDistanceCm: 9736,
                       goalDistanceCm: 8736,
                       bestDistanceCm: 9655,
                       targetDistance: 11405,
+                      closerTimeMs: 8700,
+                      closerRatio: 0.29,
+                      outsideCloserRatio: 0.71,
+                      requiredCloserRatio: 0.5,
                       acceptedShotsSinceDamage: 57,
                       damageFromStart: 30,
-                      stepTimedOut: true
+                      stepTimedOut: true,
+                      distanceControlFailed: true,
+                      minimumRangeNoProgress: false,
+                      exitRule: 'closer-range-control-failed'
                     }
                   }
                 },
@@ -35196,12 +35271,18 @@ async function runSelfTest() {
           missClose.stepStartDistanceCm,
           missClose.goalDistanceCm,
           missClose.targetDistance,
+          missClose.closerTimeMs,
+          missClose.closerRatio,
+          missClose.requiredCloserRatio,
           missClose.acceptedShotsSinceDamage,
           missClose.stepTimedOut,
+          missClose.distanceControlFailed,
+          missClose.minimumRangeNoProgress,
+          missClose.exitRule,
           missCloseExitReasonTextCore(missClose)
         ].join('|');
       })(),
-      want: '9736|8736|11405|57|true|连续 30 秒未能从 97m 接近到 87m（退出时 114m，57 发未造成新伤害），为避免继续低效追击而主动退出'
+      want: '9736|8736|11405|8700|0.29|0.5|57|true|true|false|closer-range-control-failed|连续 30 秒无法稳定保持在 87m 内（近距占比 29%，要求至少 50%，起点 97m，退出时 114m，57 发未造成新伤害），为避免继续低效追击而主动退出'
     },
     {
       name: 'browserless miss-close panel version and fallback prevent vague combat exit copy',
@@ -35216,7 +35297,7 @@ async function runSelfTest() {
             < panelScript.indexOf("if (/combat/i.test(text)) return '正在处理打架';")
         ].join('|');
       })(),
-      want: '2026.08.04.1|true|true|true'
+      want: '2026.08.07.1|true|true|true'
     },
     {
       name: 'browserless restart drain wait explains planned service restart',

@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
+const { combatPressurePhaseCore } = require('../src/strategy/combat-pressure');
 
 const DEFAULTS = {
   hitRadiusCm: 90,
@@ -76,7 +77,12 @@ const DEFAULTS = {
   combatAimSnapshotOutlierCloseSnapshotRatio: 2,
   combatAimSnapshotOutlierDisadvantageRange: 11000,
   combatAimSnapshotOutlierNoDamageMs: 1000,
-  opportunityShotStaminaCostMs: 500
+  opportunityShotStaminaCostMs: 500,
+  combatEfficiencyWindowMs: 30000,
+  combatEfficiencyCloseStepCm: 1000,
+  combatEfficiencyMinimumDistanceCm: 1000,
+  combatEfficiencyRequiredCloserRatio: 0.5,
+  combatEfficiencySampleGapCapMs: 250
 };
 
 function parseArgs(argv) {
@@ -1094,6 +1100,135 @@ function runSustainedPressureExitScenario(frames, options) {
   };
 }
 
+function frameStamina1d(frame) {
+  return numberOrNull(
+    frame?.entry?.self?.stamina_1d_remaining_milli
+      ?? frame?.entry?.self?.stamina1dRemainingMilli
+      ?? frame?.entry?.self?.stamina1d
+  );
+}
+
+function runCombatEfficiencyDistanceControlScenario(frames, targetId, options) {
+  const firstFrame = frames.find(frame => Number.isFinite(frame.targetHp)) || frames[0] || null;
+  const lastFrame = frames.at(-1) || null;
+  if (!firstFrame || !lastFrame || !targetId) {
+    return {
+      label: 'combat efficiency distance-control exit',
+      considered: frames.length,
+      hits: 0,
+      minDistanceCm: null,
+      activeStart: null,
+      exitFrame: null,
+      savedFrames: 0,
+      savedMs: 0,
+      savedStaminaMilli: 0,
+      savedStamina: 0
+    };
+  }
+  let firstHp = numberOrNull(firstFrame.targetHp);
+  let minHp = firstHp;
+  let previousVisibleHp = firstHp;
+  let retainedHp = firstHp;
+  let damageProgressAt = firstFrame.at;
+  let phaseState = {
+    id: String(targetId),
+    firstSeenAt: firstFrame.at,
+    firstHp,
+    minHp,
+    combatPhase: 'normal-combat'
+  };
+  let activeStart = null;
+  let exitFrame = null;
+  let exitPhase = null;
+  let exitIndex = -1;
+  for (let index = 0; index < frames.length; index += 1) {
+    const frame = frames[index];
+    const visibleHp = numberOrNull(frame.targetHp);
+    if (firstHp === null && visibleHp !== null) firstHp = visibleHp;
+    if (visibleHp !== null) {
+      if (previousVisibleHp !== null && visibleHp < previousVisibleHp - 0.01) damageProgressAt = frame.at;
+      previousVisibleHp = visibleHp;
+      retainedHp = visibleHp;
+      minHp = minHp === null ? visibleHp : Math.min(minHp, visibleHp);
+    }
+    const targetDistance = frame.self && frame.nearbyTarget
+      ? distance(frame.self, frame.nearbyTarget)
+      : null;
+    const metrics = frame.entry?.combatMetrics || frame.entry?.combatState?.combatMetrics || {};
+    const phase = combatPressurePhaseCore(phaseState, {
+      targetId: String(targetId),
+      nowMs: frame.at,
+      engagedAt: firstFrame.at,
+      ordinaryProfit: false,
+      targetHp: retainedHp,
+      firstHp,
+      minHp,
+      damageFromStart: firstHp !== null && minHp !== null ? Math.max(0, firstHp - minHp) : null,
+      damageKnown: firstHp !== null && minHp !== null,
+      damageProgressAt,
+      acceptedShotsSinceDamage: Math.max(0, Number(metrics.acceptedShots || 0)),
+      distance: targetDistance
+    }, options);
+    phaseState = {
+      ...phaseState,
+      id: String(targetId),
+      combatPhase: phase.phase,
+      phaseStartedAt: phase.phaseStartedAt,
+      closePressure: phase.active ? phase : null,
+      hp: retainedHp,
+      firstHp,
+      minHp,
+      distance: targetDistance
+    };
+    if (!activeStart && phase.active) {
+      activeStart = {
+        line: frame.lineNo,
+        time: formatTime(frame.at),
+        noDamageMs: phase.noDamageMs,
+        distanceCm: targetDistance === null ? null : Math.round(targetDistance),
+        goalDistanceCm: phase.goalDistanceCm,
+        acceptedShotsSinceDamage: phase.acceptedShotsSinceDamage
+      };
+    }
+    if (!exitFrame && phase.exitRequired) {
+      exitFrame = frame;
+      exitPhase = phase;
+      exitIndex = index;
+      break;
+    }
+  }
+  const exitStamina = frameStamina1d(exitFrame);
+  const finalStamina = frameStamina1d(lastFrame);
+  const savedStaminaMilli = exitStamina !== null && finalStamina !== null
+    ? Math.max(0, Math.round(exitStamina - finalStamina))
+    : 0;
+  return {
+    label: 'combat efficiency distance-control exit',
+    considered: frames.length,
+    hits: exitFrame ? 1 : 0,
+    minDistanceCm: exitPhase?.bestDistanceCm ?? null,
+    activeStart,
+    exitFrame: exitFrame ? {
+      line: exitFrame.lineNo,
+      time: formatTime(exitFrame.at),
+      selfHp: exitFrame.selfHp,
+      targetHp: exitFrame.targetHp ?? retainedHp,
+      noDamageMs: exitPhase.noDamageMs,
+      rule: exitPhase.exitRule,
+      stepIndex: exitPhase.stepIndex,
+      goalDistanceCm: exitPhase.goalDistanceCm,
+      closerTimeMs: exitPhase.closerTimeMs,
+      closerRatio: exitPhase.closerRatio,
+      outsideCloserRatio: exitPhase.outsideCloserRatio,
+      acceptedShotsSinceDamage: exitPhase.acceptedShotsSinceDamage
+    } : null,
+    savedFrames: exitIndex >= 0 ? Math.max(0, frames.length - exitIndex - 1) : 0,
+    savedMs: exitFrame ? Math.max(0, Math.round(lastFrame.at - exitFrame.at)) : 0,
+    savedStaminaMilli,
+    savedStamina: Number((savedStaminaMilli / 10000).toFixed(4))
+  };
+}
+
 function minDistanceForShot(origin, aim, targetSamples, shotAt, options) {
   if (!origin || !aim || !targetSamples.length) return { hit: false, min: Infinity, minAt: null };
   const dir = unit(sub(aim, origin));
@@ -1888,6 +2023,7 @@ function replay(options) {
     runFinishLowThreatScenario(frames, shots, targetSamples, options),
     runPressureFireScenario(frames, shots, targetSamples, options),
     runSustainedPressureExitScenario(frames, options),
+    runCombatEfficiencyDistanceControlScenario(frames, loaded.targetId, options),
     runPressureAuthorityScenario(shots, targetSamples, options),
     runAimScenario('logged aimTarget vs hp-authoritative target', shots, shot => shot.frame.aim, healthAuthoritativeSamples, options),
     runPressureAuthorityScenario(shots, healthAuthoritativeSamples, options, 'guarded pressure authority vs hp-authoritative target')
@@ -1981,7 +2117,7 @@ function printReport(result) {
       ? ` firstPressure=line ${item.firstPressure.line} stamina=${item.firstPressure.loggedStamina5s}->${item.firstPressure.projectedStamina5s}`
       : '';
     const exit = item.exitFrame
-      ? ` exit=line ${item.exitFrame.line} savedMs=${item.savedMs || 0} hp=${item.exitFrame.selfHp}/${item.exitFrame.targetHp} noDamageMs=${item.exitFrame.noDamageMs}`
+      ? ` exit=line ${item.exitFrame.line} savedMs=${item.savedMs || 0} savedStamina=${item.savedStamina || 0} hp=${item.exitFrame.selfHp}/${item.exitFrame.targetHp} noDamageMs=${item.exitFrame.noDamageMs}${item.exitFrame.rule ? ` rule=${item.exitFrame.rule} closeRatio=${item.exitFrame.closerRatio}` : ''}`
       : '';
     console.log(`- ${item.label}: hits=${item.hits}/${item.considered}, min=${item.minDistanceCm}cm${first}${suppressed}${extra}${baseline}${active}${approach}${probe}${firstPressure}${exit}`);
   }

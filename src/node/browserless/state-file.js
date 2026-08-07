@@ -2855,15 +2855,23 @@ function compactExit(event) {
     missClose: Object.keys(missClose).length
       ? {
           timeoutMs: compactNumber(missClose.timeoutMs),
+          evaluationWindowMs: compactNumber(missClose.evaluationWindowMs),
           stepElapsedMs: compactNumber(missClose.stepElapsedMs),
           stepIndex: compactNumber(missClose.stepIndex),
           stepStartDistanceCm: compactNumber(missClose.stepStartDistanceCm),
           goalDistanceCm: compactNumber(missClose.goalDistanceCm),
           bestDistanceCm: compactNumber(missClose.bestDistanceCm),
           targetDistance: compactNumber(missClose.targetDistance),
+          closerTimeMs: compactNumber(missClose.closerTimeMs),
+          closerRatio: compactNumber(missClose.closerRatio),
+          outsideCloserRatio: compactNumber(missClose.outsideCloserRatio),
+          requiredCloserRatio: compactNumber(missClose.requiredCloserRatio),
           acceptedShotsSinceDamage: compactNumber(missClose.acceptedShotsSinceDamage),
           damageFromStart: compactNumber(missClose.damageFromStart),
-          stepTimedOut: compactBoolean(missClose.stepTimedOut)
+          stepTimedOut: compactBoolean(missClose.stepTimedOut),
+          distanceControlFailed: compactBoolean(missClose.distanceControlFailed),
+          minimumRangeNoProgress: compactBoolean(missClose.minimumRangeNoProgress),
+          exitRule: compactString(missClose.exitRule, 80)
         }
       : null,
     injury: Object.keys(injury).length

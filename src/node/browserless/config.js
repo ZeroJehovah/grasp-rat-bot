@@ -99,13 +99,11 @@ const DEFAULTS = {
   combatClosePressureReserveMs: 2600,
   combatClosePressureMinSelfHp: 60,
   combatClosePressureMaxHpGap: 20,
-  combatMissCloseTriggerShots: 10,
-  combatMissCloseStepShots: 10,
-  combatMissCloseStepCm: 1000,
-  combatMissCloseMinimumDistanceCm: 1000,
-  combatMissCloseTimeoutMs: 30000,
-  combatMissCloseGenerationMaxMs: 90000,
-  combatMissCloseGenerationMaxSteps: 4,
+  combatEfficiencyWindowMs: 30000,
+  combatEfficiencyCloseStepCm: 1000,
+  combatEfficiencyMinimumDistanceCm: 1000,
+  combatEfficiencyRequiredCloserRatio: 0.5,
+  combatEfficiencySampleGapCapMs: 250,
   combatResponsePolicyShadowConfirmTicks: 6,
   combatResponsePolicyShadowMinimumHoldMs: 500,
   combatTrajectoryCoverageMode: 'live-single',
@@ -287,13 +285,11 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     combatClosePressureReserveMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_RESERVE_MS, DEFAULTS.combatClosePressureReserveMs),
     combatClosePressureMinSelfHp: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_MIN_SELF_HP, DEFAULTS.combatClosePressureMinSelfHp),
     combatClosePressureMaxHpGap: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_MAX_HP_GAP, DEFAULTS.combatClosePressureMaxHpGap),
-    combatMissCloseTriggerShots: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_TRIGGER_SHOTS, DEFAULTS.combatMissCloseTriggerShots),
-    combatMissCloseStepShots: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_STEP_SHOTS, DEFAULTS.combatMissCloseStepShots),
-    combatMissCloseStepCm: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_STEP_CM, DEFAULTS.combatMissCloseStepCm),
-    combatMissCloseMinimumDistanceCm: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_MINIMUM_DISTANCE_CM, DEFAULTS.combatMissCloseMinimumDistanceCm),
-    combatMissCloseTimeoutMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_TIMEOUT_MS, DEFAULTS.combatMissCloseTimeoutMs),
-    combatMissCloseGenerationMaxMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_GENERATION_MAX_MS, DEFAULTS.combatMissCloseGenerationMaxMs),
-    combatMissCloseGenerationMaxSteps: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_MISS_CLOSE_GENERATION_MAX_STEPS, DEFAULTS.combatMissCloseGenerationMaxSteps),
+    combatEfficiencyWindowMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_EFFICIENCY_WINDOW_MS, DEFAULTS.combatEfficiencyWindowMs),
+    combatEfficiencyCloseStepCm: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_EFFICIENCY_CLOSE_STEP_CM, DEFAULTS.combatEfficiencyCloseStepCm),
+    combatEfficiencyMinimumDistanceCm: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_EFFICIENCY_MINIMUM_DISTANCE_CM, DEFAULTS.combatEfficiencyMinimumDistanceCm),
+    combatEfficiencyRequiredCloserRatio: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_EFFICIENCY_REQUIRED_CLOSER_RATIO, DEFAULTS.combatEfficiencyRequiredCloserRatio),
+    combatEfficiencySampleGapCapMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_EFFICIENCY_SAMPLE_GAP_CAP_MS, DEFAULTS.combatEfficiencySampleGapCapMs),
     combatResponsePolicyShadowConfirmTicks: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_RESPONSE_POLICY_SHADOW_CONFIRM_TICKS, DEFAULTS.combatResponsePolicyShadowConfirmTicks),
     combatResponsePolicyShadowMinimumHoldMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_RESPONSE_POLICY_SHADOW_MINIMUM_HOLD_MS, DEFAULTS.combatResponsePolicyShadowMinimumHoldMs),
     combatTrajectoryCoverageMode: trajectoryCoverageMode(
@@ -528,20 +524,16 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.combatClosePressureMinSelfHp = numberEnv(argv[++i], config.combatClosePressureMinSelfHp);
     } else if (arg === '--combat-close-pressure-max-hp-gap') {
       config.combatClosePressureMaxHpGap = numberEnv(argv[++i], config.combatClosePressureMaxHpGap);
-    } else if (arg === '--combat-miss-close-trigger-shots') {
-      config.combatMissCloseTriggerShots = numberEnv(argv[++i], config.combatMissCloseTriggerShots);
-    } else if (arg === '--combat-miss-close-step-shots') {
-      config.combatMissCloseStepShots = numberEnv(argv[++i], config.combatMissCloseStepShots);
-    } else if (arg === '--combat-miss-close-step-cm') {
-      config.combatMissCloseStepCm = numberEnv(argv[++i], config.combatMissCloseStepCm);
-    } else if (arg === '--combat-miss-close-minimum-distance-cm') {
-      config.combatMissCloseMinimumDistanceCm = numberEnv(argv[++i], config.combatMissCloseMinimumDistanceCm);
-    } else if (arg === '--combat-miss-close-timeout-ms') {
-      config.combatMissCloseTimeoutMs = numberEnv(argv[++i], config.combatMissCloseTimeoutMs);
-    } else if (arg === '--combat-miss-close-generation-max-ms') {
-      config.combatMissCloseGenerationMaxMs = numberEnv(argv[++i], config.combatMissCloseGenerationMaxMs);
-    } else if (arg === '--combat-miss-close-generation-max-steps') {
-      config.combatMissCloseGenerationMaxSteps = numberEnv(argv[++i], config.combatMissCloseGenerationMaxSteps);
+    } else if (arg === '--combat-efficiency-window-ms') {
+      config.combatEfficiencyWindowMs = numberEnv(argv[++i], config.combatEfficiencyWindowMs);
+    } else if (arg === '--combat-efficiency-close-step-cm') {
+      config.combatEfficiencyCloseStepCm = numberEnv(argv[++i], config.combatEfficiencyCloseStepCm);
+    } else if (arg === '--combat-efficiency-minimum-distance-cm') {
+      config.combatEfficiencyMinimumDistanceCm = numberEnv(argv[++i], config.combatEfficiencyMinimumDistanceCm);
+    } else if (arg === '--combat-efficiency-required-closer-ratio') {
+      config.combatEfficiencyRequiredCloserRatio = numberEnv(argv[++i], config.combatEfficiencyRequiredCloserRatio);
+    } else if (arg === '--combat-efficiency-sample-gap-cap-ms') {
+      config.combatEfficiencySampleGapCapMs = numberEnv(argv[++i], config.combatEfficiencySampleGapCapMs);
     } else if (arg === '--combat-response-policy-shadow-confirm-ticks') {
       config.combatResponsePolicyShadowConfirmTicks = numberEnv(argv[++i], config.combatResponsePolicyShadowConfirmTicks);
     } else if (arg === '--combat-response-policy-shadow-minimum-hold-ms') {
@@ -684,13 +676,11 @@ function usage() {
     '  --combat-close-pressure-reserve-ms <ms>  Close-pressure stamina reserve. Default: 2600',
     '  --combat-close-pressure-min-self-hp <hp>  Minimum HP for exchange continuation. Default: 60',
     '  --combat-close-pressure-max-hp-gap <hp>  Maximum target HP lead for continuation. Default: 20',
-    '  --combat-miss-close-trigger-shots <n>  Accepted no-damage shots before the first 10m close step. Default: 10',
-    '  --combat-miss-close-step-shots <n>  Accepted no-damage shots at one reached goal before the next step. Default: 10',
-    '  --combat-miss-close-step-cm <cm>  Distance removed by each progressive close step. Default: 1000',
-    '  --combat-miss-close-minimum-distance-cm <cm>  Lowest progressive close goal. Default: 1000',
-    '  --combat-miss-close-timeout-ms <ms>  Leave when one close step cannot be reached. Default: 30000',
-    '  --combat-miss-close-generation-max-ms <ms>  Global no-damage close-pressure limit. Default: 90000',
-    '  --combat-miss-close-generation-max-steps <n>  Maximum completed no-damage close steps. Default: 4',
+    '  --combat-efficiency-window-ms <ms>  No-damage observation and closer-range assessment window. Default: 30000',
+    '  --combat-efficiency-close-step-cm <cm>  Distance removed after each maintained low-efficiency window. Default: 1000',
+    '  --combat-efficiency-minimum-distance-cm <cm>  Lowest forced-close goal. Default: 1000',
+    '  --combat-efficiency-required-closer-ratio <ratio>  Required time share inside the closer range. Default: 0.5',
+    '  --combat-efficiency-sample-gap-cap-ms <ms>  Maximum one-frame contribution to closer-range time. Default: 250',
     '  --combat-response-policy-shadow-confirm-ticks <n>  Candidate confirmations for shadow policy latch. Default: 6',
     '  --combat-response-policy-shadow-minimum-hold-ms <ms>  Minimum shadow policy hold. Default: 500',
     '  --combat-trajectory-coverage-mode <mode>  Multi-trajectory aim mode: off|shadow|live-single|live-volley. Default: live-single',

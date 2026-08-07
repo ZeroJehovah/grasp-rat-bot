@@ -851,9 +851,10 @@ function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bu
     if (state && typeof state === 'object') state.combatTarget = null;
     return null;
   }
-  // Close pressure may bridge the attack boundary, but it must still honor
-  // the configured disengage radius. Realtime visibility is much wider than
-  // combat range and is not sufficient evidence to keep a fight alive.
+  // Once low-efficiency close pressure starts, keep using the realtime-visible
+  // target for the bounded distance-control window. Releasing it at the old
+  // disengage radius would prevent both the required close attempt and its
+  // stop-loss assessment.
   if (closePressure && visibleTarget && !isInvulnerableEntity(visibleTarget)
     && !visibleTargetDead
     && !(typeof options.whitelistCheck === 'function'
@@ -862,15 +863,6 @@ function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bu
       && !visibleTarget.whitelistContactPolicy?.dynamicWhitelistMember)) {
     const distance = Number(visibleTarget.distance);
     const attackRange = Math.max(0, Number(options.combatAttackRange || options.attackRange || 0));
-    const disengageRange = Math.max(attackRange, Number(
-      options.combatDisengageRange
-        ?? options.combatEngageGraceRange
-        ?? attackRange
-    ));
-    if (Number.isFinite(distance) && disengageRange > 0 && distance > disengageRange) {
-      if (state && typeof state === 'object') state.combatTarget = null;
-      return null;
-    }
     const lastInRangeAt = Number(engaged.lastInRangeAt || engaged.at || 0);
     const outOfRangeMs = Math.max(0, nowMs - lastInRangeAt);
     return {
@@ -888,6 +880,10 @@ function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bu
           || visibleTarget.moving),
         outOfRangeLimitMs: null,
         closePressureHold: true,
+        distanceControlBeyondLegacyDisengage: Boolean(
+          Number.isFinite(distance)
+            && distance > Math.max(attackRange, Number(options.combatDisengageRange || 0))
+        ),
         edgePressure: null,
         escapeDecision: engaged.escapeDecision || null,
         escapeHold: false,

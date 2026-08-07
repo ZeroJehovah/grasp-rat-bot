@@ -3825,7 +3825,6 @@ function replayCombatClosePressure(options) {
   };
   let trigger = null;
   let policyTimeout = null;
-  let generationExit = null;
   let stepsStarted = 0;
   let stepsReached = 0;
   let lastReachedStep = 0;
@@ -3834,11 +3833,11 @@ function replayCombatClosePressure(options) {
     .map(row => numberOrNull(row.detail.timing?.rollingP90Ticks))
     .filter(Number.isFinite), 0.9) ?? 5;
   const pressureOptions = {
-    combatMissCloseTriggerShots: 10,
-    combatMissCloseStepShots: 10,
-    combatMissCloseStepCm: 1000,
-    combatMissCloseMinimumDistanceCm: 1000,
-    combatMissCloseTimeoutMs: 30000,
+    combatEfficiencyWindowMs: 30000,
+    combatEfficiencyCloseStepCm: 1000,
+    combatEfficiencyMinimumDistanceCm: 1000,
+    combatEfficiencyRequiredCloserRatio: 0.5,
+    combatEfficiencySampleGapCapMs: 250,
     combatControlIntervalMs: options.controlIntervalMs,
     combatServerTickMs: 50,
     combatBulletSpeedPerTick: 500,
@@ -3903,23 +3902,12 @@ function replayCombatClosePressure(options) {
           stepStartDistanceCm: phase.stepStartDistanceCm,
           goalDistanceCm: phase.goalDistanceCm,
           targetDistanceCm: phase.targetDistance,
+          closerTimeMs: phase.closerTimeMs,
+          closerRatio: phase.closerRatio,
+          outsideCloserRatio: phase.outsideCloserRatio,
+          requiredCloserRatio: phase.requiredCloserRatio,
+          rule: phase.exitRule,
           movementStamina: Math.max(0, Number(row.detail.metrics?.movementStaminaSpent || 0))
-        };
-      }
-      if (!generationExit && phase.generationLimitReached) {
-        generationExit = {
-          line: row.line,
-          at: row.entry.at || '',
-          elapsedMs: atMs - startedAt,
-          generationElapsedMs: phase.generationElapsedMs,
-          completedSteps: phase.completedSteps,
-          acceptedShots: Math.max(0, Number(row.detail.metrics?.acceptedShots || 0)),
-          confirmedHits: Math.max(0, Number(row.detail.metrics?.confirmedHits || 0)),
-          shootingStamina: Math.max(0, Number(row.detail.metrics?.shootingStaminaSpent || 0)),
-          movementStamina: Math.max(0, Number(row.detail.metrics?.movementStaminaSpent || 0)),
-          reason: phase.generationTimedOut
-            ? 'combat-no-damage-generation-deadline'
-            : 'combat-no-damage-generation-step-limit'
         };
       }
       phaseRows.push(row);
@@ -4027,8 +4015,8 @@ function replayCombatClosePressure(options) {
     } : null,
     progressiveClose: {
       stepCm: 1000,
-      stepShots: 10,
-      timeoutMs: 30000,
+      evaluationWindowMs: 30000,
+      requiredCloserRatio: 0.5,
       stepsStarted,
       stepsReached,
       timeout: policyTimeout,
@@ -4041,11 +4029,6 @@ function replayCombatClosePressure(options) {
             Number(rows.at(-1).detail.metrics?.movementStaminaSpent || 0) - Number(policyTimeout.movementStamina || 0)
           )
         : 0
-    },
-    noDamageGeneration: {
-      maxMs: pressureOptions.combatMissCloseGenerationMaxMs ?? 90000,
-      maxSteps: pressureOptions.combatMissCloseGenerationMaxSteps ?? 4,
-      exit: generationExit
     },
     range,
     historical,
@@ -4070,10 +4053,9 @@ function replayCombatClosePressure(options) {
     : reserveReplay.shotsFired === 0);
   result.accepted = Boolean(
     trigger
-      && trigger.acceptedShotsSinceDamage >= 10
-      && trigger.triggerReason === 'missed-shots-threshold'
+      && trigger.noDamageMs >= 30000
+      && trigger.triggerReason === 'no-damage-window-threshold'
       && range.progressiveMissClose === true
-      && Number(trigger.stepStartDistanceCm) - Number(trigger.goalDistanceCm) <= 1000
       && Number(trigger.stepStartDistanceCm) - Number(trigger.goalDistanceCm) > 0
       && historical.pressureFrames > 0
       && historical.targetContinuityFrames === historical.pressureFrames
@@ -4087,13 +4069,13 @@ function replayCombatClosePressure(options) {
       && reserveAccepted
       && (policyTimeout
         ? policyTimeout.stepElapsedMs >= 30000
-        : stepsReached > 0)
+        : (stepsReached > 0 || noBulletControl.controlledPressureBandFrames > 0))
       && (policyTimeout || threatPreserving.distance.p50Cm < historical.distance.p50Cm)
   );
   return result;
 }
 
-function replayNoDamageGenerationGrid(options) {
+function replayCombatEfficiencyWindowGrid(options) {
   const rows = selectedEntries(options).filter(({ detail }) => {
     const target = detail.target || null;
     if (!target) return false;
@@ -4101,9 +4083,9 @@ function replayNoDamageGenerationGrid(options) {
     if (options.targetName && String(target.name || '') !== options.targetName) return false;
     return true;
   });
-  if (!rows.length) return { mode: 'combat-no-damage-generation-grid', frames: 0, accepted: false };
+  if (!rows.length) return { mode: 'combat-efficiency-window-grid', frames: 0, accepted: false };
   const targetId = options.targetId || String(rows[0].detail.target?.userId ?? rows[0].detail.target?.user_id ?? '');
-  const runCase = (generationMaxMs, generationMaxSteps) => {
+  const runCase = (evaluationWindowMs, requiredCloserRatio) => {
     const firstAtMs = Date.parse(rows[0].entry.at || '');
     let firstHp = numberOrNull(rows[0].detail.target?.hp);
     let minHp = firstHp;
@@ -4152,13 +4134,11 @@ function replayNoDamageGenerationGrid(options) {
         movementStaminaSinceDamage: Math.max(0, Number(metrics.movementStaminaSpent || 0)),
         distance: numberOrNull(row.detail.target?.distance)
       }, {
-        combatMissCloseTriggerShots: 10,
-        combatMissCloseStepShots: 10,
-        combatMissCloseStepCm: 1000,
-        combatMissCloseMinimumDistanceCm: 1000,
-        combatMissCloseTimeoutMs: 30000,
-        combatMissCloseGenerationMaxMs: generationMaxMs,
-        combatMissCloseGenerationMaxSteps: generationMaxSteps
+        combatEfficiencyWindowMs: evaluationWindowMs,
+        combatEfficiencyCloseStepCm: 1000,
+        combatEfficiencyMinimumDistanceCm: 1000,
+        combatEfficiencyRequiredCloserRatio: requiredCloserRatio,
+        combatEfficiencySampleGapCapMs: 250
       });
       phaseState = {
         ...phaseState,
@@ -4173,44 +4153,47 @@ function replayNoDamageGenerationGrid(options) {
       if (!firstTrigger && phase.active) {
         firstTrigger = { line: row.line, at: row.entry.at || '', acceptedShots };
       }
-      if (!firstExit && phase.generationLimitReached) {
+      if (!firstExit && phase.exitRequired) {
         firstExit = {
           line: row.line,
           at: row.entry.at || '',
           elapsedMs: atMs - firstAtMs,
-          generationElapsedMs: phase.generationElapsedMs,
+          noDamageMs: phase.noDamageMs,
+          stepElapsedMs: phase.stepElapsedMs,
           completedSteps: phase.completedSteps,
           retainedHits: Math.max(0, Number(metrics.confirmedHits || 0)),
           acceptedShots,
           shootingStamina: Math.max(0, Number(metrics.shootingStaminaSpent || 0)),
           movementStamina: Math.max(0, Number(metrics.movementStaminaSpent || 0)),
-          reason: phase.generationTimedOut
-            ? 'combat-no-damage-generation-deadline'
-            : 'combat-no-damage-generation-step-limit'
+          closerRatio: phase.closerRatio,
+          outsideCloserRatio: phase.outsideCloserRatio,
+          reason: phase.exitRule
         };
         break;
       }
     }
-    return { generationMaxMs, generationMaxSteps, firstTrigger, firstDamage, firstExit };
+    return { evaluationWindowMs, requiredCloserRatio, firstTrigger, firstDamage, firstExit };
   };
-  const grid = [60000, 90000, 120000].flatMap(generationMaxMs => (
-    [2, 3, 4].map(generationMaxSteps => runCase(generationMaxMs, generationMaxSteps))
+  const grid = [20000, 30000, 40000].flatMap(evaluationWindowMs => (
+    [0.4, 0.5, 0.6].map(requiredCloserRatio => runCase(evaluationWindowMs, requiredCloserRatio))
   ));
-  const selected = grid.find(item => item.generationMaxMs === 90000 && item.generationMaxSteps === 4) || null;
-  const finalMetrics = rows.at(-1).detail.metrics || {};
+  const selected = grid.find(item => item.evaluationWindowMs === 30000 && item.requiredCloserRatio === 0.5) || null;
+  const retainedConfirmedHits = rows.reduce((maximum, row) => (
+    Math.max(maximum, Math.max(0, Number(row.detail.metrics?.confirmedHits || 0)))
+  ), 0);
   return {
-    mode: 'combat-no-damage-generation-grid',
+    mode: 'combat-efficiency-window-grid',
     targetId,
     targetName: options.targetName || String(rows[0].detail.target?.name || ''),
     lines: `${options.startLine}-${options.endLine}`,
     frames: rows.length,
     grid,
     selected,
-    retainedConfirmedHits: Math.max(0, Number(finalMetrics.confirmedHits || 0)),
+    retainedConfirmedHits,
     executionChanged: false,
     accepted: options.expectNewExit
       ? Boolean(selected?.firstTrigger && selected?.firstExit)
-      : Boolean(!selected?.firstExit && Math.max(0, Number(finalMetrics.confirmedHits || 0)) > 0)
+      : Boolean(!selected?.firstExit && selected?.firstDamage)
   };
 }
 
@@ -7024,7 +7007,7 @@ function runReplay(options) {
   if (options.mode === 'post-attack-drop-attribution') return replayPostAttackDropAttribution(options);
   if (options.mode === 'arbitration') return replayArbitration(options);
   if (options.mode === 'combat-close-pressure') return replayCombatClosePressure(options);
-  if (options.mode === 'combat-no-damage-generation-grid') return replayNoDamageGenerationGrid(options);
+  if (options.mode === 'combat-efficiency-window-grid') return replayCombatEfficiencyWindowGrid(options);
   if (options.mode === 'combat-response-policy-shadow') return replayResponsePolicyShadow(options);
   if (options.mode === 'combat-target-switch') return replayCombatTargetSwitch(options);
   if (options.mode === 'profit-threshold-dropout') return replayProfitThresholdDropout(options);
@@ -7049,7 +7032,7 @@ module.exports = {
   parseArgs,
   replayDistanceAwareCombat,
   replayCombatClosePressure,
-  replayNoDamageGenerationGrid,
+  replayCombatEfficiencyWindowGrid,
   replayResponsePolicyShadow,
   replayCombatTargetSwitch,
   replayProfitThresholdDropout,
