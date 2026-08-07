@@ -1,6 +1,9 @@
 'use strict';
 
-const { rawInvulnerabilityMsFrom } = require('./invulnerability-time');
+const {
+  protocolInvulnerabilityMsFrom,
+  rawInvulnerabilityMsFrom
+} = require('./invulnerability-time');
 
 const DEFAULT_REMOTE_PROFIT_TARGET_CONFIG = Object.freeze({
   minDrop: 50,
@@ -105,8 +108,9 @@ function basicNormalizedEntity(entity, options = {}) {
   const alive = !life || life === 'alive';
   const stamina1dRemaining = finiteNumber(entity?.stamina1dRemaining ?? entity?.stamina_1d_remaining_milli ?? entity?.stamina_1d_remaining_ms ?? entity?.stamina_1d);
   const stamina1dLimit = finiteNumber(entity?.stamina1dLimit ?? entity?.stamina_1d_limit_milli ?? entity?.stamina_1d_limit_ms ?? entity?.stamina_1d_limit);
-  const invulnerableRemainingMs = finiteNumber(entity?.invulnerableRemainingMs)
-    ?? rawInvulnerabilityMsFrom(entity);
+  const invulnerableRemainingMs = options.rawProtocolFields === true
+    ? protocolInvulnerabilityMsFrom(entity)
+    : (finiteNumber(entity?.invulnerableRemainingMs) ?? rawInvulnerabilityMsFrom(entity));
   return {
     ...entity,
     userId: entityUserId(entity),

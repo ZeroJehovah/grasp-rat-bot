@@ -6,7 +6,11 @@ const {
   incomingBulletHasCollisionRiskCore,
   isInvulnerableEntity
 } = require('../../strategy/combat-target-selection');
-const { rawInvulnerabilityMsFrom } = require('../../strategy/invulnerability-time');
+const {
+  canonicalInvulnerabilityMsFrom,
+  protocolInvulnerabilityMsFrom,
+  rawInvulnerabilityMsFrom
+} = require('../../strategy/invulnerability-time');
 const {
   COMBAT_ECONOMIC_STOP_LOSS_DEFAULTS,
   evaluateEconomicCooldownReentryCore,
@@ -1257,7 +1261,9 @@ function normalizeEntityForDecision(entity, self = null, authority = 'realtime',
   const stamina5sLimit = staminaLimitForWindow(entity, '5s');
   const stamina1hLimit = staminaLimitForWindow(entity, '1h');
   const stamina1dLimit = staminaLimitForWindow(entity, '1d');
-  const invulnerableMs = invulnerableRemainingMs(entity, options);
+  const invulnerableMs = options.rawProtocolFields === true
+    ? protocolInvulnerabilityRemainingMs(entity, options)
+    : invulnerableRemainingMs(entity, options);
   const fullStamina5s = hasFull5sStamina(entity, options);
   const dropKnown = entityDropKnown(entity);
   const normalized = {
@@ -1715,10 +1721,10 @@ function refreshRealtimeSnapshotObservation(state, self, stateful = {}, options 
     const dropSource = entityDropKnown(realtimeEntity) ? realtimeEntity : metadataSource;
     const dropKnown = entityDropKnown(dropSource);
     const drop = dropKnown ? numberOrNull(entityDropValue(dropSource)) : null;
-    const realtimeInvulnerableMs = realtimeEntity ? invulnerableRemainingMs(realtimeEntity, options) : null;
+    const realtimeInvulnerableMs = realtimeEntity ? protocolInvulnerabilityRemainingMs(realtimeEntity, options) : null;
     const invulnerableMs = realtimeInvulnerableMs !== null
       ? realtimeInvulnerableMs
-      : invulnerableRemainingMs(metadataSource, options);
+      : protocolInvulnerabilityRemainingMs(metadataSource, options);
     const activityAgeRaw = realtimeEntity?.recentActivityAgeMs ?? metadataSource?.recentActivityAgeMs;
     const activityAgeMs = activityAgeRaw === null || activityAgeRaw === undefined || activityAgeRaw === ''
       ? null
@@ -2705,15 +2711,20 @@ function partitionActiveCoinCompetition(self, coins = [], visibleTargets = [], o
 }
 
 function invulnerableRemainingMs(target, options = {}) {
-  const canonicalMs = positiveFieldValue(target, [
-    'invulnerableRemainingMs',
-    'invincibleRemainingMs',
-    'invulnerabilityRemainingMs',
-    'immuneRemainingMs'
-  ]);
+  const canonicalMs = canonicalInvulnerabilityMsFrom(target);
   if (canonicalMs !== null) return Math.round(canonicalMs);
   const remainingMs = rawInvulnerabilityMsFrom(target);
   if (remainingMs !== null) return Math.round(remainingMs);
+  return invulnerableRemainingMsFromTicksOrFlag(target, options);
+}
+
+function protocolInvulnerabilityRemainingMs(target, options = {}) {
+  const remainingMs = protocolInvulnerabilityMsFrom(target);
+  if (remainingMs !== null) return Math.round(remainingMs);
+  return invulnerableRemainingMsFromTicksOrFlag(target, options);
+}
+
+function invulnerableRemainingMsFromTicksOrFlag(target, options = {}) {
   const tickMs = Math.max(1, Number(options.tickMs ?? BROWSER_RUNTIME_DEFAULTS.tickMs ?? 120) || 120);
   const remainingTicks = positiveFieldValue(target, INVULNERABLE_TICK_FIELDS);
   const genericRemaining = positiveFieldValue(target, INVULNERABLE_GENERIC_REMAINING_FIELDS);
@@ -3022,6 +3033,7 @@ function observeBrowserlessCoinPickups(input, stateful = {}, options = {}) {
 function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const realtime = state?.realtime || {};
   const fallback = state?.fallback || state?.snapshot || {};
+  const normalizationOptions = { ...options, rawProtocolFields: true };
   const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
   const dataGaps = [];
   const snapshotFrameAgeMs = numberOrNull(fallback.frameAgeMs);
@@ -3031,7 +3043,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const rawSelfUserId = numberOrNull(realtime.self?.user_id ?? realtime.self?.userId ?? state?.userId ?? options.userId);
   const snapshotSelf = rawSelfUserId !== null ? snapshotEntitiesByUserId.get(rawSelfUserId) : null;
   const enrichedSelf = enrichRealtimeSelfWithSnapshotMetadata(realtime.self, snapshotSelf, options);
-  const self = normalizeEntityForDecision(enrichedSelf.self, null, 'realtime', options);
+  const self = normalizeEntityForDecision(enrichedSelf.self, null, 'realtime', normalizationOptions);
   if (enrichedSelf.staminaMerged) dataGaps.push('self-stamina-from-snapshot');
   if (!self) dataGaps.push('missing-realtime-self');
   const whitelistIdentityContext = buildWhitelistSafetyIdentityContext(options, nowMs);
@@ -3042,7 +3054,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
       snapshotEntitiesByUserId.get(numberOrNull(entity?.user_id ?? entity?.userId)),
       options
     ))
-    .map(entity => normalizeEntityForDecision(entity, self, 'realtime', options))
+    .map(entity => normalizeEntityForDecision(entity, self, 'realtime', normalizationOptions))
     .filter(Boolean);
   annotateBrowserlessRecentActivity(realtimeEntities, stateful, nowMs, options);
   const decisionEntities = realtimeEntities.map(entity => refreshDecisionEntityActivity(
@@ -3257,6 +3269,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
 
 function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {}) {
   const inputStages = {};
+  const normalizationOptions = { ...options, rawProtocolFields: true };
   let inputStageStarted = performance.now();
   const markInputStage = name => {
     inputStages[name] = performance.now() - inputStageStarted;
@@ -3325,7 +3338,7 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
   markInputStage('metadata-index');
   const snapshotSelf = rawSelfUserId !== null ? snapshotEntitiesByUserId.get(rawSelfUserId) : null;
   const enrichedSelf = enrichRealtimeSelfWithSnapshotMetadata(realtime.self, snapshotSelf, options);
-  const self = normalizeEntityForDecision(enrichedSelf.self, null, 'realtime', options);
+  const self = normalizeEntityForDecision(enrichedSelf.self, null, 'realtime', normalizationOptions);
   markInputStage('self-normalize');
   const selfUserId = Number(self?.user_id ?? state?.userId ?? options.userId ?? 0);
   const realtimeEntities = [];
@@ -3337,7 +3350,7 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
       userId === null ? null : snapshotEntitiesByUserId.get(userId),
       options
     );
-    const normalized = normalizeEntityForDecision(enriched, self, 'realtime', options);
+    const normalized = normalizeEntityForDecision(enriched, self, 'realtime', normalizationOptions);
     if (normalized) realtimeEntities.push(normalized);
   }
   markInputStage('entity-normalize');

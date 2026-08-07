@@ -70,6 +70,7 @@ const {
   decisionStatePatch,
   effectiveProfitReward,
   evaluateProactiveCombatMarginalRoi,
+  normalizeEntityForDecision,
   opportunityEnemyStaminaCost: browserlessOpportunityEnemyStaminaCost,
   recentCombatResidualThreatContinuityCore,
   recordAttackHistoryFromActionResult,
@@ -8658,6 +8659,76 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'flee|safety|avoid-invulnerable-target||true|2500|9600|true|snapshot|9600|2500|1|Passive'
+    },
+    {
+      name: 'browserless raw camel invulnerability countdown converts once for target and nearby panel',
+      got: (() => {
+        const state = {
+          userId: 7,
+          realtime: {
+            tick: 52,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+              { entity_id: 2, user_id: 8, label: 'raw-camel-target', x: 1200, y: 0, hp: 80, firing: true }
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: {
+            tick: 53,
+            frameAgeMs: 100,
+            entities: [
+              {
+                entity_id: 22,
+                user_id: 8,
+                label: 'raw-camel-target',
+                x: 1210,
+                y: 0,
+                hp: 80,
+                current_join_mode: 'Passive',
+                invulnerableRemainingMs: 226080
+              }
+            ],
+            coinDrops: [],
+            messages: []
+          }
+        };
+        const input = buildBrowserlessStrategyInput(state, {
+          controlMode: 'profit-live',
+          nowMs: 1200
+        }, {});
+        const decision = buildBrowserlessDecision(state, {}, {
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          nowMs: 1200
+        });
+        const target = input.visibleTargets.find(entity => Number(entity.user_id) === 8);
+        const row = decision.input.nearby.p.find(item => item[0] === 'raw-camel-target');
+        const canonical = normalizeEntityForDecision({
+          user_id: 9,
+          x: 0,
+          y: 0,
+          hp: 100,
+          invulnerableRemainingMs: 94200
+        });
+        const raw = normalizeEntityForDecision({
+          user_id: 10,
+          x: 0,
+          y: 0,
+          hp: 100,
+          invulnerableRemainingMs: 226080
+        }, null, 'snapshot', { rawProtocolFields: true });
+        return [
+          target?.invulnerableRemainingMs,
+          decision.action.target?.invulnerableRemainingMs,
+          row?.[4],
+          canonical?.invulnerableRemainingMs,
+          raw?.invulnerableRemainingMs
+        ].join('|');
+      })(),
+      want: '94200|94200|94200|94200|94200'
     },
     {
       name: 'browserless decision adapter emits snapshot fallback profit without commands',

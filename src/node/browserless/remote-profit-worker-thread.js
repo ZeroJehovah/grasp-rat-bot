@@ -59,7 +59,8 @@ parentPort.on('message', message => {
             : entity;
           const normalized = normalizeEntityForDecision(projected, request.self || null, 'snapshot-navigation', {
             ...(request.scoringOptions || {}),
-            ...(request.config || {})
+            ...(request.config || {}),
+            rawProtocolFields: true
           });
           if (!normalized) return null;
           normalized.userId = normalized.user_id;
