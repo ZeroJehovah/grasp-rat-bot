@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.08.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.08.2';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -69,11 +69,19 @@ function appendMapTrailSampleCore(samples, sample, nowMs, maxAgeMs = 30000, maxS
   return [...retained, { x, y, at, breakBefore: Boolean(sample?.breakBefore) }].slice(-limit);
 }
 
+function pruneMapTrailHistoryCore(history, observedKeys) {
+  if (!(history instanceof Map)) return new Map();
+  const observed = observedKeys instanceof Set
+    ? observedKeys
+    : new Set(Array.isArray(observedKeys) ? observedKeys : []);
+  return new Map([...history.entries()].filter(([key]) => observed.has(key)));
+}
+
 function mapTrailOpacityCore(sampleAtMs, nowMs, maxAgeMs = 30000) {
   const maxAge = Math.max(1, Number(maxAgeMs) || 30000);
   const age = Math.max(0, Number(nowMs) - Number(sampleAtMs));
   const freshness = Math.max(0, Math.min(1, 1 - age / maxAge));
-  return 0.06 + freshness * 0.36;
+  return 0.12 + freshness * 0.52;
 }
 
 function highDropRankValueCore(item) {
@@ -429,6 +437,13 @@ function renderBrowserlessWebPanel() {
     .auth-message{min-height:18px;overflow-wrap:anywhere}
     .map-stage{position:relative;width:min(100%,420px);aspect-ratio:1;margin:0 auto;touch-action:pan-y}
     .map-canvas{display:block;width:100%;height:100%;aspect-ratio:1}
+    .map-fullscreen-toggle{position:absolute;top:8px;right:8px;z-index:3;width:32px;height:32px;min-height:32px;padding:0;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;background:rgba(8,12,18,.78);color:var(--text);font-size:20px;line-height:1;box-shadow:0 2px 8px rgba(0,0,0,.28)}
+    .map-fullscreen-toggle:hover{background:rgba(32,37,42,.96)}
+    .map-fullscreen-toggle:focus-visible{outline:1px solid var(--blue);outline-offset:2px}
+    #mapPanel:fullscreen{display:flex;flex-direction:column;width:100vw;height:100vh;max-width:none;max-height:none;margin:0;padding:clamp(10px,2vw,24px);border:0;border-radius:0;background:var(--bg);overflow:hidden}
+    #mapPanel:fullscreen>.panel-body{display:flex;flex:1;min-height:0;max-height:none;align-items:center;justify-content:center;overflow:hidden}
+    #mapPanel:fullscreen .map-stage{width:min(100%,calc(100vh - 76px));max-width:none}
+    #mapPanel:fullscreen .map-fullscreen-toggle{top:clamp(8px,1.5vw,16px);right:clamp(8px,1.5vw,16px)}
     .map-tooltip{position:absolute;z-index:2;display:none;max-width:min(240px,80%);padding:6px 8px;border:1px solid rgba(255,255,255,.2);border-radius:5px;background:rgba(8,12,18,.96);color:var(--text);font-size:12px;line-height:1.4;white-space:pre-line;pointer-events:none;box-shadow:0 5px 16px rgba(0,0,0,.3)}
     .map-tooltip.visible{display:block}
     .nearby-panel{min-width:0}
@@ -646,6 +661,7 @@ function renderBrowserlessWebPanel() {
           <div class="panel-body">
             <div id="mapStage" class="map-stage">
               <canvas id="targetMap" class="map-canvas" width="420" height="420" aria-label="附近目标地图"></canvas>
+              <button id="mapFullscreenToggle" class="map-fullscreen-toggle" type="button" aria-label="地图面板全屏" aria-pressed="false" title="地图面板全屏">⛶</button>
               <div id="mapTooltip" class="map-tooltip" role="tooltip"></div>
             </div>
           </div>
@@ -683,6 +699,7 @@ function renderBrowserlessWebPanel() {
     const MAP_MOVE_ANIMATION_MS = 260;
     const MAP_TRAIL_MAX_AGE_MS = 30000;
     const MAP_TRAIL_MAX_SAMPLES = 16;
+    const MAP_TRAIL_LINE_WIDTH = 2;
     let autoRefreshTimer = 0;
     let countdownTimer = 0;
     let refreshInFlight = null;
@@ -717,6 +734,7 @@ function renderBrowserlessWebPanel() {
     const mapAnimationProgress = ${mapAnimationProgressCore.toString()};
     const interpolateMapMarker = ${interpolateMapMarkerCore.toString()};
     const appendMapTrailSample = ${appendMapTrailSampleCore.toString()};
+    const pruneMapTrailHistory = ${pruneMapTrailHistoryCore.toString()};
     const mapTrailOpacity = ${mapTrailOpacityCore.toString()};
     const transportMetricValueClass = ${transportMetricValueClassCore.toString()};
 
@@ -2224,23 +2242,10 @@ function renderBrowserlessWebPanel() {
         if (!samples.length) continue;
         mapTrailHistory.set(record.key, {
           color: record.color,
-          samples,
-          present: true
+          samples
         });
       }
-      for (const [key, entry] of mapTrailHistory.entries()) {
-        if (observedKeys.has(key)) continue;
-        entry.present = false;
-        const samples = appendMapTrailSample(
-          entry.samples,
-          null,
-          nowMs,
-          MAP_TRAIL_MAX_AGE_MS,
-          MAP_TRAIL_MAX_SAMPLES
-        );
-        if (samples.length) entry.samples = samples;
-        else mapTrailHistory.delete(key);
-      }
+      mapTrailHistory = pruneMapTrailHistory(mapTrailHistory, observedKeys);
       mapTrailObservationAtMs = observedAtMs;
     }
     function drawMapTrails(context, scene, markers, frame) {
@@ -2251,11 +2256,11 @@ function renderBrowserlessWebPanel() {
       context.save();
       context.lineCap = 'round';
       context.lineJoin = 'round';
-      context.lineWidth = .6;
+      context.lineWidth = MAP_TRAIL_LINE_WIDTH;
       for (const [key, entry] of mapTrailHistory.entries()) {
         const samples = entry.samples.filter(sample => scene.trailNowMs - Number(sample.at) <= MAP_TRAIL_MAX_AGE_MS);
         if (samples.length < 2) continue;
-        const currentMarker = entry.present ? currentMarkers.get(key) : null;
+        const currentMarker = currentMarkers.get(key);
         for (let index = 1; index < samples.length; index += 1) {
           const previous = samples[index - 1];
           const sample = samples[index];
@@ -2545,6 +2550,34 @@ function renderBrowserlessWebPanel() {
       const tooltip = document.getElementById('mapTooltip');
       if (!tooltip) return;
       tooltip.classList.remove('visible');
+    }
+    function mapFullscreenElement() {
+      return document.fullscreenElement || document.webkitFullscreenElement || null;
+    }
+    function syncMapFullscreenButton() {
+      const panel = document.getElementById('mapPanel');
+      const button = document.getElementById('mapFullscreenToggle');
+      if (!panel || !button) return;
+      const requestSupported = typeof panel.requestFullscreen === 'function'
+        || typeof panel.webkitRequestFullscreen === 'function';
+      button.hidden = !requestSupported;
+      if (!requestSupported) return;
+      const active = mapFullscreenElement() === panel;
+      button.textContent = active ? '⤢' : '⛶';
+      button.setAttribute('aria-label', active ? '退出地图面板全屏' : '地图面板全屏');
+      button.setAttribute('aria-pressed', String(active));
+      button.title = active ? '退出地图面板全屏' : '地图面板全屏';
+    }
+    async function toggleMapFullscreen() {
+      const panel = document.getElementById('mapPanel');
+      if (!panel) return;
+      if (mapFullscreenElement() === panel) {
+        const exit = document.exitFullscreen || document.webkitExitFullscreen;
+        if (typeof exit === 'function') await exit.call(document);
+        return;
+      }
+      const request = panel.requestFullscreen || panel.webkitRequestFullscreen;
+      if (typeof request === 'function') await request.call(panel);
     }
     function updateMapTooltip(event) {
       const canvas = document.getElementById('targetMap');
@@ -3718,6 +3751,14 @@ function renderBrowserlessWebPanel() {
     window.addEventListener('pagehide', stopAutoRefresh);
     document.getElementById('targetMap')?.addEventListener('pointermove', updateMapTooltip);
     document.getElementById('targetMap')?.addEventListener('pointerleave', hideMapTooltip);
+    document.getElementById('mapFullscreenToggle')?.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleMapFullscreen().catch(() => syncMapFullscreenButton());
+    });
+    document.addEventListener('fullscreenchange', syncMapFullscreenButton);
+    document.addEventListener('webkitfullscreenchange', syncMapFullscreenButton);
+    syncMapFullscreenButton();
     const mapStage = document.getElementById('mapStage');
     if (mapStage && typeof ResizeObserver === 'function') {
       const mapResizeObserver = new ResizeObserver(() => {
@@ -3756,6 +3797,7 @@ module.exports = {
   lastExitPanelVisibleCore,
   mapAnimationProgressCore,
   mapMarkerKeyCore,
+  pruneMapTrailHistoryCore,
   mapTrailOpacityCore,
   missCloseExitReasonTextCore,
   recoveryContactExitReasonTextCore,

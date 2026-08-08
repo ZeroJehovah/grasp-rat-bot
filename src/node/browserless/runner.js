@@ -36,6 +36,7 @@ const {
   highDropSortValueCore,
   isStaminaExhaustionExitReasonCore,
   lastExitPanelVisibleCore,
+  pruneMapTrailHistoryCore,
   mapTrailOpacityCore
 } = require('./web-panel');
 const {
@@ -6768,15 +6769,27 @@ async function runBrowserlessRunnerSelfTest() {
       null,
       mapTrailNowMs + 16000
     );
+    const mapTrailHistoryBeforeClear = new Map([
+      ['player:visible', { samples: [{ x: 0, y: 0 }] }],
+      ['player:gone', { samples: [{ x: 100, y: 100 }] }]
+    ]);
+    const mapTrailHistoryAfterClear = pruneMapTrailHistoryCore(
+      mapTrailHistoryBeforeClear,
+      new Set(['player:visible'])
+    );
     const mapTrailCoreTest = {
       ok: mapTrailSamples.length === 2
         && unchangedMapTrailSamples.length === 2
         && resumedMapTrailSamples.length === 3
         && resumedMapTrailSamples[2].breakBefore === true
         && prunedMapTrailSamples.length === 1
-        && mapTrailOpacityCore(mapTrailNowMs - 1000, mapTrailNowMs) > mapTrailOpacityCore(mapTrailNowMs - 29000, mapTrailNowMs),
+        && mapTrailOpacityCore(mapTrailNowMs - 1000, mapTrailNowMs) > mapTrailOpacityCore(mapTrailNowMs - 29000, mapTrailNowMs)
+        && mapTrailHistoryAfterClear.size === 1
+        && mapTrailHistoryAfterClear.has('player:visible')
+        && !mapTrailHistoryAfterClear.has('player:gone'),
       sampleCount: resumedMapTrailSamples.length,
-      prunedCount: prunedMapTrailSamples.length
+      prunedCount: prunedMapTrailSamples.length,
+      visibleHistoryCount: mapTrailHistoryAfterClear.size
     };
     const nearbyMapLegacyCompact = buildCompactBrowserlessStatus({
       updatedAt: '2026-07-26T01:00:00.000Z',
@@ -7995,14 +8008,21 @@ async function runBrowserlessRunnerSelfTest() {
           && pageHtml.includes('MAP_MOVE_ANIMATION_MS = 260')
           && pageHtml.includes('MAP_TRAIL_MAX_AGE_MS = 30000')
           && pageHtml.includes('MAP_TRAIL_MAX_SAMPLES = 16')
+          && pageHtml.includes('MAP_TRAIL_LINE_WIDTH = 2')
           && pageHtml.includes('const sourceIpDeferredDetailText = status => dailyFirstLoginExempt(status)')
           && pageHtml.includes('每日首次登录豁免仍有效，届时直接使用主 IP 登录')
           && pageHtml.includes('先使用主 IP 做快照安全检查')
           && pageHtml.includes('function startMapMarkerAnimation(scene, markers, animate = true)')
           && pageHtml.includes('function recordMapTrailObservation(status, markers, nowMs)')
           && pageHtml.includes('function drawMapTrails(context, scene, markers, frame)')
-          && pageHtml.includes('context.lineWidth = .6')
+          && pageHtml.includes('const pruneMapTrailHistory =')
+          && pageHtml.includes('mapTrailHistory = pruneMapTrailHistory(mapTrailHistory, observedKeys)')
+          && pageHtml.includes('context.lineWidth = MAP_TRAIL_LINE_WIDTH')
           && pageHtml.includes('context.globalAlpha = mapTrailOpacity(sample.at, scene.trailNowMs, MAP_TRAIL_MAX_AGE_MS)')
+          && pageHtml.includes('id="mapFullscreenToggle"')
+          && pageHtml.includes('#mapPanel:fullscreen')
+          && pageHtml.includes('requestFullscreen')
+          && pageHtml.includes('document.addEventListener(\'fullscreenchange\', syncMapFullscreenButton)')
           && pageHtml.includes("mapKey: mapMarkerKey('coin', item?.[0])")
           && pageHtml.includes("mapKey: mapMarkerKey('player', item?.[9], name)")
           && pageHtml.includes("window.matchMedia('(prefers-reduced-motion: reduce)').matches")
