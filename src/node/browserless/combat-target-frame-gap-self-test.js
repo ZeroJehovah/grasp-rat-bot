@@ -2,6 +2,7 @@
 
 const { createBrowserlessActionAdapter } = require('./action-adapter');
 const { buildBrowserlessRealtimeControlDecision } = require('./decision-adapter');
+const { rememberBrowserlessCombatEngagement } = require('./combat-adapter');
 const { pickEngagedCombatTargetCore } = require('../../strategy/combat-target-selection');
 
 function runCombatTargetFrameGapSelfTest() {
@@ -165,6 +166,40 @@ function runCombatTargetFrameGapSelfTest() {
       && restoredDecision.combat?.target?.combatIntent === 'engaged'
       && decisionState.combatTarget?.originIntent === 'defensive');
 
+  const sparseMetadataState = {};
+  const metadataOptions = {
+    nowMs,
+    currentTick: 685274,
+    commandShooting: { controlGeneration: 'metadata-test', lastConfirmationSequence: 0, lastRequestSequence: 0 }
+  };
+  rememberBrowserlessCombatEngagement(
+    sparseMetadataState,
+    self,
+    { ...target, name: 'metadata-target', drop: 2424, combatIntent: 'profit' },
+    metadataOptions
+  );
+  rememberBrowserlessCombatEngagement(
+    sparseMetadataState,
+    self,
+    {
+      user_id: targetId,
+      x: target.x + 10,
+      y: target.y + 10,
+      hp: target.hp,
+      combatIntent: 'profit'
+    },
+    { ...metadataOptions, nowMs: nowMs + 50, currentTick: 685275 }
+  );
+  assert('sparse realtime metadata preserves the last known Drop and name',
+    sparseMetadataState.combatTarget?.drop === 2424
+      && sparseMetadataState.combatTarget?.dropKnown === true
+      && sparseMetadataState.combatTarget?.name === 'metadata-target');
+
+  buildBrowserlessRealtimeControlDecision(
+    frame(685282, nowMs + 149, []),
+    decisionState,
+    { ...options, nowMs: nowMs + 149 }
+  );
   const expiredDecision = buildBrowserlessRealtimeControlDecision(
     frame(685283, nowMs + 451, []),
     decisionState,
@@ -172,7 +207,58 @@ function runCombatTargetFrameGapSelfTest() {
   );
   assert('sustained target absence releases after the bounded hold',
     expiredDecision.action === null
-      && expiredDecision.combat?.targetFrameGapHold === null);
+      && expiredDecision.combat?.targetFrameGapHold === null
+      && expiredDecision.combat?.targetFrameGapReset?.reason === 'combat-target-frame-gap-reset'
+      && decisionState.combatTarget === null
+      && decisionState.combatMetrics === null
+      && !decisionState.combatEngagements[String(targetId)]);
+
+  const reappearingState = {
+    combatTarget: {
+      ...rememberedTarget,
+      drop: 2424,
+      dropKnown: true,
+      at: nowMs
+    },
+    combatEngagements: { [String(targetId)]: { ...rememberedTarget, drop: 2424, dropKnown: true, at: nowMs } },
+    combatMetrics: {
+      targetId: String(targetId),
+      targetName: target.name,
+      startedAt: nowMs - 5000,
+      acceptedShots: 84,
+      targetDamage: 0,
+      totalStaminaSpent: 20000,
+      engagementGeneration: 'old-segment'
+    },
+    combatAim: { targetId },
+    combatHpObservationTargetId: String(targetId),
+    combatHpObservationBuffer: { observations: [{ atMs: nowMs }] }
+  };
+  const farSparseTarget = {
+    user_id: targetId,
+    x: self.x + 32836,
+    y: self.y,
+    hp: 100,
+    current_join_mode: 'Active'
+  };
+  buildBrowserlessRealtimeControlDecision(
+    frame(685283, nowMs + 49, []),
+    reappearingState,
+    { ...options, nowMs: nowMs + 49 }
+  );
+  const reappearanceDecision = buildBrowserlessRealtimeControlDecision(
+    frame(685284, nowMs + 451, [farSparseTarget]),
+    reappearingState,
+    { ...options, nowMs: nowMs + 451 }
+  );
+  assert('post-gap reappearance does not reuse the old close-pressure segment',
+    reappearanceDecision.combat?.target === null
+      && reappearanceDecision.combat?.exit === null
+      && reappearingState.combatTarget === null
+      && reappearingState.combatMetrics === null
+      && !reappearingState.combatEngagements[String(targetId)]
+      && reappearingState.combatAim === null
+      && reappearingState.combatHpObservationTargetId === '');
 
   const invulnerableState = {
     combatTarget: { ...rememberedTarget },

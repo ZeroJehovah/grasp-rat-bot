@@ -749,6 +749,62 @@ function entityDropKnown(entity) {
   ].some(value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)));
 }
 
+function combatTargetFrameGapHoldLimit(options = {}) {
+  const combatControlIntervalMs = Number(options.combatControlIntervalMs);
+  const derivedHoldMs = Math.max(
+    DEFAULT_COMBAT_TARGET_FRAME_GAP_HOLD_MS,
+    (Number.isFinite(combatControlIntervalMs) && combatControlIntervalMs > 0
+      ? combatControlIntervalMs
+      : 50) * 5
+  );
+  const configuredHoldMs = Number(options.combatTargetFrameGapHoldMs);
+  return Math.max(0,
+    options.combatTargetFrameGapHoldMs !== null
+      && options.combatTargetFrameGapHoldMs !== undefined
+      && Number.isFinite(configuredHoldMs)
+      ? configuredHoldMs
+      : derivedHoldMs);
+}
+
+function resetCombatEngagementAfterFrameGap(stateful, targetId, nowMs, ageMs, maxAgeMs) {
+  if (!stateful || typeof stateful !== 'object') return null;
+  const id = String(targetId ?? '');
+  if (!id) return null;
+  const currentTargetId = String(stateful.combatTarget?.id ?? '');
+  if (currentTargetId && currentTargetId !== id) return null;
+  const metricsTargetId = String(stateful.combatMetrics?.targetId ?? '');
+  if (stateful.combatEngagements && typeof stateful.combatEngagements === 'object') {
+    delete stateful.combatEngagements[id];
+  }
+  if (stateful.combatMetricsByTarget && typeof stateful.combatMetricsByTarget === 'object') {
+    delete stateful.combatMetricsByTarget[id];
+  }
+  if (!metricsTargetId || metricsTargetId === id) stateful.combatMetrics = null;
+  if (String(stateful.combatAim?.targetId ?? '') === id) stateful.combatAim = null;
+  if (String(stateful.combatHpObservationTargetId ?? '') === id) {
+    stateful.combatHpObservationTargetId = '';
+    stateful.combatHpObservationBuffer = null;
+    stateful.combatHpLossAttributionPending = null;
+  }
+  if (currentTargetId === id) stateful.combatTarget = null;
+  stateful.combatTargetFrameGap = null;
+  stateful.combatExecutionLedger = null;
+  stateful.combatMovementStability = null;
+  // Target-switch hysteresis is tied to the old visible engagement. Keeping it
+  // after a long realtime absence could make a fresh segment inherit stale
+  // arbitration state.
+  stateful.combatTargetSwitchGate = null;
+  stateful.combatTargetSwitchHistory = null;
+  return {
+    active: true,
+    reason: 'combat-target-frame-gap-reset',
+    targetId: id,
+    ageMs: Math.round(Math.max(0, Number(ageMs) || 0)),
+    maxAgeMs: Math.round(Math.max(0, Number(maxAgeMs) || 0)),
+    at: Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now()
+  };
+}
+
 function targetWhitelistFromOptions(options = {}) {
   if (options.targetWhitelist && typeof options.targetWhitelist === 'object') return options.targetWhitelist;
   const nameSet = options.targetWhitelistNameSet instanceof Set
@@ -2902,6 +2958,15 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   }
   const distance = Number.isFinite(Number(target.distance)) ? Number(target.distance) : distanceBetween(self, target);
   const hp = numberOrNull(target.knownHp ?? target.hp);
+  const currentTargetName = String(target.name || '').trim();
+  const previousTargetName = same ? String(previous.name || '').trim() : '';
+  const targetName = currentTargetName || previousTargetName;
+  const currentDropKnown = entityDropKnown(target);
+  const previousDropKnown = same && previous.dropKnown === true;
+  const targetDropKnown = currentDropKnown || previousDropKnown;
+  const targetDrop = currentDropKnown
+    ? entityDropValue(target)
+    : (previousDropKnown ? Math.max(0, Number(previous.drop) || 0) : entityDropValue(target));
   const previousHp = same && Number.isFinite(Number(previous.hp)) ? Number(previous.hp) : null;
   const damaged = hp !== null && previousHp !== null && hp < previousHp - 0.01;
   const healed = hp !== null && previousHp !== null && hp > previousHp + 0.01;
@@ -3107,7 +3172,7 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     firstSeenTick: same
       ? (numberOrNull(previous.firstSeenTick) ?? numberOrNull(options.currentTick))
       : numberOrNull(options.currentTick),
-    name: target.name || '',
+    name: targetName,
     x: Math.round(Number(target.x) || 0),
     y: Math.round(Number(target.y) || 0),
     hp,
@@ -3115,8 +3180,8 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     minHp,
     damageFromStart,
     displayHp: numberOrNull(target.hp),
-    drop: entityDropValue(target),
-    dropKnown: entityDropKnown(target),
+    drop: targetDrop,
+    dropKnown: targetDropKnown,
     distance,
     active: Boolean(target.active),
     moving: Boolean(target.moving),
@@ -3220,7 +3285,7 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   stateful.combatMetrics = {
     ...previousMetrics,
     targetId: String(id),
-    targetName: target.name || previousMetrics.targetName || '',
+    targetName: targetName || previousMetrics.targetName || '',
     engagementId: `${String(id)}:${engagementStartedAt}`,
     controlGeneration: currentControlGeneration || previousControlGeneration,
     engagementGeneration,
@@ -3386,6 +3451,66 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     .filter(Boolean);
   if (!bullets.length) dataGaps.push('no-realtime-bullet-evidence');
   const stateful = options.decisionState || options.stateful || null;
+  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const targetFrameGapHoldMaxMs = combatTargetFrameGapHoldLimit(options);
+  let targetFrameGapReset = null;
+  const previousTargetIdForGap = String(stateful?.combatTarget?.id ?? '');
+  const previousTargetAtForGap = Number(stateful?.combatTarget?.at || 0);
+  const currentVisibleTargetForGap = previousTargetIdForGap
+    ? targets.find(item => String(combatTargetId(item) || '') === previousTargetIdForGap) || null
+    : null;
+  const previousGapState = stateful?.combatTargetFrameGap;
+  const previousGapMatchesTarget = Boolean(
+    previousGapState
+      && String(previousGapState.targetId ?? '') === previousTargetIdForGap
+  );
+  const gapAgeBeforeSelectionMs = previousTargetAtForGap > 0
+    ? Math.max(0, nowMs - previousTargetAtForGap)
+    : null;
+  const previousClosePressureActive = Boolean(
+    stateful?.combatTarget?.closePressure?.active === true
+      || stateful?.combatTarget?.combatPhase === 'close-pressure'
+  );
+  if (stateful && previousTargetIdForGap) {
+    if (!currentVisibleTargetForGap) {
+      if ((previousGapMatchesTarget || previousClosePressureActive)
+        && gapAgeBeforeSelectionMs !== null
+        && gapAgeBeforeSelectionMs > targetFrameGapHoldMaxMs) {
+        targetFrameGapReset = resetCombatEngagementAfterFrameGap(
+          stateful,
+          previousTargetIdForGap,
+          nowMs,
+          gapAgeBeforeSelectionMs,
+          targetFrameGapHoldMaxMs
+        );
+      } else {
+        stateful.combatTargetFrameGap = {
+          targetId: previousTargetIdForGap,
+          lastVisibleAt: previousTargetAtForGap,
+          missingSince: previousGapMatchesTarget
+            ? Number(previousGapState.missingSince || nowMs)
+            : nowMs
+        };
+      }
+    } else if (previousGapMatchesTarget) {
+      const reappearanceAgeMs = Number.isFinite(Number(previousGapState.lastVisibleAt))
+        ? Math.max(0, nowMs - Number(previousGapState.lastVisibleAt))
+        : gapAgeBeforeSelectionMs;
+      if (reappearanceAgeMs !== null && reappearanceAgeMs > targetFrameGapHoldMaxMs) {
+        targetFrameGapReset = resetCombatEngagementAfterFrameGap(
+          stateful,
+          previousTargetIdForGap,
+          nowMs,
+          reappearanceAgeMs,
+          targetFrameGapHoldMaxMs
+        );
+      } else {
+        stateful.combatTargetFrameGap = null;
+      }
+    } else if (stateful.combatTargetFrameGap) {
+      stateful.combatTargetFrameGap = null;
+    }
+  }
   const incomingBullet = pickIncomingBullet(bullets, options);
   const selfStamina5s = numberOrNull(
     self?.stamina_5s_remaining_milli
@@ -3581,20 +3706,6 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   const target = normalTarget || (contactApplies
     ? { ...contactTarget, combatIntent: 'defensive', contactEntryOnly: true }
     : null);
-  const combatControlIntervalMs = Number(options.combatControlIntervalMs);
-  const derivedTargetFrameGapHoldMs = Math.max(
-    DEFAULT_COMBAT_TARGET_FRAME_GAP_HOLD_MS,
-    (Number.isFinite(combatControlIntervalMs) && combatControlIntervalMs > 0
-      ? combatControlIntervalMs
-      : 50) * 5
-  );
-  const configuredTargetFrameGapHoldMs = Number(options.combatTargetFrameGapHoldMs);
-  const targetFrameGapHoldMaxMs = Math.max(0,
-    options.combatTargetFrameGapHoldMs !== null
-      && options.combatTargetFrameGapHoldMs !== undefined
-      && Number.isFinite(configuredTargetFrameGapHoldMs)
-      ? configuredTargetFrameGapHoldMs
-      : derivedTargetFrameGapHoldMs);
   const targetFrameGapState = !target
     && currentTargetId
     && !currentVisibleTarget
@@ -4615,6 +4726,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       target: contactEntryGuard.target ? summarizeCombatTarget(contactEntryGuard.target) : null,
       movementOnly: contactEntryOnly
     },
+    targetFrameGapReset,
     targetFrameGapHold,
     combatPhase: combatPhase || {
       phase: combatTargetState?.combatPhase || 'normal-combat',
