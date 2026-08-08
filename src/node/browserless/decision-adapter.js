@@ -153,6 +153,8 @@ const DEFAULT_PROFIT_LIVE_INJURY_HP = 90;
 const DEFAULT_PROFIT_LIVE_PLAYER_DROP_MAX_DISTANCE = BROWSER_RUNTIME_DEFAULTS.postAttackDropCoinMaxDistance;
 const DEFAULT_PROFIT_LIVE_PLAYER_DROP_MAX_AGE_TICKS = 8000;
 const DEFAULT_REALTIME_LOOT_MAX_AGE_MS = 2500;
+const DEFAULT_REALTIME_LOOT_DISTANCE_HYSTERESIS_CM = 250;
+const DEFAULT_REALTIME_LOOT_DISTANCE_HYSTERESIS_HOLD_MS = 500;
 const DEFAULT_INVULNERABLE_THREAT_MEMORY_MS = 2500;
 const DEFAULT_INVULNERABLE_THREAT_CLEAR_CONFIRMATIONS = 2;
 const DEFAULT_INVULNERABLE_THREAT_CLEAR_MIN_MS = 500;
@@ -224,7 +226,18 @@ const INTERNAL_REALTIME_OPTIONS = Symbol('browserless-internal-realtime-options'
 const OPTION_OVERRIDE_STACKS = new WeakMap();
 
 function buildBrowserlessRuntimeDefaults(config = {}) {
-  return buildRuntimeDefaults(config, false);
+  const defaults = buildRuntimeDefaults(config, false);
+  const distanceHysteresis = Number(config.realtimeLootDistanceHysteresisCm);
+  const hysteresisHoldMs = Number(config.realtimeLootDistanceHysteresisHoldMs);
+  return {
+    ...defaults,
+    realtimeLootDistanceHysteresisCm: Number.isFinite(distanceHysteresis)
+      ? Math.max(0, distanceHysteresis)
+      : DEFAULT_REALTIME_LOOT_DISTANCE_HYSTERESIS_CM,
+    realtimeLootDistanceHysteresisHoldMs: Number.isFinite(hysteresisHoldMs)
+      ? Math.max(0, hysteresisHoldMs)
+      : DEFAULT_REALTIME_LOOT_DISTANCE_HYSTERESIS_HOLD_MS
+  };
 }
 
 function cloneJson(value) {
@@ -1877,6 +1890,7 @@ function selectRealtimeLootCandidate(input, stateful = {}, options = {}) {
   const observation = input?.realtimeSnapshotObservation || null;
   const maxAgeMs = Math.max(250, Number(options.realtimeLootMaxAgeMs ?? DEFAULT_REALTIME_LOOT_MAX_AGE_MS));
   const ageMs = realtimeObservationAgeMs(observation, input);
+  const nowMs = Number.isFinite(Number(input?.nowMs)) ? Number(input.nowMs) : Date.now();
   const minAmount = Math.max(1, highValueCoinPriorityAmount(options));
   const configuredMaxDistance = Math.max(0, Number(
     options.realtimeLootMaxDistanceCm
@@ -1887,6 +1901,8 @@ function selectRealtimeLootCandidate(input, stateful = {}, options = {}) {
   const maxDistance = configuredMaxDistance > 0
     ? Math.min(configuredMaxDistance, highValueRange)
     : highValueRange;
+  const hysteresisDistanceCm = realtimeLootDistanceHysteresisCm(options);
+  const hysteresisHoldMs = realtimeLootDistanceHysteresisHoldMs(options);
   const candidates = ageMs <= maxAgeMs
     ? realtimeObservationCoins(observation, input?.self)
       .filter(coin => Number(coin.amount || 0) >= minAmount)
@@ -1896,7 +1912,32 @@ function selectRealtimeLootCandidate(input, stateful = {}, options = {}) {
         || Number(b.amount || 0) - Number(a.amount || 0)
         || Number(a.distance || Infinity) - Number(b.distance || Infinity))
     : [];
-  const selected = candidates[0] || null;
+  const previousIntent = stateful.realtimeLootIntent || null;
+  const previousLastSeenAt = Number(previousIntent?.lastSeenAt || previousIntent?.startedAt || 0);
+  const previousIntentAgeMs = previousLastSeenAt > 0
+    ? Math.max(0, nowMs - previousLastSeenAt)
+    : Number.POSITIVE_INFINITY;
+  const heldCandidate = !candidates.length
+    && ageMs <= maxAgeMs
+    && previousIntent?.key
+    && hysteresisDistanceCm > 0
+    && hysteresisHoldMs > 0
+    && previousIntentAgeMs <= hysteresisHoldMs
+    ? realtimeObservationCoins(observation, input?.self)
+      .find(coin => String(coin?.key || '') === String(previousIntent.key))
+    : null;
+  const retainedBoundaryIntent = Boolean(
+    heldCandidate
+      && Number(heldCandidate.amount || 0) >= minAmount
+      && Number.isFinite(Number(heldCandidate.distance))
+      && (!maxDistance || Number(heldCandidate.distance) <= maxDistance + hysteresisDistanceCm)
+      && opportunityStaminaAffordable(
+        input?.self,
+        opportunityCoinStaminaCost(heldCandidate, options),
+        options
+      )
+  );
+  const selected = candidates[0] || (retainedBoundaryIntent ? heldCandidate : null);
   if (!selected) {
     stateful.realtimeLootIntent = null;
     return {
@@ -1905,11 +1946,14 @@ function selectRealtimeLootCandidate(input, stateful = {}, options = {}) {
       maxAgeMs,
       minAmount,
       maxDistance,
+      hysteresisDistanceCm,
+      hysteresisHoldMs,
+      retainedBoundaryIntent: false,
       candidateCount: candidates.length,
       reason: ageMs > maxAgeMs ? 'snapshot-stale' : 'no-high-value-coin'
     };
   }
-  const same = stateful.realtimeLootIntent?.key === selected.key;
+  const same = previousIntent?.key === selected.key;
   stateful.realtimeLootIntent = {
     key: selected.key,
     id: selected.id,
@@ -1918,8 +1962,14 @@ function selectRealtimeLootCandidate(input, stateful = {}, options = {}) {
     y: selected.y,
     sourceUserId: selected.source_user_id,
     selfKilledPlayerDrop: Boolean(selected.selfKilledPlayerDrop),
-    startedAt: same ? Number(stateful.realtimeLootIntent.startedAt || input.nowMs) : input.nowMs,
-    lastSeenAt: input.nowMs,
+    startedAt: same ? Number(previousIntent.startedAt || nowMs) : nowMs,
+    // A boundary hold may only bridge a short gap after the last strict
+    // in-range observation. Do not refresh this timestamp while the coin is
+    // held outside the normal range, or the hysteresis would become unbounded.
+    lastSeenAt: retainedBoundaryIntent && same
+      ? previousLastSeenAt
+      : nowMs,
+    boundaryHold: retainedBoundaryIntent,
     snapshotTick: observation?.tick ?? null
   };
   return {
@@ -1928,8 +1978,13 @@ function selectRealtimeLootCandidate(input, stateful = {}, options = {}) {
     maxAgeMs,
     minAmount,
     maxDistance,
+    hysteresisDistanceCm,
+    hysteresisHoldMs,
+    retainedBoundaryIntent,
     candidateCount: candidates.length,
-    reason: selected.selfKilledPlayerDrop ? 'confirmed-self-kill-drop' : 'high-value-visible-coin'
+    reason: retainedBoundaryIntent
+      ? 'high-value-coin-boundary-hold'
+      : (selected.selfKilledPlayerDrop ? 'confirmed-self-kill-drop' : 'high-value-visible-coin')
   };
 }
 
@@ -3884,6 +3939,18 @@ function highValueCoinPriorityAmount(options = {}) {
 function highValueCoinPriorityRange(options = {}) {
   const value = Number(options.combatAttackRange ?? options.attackRange ?? DEFAULT_ATTACK_RANGE);
   return Math.max(0, Number.isFinite(value) ? value : DEFAULT_ATTACK_RANGE);
+}
+
+function realtimeLootDistanceHysteresisCm(options = {}) {
+  const value = Number(options.realtimeLootDistanceHysteresisCm
+    ?? DEFAULT_REALTIME_LOOT_DISTANCE_HYSTERESIS_CM);
+  return Math.max(0, Number.isFinite(value) ? value : DEFAULT_REALTIME_LOOT_DISTANCE_HYSTERESIS_CM);
+}
+
+function realtimeLootDistanceHysteresisHoldMs(options = {}) {
+  const value = Number(options.realtimeLootDistanceHysteresisHoldMs
+    ?? DEFAULT_REALTIME_LOOT_DISTANCE_HYSTERESIS_HOLD_MS);
+  return Math.max(0, Number.isFinite(value) ? value : DEFAULT_REALTIME_LOOT_DISTANCE_HYSTERESIS_HOLD_MS);
 }
 
 function highValueCoinPriorityHealthyHp(options = {}) {
@@ -9139,6 +9206,9 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}) {
     maxAgeMs: assessment.maxAgeMs,
     minAmount: assessment.minAmount,
     maxDistance: assessment.maxDistance,
+    hysteresisDistanceCm: assessment.hysteresisDistanceCm,
+    hysteresisHoldMs: assessment.hysteresisHoldMs,
+    retainedBoundaryIntent: Boolean(assessment.retainedBoundaryIntent),
     candidateCount: assessment.candidateCount,
     candidate: coin ? {
       id: coin.id,
@@ -11732,6 +11802,7 @@ function createBrowserlessDecisionAdapter(options = {}) {
         nonThreatCombatEconomicsByTarget: decisionState.nonThreatCombatEconomicsByTarget || {},
         dangerousCombatTargets: decisionState.dangerousCombatTargets || {},
         recentInvulnerableThreats: decisionState.recentInvulnerableThreats || {},
+        realtimeLootIntent: decisionState.realtimeLootIntent || null,
         easyKillApproach: decisionState.easyKillApproach || null,
         easyKillTargetSuppressions: decisionState.easyKillTargetSuppressions || {},
         fleeLock: decisionState.fleeLock || null,

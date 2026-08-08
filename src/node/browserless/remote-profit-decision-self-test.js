@@ -381,7 +381,192 @@ function runRemoteProfitDecisionSelfTest() {
   );
   assert.strictEqual(ordinaryFirst.action?.target?.id, 'coin-a');
   assert.strictEqual(ordinaryNext.action?.target?.id, 'coin-a', 'ordinary final-action hold remains unchanged');
-  return { ok: true, cases: 36 };
+
+  // A realtime loot target is evaluated against the current native self
+  // position on every frame. Keep the same target through one narrow boundary
+  // crossing so a 14500cm coin does not hand control to an invulnerable-player
+  // safety memory for a single 50ms frame.
+  const lootThreat = {
+    entity_id: 2,
+    user_id: 42,
+    name: 'invulnerable-target',
+    x: 15769,
+    y: 0,
+    hp: 100,
+    max_hp: 100,
+    current_join_mode: 'Active',
+    invulnerable: true,
+    invulnerable_remaining_ms: 5000,
+    stamina_5s_remaining_milli: 10000,
+    stamina_5s_limit_milli: 10000
+  };
+  const lootState = ({
+    tick,
+    selfX,
+    hp = 93,
+    coinDrops = [{ drop_id: 'boundary-coin', amount: 26, x: 14500, y: 0 }],
+    bullets = [],
+    snapshotTick = 1,
+    snapshotAtMs = 1000
+  }) => {
+    const self = fullStaminaSelf({
+      entity_id: 1,
+      x: selfX,
+      y: 0,
+      hp,
+      max_hp: 100
+    });
+    return {
+      userId: 7,
+      realtime: {
+        tick,
+        receivedAtMs: 1000 + tick * 50,
+        frameAgeMs: 0,
+        self,
+        entities: [self, lootThreat],
+        bullets: bullets
+      },
+      fallback: {
+        tick: snapshotTick,
+        receivedAtMs: snapshotAtMs,
+        frameAgeMs: 0,
+        entities: [],
+        coinDrops,
+        messages: []
+      }
+    };
+  };
+  const boundaryAdapter = createBrowserlessDecisionAdapter({
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    finalActionArbitrationHoldMs: 0
+  });
+  const boundaryInitial = boundaryAdapter.evaluateRealtime(
+    lootState({ tick: 1, selfX: 0 }),
+    { nowMs: 1050 }
+  );
+  const boundaryHeld = boundaryAdapter.evaluateRealtime(
+    lootState({ tick: 2, selfX: -2 }),
+    { nowMs: 1100 }
+  );
+  const boundaryRecovered = boundaryAdapter.evaluateRealtime(
+    lootState({ tick: 3, selfX: 0 }),
+    { nowMs: 1150 }
+  );
+  assert.strictEqual(boundaryInitial.action?.reason, 'high-value-visible-coin-priority');
+  assert.strictEqual(boundaryHeld.action?.kind, 'coin');
+  assert.strictEqual(boundaryHeld.action?.reason, 'high-value-visible-coin-priority');
+  assert.strictEqual(boundaryHeld.input?.loot?.retainedBoundaryIntent, true);
+  assert.strictEqual(boundaryHeld.input?.loot?.candidate?.distance, 14502);
+  assert.strictEqual(boundaryRecovered.action?.kind, 'coin');
+  assert.strictEqual(boundaryRecovered.input?.loot?.retainedBoundaryIntent, false);
+
+  const incomingBullet = {
+    bullet_id: 1,
+    owner_user_id: 42,
+    start_x: 15769,
+    start_y: 0,
+    target_x: 0,
+    target_y: 0,
+    speed_per_tick: 500,
+    created_tick: 1,
+    expire_tick: 30
+  };
+  const incoming = boundaryAdapter.evaluateRealtime(
+    lootState({ tick: 4, selfX: -2, bullets: [incomingBullet] }),
+    { nowMs: 1200 }
+  );
+  assert.strictEqual(incoming.action?.reason, 'incoming-bullet-dodge');
+  assert.strictEqual(incoming.input?.loot?.blockedReason, 'incoming-bullet-without-target');
+
+  const missingCoinAdapter = createBrowserlessDecisionAdapter({
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    finalActionArbitrationHoldMs: 0
+  });
+  missingCoinAdapter.evaluateRealtime(
+    lootState({ tick: 1, selfX: 0 }),
+    { nowMs: 1050 }
+  );
+  const missingCoin = missingCoinAdapter.evaluateRealtime(
+    lootState({ tick: 2, selfX: -2, coinDrops: [], snapshotTick: 2 }),
+    { nowMs: 1100 }
+  );
+  assert.notStrictEqual(missingCoin.action?.kind, 'coin');
+  assert.strictEqual(missingCoinAdapter.getState().realtimeLootIntent, null);
+
+  const outOfBandAdapter = createBrowserlessDecisionAdapter({
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    finalActionArbitrationHoldMs: 0
+  });
+  outOfBandAdapter.evaluateRealtime(
+    lootState({ tick: 1, selfX: 0 }),
+    { nowMs: 1050 }
+  );
+  const outOfBand = outOfBandAdapter.evaluateRealtime(
+    lootState({ tick: 2, selfX: -400 }),
+    { nowMs: 1100 }
+  );
+  assert.notStrictEqual(outOfBand.action?.kind, 'coin');
+  assert.strictEqual(outOfBandAdapter.getState().realtimeLootIntent, null);
+
+  const lowHpAdapter = createBrowserlessDecisionAdapter({
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    finalActionArbitrationHoldMs: 0
+  });
+  lowHpAdapter.evaluateRealtime(
+    lootState({ tick: 1, selfX: 0 }),
+    { nowMs: 1050 }
+  );
+  const lowHp = lowHpAdapter.evaluateRealtime(
+    lootState({ tick: 2, selfX: -2, hp: 50 }),
+    { nowMs: 1100 }
+  );
+  assert.notStrictEqual(lowHp.action?.kind, 'coin');
+  assert.strictEqual(lowHp.input?.loot?.blockedReason, 'self-hp-below-loot-threshold');
+
+  const expiredHoldAdapter = createBrowserlessDecisionAdapter({
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    finalActionArbitrationHoldMs: 0
+  });
+  expiredHoldAdapter.evaluateRealtime(
+    lootState({ tick: 1, selfX: 0 }),
+    { nowMs: 1050 }
+  );
+  const expiredHold = expiredHoldAdapter.evaluateRealtime(
+    lootState({ tick: 2, selfX: -2 }),
+    { nowMs: 1651 }
+  );
+  assert.notStrictEqual(expiredHold.action?.kind, 'coin');
+  assert.strictEqual(expiredHoldAdapter.getState().realtimeLootIntent, null);
+
+  const staleAdapter = createBrowserlessDecisionAdapter({
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    finalActionArbitrationHoldMs: 0
+  });
+  staleAdapter.evaluateRealtime(
+    lootState({ tick: 1, selfX: 0 }),
+    { nowMs: 1050 }
+  );
+  const stale = staleAdapter.evaluateRealtime(
+    lootState({ tick: 2, selfX: -2 }),
+    { nowMs: 3601 }
+  );
+  assert.notStrictEqual(stale.action?.kind, 'coin');
+  assert.strictEqual(stale.input?.loot?.reason, 'snapshot-stale');
+  assert.strictEqual(staleAdapter.getState().realtimeLootIntent, null);
+
+  return { ok: true, cases: 42 };
 }
 
 if (require.main === module) {
