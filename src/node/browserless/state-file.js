@@ -21,6 +21,7 @@ const RECENT_EXIT_MATCH_WINDOW_MS = 60000;
 const RECENT_EXIT_COMBAT_ASSOCIATION_MAX_AGE_MS = 6000;
 const HIGH_DROP_PANEL_THRESHOLD = 500;
 const COMPACT_NEARBY_VERSION = 3;
+const COMPACT_MAP_TRAILS_VERSION = 1;
 let stateWriteSequence = 0;
 
 function defaultBrowserlessState() {
@@ -76,6 +77,7 @@ function defaultBrowserlessState() {
       decisionState: null,
       action: null
     },
+    mapTrails: null,
     lastKnown: null,
     recentExits: [],
     network: {
@@ -336,6 +338,9 @@ function normalizeBrowserlessState(state, file = '') {
   normalized.network.transportHealth = normalized.network.transportHealth
     && typeof normalized.network.transportHealth === 'object'
     ? cloneJson(normalized.network.transportHealth)
+    : null;
+  normalized.mapTrails = normalized.mapTrails && typeof normalized.mapTrails === 'object'
+    ? cloneJson(normalized.mapTrails)
     : null;
   if (file) normalized.logs.stateFile = path.resolve(file);
   return normalized;
@@ -2482,6 +2487,41 @@ function compactNearby(nearby) {
   };
 }
 
+function compactMapTrailSample(sample) {
+  const array = Array.isArray(sample) ? sample : null;
+  const x = compactNumber(array ? array[0] : sample?.x);
+  const y = compactNumber(array ? array[1] : sample?.y);
+  const at = compactNumber(array ? array[2] : sample?.at);
+  const tick = compactNumber(array ? array[3] : sample?.tick);
+  if (x === null || y === null || at === null) return null;
+  return tick === null ? [x, y, at] : [x, y, at, tick];
+}
+
+function compactMapTrails(value) {
+  if (!value || typeof value !== 'object') return null;
+  const items = Array.isArray(value.items) ? value.items : [];
+  return {
+    version: COMPACT_MAP_TRAILS_VERSION,
+    authority: compactString(value.authority || 'realtime', 32),
+    source: compactString(value.source || 'pos', 32),
+    visibleRange: compactNumber(value.visibleRange),
+    maxAgeMs: compactNumber(value.maxAgeMs),
+    observedAt: compactString(value.observedAt, 48),
+    ageMs: compactNumber(value.ageMs),
+    tick: compactNumber(value.tick),
+    items: items.slice(0, 64).map(item => ({
+      k: compactString(item?.k ?? item?.key, 96),
+      n: compactString(item?.n ?? item?.name, 96),
+      s: (Array.isArray(item?.s) ? item.s : (Array.isArray(item?.samples) ? item.samples : []))
+        .map(compactMapTrailSample)
+        .filter(Boolean)
+        .slice(-180),
+      at: compactNumber(item?.at ?? item?.lastSeenAtMs),
+      tick: compactNumber(item?.tick ?? item?.lastTick)
+    })).filter(item => item.k && item.s.length)
+  };
+}
+
 function compactHighDropPlayers(value) {
   if (!value || typeof value !== 'object') return null;
   if (Array.isArray(value.p)) {
@@ -3163,6 +3203,7 @@ function buildPublicBrowserlessStatus(state, config = {}) {
     probes: normalized.probes,
     loginPointSafety: normalized.loginPointSafety,
     current: normalized.current,
+    mapTrails: normalized.mapTrails,
     lastKnown: normalized.lastKnown,
     recentExits: normalized.recentExits,
     network: normalized.network,
@@ -3445,6 +3486,7 @@ function browserlessCompactStatusSource(state = {}) {
     dailyDamagePlayers: compactDailyDamagePlayers(state.dailyDamagePlayers),
     dynamicWhitelist: compactDynamicWhitelist(state.dynamicWhitelist),
     remoteProfit: compactRemoteProfitStatus(state.remoteProfit || runner.remoteProfit),
+    mapTrails: compactMapTrails(state.mapTrails),
     statusRender: state.statusRender || null
   };
 }
@@ -3529,6 +3571,7 @@ function buildCompactBrowserlessStatus(state, config = {}) {
     combat: displayCombat,
     battle: compactBattleStatus(normalized, game, action, decision, displayCombat, config),
     nearby: compactNearby(current.decision?.input?.nearby),
+    mapTrails: compactMapTrails(normalized.mapTrails),
     highDropPlayers: compactHighDropPlayers(normalized.highDropPlayers),
     easyKillPlayers: compactEasyKillPlayers(normalized.easyKillPlayers),
     dailyDamagePlayers: compactDailyDamagePlayers(normalized.dailyDamagePlayers),

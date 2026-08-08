@@ -4194,6 +4194,15 @@ async function runReadOnlyCanary(config, options = {}) {
                 stageDurations['login-success-state-patch'] = performance.now() - loginSuccessPatchStarted;
               }
             }
+            if (frame.decodedJson.type === 'pos' && typeof options.onMapTrailRealtime === 'function') {
+              const mapTrailStarted = performance.now();
+              try {
+                options.onMapTrailRealtime(currentState, atMs);
+              } catch (err) {
+                log('canary-map-trail-realtime-callback-error', { error: errorMessage(err) });
+              }
+              stageDurations['map-trail-realtime-observe'] = performance.now() - mapTrailStarted;
+            }
             if (exitRecoveryActive && currentSelf && !leavePending) {
               const recoveryEvent = pendingExitRecoveryEvent(recoveryPendingExit, atMs, {
                 maximumAgeMs: Number.MAX_SAFE_INTEGER,

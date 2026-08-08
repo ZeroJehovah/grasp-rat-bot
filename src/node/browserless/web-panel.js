@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.08.2';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.08.3';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -440,10 +440,11 @@ function renderBrowserlessWebPanel() {
     .map-fullscreen-toggle{position:absolute;top:8px;right:8px;z-index:3;width:32px;height:32px;min-height:32px;padding:0;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;background:rgba(8,12,18,.78);color:var(--text);font-size:20px;line-height:1;box-shadow:0 2px 8px rgba(0,0,0,.28)}
     .map-fullscreen-toggle:hover{background:rgba(32,37,42,.96)}
     .map-fullscreen-toggle:focus-visible{outline:1px solid var(--blue);outline-offset:2px}
-    #mapPanel:fullscreen{display:flex;flex-direction:column;width:100vw;height:100vh;max-width:none;max-height:none;margin:0;padding:clamp(10px,2vw,24px);border:0;border-radius:0;background:var(--bg);overflow:hidden}
-    #mapPanel:fullscreen>.panel-body{display:flex;flex:1;min-height:0;max-height:none;align-items:center;justify-content:center;overflow:hidden}
-    #mapPanel:fullscreen .map-stage{width:min(100%,calc(100vh - 76px));max-width:none}
-    #mapPanel:fullscreen .map-fullscreen-toggle{top:clamp(8px,1.5vw,16px);right:clamp(8px,1.5vw,16px)}
+    body.map-page-fullscreen{overflow:hidden}
+    body.map-page-fullscreen #mapPanel{position:fixed;inset:0;z-index:100;display:flex;flex-direction:column;width:100vw;height:100vh;height:100dvh;max-width:none;max-height:none;margin:0;padding:clamp(10px,2vw,24px);border:0;border-radius:0;background:var(--bg);overflow:hidden}
+    body.map-page-fullscreen #mapPanel>.panel-body,body.map-page-fullscreen #mapPanel.panel-collapsed>.panel-body{display:flex;flex:1;min-height:0;max-height:none;align-items:center;justify-content:center;overflow:hidden;opacity:1;pointer-events:auto;margin-top:0}
+    body.map-page-fullscreen #mapPanel .map-stage{width:min(100%,calc(100vh - 76px),calc(100dvh - 76px));max-width:none}
+    body.map-page-fullscreen #mapPanel .map-fullscreen-toggle{top:clamp(8px,1.5vw,16px);right:clamp(8px,1.5vw,16px)}
     .map-tooltip{position:absolute;z-index:2;display:none;max-width:min(240px,80%);padding:6px 8px;border:1px solid rgba(255,255,255,.2);border-radius:5px;background:rgba(8,12,18,.96);color:var(--text);font-size:12px;line-height:1.4;white-space:pre-line;pointer-events:none;box-shadow:0 5px 16px rgba(0,0,0,.3)}
     .map-tooltip.visible{display:block}
     .nearby-panel{min-width:0}
@@ -698,7 +699,6 @@ function renderBrowserlessWebPanel() {
     const MAP_STALE_MS = 15000;
     const MAP_MOVE_ANIMATION_MS = 260;
     const MAP_TRAIL_MAX_AGE_MS = 30000;
-    const MAP_TRAIL_MAX_SAMPLES = 16;
     const MAP_TRAIL_LINE_WIDTH = 2;
     let autoRefreshTimer = 0;
     let countdownTimer = 0;
@@ -714,9 +714,7 @@ function renderBrowserlessWebPanel() {
     let mapAnimationFrame = 0;
     let mapRenderedMarkerPositions = new Map();
     let mapRenderedCanvasSize = 0;
-    let mapTrailHistory = new Map();
-    let mapTrailObservationAtMs = 0;
-    let mapTrailSessionKey = '';
+    let mapTrailRenderHistory = new Map();
     let highDropSortField = 'drop';
     let panelCollapseState = readPanelCollapseState();
 
@@ -733,8 +731,6 @@ function renderBrowserlessWebPanel() {
     const mapMarkerKey = ${mapMarkerKeyCore.toString()};
     const mapAnimationProgress = ${mapAnimationProgressCore.toString()};
     const interpolateMapMarker = ${interpolateMapMarkerCore.toString()};
-    const appendMapTrailSample = ${appendMapTrailSampleCore.toString()};
-    const pruneMapTrailHistory = ${pruneMapTrailHistoryCore.toString()};
     const mapTrailOpacity = ${mapTrailOpacityCore.toString()};
     const transportMetricValueClass = ${transportMetricValueClassCore.toString()};
 
@@ -2192,61 +2188,41 @@ function renderBrowserlessWebPanel() {
       return names;
     }
     function clearMapTrails() {
-      mapTrailHistory = new Map();
-      mapTrailObservationAtMs = 0;
-      mapTrailSessionKey = '';
+      mapTrailRenderHistory = new Map();
     }
-    function mapTrailSessionIdentity(status) {
-      return [
-        status.session?.userId ?? 'self',
-        status.stats?.currentSession?.enteredAt || status.game?.enteredAt || ''
-      ].join(':');
+    function mapTrailSampleFromBackend(sample) {
+      const array = Array.isArray(sample) ? sample : null;
+      const x = number(array ? array[0] : sample?.x);
+      const y = number(array ? array[1] : sample?.y);
+      const at = number(array ? array[2] : sample?.at);
+      if (x === null || y === null || at === null) return null;
+      return { x, y, at };
     }
-    function mapTrailObservedAtMs(status, nowMs) {
-      const parsed = Date.parse(String(status.nearby?.observedAt || status.updatedAt || ''));
-      return Number.isFinite(parsed) ? Math.min(nowMs, parsed) : nowMs;
-    }
-    function recordMapTrailObservation(status, markers, nowMs) {
-      const sessionKey = mapTrailSessionIdentity(status);
-      if (mapTrailSessionKey && mapTrailSessionKey !== sessionKey) clearMapTrails();
-      mapTrailSessionKey = sessionKey;
-      const observedAtMs = mapTrailObservedAtMs(status, nowMs);
-      if (observedAtMs <= mapTrailObservationAtMs) return;
-      const selfKey = mapMarkerKey('self', status.session?.userId, 'current');
-      const observedKeys = new Set();
-      const records = [{
-        key: selfKey,
-        x: number(status.self?.x),
-        y: number(status.self?.y),
-        color: '#eef2f5'
-      }];
-      for (const marker of markers) {
-        if (marker.kind !== 'player' || !marker.mapKey) continue;
-        records.push({
-          key: marker.mapKey,
-          x: number(marker.worldX),
-          y: number(marker.worldY),
-          color: marker.color
-        });
+    function syncMapTrailHistory(status, markers, nowMs) {
+      const backend = status?.mapTrails;
+      if (!backend || !Array.isArray(backend.items)) {
+        clearMapTrails();
+        return;
       }
-      for (const record of records) {
-        if (!record.key || record.x === null || record.y === null) continue;
-        observedKeys.add(record.key);
-        const previous = mapTrailHistory.get(record.key) || null;
-        const samples = appendMapTrailSample(previous?.samples, {
-          x: record.x,
-          y: record.y,
-          at: observedAtMs,
-          breakBefore: Boolean(previous && previous.present === false)
-        }, nowMs, MAP_TRAIL_MAX_AGE_MS, MAP_TRAIL_MAX_SAMPLES);
+      const markerColors = new Map(
+        markers.filter(marker => marker.mapKey).map(marker => [marker.mapKey, marker.color])
+      );
+      const next = new Map();
+      const maxAgeMs = Math.max(1, number(backend.maxAgeMs) || MAP_TRAIL_MAX_AGE_MS);
+      for (const item of backend.items) {
+        const key = String(item?.k ?? item?.key ?? '');
+        if (!key) continue;
+        const samples = (Array.isArray(item?.s) ? item.s : (Array.isArray(item?.samples) ? item.samples : []))
+          .map(mapTrailSampleFromBackend)
+          .filter(Boolean)
+          .filter(sample => nowMs - sample.at <= maxAgeMs);
         if (!samples.length) continue;
-        mapTrailHistory.set(record.key, {
-          color: record.color,
+        next.set(key, {
+          color: markerColors.get(key) || (key.startsWith('self:') ? '#eef2f5' : '#fb7185'),
           samples
         });
       }
-      mapTrailHistory = pruneMapTrailHistory(mapTrailHistory, observedKeys);
-      mapTrailObservationAtMs = observedAtMs;
+      mapTrailRenderHistory = next;
     }
     function drawMapTrails(context, scene, markers, frame) {
       const currentMarkers = new Map(
@@ -2257,7 +2233,7 @@ function renderBrowserlessWebPanel() {
       context.lineCap = 'round';
       context.lineJoin = 'round';
       context.lineWidth = MAP_TRAIL_LINE_WIDTH;
-      for (const [key, entry] of mapTrailHistory.entries()) {
+      for (const [key, entry] of mapTrailRenderHistory.entries()) {
         const samples = entry.samples.filter(sample => scene.trailNowMs - Number(sample.at) <= MAP_TRAIL_MAX_AGE_MS);
         if (samples.length < 2) continue;
         const currentMarker = currentMarkers.get(key);
@@ -2531,7 +2507,7 @@ function renderBrowserlessWebPanel() {
         setMapHeader('', visibleRange, markers.filter(marker => marker.kind === 'coin').length, markers.filter(marker => marker.kind === 'player').length);
       }
       const trailNowMs = Date.now();
-      recordMapTrailObservation(status, markers, trailNowMs);
+      syncMapTrailHistory(status, markers, trailNowMs);
       startMapMarkerAnimation({
         context,
         size,
@@ -2551,33 +2527,27 @@ function renderBrowserlessWebPanel() {
       if (!tooltip) return;
       tooltip.classList.remove('visible');
     }
-    function mapFullscreenElement() {
-      return document.fullscreenElement || document.webkitFullscreenElement || null;
-    }
     function syncMapFullscreenButton() {
-      const panel = document.getElementById('mapPanel');
       const button = document.getElementById('mapFullscreenToggle');
-      if (!panel || !button) return;
-      const requestSupported = typeof panel.requestFullscreen === 'function'
-        || typeof panel.webkitRequestFullscreen === 'function';
-      button.hidden = !requestSupported;
-      if (!requestSupported) return;
-      const active = mapFullscreenElement() === panel;
+      if (!button) return;
+      const active = document.body.classList.contains('map-page-fullscreen');
+      button.hidden = false;
       button.textContent = active ? '⤢' : '⛶';
-      button.setAttribute('aria-label', active ? '退出地图面板全屏' : '地图面板全屏');
+      button.setAttribute('aria-label', active ? '退出地图网页全屏' : '地图网页全屏');
       button.setAttribute('aria-pressed', String(active));
-      button.title = active ? '退出地图面板全屏' : '地图面板全屏';
+      button.title = active ? '退出地图网页全屏' : '地图网页全屏';
     }
-    async function toggleMapFullscreen() {
-      const panel = document.getElementById('mapPanel');
-      if (!panel) return;
-      if (mapFullscreenElement() === panel) {
-        const exit = document.exitFullscreen || document.webkitExitFullscreen;
-        if (typeof exit === 'function') await exit.call(document);
-        return;
+    let mapPageFullscreenScrollY = 0;
+    function toggleMapFullscreen() {
+      const active = document.body.classList.contains('map-page-fullscreen');
+      if (!active) mapPageFullscreenScrollY = window.scrollY || window.pageYOffset || 0;
+      document.body.classList.toggle('map-page-fullscreen', !active);
+      if (!active) window.scrollTo(0, 0);
+      else window.scrollTo(0, mapPageFullscreenScrollY);
+      syncMapFullscreenButton();
+      if (latestMapStatus) {
+        requestAnimationFrame(() => renderTargetMap(latestMapStatus, { animate: false, resetPositions: true }));
       }
-      const request = panel.requestFullscreen || panel.webkitRequestFullscreen;
-      if (typeof request === 'function') await request.call(panel);
     }
     function updateMapTooltip(event) {
       const canvas = document.getElementById('targetMap');
@@ -3754,10 +3724,8 @@ function renderBrowserlessWebPanel() {
     document.getElementById('mapFullscreenToggle')?.addEventListener('click', event => {
       event.preventDefault();
       event.stopPropagation();
-      toggleMapFullscreen().catch(() => syncMapFullscreenButton());
+      toggleMapFullscreen();
     });
-    document.addEventListener('fullscreenchange', syncMapFullscreenButton);
-    document.addEventListener('webkitfullscreenchange', syncMapFullscreenButton);
     syncMapFullscreenButton();
     const mapStage = document.getElementById('mapStage');
     if (mapStage && typeof ResizeObserver === 'function') {

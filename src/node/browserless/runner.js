@@ -30,15 +30,16 @@ const {
 const { startStatusServer } = require('./status-server');
 const {
   BROWSERLESS_WEB_PANEL_VERSION,
-  appendMapTrailSampleCore,
   groupBlockingFactorsCore,
   highDropRankValueCore,
   highDropSortValueCore,
   isStaminaExhaustionExitReasonCore,
-  lastExitPanelVisibleCore,
-  pruneMapTrailHistoryCore,
-  mapTrailOpacityCore
+  lastExitPanelVisibleCore
 } = require('./web-panel');
+const {
+  createMapTrailTracker,
+  runMapTrailTrackerSelfTest
+} = require('./map-trail-tracker');
 const {
   createRemoteProfitWorker,
   isRemoteProfitSnapshotEligible,
@@ -1846,6 +1847,18 @@ async function runBrowserlessRunner(config, deps = {}) {
     backgroundIo,
     onEvent: event => logStore.append('runner', 'daily-damage-player', event)
   });
+  const mapTrailTracker = deps.mapTrailTracker || createMapTrailTracker({
+    now,
+    visibleRange: config.mapTrailVisibleRange
+      ?? config.globalCoinMaxDistance
+      ?? buildBrowserlessRuntimeDefaults(config).globalCoinMaxDistance
+  });
+  const observeMapTrailRealtime = (state, atMs) => mapTrailTracker.observeRealtime(
+    state?.realtime?.entities || [],
+    state?.realtime?.self || null,
+    atMs,
+    state?.realtime?.tick
+  );
   const dynamicWhitelist = deps.dynamicWhitelist || createDynamicWhitelist({
     file: path.join(config.dataDir, 'dynamic-whitelist.json'),
     now,
@@ -3229,6 +3242,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       easyKillPlayers: easyKillPlayerStatus(),
       dailyDamagePlayers: damagePlayerTracker.status(now()),
       dynamicWhitelist: dynamicWhitelist.status(),
+      mapTrails: mapTrailTracker.status(now()),
       chat: chatService.status?.(now()) || null,
       statusRender: {
         ...(statusRenderDiagnostics || {}),
@@ -4043,9 +4057,11 @@ async function runBrowserlessRunner(config, deps = {}) {
           openBrowserlessWs: sourceIpController.openBrowserlessWs,
           onLoginTransportAttempt: markSourceIpLoginAttempt,
           onLoginSuccess: entry => {
+            mapTrailTracker.clear();
             markSourceIpLoginSuccess(entry);
             beginGameplaySnapshotSession(entry, bootstrapDailyFirstLogin ? null : bootstrapSnapshotPayload);
           },
+          onMapTrailRealtime: observeMapTrailRealtime,
           onTransportOpen,
           onTransportClose,
           onTransportHealth: transportHealth => {
@@ -4061,6 +4077,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         logStore.append('runner', 'runner-canary-error', bootstrap);
       }
       endGameplaySnapshotSession(bootstrap?.reason || bootstrap?.error || 'login-point-bootstrap-finish');
+      if (runnerResultConfirmedLeave({ canary: bootstrap })) mapTrailTracker.clear();
       const learned = learnedLoginPointFromCanary(bootstrap);
       if (learned.loginPoint) {
         updateState({
@@ -4182,9 +4199,11 @@ async function runBrowserlessRunner(config, deps = {}) {
         openBrowserlessWs: sourceIpController.openBrowserlessWs,
         onLoginTransportAttempt: markSourceIpLoginAttempt,
         onLoginSuccess: entry => {
+          mapTrailTracker.clear();
           markSourceIpLoginSuccess(entry);
           beginGameplaySnapshotSession(entry, loginSnapshotPayload);
         },
+        onMapTrailRealtime: observeMapTrailRealtime,
         onTransportOpen,
         onTransportClose,
         onTransportHealth: transportHealth => {
@@ -4245,6 +4264,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       mode: nextPendingExit ? 'exit-recovery' : (config.controlMode || 'read-only'),
       canary: canary || null
     };
+    if (runnerResultConfirmedLeave(result)) mapTrailTracker.clear();
     const sourceIpPreflightStateAfterCanary = readBrowserlessStateFile(stateFile);
     const sourceIpPreflightAfterCanary = normalizeSourceIpPreflight(
       sourceIpPreflightStateAfterCanary.network?.sourceIpPreflight,
@@ -6711,6 +6731,19 @@ async function runBrowserlessRunnerSelfTest() {
       updatedAt: '2026-07-26T01:00:00.000Z',
       session: { userId: 7, sessionToken: 'nearby-map-self-test-token' },
       runner: { running: true },
+      mapTrails: {
+        version: 1,
+        authority: 'realtime',
+        source: 'pos',
+        visibleRange: 50000,
+        maxAgeMs: 30000,
+        observedAt: '2026-07-26T01:00:00.000Z',
+        items: [{
+          k: 'player:2480',
+          n: 'Pyro',
+          s: [[10000, 0, Date.parse('2026-07-26T00:59:55.000Z'), 1], [10100, 20, Date.parse('2026-07-26T01:00:00.000Z'), 2]]
+        }]
+      },
       current: {
         self: { user_id: 7, name: 'self', x: 0, y: 0, vx: 35, vy: -35, hp: 100 },
         decision: {
@@ -6738,59 +6771,15 @@ async function runBrowserlessRunnerSelfTest() {
         && nearbyMapCompact.nearby?.p?.find(row => row[0] === 'Pyro')?.[14] === -35
         && nearbyMapCompact.nearby?.p?.find(row => row[0] === 'Pyro')?.[15] === 35
         && nearbyMapCompact.self?.vx === 35
-        && nearbyMapCompact.self?.vy === -35,
+        && nearbyMapCompact.self?.vy === -35
+        && nearbyMapCompact.mapTrails?.authority === 'realtime'
+        && nearbyMapCompact.mapTrails?.source === 'pos'
+        && nearbyMapCompact.mapTrails?.items?.find(item => item.k === 'player:2480')?.s?.length === 2,
       coin: nearbyMapCompact.nearby?.c?.find(row => row[0] === 'route-a') || null,
-      player: nearbyMapCompact.nearby?.p?.find(row => row[0] === 'Pyro') || null
+      player: nearbyMapCompact.nearby?.p?.find(row => row[0] === 'Pyro') || null,
+      trail: nearbyMapCompact.mapTrails?.items?.find(item => item.k === 'player:2480') || null
     };
-    const mapTrailNowMs = Date.parse('2026-07-26T01:00:30.000Z');
-    let mapTrailSamples = appendMapTrailSampleCore([], {
-      x: 0,
-      y: 0,
-      at: mapTrailNowMs - 30000
-    }, mapTrailNowMs);
-    mapTrailSamples = appendMapTrailSampleCore(mapTrailSamples, {
-      x: 1000,
-      y: 0,
-      at: mapTrailNowMs - 15000
-    }, mapTrailNowMs);
-    const unchangedMapTrailSamples = appendMapTrailSampleCore(mapTrailSamples, {
-      x: 1000,
-      y: 0,
-      at: mapTrailNowMs - 3000
-    }, mapTrailNowMs);
-    const resumedMapTrailSamples = appendMapTrailSampleCore(unchangedMapTrailSamples, {
-      x: 1000,
-      y: 0,
-      at: mapTrailNowMs - 1000,
-      breakBefore: true
-    }, mapTrailNowMs);
-    const prunedMapTrailSamples = appendMapTrailSampleCore(
-      resumedMapTrailSamples,
-      null,
-      mapTrailNowMs + 16000
-    );
-    const mapTrailHistoryBeforeClear = new Map([
-      ['player:visible', { samples: [{ x: 0, y: 0 }] }],
-      ['player:gone', { samples: [{ x: 100, y: 100 }] }]
-    ]);
-    const mapTrailHistoryAfterClear = pruneMapTrailHistoryCore(
-      mapTrailHistoryBeforeClear,
-      new Set(['player:visible'])
-    );
-    const mapTrailCoreTest = {
-      ok: mapTrailSamples.length === 2
-        && unchangedMapTrailSamples.length === 2
-        && resumedMapTrailSamples.length === 3
-        && resumedMapTrailSamples[2].breakBefore === true
-        && prunedMapTrailSamples.length === 1
-        && mapTrailOpacityCore(mapTrailNowMs - 1000, mapTrailNowMs) > mapTrailOpacityCore(mapTrailNowMs - 29000, mapTrailNowMs)
-        && mapTrailHistoryAfterClear.size === 1
-        && mapTrailHistoryAfterClear.has('player:visible')
-        && !mapTrailHistoryAfterClear.has('player:gone'),
-      sampleCount: resumedMapTrailSamples.length,
-      prunedCount: prunedMapTrailSamples.length,
-      visibleHistoryCount: mapTrailHistoryAfterClear.size
-    };
+    const mapTrailTrackerSelfTest = runMapTrailTrackerSelfTest();
     const nearbyMapLegacyCompact = buildCompactBrowserlessStatus({
       updatedAt: '2026-07-26T01:00:00.000Z',
       current: {
@@ -7993,7 +7982,7 @@ async function runBrowserlessRunnerSelfTest() {
         nearbyFleeTargetPanel: nearbyFleeTargetPanelTest,
         nearbySelectedPlayerCoordinates: nearbySelectedPlayerCoordinatesTest,
         nearbyMapCoordinates: nearbyMapCoordinatesTest,
-        nearbyMapTrails: mapTrailCoreTest,
+        nearbyMapTrails: mapTrailTrackerSelfTest,
         nearbyMapLegacyCompatibility: nearbyMapLegacyCompatibilityTest,
         realtimeLootSafetyArbitration: realtimeLootSafetyArbitrationTest
       };
@@ -8007,22 +7996,23 @@ async function runBrowserlessRunnerSelfTest() {
           && pageHtml.includes('MAP_STALE_MS = 15000')
           && pageHtml.includes('MAP_MOVE_ANIMATION_MS = 260')
           && pageHtml.includes('MAP_TRAIL_MAX_AGE_MS = 30000')
-          && pageHtml.includes('MAP_TRAIL_MAX_SAMPLES = 16')
           && pageHtml.includes('MAP_TRAIL_LINE_WIDTH = 2')
           && pageHtml.includes('const sourceIpDeferredDetailText = status => dailyFirstLoginExempt(status)')
           && pageHtml.includes('每日首次登录豁免仍有效，届时直接使用主 IP 登录')
           && pageHtml.includes('先使用主 IP 做快照安全检查')
           && pageHtml.includes('function startMapMarkerAnimation(scene, markers, animate = true)')
-          && pageHtml.includes('function recordMapTrailObservation(status, markers, nowMs)')
+          && pageHtml.includes('function syncMapTrailHistory(status, markers, nowMs)')
           && pageHtml.includes('function drawMapTrails(context, scene, markers, frame)')
-          && pageHtml.includes('const pruneMapTrailHistory =')
-          && pageHtml.includes('mapTrailHistory = pruneMapTrailHistory(mapTrailHistory, observedKeys)')
+          && pageHtml.includes('const backend = status?.mapTrails')
+          && pageHtml.includes('syncMapTrailHistory(status, markers, trailNowMs)')
           && pageHtml.includes('context.lineWidth = MAP_TRAIL_LINE_WIDTH')
           && pageHtml.includes('context.globalAlpha = mapTrailOpacity(sample.at, scene.trailNowMs, MAP_TRAIL_MAX_AGE_MS)')
           && pageHtml.includes('id="mapFullscreenToggle"')
-          && pageHtml.includes('#mapPanel:fullscreen')
-          && pageHtml.includes('requestFullscreen')
-          && pageHtml.includes('document.addEventListener(\'fullscreenchange\', syncMapFullscreenButton)')
+          && pageHtml.includes('body.map-page-fullscreen #mapPanel')
+          && pageHtml.includes('document.body.classList.toggle(\'map-page-fullscreen\', !active)')
+          && pageHtml.includes('退出地图网页全屏')
+          && !pageHtml.includes('requestFullscreen')
+          && !pageHtml.includes('fullscreenchange')
           && pageHtml.includes("mapKey: mapMarkerKey('coin', item?.[0])")
           && pageHtml.includes("mapKey: mapMarkerKey('player', item?.[9], name)")
           && pageHtml.includes("window.matchMedia('(prefers-reduced-motion: reduce)').matches")
@@ -8188,6 +8178,7 @@ async function runBrowserlessRunnerSelfTest() {
         && nearbySelectedPlayerCoordinatesTest.ok
         && nearbyMapCoordinatesTest.ok
         && nearbyMapLegacyCompatibilityTest.ok
+        && mapTrailTrackerSelfTest.ok
         && statusServerChatTest.ok
         && snapshotEdge.ok
         && cloudflareChallenge.ok
@@ -8263,6 +8254,7 @@ async function runBrowserlessRunnerSelfTest() {
       nearbyCoinRoutePanelTest,
       nearbySelectedPlayerCoordinatesTest,
       nearbyMapCoordinatesTest,
+      mapTrailTrackerSelfTest,
       nearbyMapLegacyCompatibilityTest,
       statusServerChatTest,
       snapshotEdge,
