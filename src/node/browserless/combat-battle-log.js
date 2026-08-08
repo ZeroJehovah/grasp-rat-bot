@@ -134,6 +134,16 @@ function numberOrNull(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+// Shoot requestSequence is allocated from a control-generation-local counter
+// in state-store. It is not globally unique across reconnects or resets, so a
+// sequence-only origin key would incorrectly turn later ACKs into ambiguous
+// requests when the same small sequence is reused under a new generation.
+function requestSequenceOriginKey(controlGeneration, requestSequence) {
+  const sequence = numberOrNull(requestSequence);
+  const generation = String(controlGeneration || '').trim();
+  return sequence === null || !generation ? '' : `${generation}:${sequence}`;
+}
+
 function boundedIdentifier(value) {
   if (value === null || value === undefined) return null;
   const text = String(value).trim().slice(0, 80);
@@ -1171,14 +1181,13 @@ function createCombatBattleLog(options = {}) {
       if (!existing) executionRequestOrigins.set(normalized, { ...origin });
       else if (String(existing.segmentId || '') !== String(origin.segmentId || '')) requestOriginConflicts.add(normalized);
     }
-    const sequence = numberOrNull(requestSequence);
-    if (sequence !== null) {
-      const sequenceKey = String(sequence);
+    const sequenceKey = requestSequenceOriginKey(origin?.controlGeneration, requestSequence);
+    if (sequenceKey) {
       const existing = executionRequestSequenceOrigins.get(sequenceKey);
       if (!existing) executionRequestSequenceOrigins.set(sequenceKey, { ...origin });
       else if (String(existing.segmentId || '') !== String(origin.segmentId || '')) requestOriginConflicts.add(`sequence:${sequenceKey}`);
     }
-    if (!normalized && sequence === null) return;
+    if (!normalized && !sequenceKey) return;
     while (executionRequestOrigins.size > 4096) {
       executionRequestOrigins.delete(executionRequestOrigins.keys().next().value);
     }
@@ -1466,7 +1475,7 @@ function createCombatBattleLog(options = {}) {
     const activeTargetId = String(active?.lastMetrics?.targetId ?? active?.targetId ?? '');
     const requestKey = event.requestId ?? event.commandId ?? '';
     const normalizedRequestKey = String(requestKey || '');
-    const requestSequenceKey = event.requestSequence === null ? '' : String(event.requestSequence);
+    const requestSequenceKey = requestSequenceOriginKey(event.controlGeneration, event.requestSequence);
     const requestConflict = (normalizedRequestKey && requestOriginConflicts.has(normalizedRequestKey))
       || (requestSequenceKey && requestOriginConflicts.has(`sequence:${requestSequenceKey}`));
     const requestOrigin = requestConflict
@@ -2363,6 +2372,69 @@ function runCombatBattleLogSelfTest() {
       && ownershipRows[1].combatAudit.leaveDispatchCount === 1);
     assert('combatAudit mismatch summary remains below eight KiB',
       Buffer.byteLength(JSON.stringify(ownershipRows[1]), 'utf8') <= MAX_INDEX_LINE_BYTES);
+
+    // requestSequence restarts at one for every control generation. A later
+    // generation must therefore keep its first dispatch/ACK physical even
+    // when the previous generation used the same sequence number.
+    const sequenceReuseRoot = path.join(root, 'sequence-reuse');
+    const sequenceReuseDayDir = path.join(sequenceReuseRoot, utc8DayKey(nowMs), BATTLES_DIR);
+    const sequenceReuseLog = createCombatBattleLog({
+      logDir: sequenceReuseRoot,
+      now: () => nowMs,
+      idleFinalizeMs: 15000
+    });
+    const recordSequenceReuseShot = (targetId, control, engagement, requestId) => {
+      sequenceReuseLog.record('combat-live', frame(`${targetId}:${targetId}`, {
+        controlGeneration: control,
+        engagementGeneration: engagement,
+        lastObservedAt: nowMs
+      }, {
+        target: { userId: targetId, hp: 100, active: true },
+        combatAudit: ownershipAudit('normal-combat', 'policy', targetId)
+      }));
+      nowMs += 1;
+      sequenceReuseLog.recordShotExecution({
+        sequence: 1,
+        requestSequence: 1,
+        type: 'shoot-dispatch',
+        atMs: nowMs,
+        requestId,
+        controlGeneration: control,
+        engagementGeneration: engagement,
+        segmentGeneration: `${targetId}:${targetId}#1`,
+        ownerSelfId: 7,
+        targetId: String(targetId),
+        wireTarget: { x: 1000, y: 0 },
+        outcome: 'transport-accepted'
+      });
+      nowMs += 1;
+      sequenceReuseLog.recordShotExecution({
+        sequence: 2,
+        requestSequence: 1,
+        type: 'shoot-ack-accepted',
+        atMs: nowMs,
+        requestId,
+        controlGeneration: control,
+        engagementGeneration: engagement,
+        segmentGeneration: `${targetId}:${targetId}#1`,
+        ownerSelfId: 7,
+        targetId: String(targetId),
+        wireTarget: { x: 1000, y: 0 },
+        outcome: 'accepted',
+        ack: { bullet_id: `sequence-${targetId}`, owner_user_id: 7, target_x: 1000, target_y: 0 }
+      });
+    };
+    recordSequenceReuseShot(700, 'control:first', 'control:first:700', 'sequence-first');
+    recordSequenceReuseShot(800, 'control:second', 'control:second:800', 'sequence-second');
+    sequenceReuseLog.flush('sequence-reuse-test');
+    const sequenceReuseRows = fs.readFileSync(path.join(sequenceReuseDayDir, INDEX_FILE), 'utf8')
+      .trim().split('\n').filter(Boolean).map(JSON.parse);
+    assert('control-generation-scoped request sequences remain physically owned', sequenceReuseRows.length === 2
+      && sequenceReuseRows.every(row => row.segmentWireRequestCount === 1
+        && row.segmentAcceptedShots === 1
+        && row.combatAudit?.dispatchCount === 1
+        && row.combatAudit?.acceptedAckCount === 1
+        && row.shotOwnershipInvariantOk === true));
 
     // The background worker may not have created either the raw or gz path by
     // the time the same engagement reopens. In-memory path allocation must
