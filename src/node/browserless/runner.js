@@ -58,6 +58,11 @@ const {
   createHighDropPlayerTracker,
   createSnapshotGapPoller
 } = require('./high-drop-player-tracker');
+const {
+  DEFAULT_SNAPSHOT_REQUEST_INTERVAL_MS,
+  createSnapshotRequestScheduler,
+  runSnapshotRequestSchedulerSelfTest
+} = require('./snapshot-request-scheduler');
 const { createEasyKillPlayerTracker } = require('./easy-kill-player-tracker');
 const { createCombatCompletionTracker } = require('./combat-completion-tracker');
 const { createCombatBattleLog, runCombatBattleLogSelfTest } = require('./combat-battle-log');
@@ -444,6 +449,48 @@ async function runLoginPointHighHpExemptionSelfTest() {
     runner: { pendingExit: { exitAttemptId: 'self-test-pending-exit' } }
   }, deps);
   const recoveryFetchCount = fetchCount;
+  let sharedSchedulerNowMs = Date.UTC(2026, 7, 5, 0, 1, 0);
+  let sharedSchedulerFetchCount = 0;
+  const sharedScheduler = createSnapshotRequestScheduler({
+    now: () => sharedSchedulerNowMs,
+    sleep: async delayMs => { sharedSchedulerNowMs += delayMs; },
+    fetchSnapshot: async detail => {
+      sharedSchedulerFetchCount += 1;
+      return {
+        ok: true,
+        status: 200,
+        payload: {
+          tick: 100 + sharedSchedulerFetchCount,
+          entities: [],
+          bullets: [],
+          coin_drops: [],
+          messages: []
+        },
+        observedAtMs: sharedSchedulerNowMs,
+        requestClass: detail.requestClass,
+        purpose: detail.purpose
+      };
+    }
+  });
+  await sharedScheduler.request({
+    requestClass: REQUEST_CLASSES.GAMEPLAY_SNAPSHOT,
+    purpose: 'offline-poll',
+    allowBurst: true
+  });
+  const sharedSchedulerSafety = await runPreLoginSnapshotSafety(config, {
+    loginPointSafety: { point: { x: 0, y: 0, hp: 79, source: 'self-test' } }
+  }, {
+    now: () => sharedSchedulerNowMs,
+    snapshotRequest: sharedScheduler.request
+  });
+  const sharedSchedulerFreshness = {
+    ok: sharedSchedulerFetchCount === 2
+      && sharedSchedulerSafety.response?.summary?.tick === 102
+      && sharedSchedulerSafety.reused !== true,
+    fetchCount: sharedSchedulerFetchCount,
+    tick: sharedSchedulerSafety.response?.summary?.tick ?? null,
+    reused: Boolean(sharedSchedulerSafety.reused)
+  };
   return {
     ok: Boolean(
       highHp.ok
@@ -455,6 +502,7 @@ async function runLoginPointHighHpExemptionSelfTest() {
         && lowHp.bypassedPreLoginSafety !== true
         && recoveryFetchCount === 2
         && recovery.bypassedPreLoginSafety !== true
+        && sharedSchedulerFreshness.ok
     ),
     highHp,
     lowHp: {
@@ -466,7 +514,8 @@ async function runLoginPointHighHpExemptionSelfTest() {
       reason: recovery.reason,
       bypassedPreLoginSafety: Boolean(recovery.bypassedPreLoginSafety),
       fetchCount: recoveryFetchCount
-    }
+    },
+    sharedSchedulerFreshness
   };
 }
 
@@ -2150,13 +2199,14 @@ async function runBrowserlessRunner(config, deps = {}) {
   config.sourceIps = sourceIpController.sourceIps();
   persisted = readBrowserlessStateFile(stateFile);
 
-  snapshotGapPoller = deps.snapshotGapPoller || createSnapshotGapPoller({
+  const highDropStatusAtStart = highDropPlayerTracker.status(now());
+  const lastHighDropSnapshotAtMs = Date.parse(highDropStatusAtStart.lastSnapshotAt || '');
+  const lastHighDropGlobalSnapshotAtMs = Date.parse(highDropStatusAtStart.lastGlobalSnapshotAt || '');
+  const snapshotRequestScheduler = deps.snapshotRequestScheduler || createSnapshotRequestScheduler({
     now,
-    intervalMs: DEFAULT_SNAPSHOT_GAP_MS,
-    minimumIntervalMs: DEFAULT_CHAT_ACTIVE_INTERVAL_MS,
-    globalIntervalMs: DEFAULT_SNAPSHOT_GAP_MS,
-    isReady: () => Boolean(config.userId && config.sessionToken),
-    fetchSnapshot: async () => {
+    sleep,
+    minimumIntervalMs: DEFAULT_SNAPSHOT_REQUEST_INTERVAL_MS,
+    fetchSnapshot: async detail => {
       const url = buildSnapshotProbeUrl({
         gameOrigin: config.gameOrigin,
         snapshotPath: config.snapshotPath || '/snapshot',
@@ -2164,23 +2214,80 @@ async function runBrowserlessRunner(config, deps = {}) {
         sessionToken: config.sessionToken,
         nowMs: now()
       });
+      const requestClass = detail.requestClass || REQUEST_CLASSES.GAMEPLAY_SNAPSHOT;
       const response = await sourceIpController.fetchWithTimeout(url, {
         timeoutMs: config.httpTimeoutMs || config.wsConnectTimeoutMs || 10000,
         method: 'GET',
-        requestClass: REQUEST_CLASSES.GAMEPLAY_SNAPSHOT,
+        requestClass,
+        challengePolicy: requestClass === REQUEST_CLASSES.LOGIN ? 'login-stop' : undefined,
         cache: 'no-store'
       });
       const body = await readResponseBody(response);
-      if (!response.ok) throw new Error(`snapshot HTTP ${response.status}`);
-      if (!body.json || typeof body.json !== 'object') throw new Error('snapshot returned no JSON payload');
-      return body.json;
+      return {
+        ok: Boolean(response.ok),
+        status: response.status,
+        statusText: response.statusText || '',
+        response,
+        body,
+        payload: body.json,
+        observedAtMs: now(),
+        url
+      };
+    },
+    onRequest: detail => {
+      logStore.append('runner', 'snapshot-request-start', {
+        requestSequence: Number(detail.requestSequence || 0),
+        requestClass: detail.requestClass || '',
+        purpose: detail.purpose || '',
+        startedAt: new Date(Number(detail.startedAtMs || now())).toISOString(),
+        waitMs: Number(detail.waitMs || 0),
+        allowBurst: detail.allowBurst === true
+      });
+    },
+    onResult: result => {
+      if (result?.ok !== false) return;
+      logStore.append('runner', 'snapshot-request-error', {
+        requestSequence: Number(result.requestSequence || 0),
+        requestClass: result.requestClass || '',
+        purpose: result.purpose || '',
+        status: result.status ?? null,
+        error: result.error || ''
+      });
+    }
+  });
+  const snapshotIntervalForMode = () => (
+    onlineSnapshotSession?.active === true
+      ? DEFAULT_SNAPSHOT_GAP_MS
+      : (chatService.desiredSnapshotIntervalMs?.(now()) || DEFAULT_CHAT_IDLE_INTERVAL_MS)
+  );
+  snapshotGapPoller = deps.snapshotGapPoller || createSnapshotGapPoller({
+    now,
+    intervalMs: DEFAULT_CHAT_IDLE_INTERVAL_MS,
+    minimumIntervalMs: DEFAULT_CHAT_ACTIVE_INTERVAL_MS,
+    globalIntervalMs: DEFAULT_CHAT_IDLE_INTERVAL_MS,
+    getIntervalMs: snapshotIntervalForMode,
+    getGlobalIntervalMs: snapshotIntervalForMode,
+    lastSnapshotAtMs: Number.isFinite(lastHighDropSnapshotAtMs) ? lastHighDropSnapshotAtMs : 0,
+    lastGlobalSnapshotAtMs: Number.isFinite(lastHighDropGlobalSnapshotAtMs) ? lastHighDropGlobalSnapshotAtMs : 0,
+    isReady: () => Boolean(config.userId && config.sessionToken),
+    fetchSnapshot: async ({ allowBurst = false } = {}) => {
+      const fetched = await snapshotRequestScheduler.request({
+        requestClass: REQUEST_CLASSES.GAMEPLAY_SNAPSHOT,
+        purpose: 'periodic-poll',
+        allowBurst: allowBurst === true
+      });
+      if (!fetched.ok) throw new Error(`snapshot HTTP ${fetched.status}`);
+      if (!fetched.payload || typeof fetched.payload !== 'object') {
+        throw new Error('snapshot returned no JSON payload');
+      }
+      return fetched.payload;
     },
     onSnapshot: (payload, detail = {}) => {
       logStore.append('runner', 'gameplay-snapshot-poll', {
         observedAt: new Date(Number(detail.observedAtMs || now())).toISOString(),
         tick: payload?.tick ?? null,
         entityCount: Array.isArray(payload?.entities) ? payload.entities.length : 0,
-        intervalMs: DEFAULT_SNAPSHOT_GAP_MS
+        intervalMs: snapshotIntervalForMode()
       });
       return observeSnapshotPayload(payload, detail);
     },
@@ -2549,7 +2656,8 @@ async function runBrowserlessRunner(config, deps = {}) {
       reset: true,
       snapshotAtMs: carryEligible ? carriedAtMs : 0,
       globalSnapshotAtMs: carryEligible ? carriedAtMs : 0,
-      immediate: !carryEligible
+      immediate: !carryEligible,
+      allowBurst: !carryEligible
     });
     logStore.append('runner', 'gameplay-snapshot-session-start', {
       runId: String(entry.runId || ''),
@@ -2562,8 +2670,8 @@ async function runBrowserlessRunner(config, deps = {}) {
   const endGameplaySnapshotSession = reason => {
     if (!onlineSnapshotSession?.active) return false;
     const runId = onlineSnapshotSession.runId || '';
-    snapshotGapPoller?.stop?.();
     onlineSnapshotSession = null;
+    snapshotGapPoller?.refreshSchedule?.();
     remoteProfitWorker?.reset?.('gameplay-session-end');
     logStore.append('runner', 'gameplay-snapshot-session-stop', {
       runId,
@@ -2848,6 +2956,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           now,
           sleep,
           fetchWithTimeout: sourceIpController.fetchWithTimeout,
+          snapshotRequest: snapshotRequestScheduler.request,
           onSnapshotPayload: observePreparedSnapshotPayload,
           easyKillPlayerTracker,
           damagePlayerTracker,
@@ -2928,6 +3037,7 @@ async function runBrowserlessRunner(config, deps = {}) {
             now,
             sleep,
             fetchWithTimeout: sourceIpController.fetchWithTimeout,
+            snapshotRequest: snapshotRequestScheduler.request,
             onSnapshotPayload: observePreparedSnapshotPayload,
             onSnapshotSafety: recordSnapshotSafetyProgress,
             onSnapshotEdge: progress => logStore.append('runner', `snapshot-edge-${progress.type || 'progress'}`, progress),
@@ -3235,7 +3345,9 @@ async function runBrowserlessRunner(config, deps = {}) {
       },
       runner: {
         ...(baseState.runner || {}),
-        remoteProfit: remoteProfitStatus
+        remoteProfit: remoteProfitStatus,
+        snapshotScheduler: snapshotRequestScheduler.status?.() || null,
+        snapshotPoller: snapshotGapPoller?.status?.() || null
       },
       remoteProfit: remoteProfitStatus,
       highDropPlayers: highDropPlayerTracker.status(now()),
@@ -3486,6 +3598,14 @@ async function runBrowserlessRunner(config, deps = {}) {
     }
   }
 
+  if (!config.once && !config.dryRun) {
+    snapshotGapPoller.start({
+      reset: false,
+      immediate: false,
+      allowBurst: false
+    });
+  }
+
   logStore.append('runner', 'runner-start', {
     runtimeRevision: browserlessRuntimeRevision(),
     runtimeRevisionResolution: browserlessRuntimeRevisionStatus(),
@@ -3577,6 +3697,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           now,
           sleep,
           fetchWithTimeout: sourceIpController.fetchWithTimeout,
+          snapshotRequest: snapshotRequestScheduler.request,
           onSnapshotPayload: observePreparedSnapshotPayload,
           easyKillPlayerTracker,
           damagePlayerTracker,
@@ -4054,6 +4175,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           onRemoteProfitRealtime: entities => remoteProfitWorker?.observeRealtimeEntities?.(entities),
           onRemoteProfitWhitelist: ids => { remoteProfitStaticWhitelistIds = ids.slice(0, 128); },
           fetchWithTimeout: sourceIpController.fetchWithTimeout,
+          snapshotRequest: snapshotRequestScheduler.request,
           openBrowserlessWs: sourceIpController.openBrowserlessWs,
           onLoginTransportAttempt: markSourceIpLoginAttempt,
           onLoginSuccess: entry => {
@@ -4196,6 +4318,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         onRemoteProfitWhitelist: ids => { remoteProfitStaticWhitelistIds = ids.slice(0, 128); },
         onSnapshotEdge: progress => logStore.append('runner', `snapshot-edge-${progress.type || 'progress'}`, progress),
         fetchWithTimeout: sourceIpController.fetchWithTimeout,
+        snapshotRequest: snapshotRequestScheduler.request,
         openBrowserlessWs: sourceIpController.openBrowserlessWs,
         onLoginTransportAttempt: markSourceIpLoginAttempt,
         onLoginSuccess: entry => {
@@ -4896,11 +5019,10 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
           && loginSuccessLogCount === 1
           && loginSuccessAckCount === 1
           && bypassReason === 'daily-first-login-invulnerability'
-          && snapshotSessionEvents.length === 2
+          && snapshotSessionEvents.length === 1
           && snapshotSessionEvents[0].type === 'start'
           && snapshotSessionEvents[0].detail.immediate === true
           && snapshotSessionEvents[0].detail.snapshotAtMs === 0
-          && snapshotSessionEvents[1].type === 'stop'
           && logSafe
       ),
       order,
@@ -4974,11 +5096,10 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
       ok: Boolean(
         result.ok
           && bypassReason === ''
-          && snapshotSessionEvents.length === 2
+          && snapshotSessionEvents.length === 1
           && snapshotSessionEvents[0].type === 'start'
           && snapshotSessionEvents[0].detail.immediate === false
           && snapshotSessionEvents[0].detail.snapshotAtMs === snapshotObservedAtMs
-          && snapshotSessionEvents[1].type === 'stop'
           && remotePublications.length === 1
           && publication.source === 'prelogin-http'
           && publication.observedAtMs === snapshotObservedAtMs
@@ -5034,11 +5155,10 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
           && config.loginPointHp === 100
           && bypassReason === ''
           && observedPreLoginPayloadCount === 0
-          && snapshotSessionEvents.length === 2
+          && snapshotSessionEvents.length === 1
           && snapshotSessionEvents[0].type === 'start'
           && snapshotSessionEvents[0].detail.immediate === true
           && snapshotSessionEvents[0].detail.snapshotAtMs === 0
-          && snapshotSessionEvents[1].type === 'stop'
       ),
       loginPointHp: config.loginPointHp,
       bypassReason,
@@ -5941,6 +6061,7 @@ async function runBrowserlessRunnerSelfTest() {
     const missingEnemyHold = runMissingEnemyHoldSelfTest();
     const requestRatePolicy = await runRequestRatePolicySelfTest();
     const requestRateController = await runRequestRateControllerSelfTest();
+    const snapshotRequestScheduler = await runSnapshotRequestSchedulerSelfTest();
     const loginPointHighHpExemption = await runLoginPointHighHpExemptionSelfTest();
     const sourceIpProbe = await runSourceIpProbeSelfTest();
     const sourceIpPreflight = await runSourceIpPreflightSelfTest();
@@ -6553,6 +6674,58 @@ async function runBrowserlessRunnerSelfTest() {
       fetchSnapshot: async () => ({})
     });
     const dynamicSnapshotPollerStatus = dynamicSnapshotPoller.status();
+    let snapshotModeOnline = false;
+    const snapshotModeScheduleDelays = [];
+    const snapshotModePoller = createSnapshotGapPoller({
+      now: () => Date.UTC(2026, 7, 8, 1, 3, 0),
+      intervalMs: DEFAULT_CHAT_IDLE_INTERVAL_MS,
+      minimumIntervalMs: DEFAULT_CHAT_ACTIVE_INTERVAL_MS,
+      globalIntervalMs: DEFAULT_CHAT_IDLE_INTERVAL_MS,
+      getIntervalMs: () => snapshotModeOnline
+        ? DEFAULT_CHAT_ACTIVE_INTERVAL_MS
+        : DEFAULT_CHAT_IDLE_INTERVAL_MS,
+      getGlobalIntervalMs: () => snapshotModeOnline
+        ? DEFAULT_CHAT_ACTIVE_INTERVAL_MS
+        : DEFAULT_CHAT_IDLE_INTERVAL_MS,
+      setTimeout: (_callback, delayMs) => {
+        const handle = { delayMs, cleared: false, unref() {} };
+        snapshotModeScheduleDelays.push(handle);
+        return handle;
+      },
+      clearTimeout: handle => {
+        if (handle) handle.cleared = true;
+      },
+      fetchSnapshot: async () => ({})
+    });
+    const snapshotModeAtMs = Date.UTC(2026, 7, 8, 1, 3, 0);
+    snapshotModePoller.start({
+      reset: true,
+      snapshotAtMs: snapshotModeAtMs,
+      globalSnapshotAtMs: snapshotModeAtMs,
+      immediate: false
+    });
+    const offlineSnapshotModeStatus = snapshotModePoller.status();
+    snapshotModeOnline = true;
+    snapshotModePoller.refreshSchedule();
+    const onlineSnapshotModeStatus = snapshotModePoller.status();
+    snapshotModeOnline = false;
+    snapshotModePoller.refreshSchedule();
+    const restoredOfflineSnapshotModeStatus = snapshotModePoller.status();
+    snapshotModePoller.stop();
+    const snapshotModePollerTest = {
+      ok: offlineSnapshotModeStatus.currentIntervalMs === DEFAULT_CHAT_IDLE_INTERVAL_MS
+        && offlineSnapshotModeStatus.currentGlobalIntervalMs === DEFAULT_CHAT_IDLE_INTERVAL_MS
+        && onlineSnapshotModeStatus.currentIntervalMs === DEFAULT_CHAT_ACTIVE_INTERVAL_MS
+        && onlineSnapshotModeStatus.currentGlobalIntervalMs === DEFAULT_CHAT_ACTIVE_INTERVAL_MS
+        && restoredOfflineSnapshotModeStatus.currentIntervalMs === DEFAULT_CHAT_IDLE_INTERVAL_MS
+        && restoredOfflineSnapshotModeStatus.currentGlobalIntervalMs === DEFAULT_CHAT_IDLE_INTERVAL_MS
+        && snapshotModeScheduleDelays.map(item => item.delayMs).join(',')
+          === [DEFAULT_CHAT_IDLE_INTERVAL_MS, DEFAULT_CHAT_ACTIVE_INTERVAL_MS, DEFAULT_CHAT_IDLE_INTERVAL_MS].join(','),
+      delays: snapshotModeScheduleDelays.map(item => item.delayMs),
+      offlineIntervalMs: offlineSnapshotModeStatus.currentIntervalMs,
+      onlineIntervalMs: onlineSnapshotModeStatus.currentIntervalMs,
+      restoredOfflineIntervalMs: restoredOfflineSnapshotModeStatus.currentIntervalMs
+    };
     const fixedSnapshotScheduleDelays = [];
     const fixedSnapshotPoller = createSnapshotGapPoller({
       now: () => Date.UTC(2026, 6, 8, 1, 3, 0),
@@ -8118,6 +8291,7 @@ async function runBrowserlessRunnerSelfTest() {
         && remoteProfitDecision.ok
         && missingEnemyHold.ok
         && requestRateController.ok
+        && snapshotRequestScheduler.ok
         && loginPointHighHpExemption.ok
         && dryRun.ok
         && sourceIpPreflight.ok
@@ -8173,6 +8347,7 @@ async function runBrowserlessRunnerSelfTest() {
         && chatHistoryStore.ok
         && chatHistoryWorker.ok
         && dynamicSnapshotPollerStatus.currentIntervalMs === DEFAULT_CHAT_ACTIVE_INTERVAL_MS
+        && snapshotModePollerTest.ok
         && fixedSnapshotPollerTest.ok
         && nearbyCoinRoutePanelTest.ok
         && nearbySelectedPlayerCoordinatesTest.ok
@@ -8203,6 +8378,7 @@ async function runBrowserlessRunnerSelfTest() {
       remoteProfitDecision,
       missingEnemyHold,
       requestRateController,
+      snapshotRequestScheduler,
       loginPointHighHpExemption,
       sourceIpPreflight,
       sourceIpPreflightRunner,
@@ -8249,6 +8425,7 @@ async function runBrowserlessRunnerSelfTest() {
       chatService,
       chatHistoryStore,
       chatHistoryWorker,
+      snapshotModePollerTest,
       fixedSnapshotPoller: fixedSnapshotPollerTest,
       dynamicSnapshotPollerStatus,
       nearbyCoinRoutePanelTest,

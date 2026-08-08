@@ -1119,24 +1119,55 @@ function applySingleBlockerLoginBypass(summary, state, config = {}, checkedAtMs 
   };
 }
 
-async function fetchPreLoginSnapshot(config, deps = {}) {
-  const url = buildSnapshotProbeUrl({
-    gameOrigin: config.gameOrigin,
-    snapshotPath: config.snapshotPath || '/snapshot',
-    userId: config.userId,
-    sessionToken: config.sessionToken
-  });
-  const fetchImpl = deps.fetchImpl;
-  const response = await (deps.fetchWithTimeout || fetchWithTimeout)(url, {
-    fetchImpl,
-    timeoutMs: config.httpTimeoutMs || config.wsConnectTimeoutMs || 10000,
-    localAddress: config.sourceIp,
-    requestClass: REQUEST_CLASSES.LOGIN,
-    challengePolicy: 'login-stop',
-    method: 'GET',
-    cache: 'no-store'
-  });
-  const body = await readResponseBody(response);
+async function fetchPreLoginSnapshot(config, deps = {}, requestDetail = {}) {
+  let fetched;
+  if (typeof deps.snapshotRequest === 'function') {
+    fetched = await deps.snapshotRequest({
+      requestClass: REQUEST_CLASSES.LOGIN,
+      purpose: 'prelogin-safety',
+      ...requestDetail
+    });
+  } else {
+    // The production runner always supplies the unified scheduler. Keep this
+    // direct transport path only for standalone canary compatibility tests.
+    const url = buildSnapshotProbeUrl({
+      gameOrigin: config.gameOrigin,
+      snapshotPath: config.snapshotPath || '/snapshot',
+      userId: config.userId,
+      sessionToken: config.sessionToken
+    });
+    const fetchImpl = deps.fetchImpl;
+    const response = await (deps.fetchWithTimeout || fetchWithTimeout)(url, {
+      fetchImpl,
+      timeoutMs: config.httpTimeoutMs || config.wsConnectTimeoutMs || 10000,
+      localAddress: config.sourceIp,
+      requestClass: REQUEST_CLASSES.LOGIN,
+      challengePolicy: 'login-stop',
+      method: 'GET',
+      cache: 'no-store'
+    });
+    const body = await readResponseBody(response);
+    fetched = {
+      ok: Boolean(response.ok),
+      status: response.status,
+      response,
+      body,
+      payload: body.json,
+      observedAtMs: typeof deps.now === 'function' ? deps.now() : Date.now(),
+      url
+    };
+  }
+  const response = fetched.response || {
+    ok: fetched.ok !== false,
+    status: fetched.status ?? (fetched.ok === false ? 500 : 200),
+    statusText: fetched.statusText || '',
+    headers: fetched.headers || { get: () => '' }
+  };
+  const body = fetched.body || {
+    json: fetched.payload,
+    text: fetched.text || ''
+  };
+  const url = String(fetched.url || '');
   const challenge = detectCloudflareChallenge({
     status: response.status,
     headers: response.headers,
@@ -1150,7 +1181,7 @@ async function fetchPreLoginSnapshot(config, deps = {}) {
       sourceIp: config.sourceIp
     });
   }
-  const observedAtMs = typeof deps.now === 'function' ? deps.now() : Date.now();
+  const observedAtMs = Number(fetched.observedAtMs || (typeof deps.now === 'function' ? deps.now() : Date.now()));
   if (body.json && typeof deps.onSnapshotPayload === 'function') {
     try {
       await deps.onSnapshotPayload(body.json, {
@@ -1166,13 +1197,24 @@ async function fetchPreLoginSnapshot(config, deps = {}) {
     body,
     payload: body.json,
     observedAtMs,
-    url
+    url,
+    requestSequence: fetched.requestSequence,
+    startedAtMs: fetched.startedAtMs,
+    waitMs: fetched.waitMs,
+    reused: fetched.reused === true
   };
 }
 
 async function runSinglePreLoginSnapshotSafetyProbe(config, state, deps = {}, detail = {}) {
   const loginPoint = loginPointFromState(state);
-  const fetched = detail.fetched || await fetchPreLoginSnapshot(config, deps);
+  const hasLastProbeTick = detail.lastProbeTick !== undefined
+    && detail.lastProbeTick !== null
+    && Number.isFinite(Number(detail.lastProbeTick));
+  const fetched = detail.fetched || await fetchPreLoginSnapshot(config, deps, {
+    allowBurst: !hasLastProbeTick,
+    reuseLatest: hasLastProbeTick,
+    minTick: hasLastProbeTick ? Number(detail.lastProbeTick) : undefined
+  });
   const { response, body, url } = fetched;
   const runtimeDefaults = buildBrowserlessRuntimeDefaults(config);
   const observedAtMs = Number(fetched.observedAtMs || (typeof deps.now === 'function' ? deps.now() : Date.now()));
@@ -1313,7 +1355,12 @@ async function runPreLoginSnapshotSafety(config, state, deps = {}) {
       intervalMs: config.snapshotEdgeIntervalMs ?? MIN_SNAPSHOT_EDGE_INTERVAL_MS,
       maxWaitMs: config.snapshotEdgeMaxWaitMs ?? 60000,
       maxErrors: config.snapshotEdgeMaxErrors ?? 3,
-      fetchSnapshot: async () => fetchPreLoginSnapshot(config, deps),
+      fetchSnapshot: async ({ requestCount, baseline } = {}) => fetchPreLoginSnapshot(config, deps, {
+        allowBurst: requestCount === 0,
+        reuseLatest: requestCount > 0,
+        afterAtMs: baseline?.fetched?.observedAtMs,
+        minTick: baseline?.version?.tick
+      }),
       onProgress: progress => {
         if (typeof deps.onSnapshotEdge === 'function') deps.onSnapshotEdge(progress);
       }

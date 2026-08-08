@@ -331,6 +331,7 @@ function createSnapshotGapPoller(options = {}) {
   let lastGlobalSnapshotAtMs = Math.max(0, Number(options.lastGlobalSnapshotAtMs || 0));
   let lastAttemptAtMs = 0;
   let lifecycleGeneration = 0;
+  let nextRequestAllowBurst = false;
 
   function currentIntervalMs() {
     if (typeof options.getIntervalMs !== 'function') return intervalMs;
@@ -344,6 +345,20 @@ function createSnapshotGapPoller(options = {}) {
     return Math.max(minimumIntervalMs, Number.isFinite(dynamic) ? dynamic : intervalMs);
   }
 
+  function currentGlobalIntervalMs() {
+    if (globalIntervalMs <= 0) return 0;
+    if (typeof options.getGlobalIntervalMs !== 'function') return globalIntervalMs;
+    const dynamic = Number(options.getGlobalIntervalMs({
+      nowMs: now(),
+      lastSnapshotAtMs,
+      lastGlobalSnapshotAtMs,
+      lastAttemptAtMs,
+      inFlight,
+      stopped
+    }));
+    return Math.max(minimumIntervalMs, Number.isFinite(dynamic) ? dynamic : globalIntervalMs);
+  }
+
   function schedule(delayMs = null) {
     if (stopped) return;
     if (timer) clearTimer(timer);
@@ -353,8 +368,9 @@ function createSnapshotGapPoller(options = {}) {
       ? Math.max(0, currentIntervalMs() - Math.max(0, t - snapshotBase))
       : 0;
     const globalBase = Math.max(lastGlobalSnapshotAtMs, lastAttemptAtMs);
-    const globalDelay = globalIntervalMs > 0
-      ? (globalBase ? Math.max(0, globalIntervalMs - Math.max(0, t - globalBase)) : 0)
+    const effectiveGlobalIntervalMs = currentGlobalIntervalMs();
+    const globalDelay = effectiveGlobalIntervalMs > 0
+      ? (globalBase ? Math.max(0, effectiveGlobalIntervalMs - Math.max(0, t - globalBase)) : 0)
       : Infinity;
     const delay = delayMs === null
       ? Math.min(snapshotDelay, globalDelay)
@@ -389,7 +405,9 @@ function createSnapshotGapPoller(options = {}) {
     const snapshotBase = Math.max(lastSnapshotAtMs, lastAttemptAtMs);
     const globalBase = Math.max(lastGlobalSnapshotAtMs, lastAttemptAtMs);
     const snapshotDue = !snapshotBase || t - snapshotBase >= currentIntervalMs();
-    const globalDue = globalIntervalMs > 0 && (!globalBase || t - globalBase >= globalIntervalMs);
+    const effectiveGlobalIntervalMs = currentGlobalIntervalMs();
+    const globalDue = effectiveGlobalIntervalMs > 0
+      && (!globalBase || t - globalBase >= effectiveGlobalIntervalMs);
     if (!snapshotDue && !globalDue) {
       schedule();
       return;
@@ -397,8 +415,14 @@ function createSnapshotGapPoller(options = {}) {
     inFlight = true;
     const attemptAtMs = now();
     lastAttemptAtMs = attemptAtMs;
+    const allowBurst = nextRequestAllowBurst;
+    nextRequestAllowBurst = false;
     try {
-      const payload = await options.fetchSnapshot();
+      const payload = await options.fetchSnapshot({
+        allowBurst,
+        attemptAtMs,
+        lifecycleGeneration: runGeneration
+      });
       if (payload && !stopped && runGeneration === lifecycleGeneration && typeof options.onSnapshot === 'function') {
         await options.onSnapshot(payload, {
           source: 'gap-http',
@@ -418,7 +442,7 @@ function createSnapshotGapPoller(options = {}) {
   }
 
   function start(detail = {}) {
-    lifecycleGeneration += 1;
+    if (stopped) lifecycleGeneration += 1;
     if (detail.reset === true) {
       const snapshotAtMs = Math.max(0, Number(detail.snapshotAtMs || 0));
       const globalSnapshotAtMs = Math.max(0, Number(detail.globalSnapshotAtMs ?? snapshotAtMs));
@@ -426,6 +450,7 @@ function createSnapshotGapPoller(options = {}) {
       lastGlobalSnapshotAtMs = globalSnapshotAtMs;
       lastAttemptAtMs = 0;
     }
+    nextRequestAllowBurst = detail.allowBurst === true;
     stopped = false;
     schedule(detail.immediate === true ? 0 : (lastSnapshotAtMs ? null : 1000));
   }
@@ -433,6 +458,7 @@ function createSnapshotGapPoller(options = {}) {
   function stop() {
     lifecycleGeneration += 1;
     stopped = true;
+    nextRequestAllowBurst = false;
     if (timer) clearTimer(timer);
     timer = null;
   }
@@ -448,6 +474,7 @@ function createSnapshotGapPoller(options = {}) {
         globalIntervalMs,
         minimumIntervalMs,
         currentIntervalMs: currentIntervalMs(),
+        currentGlobalIntervalMs: currentGlobalIntervalMs(),
         lastSnapshotAtMs,
         lastGlobalSnapshotAtMs,
         lastAttemptAtMs,
