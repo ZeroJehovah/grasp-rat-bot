@@ -85,6 +85,7 @@ const {
 const { createBrowserlessActionAdapter } = require('./action-adapter');
 const { buildBrowserlessCombatDryRun } = require('./combat-adapter');
 const { runCombatShotExecutionSelfTest } = require('./combat-shot-execution-self-test');
+const { runCombatTargetFrameGapSelfTest } = require('./combat-target-frame-gap-self-test');
 const { createSourceIpController } = require('./source-ip-controller');
 const {
   DEFAULT_SOURCE_IP_INTERFACE,
@@ -8093,6 +8094,7 @@ async function runBrowserlessRunnerSelfTest() {
     const pendingExitRecovery = runPendingExitRecoverySelfTest();
     const combatBattleLog = runCombatBattleLogSelfTest();
     const combatShotExecution = runCombatShotExecutionSelfTest();
+    const combatTargetFrameGap = runCombatTargetFrameGapSelfTest();
     const dynamicWhitelist = await require('./dynamic-whitelist-self-test').runDynamicWhitelistSelfTest();
     const recoveryContact = require('./recovery-contact-self-test').runRecoveryContactSelfTest();
     const runnerLog = path.join(tmp, 'logs', '2026-07-08', 'runner.jsonl');
@@ -8173,6 +8175,7 @@ async function runBrowserlessRunnerSelfTest() {
         && pendingExitRecovery.ok
         && combatBattleLog.ok
         && combatShotExecution.ok
+        && combatTargetFrameGap.ok
         && dynamicWhitelist.ok
         && recoveryContact.ok
         && complexCombatMainThreadBudget.battleLogOk
@@ -8248,6 +8251,7 @@ async function runBrowserlessRunnerSelfTest() {
       pendingExitRecovery,
       combatBattleLog,
       combatShotExecution,
+      combatTargetFrameGap,
       dynamicWhitelist,
       recoveryContact,
       complexCombatMainThreadBudget,

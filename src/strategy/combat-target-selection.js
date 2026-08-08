@@ -853,7 +853,8 @@ function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bu
   if (visibleTarget && dynamicWhitelistDistanceGuardBlocksCombatCore(visibleTarget, {
     incomingOverride: incomingOwnerMatchesTarget(visibleTarget, context),
     recentInjury: recentInjuryMatchesTarget(visibleTarget, context),
-    defensiveEngagement: String(engaged.intent || engaged.originIntent || '') === 'defensive'
+    defensiveEngagement: [engaged.intent, engaged.originIntent]
+      .some(intent => String(intent || '') === 'defensive')
   })) {
     if (state && typeof state === 'object') state.combatTarget = null;
     return null;

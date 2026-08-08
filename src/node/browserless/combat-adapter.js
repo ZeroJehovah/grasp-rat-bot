@@ -95,6 +95,7 @@ const {
 } = require('../../strategy/dynamic-whitelist-safety');
 
 const DEFAULT_STAMINA_FULL_RATIO = 0.98;
+const DEFAULT_COMBAT_TARGET_FRAME_GAP_HOLD_MS = 250;
 const MISSING_OPTION_VALUE = Symbol('browserless-combat-missing-option-value');
 const NORMALIZED_COMBAT_INPUT = Symbol('browserless-normalized-combat-input');
 const NORMALIZED_COMBAT_BULLETS = Symbol('browserless-normalized-combat-bullets');
@@ -3580,6 +3581,52 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   const target = normalTarget || (contactApplies
     ? { ...contactTarget, combatIntent: 'defensive', contactEntryOnly: true }
     : null);
+  const combatControlIntervalMs = Number(options.combatControlIntervalMs);
+  const derivedTargetFrameGapHoldMs = Math.max(
+    DEFAULT_COMBAT_TARGET_FRAME_GAP_HOLD_MS,
+    (Number.isFinite(combatControlIntervalMs) && combatControlIntervalMs > 0
+      ? combatControlIntervalMs
+      : 50) * 5
+  );
+  const configuredTargetFrameGapHoldMs = Number(options.combatTargetFrameGapHoldMs);
+  const targetFrameGapHoldMaxMs = Math.max(0,
+    options.combatTargetFrameGapHoldMs !== null
+      && options.combatTargetFrameGapHoldMs !== undefined
+      && Number.isFinite(configuredTargetFrameGapHoldMs)
+      ? configuredTargetFrameGapHoldMs
+      : derivedTargetFrameGapHoldMs);
+  const targetFrameGapState = !target
+    && currentTargetId
+    && !currentVisibleTarget
+    && stateful?.combatTarget
+    && String(stateful.combatTarget.id ?? '') === currentTargetId
+    ? stateful.combatTarget
+    : null;
+  const targetFrameGapOriginIntent = String(
+    targetFrameGapState?.originIntent || targetFrameGapState?.intent || ''
+  );
+  const targetFrameGapLastVisibleAt = Number(targetFrameGapState?.at || 0);
+  const targetFrameGapAgeMs = targetFrameGapLastVisibleAt > 0
+    ? Math.max(0, Number(options.nowMs || Date.now()) - targetFrameGapLastVisibleAt)
+    : null;
+  const targetFrameGapHold = self
+    && targetFrameGapState
+    && targetFrameGapOriginIntent
+    && targetFrameGapOriginIntent !== 'afk-profit'
+    && targetFrameGapAgeMs !== null
+    && targetFrameGapAgeMs <= targetFrameGapHoldMaxMs
+    ? {
+        active: true,
+        reason: 'combat-target-frame-gap-hold',
+        targetId: currentTargetId,
+        targetName: String(targetFrameGapState.name || ''),
+        currentIntent: String(targetFrameGapState.intent || ''),
+        originIntent: targetFrameGapOriginIntent,
+        lastVisibleAt: targetFrameGapLastVisibleAt,
+        ageMs: Math.round(targetFrameGapAgeMs),
+        maxAgeMs: Math.round(targetFrameGapHoldMaxMs)
+      }
+    : null;
   if (stateful && (!self || !target)) stateful.combatMovementStability = null;
   const previousCombatTargetState = retainedCombatTargetState;
   if (!contactEntryOnly) withOptionOverrides(options, {
@@ -4568,6 +4615,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       target: contactEntryGuard.target ? summarizeCombatTarget(contactEntryGuard.target) : null,
       movementOnly: contactEntryOnly
     },
+    targetFrameGapHold,
     combatPhase: combatPhase || {
       phase: combatTargetState?.combatPhase || 'normal-combat',
       active: closePressureActive
@@ -4730,6 +4778,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
 }
 
 module.exports = {
+  DEFAULT_COMBAT_TARGET_FRAME_GAP_HOLD_MS,
   NORMALIZED_COMBAT_BULLETS,
   NORMALIZED_COMBAT_INPUT,
   buildBrowserlessCombatDryRun,

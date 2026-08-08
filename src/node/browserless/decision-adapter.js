@@ -8690,6 +8690,9 @@ function buildCombatDecision(input, stateful = {}, options = {}) {
         combatExit: combat.exit
       }
     : null;
+  const targetFrameGapHold = combatLiveEnabled && combat.targetFrameGapHold?.active === true
+    ? combat.targetFrameGapHold
+    : null;
   return {
     target,
     candidates: combat.candidates || [],
@@ -8702,7 +8705,14 @@ function buildCombatDecision(input, stateful = {}, options = {}) {
           reason: actionReason,
           target
         }
-      : null
+      : (targetFrameGapHold
+          ? {
+              kind: actionKind,
+              band: 'combat',
+              reason: 'combat-target-frame-gap-hold',
+              targetFrameGapHold
+            }
+          : null)
   };
 }
 
@@ -8949,7 +8959,7 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     && injuryHpExitAction?.reason === 'combat-hp-disadvantage-leave'
     ? null
     : injuryHpExitAction;
-  const combatAction = combat.target && combatActionEligible ? combat.action : null;
+  const combatAction = combatActionEligible ? combat.action : null;
   const closePressureCombatAction = combatAction && combatDecisionClosePressureActive(combat)
     ? combatAction
     : null;
@@ -9353,6 +9363,7 @@ function establishedCombatLootPriority(combat, coin, stateful = {}, options = {}
 }
 
 function isCombatActionEligibleForDecision(combatDecision, options = {}) {
+  if (combatDecision?.dryRun?.targetFrameGapHold?.active === true) return true;
   const target = combatDecision?.target || combatDecision?.dryRun?.target || null;
   if (!target) return false;
   if (options.controlMode !== 'profit-live') return true;

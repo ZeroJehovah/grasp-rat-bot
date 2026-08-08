@@ -3157,6 +3157,17 @@ function createBrowserlessActionAdapter(options = {}) {
       const combat = applyOptions.combat || combatSummaryFromDecision(decision);
       const self = stateSnapshot?.realtime?.self || combat?.self || null;
       if (!combat?.target) {
+        if (combat?.targetFrameGapHold?.active === true
+          && decision?.action?.reason === 'combat-target-frame-gap-hold') {
+          state.skippedCount += 1;
+          return {
+            ok: true,
+            skipped: true,
+            kind: 'combat-live',
+            reason: 'combat-target-frame-gap-hold',
+            targetFrameGapHold: { ...combat.targetFrameGapHold }
+          };
+        }
         const stopped = stop('combat-live-no-target');
         return {
           ok: stopped.ok,
