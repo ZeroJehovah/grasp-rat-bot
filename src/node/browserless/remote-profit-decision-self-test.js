@@ -146,6 +146,113 @@ function runRemoteProfitDecisionSelfTest() {
   assert.strictEqual(first.combat?.target, null);
   assert.strictEqual(first.action?.opportunisticShot, undefined);
 
+  const escortAdapter = createBrowserlessDecisionAdapter({
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    finalActionArbitrationHoldMs: 0,
+    opportunitySwitchConfirmFrames: 1,
+    opportunitySwitchMargin: 0,
+    opportunitySwitchRelativeMargin: 0
+  });
+  const defensiveCrossingTarget = {
+    entity_id: 8,
+    user_id: 8,
+    name: 'dynamic-member',
+    x: 8000,
+    y: 0,
+    vx: -50,
+    vy: 0,
+    hp: 100,
+    max_hp: 100,
+    drop: 1,
+    current_join_mode: 'Active',
+    firing: true,
+    stamina_5s_remaining_milli: 1000000,
+    stamina_5s_limit_milli: 1000000
+  };
+  const escortDecision = decide(
+    escortAdapter,
+    state(fullStaminaSelf({ hp: 60 }), [defensiveCrossingTarget]),
+    2000,
+    remoteBatch,
+    {
+      controlMode: 'profit-live',
+      combatEnabled: true,
+      dynamicWhitelistMemberUserIds: [8],
+      dynamicWhitelistEnabledUserIds: [8]
+    }
+  );
+  assert.strictEqual(escortDecision.action?.kind, 'combat-live');
+  assert.strictEqual(escortDecision.profit?.mission?.type, 'remote-player-navigation');
+  assert.strictEqual(escortDecision.combat?.movement?.profitEscort?.active, true);
+  assert.strictEqual(escortDecision.combat?.movement?.profitEscort?.missionTargetId, '99');
+  assert.strictEqual(escortDecision.combat?.movement?.profitEscort?.direction?.dx, 1);
+  assert.notStrictEqual(escortDecision.combat?.movement?.profitEscort?.direction?.dy, 0);
+  assert(
+    Number(escortDecision.combat?.movement?.dx || 0)
+      || Number(escortDecision.combat?.movement?.dy || 0),
+    'combat movement must remain non-zero while escorting the profit mission'
+  );
+
+  const escortReleased = decide(
+    escortAdapter,
+    state(fullStaminaSelf({ x: 1000, hp: 100 }), [], []),
+    5000,
+    remoteBatch,
+    {
+      dynamicWhitelistMemberUserIds: [8],
+      dynamicWhitelistEnabledUserIds: [8]
+    }
+  );
+  assert.strictEqual(escortReleased.action?.kind, 'seek-remote-player');
+  assert.strictEqual(escortReleased.profit?.mission?.type, 'remote-player-navigation');
+
+  const pursuitAdapter = createBrowserlessDecisionAdapter({
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    finalActionArbitrationHoldMs: 0,
+    opportunitySwitchConfirmFrames: 1,
+    opportunitySwitchMargin: 0,
+    opportunitySwitchRelativeMargin: 0
+  });
+  const directPursuitTarget = {
+    ...defensiveCrossingTarget,
+    x: 8000,
+    firing: false
+  };
+  const directPursuitFirst = decide(
+    pursuitAdapter,
+    state(fullStaminaSelf(), [directPursuitTarget]),
+    2000,
+    remoteBatch,
+    {
+      controlMode: 'profit-live',
+      combatEnabled: true,
+      dynamicWhitelistMemberUserIds: [8],
+      dynamicWhitelistEnabledUserIds: [8]
+    }
+  );
+  assert.strictEqual(directPursuitFirst.action?.kind, 'combat-live');
+  const directPursuitSecond = decide(
+    pursuitAdapter,
+    state(fullStaminaSelf(), [{ ...directPursuitTarget, x: 7000 }]),
+    2050,
+    remoteBatch,
+    {
+      controlMode: 'profit-live',
+      combatEnabled: true,
+      dynamicWhitelistMemberUserIds: [8],
+      dynamicWhitelistEnabledUserIds: [8]
+    }
+  );
+  assert.strictEqual(directPursuitSecond.action?.kind, 'combat-live');
+  assert.strictEqual(directPursuitSecond.combat?.target?.userId, 8);
+  assert.strictEqual(directPursuitSecond.combat?.target?.combatIntent, 'defensive');
+  assert.strictEqual(directPursuitSecond.combat?.movement?.profitEscort?.active, true);
+  assert.strictEqual(directPursuitSecond.profit?.mission?.targetId, '99');
+
   const invulnerableRemoteAdapter = createBrowserlessDecisionAdapter({
     userId: 7,
     controlMode: 'non-combat-profit',

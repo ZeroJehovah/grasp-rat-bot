@@ -80,6 +80,7 @@ function createInitialDecisionState(options = {}) {
     lastDecisionAction: cloneJson(options.lastDecisionAction || null),
     opportunityChoice: cloneJson(options.opportunityChoice || options.currentOpportunity || null),
     opportunitySwitchLock: cloneJson(options.opportunitySwitchLock || options.switchLock || null),
+    profitMission: cloneJson(options.profitMission || null),
     coinProgress: asRecord(options.coinProgress),
     coinAttempts: asRecord(options.coinAttempts),
     coinFailures: asRecord(options.coinFailures),
@@ -180,7 +181,8 @@ function summarizeBrowserlessDecisionState(state, options = {}) {
     lastDecisionAction: redactBoundedValue(state.lastDecisionAction || null),
     opportunity: {
       choice: redactBoundedValue(state.opportunityChoice || state.currentOpportunity || null),
-      switchLock: redactBoundedValue(state.opportunitySwitchLock || state.switchLock || null)
+      switchLock: redactBoundedValue(state.opportunitySwitchLock || state.switchLock || null),
+      profitMission: redactBoundedValue(state.profitMission || null)
     },
     coin: {
       progressCount: Object.keys(coinProgress).length,

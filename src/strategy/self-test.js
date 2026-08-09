@@ -51,6 +51,7 @@ const {
   safeRetreatInterceptCandidateCore,
   selectCombatMovementArbitrationCore
 } = require('./combat-movement');
+const { selectProfitEscortDirectionCore } = require('./profit-escort');
 const { runCombatHpLossAttributionSelfTest } = require('./combat-hp-loss-attribution');
 const { recordActionSwitchDiagnosticsCore } = require('./action-switch-diagnostics');
 const { attackWorthTakingCore } = require('./attack-worth');
@@ -2605,6 +2606,45 @@ function runStrategyModuleSelfTests() {
       && pendingMove.dx === 1 && pendingMove.dy === 0
       && emergencyMove.source === 'emergency-dodge'
       && emergencyMove.dx === -1 && emergencyMove.dy === 0
+  });
+
+  const escortForward = selectProfitEscortDirectionCore({
+    active: true,
+    self: { x: 0, y: 0 },
+    missionTarget: { x: 90000, y: 0, authority: 'snapshot-navigation' },
+    combatTarget: { x: 8000, y: 0 }
+  }, {
+    localDetourRadiusCm: 10000,
+    detourCorridorCm: 4500
+  });
+  const escortSidePressure = selectProfitEscortDirectionCore({
+    active: true,
+    self: { x: 0, y: 0 },
+    missionTarget: { x: 90000, y: 0 },
+    combatTarget: { x: 3000, y: 7000 }
+  }, {
+    localDetourRadiusCm: 10000,
+    detourCorridorCm: 4500
+  });
+  const escortBlockedByBullet = selectCombatMovementArbitrationCore({
+    threatField: [
+      { dx: 1, dy: -1, directHits: 1, minCPA: 40 },
+      { dx: 0, dy: 1, directHits: 1, minCPA: 40 }
+    ],
+    strategicDirection: escortForward.direction,
+    currentDirection: { dx: 0, dy: 1 },
+    emergencyDirection: { dx: 0, dy: 1 }
+  }, { minimumCpaCm: 200 });
+  results.push({
+    name: 'profit-escort-keeps-forward-progress-and-yields-to-realtime-dodge',
+    passed: escortForward.active === true
+      && escortForward.detour === true
+      && escortForward.missionProgress > 0
+      && escortSidePressure.active === true
+      && escortSidePressure.missionProgress > 0
+      && escortBlockedByBullet.source === 'emergency-dodge'
+      && escortBlockedByBullet.dx === 0
+      && escortBlockedByBullet.dy === 1
   });
 
   const pressureAttackPaused = determineCombatFireState(

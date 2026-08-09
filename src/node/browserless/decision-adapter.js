@@ -186,6 +186,7 @@ const DEFAULT_INVULNERABLE_PROFIT_MOVE_SPEED_CM_PER_SEC = 1000;
 const DEFAULT_DANGEROUS_TARGET_COOLDOWN_MS = BROWSER_RUNTIME_DEFAULTS.browserlessDangerousTargetCooldownMs ?? 900000;
 const DEFAULT_EASY_KILL_APPROACH_WINDOW_MS = BROWSER_RUNTIME_DEFAULTS.browserlessEasyKillApproachWindowMs ?? 8000;
 const DEFAULT_EASY_KILL_APPROACH_MIN_CLOSING_CM = BROWSER_RUNTIME_DEFAULTS.browserlessEasyKillApproachMinClosingCm ?? 1000;
+const DEFAULT_PROFIT_MISSION_TTL_MS = 180000;
 const DEFAULT_ACTIVE_COIN_COMPETITION_MIN_SELF_DISTANCE_CM = BROWSER_RUNTIME_DEFAULTS.activeCoinCompetitionMinSelfDistanceCm ?? 18000;
 const DEFAULT_ACTIVE_COIN_COMPETITION_NEAR_COIN_DISTANCE_CM = BROWSER_RUNTIME_DEFAULTS.activeCoinCompetitionNearCoinDistanceCm ?? 8000;
 const DEFAULT_ACTIVE_COIN_COMPETITION_MIN_LEAD_DISTANCE_CM = BROWSER_RUNTIME_DEFAULTS.activeCoinCompetitionMinLeadDistanceCm ?? 4000;
@@ -5980,6 +5981,7 @@ function remoteProfitCandidateInput(input, options = {}) {
     candidates: [],
     realtimeSupersededIds: [],
     missSuppressedIds: [],
+    invalidatedIds: [],
     inputCount: Number(batch?.candidates?.length || 0),
     filtered: {},
     valid: false,
@@ -6068,6 +6070,7 @@ function remoteProfitCandidateInput(input, options = {}) {
         || approachEtaMs === null
         || remainingNowMs > approachEtaMs
     )) {
+      result.invalidatedIds.push(id);
       reject('invulnerable-not-ready-on-current-approach');
       continue;
     }
@@ -6113,6 +6116,268 @@ function remoteProfitActionTarget(item) {
     snapshotAt: item.snapshotAt || '',
     generation: Number(item.generation || 0)
   };
+}
+
+function profitMissionTtlMs(options = {}) {
+  const value = Number(options.profitMissionTtlMs ?? DEFAULT_PROFIT_MISSION_TTL_MS);
+  return Number.isFinite(value) ? Math.max(5000, value) : DEFAULT_PROFIT_MISSION_TTL_MS;
+}
+
+function profitMissionChoiceSource(choice) {
+  if (!choice) return null;
+  return choice.sourceCoin || choice.sourceTarget || choice.coin || choice.target || choice;
+}
+
+function profitMissionChoiceType(choice) {
+  return String(choice?.type || '');
+}
+
+function profitMissionChoiceId(choice) {
+  const id = choice?.id
+    ?? choice?.userId
+    ?? choice?.user_id
+    ?? choice?.sourceTarget?.userId
+    ?? choice?.sourceTarget?.user_id
+    ?? choice?.sourceCoin?.id
+    ?? choice?.sourceCoin?.drop_id;
+  return id === null || id === undefined || id === '' ? '' : String(id);
+}
+
+function profitMissionKeyForChoice(choice) {
+  if (!choice) return '';
+  const type = profitMissionChoiceType(choice);
+  const source = profitMissionChoiceSource(choice);
+  const id = profitMissionChoiceId(choice);
+  if (type === 'coin') {
+    const key = coinDecisionKey(source);
+    return key ? `coin:${key}` : '';
+  }
+  if (!type || !id) return '';
+  return `${type}:${id}`;
+}
+
+function profitMissionChoicePoint(choice) {
+  const source = profitMissionChoiceSource(choice);
+  const x = numberOrNull(source?.x ?? choice?.x);
+  const y = numberOrNull(source?.y ?? choice?.y);
+  return x === null || y === null ? null : { x, y };
+}
+
+function profitMissionNavigationTarget(choice) {
+  const type = profitMissionChoiceType(choice);
+  const source = profitMissionChoiceSource(choice);
+  if (type === 'coin') return summarizeCoin(source);
+  if (type === 'remote-player-navigation') return remoteProfitActionTarget(choice);
+  return summarizeTarget(source);
+}
+
+function profitMissionChoiceIsHighValue(choice, options = {}) {
+  if (!choice) return false;
+  if (profitMissionChoiceType(choice) === 'remote-player-navigation') return true;
+  // Browserless tier 1 is the ordinary nearby-opportunity tier. Only the
+  // elevated tiers represent a high-priority profit objective; otherwise a
+  // normal stream of small nearby coins would become an indefinite mission
+  // lock and suppress the existing opportunity-switch policy.
+  if (Number(choice.priorityTier || 0) >= 2) return true;
+  const source = profitMissionChoiceSource(choice);
+  const amount = Number(source?.amount ?? choice?.amount ?? 0);
+  const highValueAmount = Number(options.highValueCoinPriorityAmount
+    ?? OPPORTUNITY_CONSTANTS.HIGH_VALUE_COIN_PRIORITY_AMOUNT);
+  return Number.isFinite(amount) && amount >= highValueAmount;
+}
+
+function buildProfitMissionFromChoice(choice, input = {}, previous = null, options = {}) {
+  const type = profitMissionChoiceType(choice);
+  const key = profitMissionKeyForChoice(choice);
+  const point = profitMissionChoicePoint(choice);
+  const navigationTarget = profitMissionNavigationTarget(choice);
+  if (!type || !key || !point || !navigationTarget) return null;
+  const nowMs = Number.isFinite(Number(input.nowMs)) ? Number(input.nowMs) : Date.now();
+  const same = previous && String(previous.key || '') === key;
+  const currentDistance = input.self
+    ? distanceBetween(input.self, point)
+    : numberOrNull(choice.distance);
+  return {
+    active: true,
+    key,
+    missionKey: key,
+    type,
+    subjectId: profitMissionChoiceId(choice),
+    targetId: profitMissionChoiceId(choice),
+    navigationTarget: cloneJson(navigationTarget),
+    navigationAuthority: String(navigationTarget.authority || choice.authority || 'navigation'),
+    choice: cloneJson(choice),
+    score: numberOrNull(choice.score),
+    reward: numberOrNull(choice.reward ?? choice.expectedReward),
+    expectedReward: numberOrNull(choice.expectedReward ?? choice.reward),
+    staminaCost: numberOrNull(choice.staminaCost),
+    priorityTier: Number(choice.priorityTier || 0),
+    profitThresholdEligible: choice.profitThresholdEligible === false ? false : true,
+    highValue: profitMissionChoiceIsHighValue(choice, options),
+    selectedAt: same ? Number(previous.selectedAt || nowMs) : nowMs,
+    lastConfirmedAt: nowMs,
+    expiresAt: same && Number(previous.expiresAt || 0) > nowMs
+      ? Number(previous.expiresAt)
+      : nowMs + profitMissionTtlMs(options),
+    currentDistanceCm: currentDistance === null ? null : Math.round(currentDistance),
+    previousDistanceCm: same ? numberOrNull(previous.currentDistanceCm) : null,
+    netProgressCm: same ? Number(previous.netProgressCm || 0) : 0,
+    lastForwardProgressAt: same ? Number(previous.lastForwardProgressAt || nowMs) : nowMs,
+    lockReason: 'selected-profit-target',
+    generation: Number(choice.generation || choice.remoteGeneration || previous?.generation || 0)
+  };
+}
+
+function profitMissionMatchesChoice(mission, choice) {
+  return Boolean(mission && choice && String(mission.key || '') === profitMissionKeyForChoice(choice));
+}
+
+function profitMissionTargetId(mission) {
+  return String(mission?.targetId ?? mission?.subjectId ?? '');
+}
+
+function profitMissionRemoteInvalidated(input = {}, mission = {}, nowMs = Date.now(), remoteProfit = null) {
+  if (mission.type !== 'remote-player-navigation') return false;
+  const batch = input.remoteProfitBatch;
+  if (!batch || typeof batch !== 'object') return false;
+  if (Number(batch.expiresAtMs || 0) > 0 && Number(batch.expiresAtMs) <= nowMs) return true;
+  const id = profitMissionTargetId(mission);
+  const candidates = Array.isArray(batch.candidates) ? batch.candidates : null;
+  const candidatePresent = candidates
+    ? candidates.some(candidate => String(candidate?.userId ?? candidate?.user_id ?? candidate?.id ?? '') === id)
+    : true;
+  const realtimeSuperseded = (batch.realtimeSupersededIds || []).some(value => String(value) === id)
+    || (remoteProfit?.realtimeSupersededIds || []).some(value => String(value) === id);
+  const missSuppressed = (batch.missSuppressedIds || []).some(value => String(value) === id)
+    || (remoteProfit?.missSuppressedIds || []).some(value => String(value) === id);
+  const explicitlyInvalidated = (remoteProfit?.invalidatedIds || []).some(value => String(value) === id);
+  return !candidatePresent || realtimeSuperseded || missSuppressed || explicitlyInvalidated;
+}
+
+function clearProfitMission(stateful = {}, reason = '') {
+  if (!stateful || typeof stateful !== 'object') return false;
+  if (!stateful.profitMission) return false;
+  stateful.profitMission = null;
+  return true;
+}
+
+function reconcileProfitMissionState(input = {}, stateful = {}, options = {}, remoteProfit = null) {
+  const mission = stateful?.profitMission || null;
+  if (!mission) return null;
+  const nowMs = Number.isFinite(Number(input.nowMs)) ? Number(input.nowMs) : Date.now();
+  if (mission.active === false || Number(mission.expiresAt || 0) <= nowMs) {
+    clearProfitMission(stateful, 'expired');
+    return null;
+  }
+  if (profitMissionRemoteInvalidated(input, mission, nowMs, remoteProfit)) {
+    clearProfitMission(stateful, 'remote-target-invalidated');
+    return null;
+  }
+  const missionId = profitMissionTargetId(mission);
+  const visible = (input.visibleTargets || []).find(target => (
+    missionId && String(targetIdentity(target) || '') === missionId
+  ));
+  if (visible && (visible.alive === false || Number(visible.hp) <= 0)) {
+    clearProfitMission(stateful, 'target-completed');
+    return null;
+  }
+  const combat = stateful.combatTarget || null;
+  if (combat && missionId && String(combat.id || '') === missionId
+    && (Number(combat.hp) <= 0 || combat.escapeDecision?.confirmed === true)) {
+    clearProfitMission(stateful, 'combat-target-released');
+    return null;
+  }
+  const point = mission.navigationTarget || mission.target || null;
+  const currentDistance = input.self && point ? distanceBetween(input.self, point) : null;
+  const previousDistance = numberOrNull(mission.currentDistanceCm);
+  if (currentDistance !== null) {
+    mission.previousDistanceCm = previousDistance;
+    mission.currentDistanceCm = Math.round(currentDistance);
+    if (previousDistance !== null) {
+      const delta = previousDistance - currentDistance;
+      mission.netProgressCm = Number(mission.netProgressCm || 0) + delta;
+      if (delta > 0) mission.lastForwardProgressAt = nowMs;
+    }
+  }
+  mission.lastConfirmedAt = Math.max(Number(mission.lastConfirmedAt || 0), nowMs);
+  return mission;
+}
+
+function buildProfitMissionHeldOpportunity(input = {}, mission = {}, thresholdContext = {}, options = {}) {
+  if (!mission?.highValue || !mission.choice || !mission.navigationTarget) return null;
+  if (Number(mission.expiresAt || 0) <= Number(input.nowMs || Date.now())) return null;
+  const held = cloneJson(mission.choice);
+  const type = String(mission.type || held.type || '');
+  const source = profitMissionChoiceSource(held) || {};
+  const target = {
+    ...source,
+    ...mission.navigationTarget,
+    x: Number(mission.navigationTarget.x),
+    y: Number(mission.navigationTarget.y)
+  };
+  const distance = input.self ? distanceBetween(input.self, target) : Number(mission.currentDistanceCm);
+  held.type = type;
+  held.id = mission.subjectId || held.id;
+  held.x = target.x;
+  held.y = target.y;
+  held.distance = Number.isFinite(distance) ? Math.round(distance) : null;
+  held.score = numberOrNull(mission.score);
+  held.reward = numberOrNull(mission.reward);
+  held.expectedReward = numberOrNull(mission.expectedReward ?? mission.reward);
+  held.staminaCost = numberOrNull(mission.staminaCost);
+  held.priorityTier = Number(mission.priorityTier || held.priorityTier || 0);
+  held.reason = 'profit-mission-lock-hold';
+  held.missionHold = true;
+  held.held = true;
+  held.profitThresholdEligible = mission.profitThresholdEligible !== false;
+  held.profitThresholdActive = Boolean(thresholdContext.active);
+  held.profitThresholdRewardCoins = thresholdContext.threshold?.rewardCoins ?? null;
+  held.profitThresholdStaminaMilli = thresholdContext.threshold?.staminaMilli ?? null;
+  if (type === 'coin') {
+    held.sourceCoin = { ...source, ...target, distance: held.distance };
+  } else {
+    held.sourceTarget = {
+      ...source,
+      ...target,
+      distance: held.distance,
+      authority: type === 'remote-player-navigation' ? 'snapshot-navigation' : (target.authority || source.authority || ''),
+      cachedNavigationOnly: type === 'remote-player-navigation'
+    };
+  }
+  return held;
+}
+
+function updateProfitMissionFromOpportunity(stateful = {}, choice = null, input = {}, options = {}) {
+  const previous = stateful?.profitMission || null;
+  if (!choice) {
+    reconcileProfitMissionState(input, stateful, options);
+    return stateful?.profitMission || null;
+  }
+  const candidate = buildProfitMissionFromChoice(choice, input, previous, options);
+  if (!candidate) return reconcileProfitMissionState(input, stateful, options);
+  if (previous && previous.active !== false && String(previous.key || '') !== String(candidate.key || '')) {
+    reconcileProfitMissionState(input, stateful, options);
+    if (stateful?.profitMission?.highValue) return stateful.profitMission;
+  }
+  stateful.profitMission = candidate;
+  return candidate;
+}
+
+function updateProfitMissionProgress(input = {}, stateful = {}, options = {}) {
+  return reconcileProfitMissionState(input, stateful, options);
+}
+
+function releaseProfitMissionForPickups(stateful = {}, pickups = []) {
+  const mission = stateful?.profitMission || null;
+  if (!mission || mission.type !== 'coin') return false;
+  const missionKey = String(mission.key || '');
+  const matched = (pickups || []).some(pickup => {
+    const source = pickup?.coin || pickup?.target || pickup;
+    const key = coinDecisionKey(source);
+    return key && missionKey === `coin:${key}`;
+  });
+  if (!matched) return false;
+  return clearProfitMission(stateful, 'coin-picked-up');
 }
 
 function buildOpportunityDecision(input, stateful = {}, options = {}) {
@@ -6477,6 +6742,27 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       if (stateful.currentOpportunity === storedCurrent) stateful.currentOpportunity = null;
     }
   }
+  const lockedProfitMission = reconcileProfitMissionState(input, stateful, options, remoteProfit);
+  if (lockedProfitMission?.highValue) {
+    let missionOpportunity = opportunities.find(item => profitMissionMatchesChoice(lockedProfitMission, item)) || null;
+    if (!missionOpportunity) {
+      const heldMissionOpportunity = buildProfitMissionHeldOpportunity(
+        input,
+        lockedProfitMission,
+        thresholdContext,
+        options
+      );
+      const affordable = heldMissionOpportunity
+        && opportunityStaminaAffordable(input.self, heldMissionOpportunity.staminaCost, options);
+      if (affordable) {
+        opportunities = opportunities.concat([heldMissionOpportunity]);
+        missionOpportunity = heldMissionOpportunity;
+      }
+    }
+    if (missionOpportunity && (!current || !profitMissionMatchesChoice(lockedProfitMission, current))) {
+      current = missionOpportunity;
+    }
+  }
   const rawChoiceResult = chooseStableOpportunityCore(
     rawOpportunities,
     null,
@@ -6517,6 +6803,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     opportunityOptions
   );
   const chosen = choice.chosen || null;
+  updateProfitMissionFromOpportunity(stateful, chosen, input, options);
   if (missingEnemyHold?.releaseReason) {
     missingEnemyHold.replacementCandidate = chosen ? {
       type: String(chosen.type || ''),
@@ -6566,6 +6853,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     switchLock: thresholdContext.active && !opportunities.length ? null : (choice.switchLock || null),
     switchDiagnostics: choice.switchDiagnostics || null,
     opportunityChoice: remembered.choice || null,
+    profitMission: cloneJson(stateful.profitMission || null),
     action: remembered.action || action,
     missingEnemyHold,
     remoteProfit: {
@@ -6580,6 +6868,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       realtimeSupersededIds: remoteProfit.realtimeSupersededIds,
       missSuppressedIds: remoteProfit.missSuppressedIds,
       filtered: remoteProfit.filtered,
+      invalidatedIds: remoteProfit.invalidatedIds,
       selected: chosen?.type === 'remote-player-navigation' ? remoteProfitActionTarget(chosen) : null
     },
     threshold: {
@@ -8703,6 +8992,7 @@ function buildBrowserlessPursuitLeaveDecision(input, stateful, combat, options =
 }
 
 function buildCombatDecision(input, stateful = {}, options = {}) {
+  updateProfitMissionProgress(input, stateful, options);
   const combatLiveEnabled = (options.controlMode === 'combat-live' || options.controlMode === 'profit-live') && options.combatEnabled === true;
   const combatVisibleTargets = filterEconomicSuppressedCombatTargets(input, stateful);
   const combatRealtime = {
@@ -8863,6 +9153,7 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     }
   }
   stageTimings.input = performance.now() - stageStarted;
+  reconcileProfitMissionState(input, stateful, options);
   stageStarted = performance.now();
   const coinPickups = recentRealtimeSnapshotCoinPickups(stateful, input.nowMs);
   stageTimings.coinPickups = performance.now() - stageStarted;
@@ -9154,6 +9445,7 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     action,
     combat: {
       ...(lootControl.combat || combat.dryRun || {}),
+      profitMission: cloneJson(stateful.profitMission || null),
       dangerousTargetCooldown: dangerousCombatExit,
       profitPursuitSuppression: realtimeEconomicSuppression
     },
@@ -9581,7 +9873,12 @@ function clearDangerousOpportunityState(stateful = {}, nowMs = 0) {
   if (!stateful || typeof stateful !== 'object') return;
   const choice = stateful.currentOpportunity || stateful.opportunityChoice || null;
   const targetId = opportunityChoiceTargetId(choice);
-  if (!targetId || !dangerousTargetCooldownRecordById(stateful, targetId, nowMs)) return;
+  const missionId = profitMissionTargetId(stateful.profitMission);
+  const dangerousChoice = targetId && dangerousTargetCooldownRecordById(stateful, targetId, nowMs);
+  const dangerousMission = missionId && dangerousTargetCooldownRecordById(stateful, missionId, nowMs);
+  if (!dangerousChoice && !dangerousMission) return;
+  if (dangerousMission) stateful.profitMission = null;
+  if (!dangerousChoice) return;
   stateful.opportunityChoice = null;
   stateful.currentOpportunity = null;
   stateful.opportunitySwitchLock = null;
@@ -10352,6 +10649,9 @@ function easyKillApproachTarget(input, approach) {
 function clearEasyKillOpportunityTarget(stateful = {}, targetId = '') {
   if (!targetId) return;
   clearSuppressedCombatTarget(stateful, targetId);
+  if (profitMissionTargetId(stateful.profitMission) === String(targetId)) {
+    stateful.profitMission = null;
+  }
   const choiceId = opportunityChoiceTargetId(stateful.opportunityChoice || stateful.currentOpportunity || null);
   if (choiceId === String(targetId)) {
     stateful.opportunityChoice = null;
@@ -10725,6 +11025,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     forcePostAttackCoinDecoration: true
   });
   const coinPickups = observeBrowserlessCoinPickups(input, stateful, options);
+  releaseProfitMissionForPickups(stateful, coinPickups);
   cleanupCoinProgressState(stateful, input.nowMs, options);
   applyIgnoredCoinFilter(input, stateful);
   clearActiveCoinCompetitionDecisionState(input, stateful);
@@ -11409,6 +11710,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       dataGaps: input.dataGaps
     },
     profit: {
+      mission: cloneJson(stateful.profitMission || opportunity.profitMission || null),
       best: summarizeOpportunity(
         action?.finalCandidate?.switchReason === 'best-eligible-profit'
           ? (outputOpportunityChoice || opportunity.choice)
@@ -11459,6 +11761,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       lastDecisionAction: cloneJson(stateful.lastDecisionAction || null),
       opportunityChoice: outputOpportunityChoice,
       switchLock: outputSwitchLock,
+      profitMission: cloneJson(stateful.profitMission || null),
       singleCoinBait: cloneJson(stateful.singleCoinBait || null),
       outsideCenterIdle: cloneJson(stateful.outsideCenterIdle || null),
       recoveryContactGuard: cloneJson(stateful.recoveryContactGuard || null)
@@ -11703,6 +12006,9 @@ function createBrowserlessDecisionAdapter(options = {}) {
     syncPlannerDecision(decision) {
       const plannerState = decision?.stateful || null;
       if (!plannerState || typeof plannerState !== 'object') return false;
+      if (Object.prototype.hasOwnProperty.call(plannerState, 'profitMission')) {
+        decisionState.profitMission = cloneJson(plannerState.profitMission || null);
+      }
       const proposedChoice = plannerState.opportunityChoice ?? null;
       const currentCombatTargetId = targetIdForAttackHistory(decisionState.combatTarget);
       const proposedTargetId = opportunityChoiceTargetId(proposedChoice);
@@ -11778,6 +12084,7 @@ function createBrowserlessDecisionAdapter(options = {}) {
       return {
         finalActionPreemption: decisionState.finalActionPreemption || null,
         lastDecisionAction: decisionState.lastDecisionAction || null,
+        profitMission: decisionState.profitMission || null,
         recoveryContactGuard: decisionState.recoveryContactGuard || null,
         attackHistory: decisionState.attackHistory || [],
         postKillSettlement: decisionState.postKillSettlement || null,

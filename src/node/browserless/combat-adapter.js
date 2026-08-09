@@ -29,6 +29,7 @@ const {
   stabilizeCombatMovementDirectionCore,
   shouldBackAwayFromTarget
 } = require('../../strategy/combat-movement');
+const { selectProfitEscortDirectionCore } = require('../../strategy/profit-escort');
 const {
   checkLowConfidenceThrottle,
   classifyFireRiskCore,
@@ -1027,8 +1028,7 @@ function updateContactEntryGuard(stateful, self, targets = [], bullets = [], opt
     if (!id
       || (targetHp !== null && targetHp <= 0)
       || isInvulnerableEntity(target)
-      || isHardCombatProtectedTarget(target, options)
-      || (dynamicWhitelistMember && !dynamicContactEligible && !targetBullet)) continue;
+      || isHardCombatProtectedTarget(target, options)) continue;
     const previous = state.observations[id] || null;
     const previousArmed = previous?.armed !== false;
     const risk = withOptionOverrides(options, {
@@ -1046,6 +1046,13 @@ function updateContactEntryGuard(stateful, self, targets = [], bullets = [], opt
       lastBlockedReason: risk.blockedReason
     };
     const row = { target, targetId: id, targetBullet, risk };
+    if (dynamicWhitelistMember && !dynamicContactEligible && !targetBullet
+      && !(risk.eligible && risk.directApproach)) {
+      if (!bestBlocked || Number(risk.distance ?? Infinity) < Number(bestBlocked.risk.distance ?? Infinity)) {
+        bestBlocked = row;
+      }
+      continue;
+    }
     if (risk.eligible) candidates.push(row);
     else if (!bestBlocked || Number(risk.distance ?? Infinity) < Number(bestBlocked.risk.distance ?? Infinity)) bestBlocked = row;
   }
@@ -1105,6 +1112,43 @@ function updateContactEntryGuard(stateful, self, targets = [], bullets = [], opt
     realBulletTakeover: Boolean(selected.targetBullet),
     remainingMs: holdMs
   };
+}
+
+function directClosingDynamicWhitelistTargetId(self, targets = [], stateful = {}, options = {}) {
+  if (!self || !Array.isArray(targets) || !targets.length) return '';
+  const observations = stateful?.contactEntryGuard?.observations || {};
+  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const observationTtlMs = Math.max(1000, Number(options.combatContactEntryObservationTtlMs ?? 3000));
+  const attackRange = Math.max(0, Number(options.combatAttackRange || options.attackRange || COMBAT_CONSTANTS.ATTACK_RANGE));
+  const guardBuffer = Math.max(0, Number(options.combatContactEntryGuardBufferCm ?? COMBAT_CONSTANTS.DODGE_RANGE_BUFFER));
+  const selfHp = hpValue(self);
+  const selfMaxHp = hpValue({ hp: self.max_hp ?? self.maxHp });
+  const recoveringSelf = selfHp !== null && selfMaxHp !== null && selfHp < selfMaxHp;
+  const candidates = [];
+  for (const target of targets) {
+    const dynamicWhitelistMember = Boolean(
+      target?.dynamicWhitelistMember || target?.whitelistContactPolicy?.dynamicWhitelistMember
+    );
+    if (!dynamicWhitelistMember
+      || target?.whitelistContactPolicy?.proactiveCombatEligible === true) continue;
+    const id = String(combatTargetId(target) || '');
+    const previous = id ? observations[id] : null;
+    if (!id || !previous || nowMs - Number(previous.at || 0) > observationTtlMs) continue;
+    const distance = Number(target.distance);
+    if (!Number.isFinite(distance) || distance > attackRange) continue;
+    const risk = contactEntryRiskCore(self, target, previous, {
+      ...options,
+      attackRange,
+      guardBufferCm: guardBuffer,
+      realBullet: false,
+      armed: true,
+      recoveringSelf
+    });
+    if (!risk.eligible || !risk.directApproach || risk.firing || risk.realBullet) continue;
+    candidates.push({ id, distance, closingSpeed: Number(risk.closingSpeed || 0) });
+  }
+  candidates.sort((left, right) => right.closingSpeed - left.closingSpeed || left.distance - right.distance);
+  return candidates[0]?.id || '';
 }
 
 function bulletOwnerId(bullet) {
@@ -2525,15 +2569,95 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     dy: Math.sign(Number(target.y || 0) - Number(self.y || 0))
   };
   const awayFromTarget = { dx: -towardTarget.dx, dy: -towardTarget.dy };
-  const strategicDirection = closePressureTooClose
-    ? awayFromTarget
-    : (strafe?.active
-        ? { dx: strafe.dx, dy: strafe.dy }
-        : (safeRetreatInterceptEnabled
-            && safeRetreatIntercept.eligible
-            && !preDodge
-            ? safeRetreatIntercept.direction
-            : (closeIn ? towardTarget : null)));
+  const profitMission = options.profitMission && typeof options.profitMission === 'object'
+    ? options.profitMission
+    : null;
+  const missionTarget = profitMission?.navigationTarget
+    || profitMission?.target
+    || profitMission;
+  const missionTargetId = String(
+    profitMission?.targetId
+      ?? profitMission?.subjectId
+      ?? missionTarget?.userId
+      ?? missionTarget?.user_id
+      ?? missionTarget?.id
+      ?? ''
+  );
+  const currentTargetId = String(combatTargetId(target) || '');
+  const missionIsDifferentTarget = Boolean(
+    missionTargetId
+      && currentTargetId
+      && missionTargetId !== currentTargetId
+  );
+  const recentMotionSamples = (Array.isArray(combatTargetState?.motionSamples)
+    ? combatTargetState.motionSamples
+    : [])
+    .filter(sample => Number(options.nowMs || Date.now()) - Number(sample?.at || 0) <= 2500);
+  const firstMotionSample = recentMotionSamples[0] || null;
+  const lastMotionSample = recentMotionSamples.at(-1) || null;
+  const closingPressure = Boolean(
+    firstMotionSample
+      && lastMotionSample
+      && Number(firstMotionSample.distance) - Number(lastMotionSample.distance) >= 200
+  );
+  const realTargetBulletPressure = (bullets || []).some(bullet => (
+    bullet?.synthetic !== true
+      && String(bullet?.ownerId ?? bullet?.owner_id ?? '') === currentTargetId
+  ));
+  const recentTargetThreat = Number(combatTargetState?.lastThreatAt || 0) > 0
+    && Number(options.nowMs || Date.now()) - Number(combatTargetState.lastThreatAt) <= 2500;
+  const defensiveEscortEvidence = Boolean(
+    target.combatIntent === 'defensive'
+      || target.combatIntent === 'whitelist-proximity'
+      || target.firing
+      || realTargetBulletPressure
+      || String(combatTargetState?.originIntent || '') === 'defensive'
+      || String(combatTargetState?.originIntent || '') === 'whitelist-proximity'
+      || (target.dynamicWhitelistMember && (closingPressure || recentTargetThreat))
+  );
+  const profitEscort = missionIsDifferentTarget && defensiveEscortEvidence
+    ? selectProfitEscortDirectionCore({
+        active: profitMission.active !== false,
+        self,
+        missionTarget,
+        combatTarget: target,
+        forceSeparation: closePressureTooClose
+      }, {
+        localDetourRadiusCm: options.profitEscortLocalDetourRadiusCm,
+        detourCorridorCm: options.profitEscortDetourCorridorCm,
+        minimumForwardProgress: options.profitEscortMinimumForwardProgress,
+        detourSeparationWeight: options.profitEscortDetourSeparationWeight
+      })
+    : null;
+  if (profitEscort) {
+    profitEscort.missionKey = String(profitMission.key || profitMission.missionKey || '');
+    profitEscort.missionType = String(profitMission.type || '');
+    profitEscort.missionTargetId = missionTargetId;
+    profitEscort.navigationAuthority = String(
+      missionTarget?.authority || profitMission.navigationAuthority || 'navigation'
+    );
+    profitEscort.evidence = {
+      targetCombatIntent: String(target.combatIntent || ''),
+      dynamicWhitelistMember: Boolean(target.dynamicWhitelistMember),
+      targetFiring: Boolean(target.firing),
+      realTargetBulletPressure,
+      closingPressure,
+      recentTargetThreat,
+      targetDistanceCm: Number.isFinite(Number(target.distance)) ? Math.round(Number(target.distance)) : null
+    };
+  }
+  const escortDirection = profitEscort?.active ? profitEscort.direction : null;
+  const strategicDirection = escortDirection
+    ? escortDirection
+    : (closePressureTooClose
+        ? awayFromTarget
+        : (strafe?.active
+            ? { dx: strafe.dx, dy: strafe.dy }
+            : (safeRetreatInterceptEnabled
+                && safeRetreatIntercept.eligible
+                && !preDodge
+                ? safeRetreatIntercept.direction
+                : (closeIn ? towardTarget : null))));
   const pendingCommands = (options.pendingVelocityCommands || [])
     .filter(command => command && Number.isFinite(Number(command.effectiveAfterTicks)))
     .slice()
@@ -2571,7 +2695,10 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     if (source === 'emergency-dodge') modifiers.push('dodge');
     else if (source === 'pending-safe-hold' || source === 'current-safe-hold') modifiers.push('hold-current');
     else if (preDodge) modifiers.push('predictive-hold');
-    else if (closePressureTooClose) modifiers.push('back-away');
+    else if (profitEscort?.active) {
+      modifiers.push('profit-escort');
+      if (profitEscort.detour) modifiers.push('profit-escort-detour');
+    } else if (closePressureTooClose) modifiers.push('back-away');
     else if (strafe?.active) modifiers.push('close-pressure-strafe');
     else modifiers.push('close-in');
     movement = { dx: movementArbitration.dx, dy: movementArbitration.dy, modifiers };
@@ -2635,20 +2762,24 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
         bullets,
         dodge,
         baseMovement: movement,
-        baseDistanceBand: closePressureTooClose
-          ? 'separate'
-          : (strafe?.active
-              ? 'strafe'
-              : (closeIn ? 'approach' : 'hold-spacing')),
+        baseDistanceBand: profitEscort?.active
+          ? 'escort'
+          : (closePressureTooClose
+              ? 'separate'
+              : (strafe?.active
+                  ? 'strafe'
+                  : (closeIn ? 'approach' : 'hold-spacing'))),
         currentDirection,
         pendingDirection,
         pendingVelocityCommands: options.pendingVelocityCommands,
         movementExecutionTiming: options.movementExecutionTiming,
         currentTick: options.currentTick,
         moveSpeedPerTick: options.combatMoveSpeedPerTick || 50,
-        radialIntentVector: closePressureTooClose
-          ? awayFromTarget
-          : (closeIn ? towardTarget : movement),
+        radialIntentVector: profitEscort?.active
+          ? profitEscort.direction
+          : (closePressureTooClose
+              ? awayFromTarget
+              : (closeIn ? towardTarget : movement)),
         previousState: options.distanceAwareDodgeState || null,
         reactionSlack: distanceAwareReactionSlack,
         activeOpponent: target.active === true,
@@ -2739,6 +2870,8 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     ? (preDodge ? 'close-pressure-predictive-hold' : 'combat-current-safe-hold')
     : movement.modifiers.includes('predictive-hold')
     ? (closePressureActive ? 'close-pressure-predictive-hold' : 'pre-dodge-induce-hold')
+    : movement.modifiers.includes('profit-escort')
+    ? (profitEscort?.reason || 'profit-escort-forward')
     : (movement.modifiers.includes('back-away') || movement.modifiers.includes('back-away-mixed')
         ? (closePressureTooClose ? 'combat-close-pressure-separate' : 'back-away')
         : (movement.modifiers.includes('close-in')
@@ -2830,6 +2963,10 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       minimumRangeCm: Math.round(closePressureMinRange),
       tooClose: closePressureTooClose,
       strafe: strafe ? { ...strafe } : null
+    } : null,
+    profitEscort: profitEscort ? {
+      ...profitEscort,
+      direction: profitEscort.direction ? { ...profitEscort.direction } : null
     } : null,
     pressureClose: pressureClose ? { active: true, noDamageMs: Math.round(noDamageMs), closeRange } : null,
     passiveRunner: passiveRunner.active ? passiveRunner : null,
@@ -3532,6 +3669,12 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     .some(intent => String(intent || '') === 'defensive')
     ? String(stateful?.combatTarget?.id ?? '')
     : '';
+  const directClosingTargetId = directClosingDynamicWhitelistTargetId(
+    self,
+    targets,
+    stateful,
+    options
+  );
   const context = {
     userId: selfUserId,
     bullets,
@@ -3539,7 +3682,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     incomingBulletOwnerId: incomingBullet?.ownerId,
     unknownIncoming: Boolean(incomingBullet && (incomingBullet.ownerId === null || incomingBullet.ownerId === undefined)),
     easyKillPreferredTargetId: options.easyKillPreferredTargetId,
-    defensiveEngagementTargetId: establishedDefensiveTargetId,
+    defensiveEngagementTargetId: establishedDefensiveTargetId || directClosingTargetId,
     recoveringSelf: Boolean(
       self
         && selfHp !== null
@@ -4134,6 +4277,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     pendingVelocityCommands: state?.command?.movement?.pendingVelocityCommands || options.pendingVelocityCommands,
     realtimeStateObservedAtMs: realtime.receivedAtMs,
     combatDistanceAwareDodgeEnabled: options.combatDistanceAwareDodgeEnabled === true,
+    profitMission: options.profitMission || stateful?.profitMission || null,
     distanceAwareDodgeState: stateful?.distanceAwareDodgeState || null,
     engagementId: stateful?.combatMetrics?.engagementId || '',
     currentTick: realtime.tick,

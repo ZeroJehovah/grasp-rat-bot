@@ -269,6 +269,13 @@ function activeCombatRequiresThreatEvidence(entity, context = {}) {
 }
 
 function combatTargetThreatensSelf(entity, context = {}) {
+  const defensiveEngagementTargetId = context.defensiveEngagementTargetId;
+  const entityId = targetId(entity);
+  if (defensiveEngagementTargetId !== null
+    && defensiveEngagementTargetId !== undefined
+    && defensiveEngagementTargetId !== ''
+    && entityId !== ''
+    && String(defensiveEngagementTargetId) === entityId) return true;
   if (incomingOwnerMatchesTarget(entity, context)) return true;
   if (recentInjuryMatchesTarget(entity, context)) return true;
   if (context.unknownIncoming && isActiveCombatMode(entity) && isFiringCombatEntity(entity)) return true;
