@@ -1334,7 +1334,7 @@ function renderBrowserlessWebPanel() {
       'snapshot safety not confirmed: damage-actor-near-login-point': '今日伤害过我的玩家在登录点附近，暂不进入',
       'snapshot-safety-streak-pending': '登录点已安全，等待连续确认',
       'snapshot-safety-streak-missing': '缺少登录点安全结果',
-      'daily-first-login-delay': '每日首次登录将在 00:02 开始',
+      'daily-first-login-delay': '每日首次登录将在 00:00:30 开始',
       'missing-manual-session': '等待登录信息',
       'missing-login-point': '缺少登录点坐标',
       'missing-snapshot-tick': '快照缺少时间戳',

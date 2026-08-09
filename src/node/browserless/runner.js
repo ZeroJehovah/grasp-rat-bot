@@ -720,7 +720,7 @@ function isFirstBrowserlessLoginOfDay(state, nowMs = Date.now()) {
 function browserlessDailyFirstLoginNotBeforeMs(state, config = {}, nowMs = Date.now()) {
   const nowValue = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
   if (!isFirstBrowserlessLoginOfDay(state, nowValue)) return 0;
-  const delayAfterMidnightMs = Math.max(0, Number(config.dailyFirstLoginDelayMs ?? 120000));
+  const delayAfterMidnightMs = Math.max(0, Number(config.dailyFirstLoginDelayMs ?? 30000));
   return browserlessDayStartMs(nowValue) + delayAfterMidnightMs;
 }
 

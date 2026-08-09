@@ -16,7 +16,7 @@ const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const PICKED_COINS_PER_SELF_DROP = 2;
 const DEFAULT_STAMINA_EXHAUSTED_THRESHOLD_MS = 1000;
-const DEFAULT_STAMINA_RESET_GRACE_MS = 10000;
+const DEFAULT_STAMINA_RESET_GRACE_MS = 30000;
 const RECENT_EXIT_MATCH_WINDOW_MS = 60000;
 const RECENT_EXIT_COMBAT_ASSOCIATION_MAX_AGE_MS = 6000;
 const HIGH_DROP_PANEL_THRESHOLD = 500;
@@ -635,7 +635,7 @@ function compactDailyFirstLoginNotBeforeMs(stats, config = {}, candidateMs = 0) 
   if (String(today.day || '') === candidateDay && Math.max(0, Number(today.sessionCount || 0)) > 0) {
     return 0;
   }
-  const delayAfterMidnightMs = Math.max(0, Number(config.dailyFirstLoginDelayMs ?? 120000));
+  const delayAfterMidnightMs = Math.max(0, Number(config.dailyFirstLoginDelayMs ?? 30000));
   return browserlessStatsDayStartMs(candidateDay) + delayAfterMidnightMs;
 }
 
