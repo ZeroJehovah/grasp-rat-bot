@@ -124,6 +124,138 @@ function assertImmediateRemoteRelease(nextBatch, firstNowMs = 2000, nextNowMs = 
   return next;
 }
 
+function assertRealtimeSupersededMissionContinuity() {
+  const adapter = createBrowserlessDecisionAdapter({
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    singleCoinBaitEnabled: false,
+    finalActionArbitrationHoldMs: 0,
+    opportunitySwitchConfirmFrames: 1,
+    opportunitySwitchMargin: 0,
+    opportunitySwitchRelativeMargin: 0
+  });
+  const firstBatch = batch(remoteCandidate({
+    name: 'mango',
+    active: true,
+    classification: 'easy-kill-active',
+    easyKillScore: 2,
+    drop: 134,
+    expectedReward: 60,
+    adjustedScore: 300000
+  }));
+  const first = decide(adapter, state(fullStaminaSelf()), 2000, firstBatch, {
+    controlMode: 'profit-live',
+    combatEnabled: true
+  });
+  assert.strictEqual(first.action?.kind, 'seek-remote-player');
+  assert.strictEqual(first.profit?.mission?.highValue, true);
+
+  const supersededBatch = {
+    ...firstBatch,
+    realtimeSupersededIds: ['99']
+  };
+  const paused = decide(
+    adapter,
+    state(fullStaminaSelf(), [], [{ drop_id: 'detour', amount: 1, x: 100, y: 0 }]),
+    2100,
+    supersededBatch,
+    { controlMode: 'profit-live', combatEnabled: true }
+  );
+  assert.strictEqual(paused.action?.target?.type, 'coin');
+  assert.notStrictEqual(paused.action?.kind, 'seek-remote-player');
+  assert.strictEqual(paused.profit?.mission?.targetId, '99');
+  assert.strictEqual(paused.profit?.mission?.highValue, true);
+  assert.strictEqual(paused.profit?.mission?.navigationPaused, true);
+  assert.strictEqual(
+    paused.profit?.mission?.currentDistanceCm,
+    first.profit?.mission?.currentDistanceCm
+  );
+  assert.strictEqual(
+    paused.profit?.mission?.lastConfirmedAt,
+    first.profit?.mission?.lastConfirmedAt
+  );
+  assert.strictEqual(
+    paused.profit?.mission?.navigationPauseReason,
+    'realtime-superseded-awaiting-authority'
+  );
+
+  const realtimeMango = {
+    entity_id: 2,
+    user_id: 99,
+    name: 'mango',
+    x: 48000,
+    y: 0,
+    vx: -35,
+    vy: 0,
+    hp: 100,
+    max_hp: 100,
+    drop: 134,
+    current_join_mode: 'Active',
+    stamina_5s_remaining_milli: 1000000,
+    stamina_5s_limit_milli: 1000000,
+    stamina_1h_remaining_milli: 3000000,
+    stamina_1d_remaining_milli: 20000000
+  };
+  const handoff = decide(
+    adapter,
+    state(fullStaminaSelf(), [realtimeMango]),
+    2200,
+    supersededBatch,
+    {
+      controlMode: 'profit-live',
+      combatEnabled: true,
+      easyKillPlayers: [{ userId: 99, score: 2 }],
+      dailyDamageUserIds: []
+    }
+  );
+  assert.strictEqual(handoff.action?.kind, 'seek-enemy');
+  assert.strictEqual(handoff.action?.target?.userId, 99);
+  assert.strictEqual(handoff.profit?.mission?.type, 'enemy');
+  assert.strictEqual(handoff.profit?.mission?.targetId, '99');
+  assert.strictEqual(handoff.profit?.mission?.highValue, true);
+  assert.strictEqual(handoff.profit?.mission?.lockReason, 'same-target-authority-handoff');
+
+  const missing = decide(
+    adapter,
+    state(fullStaminaSelf()),
+    5001,
+    supersededBatch,
+    { controlMode: 'profit-live', combatEnabled: true }
+  );
+  assert.strictEqual(missing.action?.kind, 'seek-enemy');
+  assert.strictEqual(missing.action?.target?.userId, 99);
+  assert.strictEqual(missing.action?.target?.cachedNavigationOnly, true);
+  assert.strictEqual(missing.profit?.mission?.highValue, true);
+
+  const highValueDetour = decide(
+    adapter,
+    state(fullStaminaSelf(), [], [{ drop_id: 'high-detour', amount: 100, x: 100, y: 0 }]),
+    5100,
+    supersededBatch,
+    { controlMode: 'profit-live', combatEnabled: true }
+  );
+  assert.strictEqual(highValueDetour.action?.target?.type, 'coin');
+  assert.strictEqual(highValueDetour.profit?.mission?.targetId, '99');
+  assert.strictEqual(highValueDetour.profit?.mission?.highValue, true);
+
+  const resumed = decide(
+    adapter,
+    state(fullStaminaSelf(), [{ ...realtimeMango, x: 45000 }]),
+    5200,
+    supersededBatch,
+    {
+      controlMode: 'profit-live',
+      combatEnabled: true,
+      easyKillPlayers: [{ userId: 99, score: 2 }],
+      dailyDamageUserIds: []
+    }
+  );
+  assert.strictEqual(resumed.action?.target?.userId, 99);
+  assert.strictEqual(resumed.profit?.mission?.targetId, '99');
+  assert.strictEqual(resumed.profit?.mission?.highValue, true);
+}
+
 function runRemoteProfitDecisionSelfTest() {
   const adapter = createBrowserlessDecisionAdapter({
     userId: 7,
@@ -458,9 +590,9 @@ function runRemoteProfitDecisionSelfTest() {
   assert.strictEqual(input.remoteProfitBatch.candidates.length, 1);
 
   assertImmediateRemoteRelease(batch(remoteCandidate(), { generation: 4, candidates: [] }));
-  assertImmediateRemoteRelease(batch(remoteCandidate(), { realtimeSupersededIds: ['99'] }));
   assertImmediateRemoteRelease(batch(remoteCandidate(), { missSuppressedIds: ['99'] }));
   assertImmediateRemoteRelease(remoteBatch, 210900, 211000);
+  assertRealtimeSupersededMissionContinuity();
 
   const ordinaryAdapter = createBrowserlessDecisionAdapter({
     userId: 7,
@@ -673,7 +805,7 @@ function runRemoteProfitDecisionSelfTest() {
   assert.strictEqual(stale.input?.loot?.reason, 'snapshot-stale');
   assert.strictEqual(staleAdapter.getState().realtimeLootIntent, null);
 
-  return { ok: true, cases: 42 };
+  return { ok: true, cases: 46 };
 }
 
 if (require.main === module) {

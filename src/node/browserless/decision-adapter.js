@@ -6213,7 +6213,8 @@ function buildProfitMissionFromChoice(choice, input = {}, previous = null, optio
     staminaCost: numberOrNull(choice.staminaCost),
     priorityTier: Number(choice.priorityTier || 0),
     profitThresholdEligible: choice.profitThresholdEligible === false ? false : true,
-    highValue: profitMissionChoiceIsHighValue(choice, options),
+    highValue: profitMissionChoiceIsHighValue(choice, options)
+      || Boolean(same && previous.highValue === true),
     selectedAt: same ? Number(previous.selectedAt || nowMs) : nowMs,
     lastConfirmedAt: nowMs,
     expiresAt: same && Number(previous.expiresAt || 0) > nowMs
@@ -6223,7 +6224,16 @@ function buildProfitMissionFromChoice(choice, input = {}, previous = null, optio
     previousDistanceCm: same ? numberOrNull(previous.currentDistanceCm) : null,
     netProgressCm: same ? Number(previous.netProgressCm || 0) : 0,
     lastForwardProgressAt: same ? Number(previous.lastForwardProgressAt || nowMs) : nowMs,
-    lockReason: 'selected-profit-target',
+    lockReason: same && previous.lockReason
+      ? String(previous.lockReason)
+      : 'selected-profit-target',
+    originKey: same ? String(previous.originKey || '') : '',
+    originType: same ? String(previous.originType || '') : '',
+    navigationPaused: Boolean(same && previous.navigationPaused),
+    navigationPauseReason: same ? String(previous.navigationPauseReason || '') : '',
+    navigationPausedAt: same ? Number(previous.navigationPausedAt || 0) : 0,
+    navigationPauseGeneration: same ? Number(previous.navigationPauseGeneration || 0) : 0,
+    navigationResumedAt: same ? Number(previous.navigationResumedAt || 0) : 0,
     generation: Number(choice.generation || choice.remoteGeneration || previous?.generation || 0)
   };
 }
@@ -6236,11 +6246,19 @@ function profitMissionTargetId(mission) {
   return String(mission?.targetId ?? mission?.subjectId ?? '');
 }
 
-function profitMissionRemoteInvalidated(input = {}, mission = {}, nowMs = Date.now(), remoteProfit = null) {
-  if (mission.type !== 'remote-player-navigation') return false;
+function profitMissionRemoteState(input = {}, mission = {}, nowMs = Date.now(), remoteProfit = null) {
+  const state = {
+    invalidated: false,
+    navigationPaused: false,
+    reason: '',
+    generation: Number(input?.remoteProfitBatch?.generation || remoteProfit?.generation || 0)
+  };
+  if (mission.type !== 'remote-player-navigation') return state;
   const batch = input.remoteProfitBatch;
-  if (!batch || typeof batch !== 'object') return false;
-  if (Number(batch.expiresAtMs || 0) > 0 && Number(batch.expiresAtMs) <= nowMs) return true;
+  if (!batch || typeof batch !== 'object') return state;
+  if (Number(batch.expiresAtMs || 0) > 0 && Number(batch.expiresAtMs) <= nowMs) {
+    return { ...state, invalidated: true, reason: 'remote-batch-expired' };
+  }
   const id = profitMissionTargetId(mission);
   const candidates = Array.isArray(batch.candidates) ? batch.candidates : null;
   const candidatePresent = candidates
@@ -6251,7 +6269,17 @@ function profitMissionRemoteInvalidated(input = {}, mission = {}, nowMs = Date.n
   const missSuppressed = (batch.missSuppressedIds || []).some(value => String(value) === id)
     || (remoteProfit?.missSuppressedIds || []).some(value => String(value) === id);
   const explicitlyInvalidated = (remoteProfit?.invalidatedIds || []).some(value => String(value) === id);
-  return !candidatePresent || realtimeSuperseded || missSuppressed || explicitlyInvalidated;
+  if (!candidatePresent) return { ...state, invalidated: true, reason: 'remote-target-missing' };
+  if (missSuppressed) return { ...state, invalidated: true, reason: 'remote-target-miss-suppressed' };
+  if (explicitlyInvalidated) return { ...state, invalidated: true, reason: 'remote-target-invalidated' };
+  if (realtimeSuperseded) {
+    return {
+      ...state,
+      navigationPaused: true,
+      reason: 'realtime-superseded-awaiting-authority'
+    };
+  }
+  return state;
 }
 
 function clearProfitMission(stateful = {}, reason = '') {
@@ -6269,9 +6297,22 @@ function reconcileProfitMissionState(input = {}, stateful = {}, options = {}, re
     clearProfitMission(stateful, 'expired');
     return null;
   }
-  if (profitMissionRemoteInvalidated(input, mission, nowMs, remoteProfit)) {
-    clearProfitMission(stateful, 'remote-target-invalidated');
+  const remoteState = profitMissionRemoteState(input, mission, nowMs, remoteProfit);
+  if (remoteState.invalidated) {
+    clearProfitMission(stateful, remoteState.reason || 'remote-target-invalidated');
     return null;
+  }
+  if (remoteState.navigationPaused) {
+    mission.navigationPaused = true;
+    mission.navigationPauseReason = remoteState.reason;
+    mission.navigationPausedAt = Number(mission.navigationPausedAt || nowMs);
+    mission.navigationPauseGeneration = remoteState.generation;
+  } else if (mission.navigationPaused) {
+    mission.navigationPaused = false;
+    mission.navigationPauseReason = '';
+    mission.navigationPausedAt = 0;
+    mission.navigationPauseGeneration = 0;
+    mission.navigationResumedAt = nowMs;
   }
   const missionId = profitMissionTargetId(mission);
   const visible = (input.visibleTargets || []).find(target => (
@@ -6290,7 +6331,7 @@ function reconcileProfitMissionState(input = {}, stateful = {}, options = {}, re
   const point = mission.navigationTarget || mission.target || null;
   const currentDistance = input.self && point ? distanceBetween(input.self, point) : null;
   const previousDistance = numberOrNull(mission.currentDistanceCm);
-  if (currentDistance !== null) {
+  if (!mission.navigationPaused && currentDistance !== null) {
     mission.previousDistanceCm = previousDistance;
     mission.currentDistanceCm = Math.round(currentDistance);
     if (previousDistance !== null) {
@@ -6299,12 +6340,16 @@ function reconcileProfitMissionState(input = {}, stateful = {}, options = {}, re
       if (delta > 0) mission.lastForwardProgressAt = nowMs;
     }
   }
-  mission.lastConfirmedAt = Math.max(Number(mission.lastConfirmedAt || 0), nowMs);
+  if (!mission.navigationPaused) {
+    mission.lastConfirmedAt = Math.max(Number(mission.lastConfirmedAt || 0), nowMs);
+  }
+  mission.lastReconciledAt = nowMs;
   return mission;
 }
 
 function buildProfitMissionHeldOpportunity(input = {}, mission = {}, thresholdContext = {}, options = {}) {
   if (!mission?.highValue || !mission.choice || !mission.navigationTarget) return null;
+  if (mission.navigationPaused) return null;
   if (Number(mission.expiresAt || 0) <= Number(input.nowMs || Date.now())) return null;
   const held = cloneJson(mission.choice);
   const type = String(mission.type || held.type || '');
@@ -6336,15 +6381,49 @@ function buildProfitMissionHeldOpportunity(input = {}, mission = {}, thresholdCo
   if (type === 'coin') {
     held.sourceCoin = { ...source, ...target, distance: held.distance };
   } else {
+    if (type === 'enemy') held.actionKind = 'seek-enemy';
     held.sourceTarget = {
       ...source,
       ...target,
       distance: held.distance,
       authority: type === 'remote-player-navigation' ? 'snapshot-navigation' : (target.authority || source.authority || ''),
-      cachedNavigationOnly: type === 'remote-player-navigation'
+      cachedNavigationOnly: true
     };
   }
   return held;
+}
+
+function profitMissionSameSubjectAuthorityHandoff(previous = null, candidate = null) {
+  if (!previous || !candidate) return false;
+  const previousId = profitMissionTargetId(previous);
+  const candidateId = profitMissionTargetId(candidate);
+  if (!previousId || previousId !== candidateId) return false;
+  const types = new Set([String(previous.type || ''), String(candidate.type || '')]);
+  return types.has('remote-player-navigation') && types.has('enemy');
+}
+
+function inheritProfitMissionAuthorityHandoff(previous = {}, candidate = {}, input = {}) {
+  const nowMs = Number.isFinite(Number(input.nowMs)) ? Number(input.nowMs) : Date.now();
+  return {
+    ...candidate,
+    highValue: previous.highValue === true || candidate.highValue === true,
+    selectedAt: Number(previous.selectedAt || candidate.selectedAt || nowMs),
+    expiresAt: Number(previous.expiresAt || 0) > nowMs
+      ? Number(previous.expiresAt)
+      : Number(candidate.expiresAt || nowMs),
+    previousDistanceCm: numberOrNull(previous.currentDistanceCm),
+    netProgressCm: Number(previous.netProgressCm || 0),
+    lastForwardProgressAt: Number(previous.lastForwardProgressAt || candidate.lastForwardProgressAt || nowMs),
+    lockReason: 'same-target-authority-handoff',
+    originKey: String(previous.originKey || previous.key || ''),
+    originType: String(previous.originType || previous.type || ''),
+    navigationPaused: false,
+    navigationPauseReason: '',
+    navigationPausedAt: 0,
+    navigationPauseGeneration: 0,
+    navigationResumedAt: nowMs,
+    generation: Number(candidate.generation || previous.generation || 0)
+  };
 }
 
 function updateProfitMissionFromOpportunity(stateful = {}, choice = null, input = {}, options = {}) {
@@ -6357,7 +6436,12 @@ function updateProfitMissionFromOpportunity(stateful = {}, choice = null, input 
   if (!candidate) return reconcileProfitMissionState(input, stateful, options);
   if (previous && previous.active !== false && String(previous.key || '') !== String(candidate.key || '')) {
     reconcileProfitMissionState(input, stateful, options);
-    if (stateful?.profitMission?.highValue) return stateful.profitMission;
+    const retained = stateful?.profitMission || null;
+    if (profitMissionSameSubjectAuthorityHandoff(retained, candidate)) {
+      stateful.profitMission = inheritProfitMissionAuthorityHandoff(retained, candidate, input);
+      return stateful.profitMission;
+    }
+    if (retained?.highValue) return retained;
   }
   stateful.profitMission = candidate;
   return candidate;
