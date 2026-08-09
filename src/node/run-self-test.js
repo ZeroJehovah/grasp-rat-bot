@@ -220,7 +220,10 @@ const {
   missCloseExitReasonTextCore,
   nearbyCoinIconCore,
   panelSessionFlagsCore,
+  remoteSnapshotProfitTargetTitleCore,
+  remoteTargetActivityTextCore,
   restartDrainBlockedReasonTextCore,
+  targetAuthoritySourceTextCore,
   transportMetricValueClassCore,
   renderBrowserlessWebPanel
 } = require('./browserless/web-panel');
@@ -34534,6 +34537,41 @@ async function runSelfTest() {
       want: '401|200|true|true|true|200|true|12|true|true|true|200|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|200|true|1'
     },
     {
+      name: 'browserless web panel presents remote snapshot profit navigation as movement',
+      got: (() => {
+        const panelHtml = renderBrowserlessWebPanel();
+        const activeTarget = {
+          name: 'mango',
+          authority: 'snapshot-navigation',
+          hp: 100,
+          drop: 134,
+          distance: 48000,
+          active: true,
+          moving: true,
+          firing: false,
+          remoteClassification: 'easy-kill-active'
+        };
+        return [
+          BROWSERLESS_WEB_PANEL_VERSION,
+          remoteTargetActivityTextCore(activeTarget),
+          remoteTargetActivityTextCore({
+            active: false,
+            moving: false,
+            firing: false,
+            remoteClassification: 'high-drop-afk'
+          }),
+          remoteSnapshotProfitTargetTitleCore(activeTarget),
+          targetAuthoritySourceTextCore(activeTarget.authority),
+          targetAuthoritySourceTextCore('snapshot'),
+          panelHtml.includes("'remote-snapshot-profit-target': '远程快照收益目标'"),
+          panelHtml.includes("'seek-remote-player': '靠近远程收益玩家'"),
+          panelHtml.includes("if (kind === 'seek-remote-player') return remoteSnapshotProfitTargetTitle(target);"),
+          panelHtml.includes("if (reason === 'remote-snapshot-profit-target') return '远程快照收益目标';")
+        ].join('|');
+      })(),
+      want: '2026.08.10.1|活动玩家|挂机玩家|正在靠近高Drop活动玩家|HTTP全局快照|WS状态帧|true|true|true|true'
+    },
+    {
       name: 'browserless web panel colors each transport metric value by severity',
       got: (() => {
         const panelHtml = renderBrowserlessWebPanel();
@@ -34557,7 +34595,7 @@ async function runSelfTest() {
           panelHtml.includes('.transport-metric.muted,.transport-metric.muted .metric-value{color:var(--muted)}')
         ].join('|');
       })(),
-      want: '2026.08.04.1|ok|warn|bad|ok|warn|bad|ok|warn|bad|muted|true|true|true|true|true|true'
+      want: '2026.08.10.1|ok|warn|bad|ok|warn|bad|ok|warn|bad|muted|true|true|true|true|true|true'
     },
     {
       name: 'browserless web panel animates keyed map markers between status refreshes',
@@ -34595,7 +34633,7 @@ async function runSelfTest() {
           /function stopAutoRefresh\(\)\s*\{\s*cancelMapMarkerAnimation\(true\);/.test(panelScript)
         ].join('|');
       })(),
-      want: '2026.08.04.1|coin:0|player:alice||0|0.875|1|97.5|195.0|110|220|true|true|true|true|true|true|true|true|true|true|true'
+      want: '2026.08.10.1|coin:0|player:alice||0|0.875|1|97.5|195.0|110|220|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless status server adds dynamic whitelist players by name',
@@ -36119,7 +36157,7 @@ async function runSelfTest() {
           !panelScript.includes("setRichText('roleTitleMeta', [{ text: '已离线', className: 'muted' }], 'muted');")
         ].join('|');
       })(),
-      want: '2026.08.04.1|true|true|true|true|true|true'
+      want: '2026.08.10.1|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',

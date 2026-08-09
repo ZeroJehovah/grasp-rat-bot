@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.08.3';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.10.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -127,6 +127,31 @@ function transportMetricValueClassCore(value, metricKind) {
   if (number < limits[0]) return 'ok';
   if (number < limits[1]) return 'warn';
   return 'bad';
+}
+
+function remoteTargetActivityTextCore(target = {}) {
+  const classification = String(target?.remoteClassification || '').toLowerCase();
+  if (classification === 'easy-kill-active'
+    || target?.active === true
+    || target?.moving === true
+    || target?.firing === true) return '活动玩家';
+  if (classification === 'high-drop-afk'
+    || (target?.active === false && target?.moving === false && target?.firing === false)) return '挂机玩家';
+  return '玩家';
+}
+
+function remoteSnapshotProfitTargetTitleCore(target = {}) {
+  return '正在靠近高Drop' + remoteTargetActivityTextCore(target);
+}
+
+function targetAuthoritySourceTextCore(source) {
+  const text = String(source || '').toLowerCase();
+  if (!text) return '--';
+  if (text.includes('real') || text.includes('live') || text.includes('native')) return 'WS实时位置';
+  if (text.includes('snapshot-navigation')) return 'HTTP全局快照';
+  if (text.includes('snapshot') || text.includes('fallback')) return 'WS状态帧';
+  if (text.includes('state')) return '记录';
+  return '--';
 }
 
 function panelSessionFlagsCore(status = {}) {
@@ -733,6 +758,9 @@ function renderBrowserlessWebPanel() {
     const interpolateMapMarker = ${interpolateMapMarkerCore.toString()};
     const mapTrailOpacity = ${mapTrailOpacityCore.toString()};
     const transportMetricValueClass = ${transportMetricValueClassCore.toString()};
+    const remoteTargetActivityText = ${remoteTargetActivityTextCore.toString()};
+    const remoteSnapshotProfitTargetTitle = ${remoteSnapshotProfitTargetTitleCore.toString().replace('remoteTargetActivityTextCore', 'remoteTargetActivityText')};
+    const sourceText = ${targetAuthoritySourceTextCore.toString()};
 
     const value = v => v === null || v === undefined || v === '' ? '--' : String(v);
     const number = v => v === null || v === undefined || v === '' ? null : (Number.isFinite(Number(v)) ? Number(v) : null);
@@ -1279,6 +1307,7 @@ function renderBrowserlessWebPanel() {
       'best-opportunity': '综合收益最高',
       'best-opportunity-drop-target': '选择收益最高的目标',
       'best-opportunity-afk-drop-target': '攻击不动且有掉落的目标',
+      'remote-snapshot-profit-target': '远程快照收益目标',
       'approach-profitable-drop-target': '靠近高收益目标',
       'opportunistic-afk-drop-shot': '顺手打不动的目标',
       'combat-attack': '正在打架',
@@ -1403,6 +1432,7 @@ function renderBrowserlessWebPanel() {
       coin: '捡金币',
       'seek-coin': '去捡金币',
       'seek-enemy': '靠近挂机玩家',
+      'seek-remote-player': '靠近远程收益玩家',
       'profit-candidate': '选择金币目标',
       attack: '攻击目标',
       'combat-live': '打架',
@@ -1598,14 +1628,6 @@ function renderBrowserlessWebPanel() {
     function modeText(mode, combatEnabled) {
       const text = modeMap[mode] || (mode ? '自动运行' : '--');
       return combatEnabled ? text + ' / 可打架' : text;
-    }
-    function sourceText(source) {
-      const text = String(source || '').toLowerCase();
-      if (!text) return '--';
-      if (text.includes('real') || text.includes('live') || text.includes('native')) return 'WS实时位置';
-      if (text.includes('snapshot') || text.includes('fallback')) return 'WS状态帧';
-      if (text.includes('state')) return '记录';
-      return '--';
     }
     function dataGapText(gap) {
       const text = String(gap || '');
@@ -1898,6 +1920,7 @@ function renderBrowserlessWebPanel() {
       if (kind === 'seek-coin') return '去捡金币 ' + targetLabel(target);
       if (kind === 'profit-candidate') return '选择金币目标 ' + targetLabel(target);
       if (kind === 'seek-enemy') return '靠近高Drop挂机玩家 ' + targetLabel(target);
+      if (kind === 'seek-remote-player') return '靠近高Drop' + remoteTargetActivityText(target) + ' ' + targetLabel(target);
       if (kind === 'attack' || kind === 'combat-live') return '打目标 ' + targetLabel(target);
       return kindText(kind);
     }
@@ -1917,6 +1940,7 @@ function renderBrowserlessWebPanel() {
         if (String(reason).includes('bait')) return '正在蹲守1金币诱饵';
         return amount !== null && amount <= 1 ? '正在移动前往小额金币' : '正在移动前往大额金币';
       }
+      if (kind === 'seek-remote-player') return remoteSnapshotProfitTargetTitle(target);
       if (kind === 'seek-enemy') return '正在靠近高Drop挂机玩家';
       if (kind === 'attack') {
         const afk = target && target.active !== true && target.firing !== true && target.moving !== true;
@@ -1939,6 +1963,7 @@ function renderBrowserlessWebPanel() {
         });
       }
       if (reason === 'best-opportunity' || reason === 'best-opportunity-coin' || reason === 'best-opportunity-coin-route' || reason === 'best-eligible-profit') return '综合收益最高';
+      if (reason === 'remote-snapshot-profit-target') return '远程快照收益目标';
       if (reason === 'post-attack-drop-wait-position' || reason === 'post-kill-settlement-wait') return '等待掉落确认';
       if (kind === 'coin' || kind === 'seek-coin' || kind === 'profit-candidate') return reasonText(reason) === actionTitleText(status) ? '综合收益最高' : reasonText(reason);
       return actionReasonText(status);
@@ -3769,9 +3794,12 @@ module.exports = {
   mapTrailOpacityCore,
   missCloseExitReasonTextCore,
   recoveryContactExitReasonTextCore,
+  remoteSnapshotProfitTargetTitleCore,
+  remoteTargetActivityTextCore,
   nearbyCoinIconCore,
   panelSessionFlagsCore,
   restartDrainBlockedReasonTextCore,
+  targetAuthoritySourceTextCore,
   transportMetricValueClassCore,
   renderBrowserlessWebPanel
 };
