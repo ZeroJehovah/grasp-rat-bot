@@ -11,6 +11,7 @@ const EXECUTION_TYPES = new Set([
   'shoot-skip',
   'shoot-stop'
 ]);
+const OUTSIDE_BATTLE_EXECUTION_CLASSES = new Set(['profit-opportunity', 'safety']);
 
 function numberOrNull(value) {
   if (value === null || value === undefined || value === '') return null;
@@ -181,6 +182,7 @@ function reconcileShotOwnership(options = {}) {
   const assignedByType = {};
   const duplicateByType = {};
   const unresolvedByType = {};
+  const outsideByType = {};
 
   function addDispatchOwner(key, segmentId) {
     if (!key || !segmentId) return;
@@ -295,6 +297,23 @@ function reconcileShotOwnership(options = {}) {
 
   function resolveEvent(event) {
     const type = eventType(event);
+    const executionClass = text(eventField(event, 'executionClass'));
+    const explicitlyOutside = OUTSIDE_BATTLE_EXECUTION_CLASSES.has(executionClass)
+      && [
+        eventField(event, 'originStatus'),
+        eventField(event, 'ownershipDisposition')
+      ].some(value => text(value) === 'outside-battle-context');
+    const hasOwnershipEvidence = [
+      'originSegmentId',
+      'segmentGeneration',
+      'currentSegmentId',
+      'currentSegmentFile',
+      'engagementGeneration'
+    ].some(field => text(eventField(event, field)));
+    if (explicitlyOutside
+      || (OUTSIDE_BATTLE_EXECUTION_CLASSES.has(executionClass) && !hasOwnershipEvidence)) {
+      return { segment: null, reason: 'outside-battle-context' };
+    }
     const key = requestKey(event);
     if (ACCEPTED_TYPES.has(type) && !key) {
       return { segment: null, reason: 'missing-request-identity-no-unique-owner' };
@@ -348,6 +367,18 @@ function reconcileShotOwnership(options = {}) {
       : { segment: null, reason: 'unsupported-execution-type' };
     if (!resolved?.segment) {
       const reason = text(resolved?.reason || 'unresolved');
+      if (reason === 'outside-battle-context') {
+        bump(outsideByType, type);
+        assignments.push({
+          event,
+          type,
+          status: 'outside-battle-context',
+          reason,
+          candidates: resolved?.candidates || [],
+          segmentId: null
+        });
+        continue;
+      }
       bump(unresolvedReasons, reason);
       bump(unresolvedByType, type);
       const related = segmentById.get(text(eventField(event, 'currentSegmentId')))
@@ -421,6 +452,7 @@ function reconcileShotOwnership(options = {}) {
   const duplicateCount = Object.values(duplicateByType).reduce((sum, value) => sum + value, 0);
   const assignedCount = Object.values(assignedByType).reduce((sum, value) => sum + value, 0);
   const unresolvedCount = Object.values(unresolvedByType).reduce((sum, value) => sum + value, 0);
+  const outsideBattleCount = Object.values(outsideByType).reduce((sum, value) => sum + value, 0);
   return {
     rows,
     assignments,
@@ -429,12 +461,14 @@ function reconcileShotOwnership(options = {}) {
       duplicateCount,
       assignedCount,
       unresolvedCount,
-      accountedCount: duplicateCount + assignedCount + unresolvedCount,
-      ok: rawAmendmentCount === duplicateCount + assignedCount + unresolvedCount,
+      outsideBattleCount,
+      accountedCount: duplicateCount + assignedCount + unresolvedCount + outsideBattleCount,
+      ok: rawAmendmentCount === duplicateCount + assignedCount + unresolvedCount + outsideBattleCount,
       rawByType,
       assignedByType,
       duplicateByType,
       unresolvedByType,
+      outsideByType,
       duplicateReasons,
       unresolvedReasons
     }
@@ -493,7 +527,9 @@ function runShotOwnershipReconcilerSelfTest() {
     { type: 'shoot-ack-accepted', atMs: 2140, controlGeneration: 'c1', engagementGeneration: 'gB1', currentSegmentId: 'B#1', targetId: 'B', ack: { bullet_id: 'missing-request' } },
     { type: 'shoot-dispatch', atMs: 2100, requestId: 'B-shot', requestSequence: 2, controlGeneration: 'c1', engagementGeneration: 'gB1', segmentGeneration: 'A#1', currentSegmentId: 'B#1', targetId: 'B' },
     { type: 'shoot-dispatch', atMs: 5500, requestId: 'ambiguous', controlGeneration: 'c3', engagementGeneration: 'shared', targetId: 'X' },
-    { type: 'shoot-ack-accepted', atMs: 7000, requestId: 'orphan', controlGeneration: 'c4', engagementGeneration: 'none', targetId: 'Z', ack: { bullet_id: 'orphan' } }
+    { type: 'shoot-ack-accepted', atMs: 7000, requestId: 'orphan', controlGeneration: 'c4', engagementGeneration: 'none', targetId: 'Z', ack: { bullet_id: 'orphan' } },
+    { type: 'shoot-dispatch', atMs: 7010, requestId: 'profit-outside', executionClass: 'profit-opportunity', targetId: 'P', currentSegmentId: 'C#1', currentSegmentFile: 'C-1.gz', originStatus: 'outside-battle-context', ownershipDisposition: 'outside-battle-context' },
+    { type: 'shoot-dispatch', atMs: 7020, requestId: 'unknown-context', executionClass: 'unknown', targetId: 'U' }
   ];
   const result = reconcileShotOwnership({ segments, physicalSegments, amendments });
   const byId = new Map(result.rows.map(row => [row.segmentId, row]));
@@ -507,6 +543,11 @@ function runShotOwnershipReconcilerSelfTest() {
     missingRequestPreserved: result.conservation.unresolvedReasons['missing-request-identity-no-unique-owner'] === 1,
     ambiguousPreserved: result.conservation.unresolvedReasons['ambiguous-engagement-generation'] === 1,
     trulyUnresolvedPreserved: result.conservation.unresolvedReasons['no-compatible-segment'] === 1
+      && result.conservation.unresolvedReasons['missing-segment-and-engagement-evidence'] === 1,
+    explicitProfitOutsideBattle: result.conservation.outsideBattleCount === 1
+      && result.conservation.outsideByType['shoot-dispatch'] === 1,
+    unknownClassRemainsUnresolved: result.assignments.some(item => item.event.requestId === 'unknown-context'
+      && item.status === 'unresolved')
   };
   return {
     ok: Object.values(checks).every(Boolean),

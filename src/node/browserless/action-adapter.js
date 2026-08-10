@@ -48,6 +48,12 @@ const DEFAULT_NEAR_COIN_CONTINUATION_LEASE_SLACK_MS = 125;
 const DEFAULT_NEAR_COIN_CONTINUATION_MIN_LEASE_MS = 250;
 const DEFAULT_NEAR_COIN_CONTINUATION_STOP_SPEED_TOLERANCE = 1;
 const DEFAULT_NEAR_COIN_CONTINUATION_SNAPSHOT_MAX_AGE_MS = 5000;
+const SHOOT_EXECUTION_CLASSES = Object.freeze({
+  COMBAT: 'combat',
+  PROFIT_OPPORTUNITY: 'profit-opportunity',
+  SAFETY: 'safety',
+  UNKNOWN: 'unknown'
+});
 const COMMAND_SUMMARY_CACHE = new WeakMap();
 const NO_TRANSPORT_FAILURE = Object.freeze({});
 
@@ -59,6 +65,18 @@ function numberOrNull(value) {
 function optionalNumber(value) {
   if (value === null || value === undefined || value === '') return null;
   return numberOrNull(value);
+}
+
+function normalizeShootExecutionClass(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  switch (normalized) {
+    case SHOOT_EXECUTION_CLASSES.COMBAT:
+    case SHOOT_EXECUTION_CLASSES.PROFIT_OPPORTUNITY:
+    case SHOOT_EXECUTION_CLASSES.SAFETY:
+      return normalized;
+    default:
+      return SHOOT_EXECUTION_CLASSES.UNKNOWN;
+  }
 }
 
 const SELF_STAMINA_METADATA_FIELDS = [
@@ -518,6 +536,7 @@ function summarizeCommand(command) {
     sentAtMs: command.sentAtMs,
     requestId: command.requestId ?? null,
     requestSequence: command.requestSequence ?? null,
+    executionClass: command.executionClass || 'unknown',
     controlGeneration: command.controlGeneration || '',
     engagementGeneration: command.engagementGeneration || '',
     segmentGeneration: command.segmentGeneration || '',
@@ -647,6 +666,7 @@ function createBrowserlessActionAdapter(options = {}) {
     const entry = {
       type: String(event.type || 'shoot-execution'),
       atMs: optionalNumber(event.atMs) ?? now(),
+      executionClass: normalizeShootExecutionClass(event.executionClass),
       requestId: event.requestId ?? null,
       commandId: event.commandId ?? null,
       requestSequence: optionalNumber(event.requestSequence),
@@ -687,6 +707,7 @@ function createBrowserlessActionAdapter(options = {}) {
       atMs: now(),
       requestId,
       controlGeneration,
+      executionClass: shotMeta.executionClass,
       engagementGeneration: shotMeta.engagementGeneration,
       targetId: targetRepeatKey(target),
       baseCadenceMs: shotMeta.baseCadenceMs,
@@ -1858,6 +1879,7 @@ function createBrowserlessActionAdapter(options = {}) {
       retryInMs: gate.retryInMs ?? null,
       execution: recordSkip
         ? skippedShootExecution(gate.reason, target, {}, {
+            executionClass: SHOOT_EXECUTION_CLASSES.PROFIT_OPPORTUNITY,
             outcome: 'stamina-reserve'
           })
         : null
@@ -1892,13 +1914,16 @@ function createBrowserlessActionAdapter(options = {}) {
         staminaPlan: gate.staminaPlan || null,
         execution: sendOptions.recordSkip === false
           ? null
-          : skippedShootExecution(skipReason, target, {}, {
+          : skippedShootExecution(skipReason, target, {
+              executionClass: SHOOT_EXECUTION_CLASSES.PROFIT_OPPORTUNITY
+            }, {
               outcome: skipReason === 'missing-shoot-coordinates' ? 'skipped' : 'correlation-slots-exhausted'
             })
       };
     }
     const afkCadenceMs = Math.max(afkShootMinIntervalMs, Number(cadenceMs || 0));
     const sent = sendShoot(targetX, targetY, startX, startY, reason, target, afkCadenceMs, {
+      executionClass: SHOOT_EXECUTION_CLASSES.PROFIT_OPPORTUNITY,
       aimMode: aim.slot === 0 ? 'afk-center' : 'afk-ack-correlation'
     });
     sent.aimCorrelation = {
@@ -2275,17 +2300,21 @@ function createBrowserlessActionAdapter(options = {}) {
 
   function sendShoot(targetX, targetY, startX, startY, reason, target = null, cadenceMs = combatShootMinIntervalMs, shotMeta = {}) {
     const atMs = now();
+    const executionClass = normalizeShootExecutionClass(shotMeta.executionClass);
     const requestId = `${controlGeneration || 'control'}:shoot-attempt:${nextShootAttemptSequence++}`;
-    const publishedSegmentGeneration = String(getSegmentGeneration?.({
-      atMs,
-      controlGeneration,
-      engagementGeneration: shotMeta.engagementGeneration,
-      targetId: targetRepeatKey(target)
-    }) || shotMeta.segmentGeneration || '');
+    const publishedSegmentGeneration = executionClass === SHOOT_EXECUTION_CLASSES.COMBAT
+      ? String(getSegmentGeneration?.({
+          atMs,
+          controlGeneration,
+          engagementGeneration: shotMeta.engagementGeneration,
+          targetId: targetRepeatKey(target)
+        }) || shotMeta.segmentGeneration || '')
+      : String(shotMeta.segmentGeneration || '');
     const executionContext = {
       atMs,
       requestId,
       controlGeneration,
+      executionClass,
       engagementGeneration: shotMeta.engagementGeneration,
       segmentGeneration: publishedSegmentGeneration,
       ownerSelfId,
@@ -2398,6 +2427,7 @@ function createBrowserlessActionAdapter(options = {}) {
       startY: Math.round(Number(startY) || 0),
       reason,
       requestId,
+      executionClass,
       controlGeneration,
       engagementGeneration: String(shotMeta.engagementGeneration || ''),
       segmentGeneration: publishedSegmentGeneration,
@@ -2461,6 +2491,7 @@ function createBrowserlessActionAdapter(options = {}) {
           commandId: command.id,
           requestId: command.requestId,
           requestSequence: command.requestSequence,
+          executionClass: command.executionClass,
           controlGeneration: command.controlGeneration,
           engagementGeneration: command.engagementGeneration,
           segmentGeneration: command.segmentGeneration,
@@ -2507,6 +2538,7 @@ function createBrowserlessActionAdapter(options = {}) {
         if (telemetry && typeof telemetry === 'object') {
           command.requestId = telemetry.requestId ?? command.requestId;
           command.requestSequence = optionalNumber(telemetry.requestSequence ?? telemetry.sequence);
+          command.executionClass = normalizeShootExecutionClass(telemetry.executionClass || command.executionClass);
           command.controlGeneration = String(telemetry.controlGeneration || command.controlGeneration || '');
           command.engagementGeneration = String(telemetry.engagementGeneration || command.engagementGeneration || '');
           command.segmentGeneration = String(telemetry.segmentGeneration || command.segmentGeneration || '');
@@ -2521,6 +2553,7 @@ function createBrowserlessActionAdapter(options = {}) {
       requestId: command.requestId,
       requestSequence: command.requestSequence,
       controlGeneration: command.controlGeneration,
+      executionClass: command.executionClass,
       engagementGeneration: command.engagementGeneration,
       segmentGeneration: command.segmentGeneration,
       ownerSelfId: command.ownerSelfId,
@@ -2569,6 +2602,7 @@ function createBrowserlessActionAdapter(options = {}) {
       requestId: null,
       commandId: state.lastShootCommand?.id ?? null,
       controlGeneration,
+      executionClass: SHOOT_EXECUTION_CLASSES.SAFETY,
       engagementGeneration,
       targetId: detail.targetId ?? targetRepeatKey(detail.target),
       baseCadenceMs: detail.baseCadenceMs,
@@ -3202,6 +3236,7 @@ function createBrowserlessActionAdapter(options = {}) {
         state.skippedCount += 1;
         const shotMeta = {
           observedTick: combat.timing?.observedTick ?? combat.tick,
+          executionClass: SHOOT_EXECUTION_CLASSES.COMBAT,
           engagementGeneration: combat.metrics?.engagementGeneration,
           baseCadenceMs: shooting.cadenceMs,
           executionCadenceMs: shooting.executionCadenceMs ?? shooting.cadenceMs,
@@ -3225,6 +3260,7 @@ function createBrowserlessActionAdapter(options = {}) {
           shooting.executionCadenceMs || shooting.cadenceMs,
           {
             observedTick: combat.timing?.observedTick ?? combat.tick,
+            executionClass: SHOOT_EXECUTION_CLASSES.COMBAT,
             engagementGeneration: combat.metrics?.engagementGeneration,
             baseCadenceMs: shooting.cadenceMs,
             executionCadenceMs: shooting.executionCadenceMs || shooting.cadenceMs,

@@ -95,6 +95,7 @@ function runCombatShotExecutionSelfTest() {
   const controlA = store.beginControlGeneration('ws-open');
   const requestA = store.recordShootRequest({
     requestId: 'request-a',
+    executionClass: 'combat',
     targetId: 8,
     targetX: 100,
     targetY: 0,
@@ -119,6 +120,7 @@ function runCombatShotExecutionSelfTest() {
   const acceptedExecution = ackExecutionEvents.find(event => event.type === 'shoot-ack-accepted');
   check('accepted ACK listener carries bounded replay geometry without expanding cached execution state',
     acceptedExecution?.requestSequence === requestA.requestSequence
+      && acceptedExecution?.executionClass === 'combat'
       && acceptedExecution?.ownerSelfId === 1
       && acceptedExecution?.wireTarget?.x === 100
       && acceptedExecution?.ack?.bullet_id === 'bullet-a'
@@ -137,11 +139,13 @@ function runCombatShotExecutionSelfTest() {
   store.ingestFrame(shotAck('bullet-a', 100, 0, 11), { receivedAtMs: nowMs + 30 });
   command = store.getCommandState(nowMs + 30).shooting;
   check('duplicate ACK is counted without accepting a request twice', command.acceptedShots === 1
-    && command.duplicateAckCount === 1);
+    && command.duplicateAckCount === 1
+    && ackExecutionEvents.find(event => event.type === 'shoot-ack-duplicate')?.executionClass === 'combat');
 
   nowMs += 50;
   store.recordShootRequest({
     requestId: 'request-late',
+    executionClass: 'profit-opportunity',
     targetId: 8,
     targetX: 200,
     targetY: 0,
@@ -164,7 +168,8 @@ function runCombatShotExecutionSelfTest() {
   const late = command.confirmedShots.find(shot => shot.requestId === 'request-late');
   check('late ACK remains owned by its expired request generation', late?.lateAck === true
     && late.engagementGeneration === 'engagement-a'
-    && command.lateAckCount === 1);
+    && command.lateAckCount === 1
+    && ackExecutionEvents.find(event => event.type === 'shoot-ack-late')?.executionClass === 'profit-opportunity');
 
   store.ingestFrame(shotAck('bullet-orphan', 999, 999, 40), { receivedAtMs: nowMs + 20 });
   command = store.getCommandState(nowMs + 20).shooting;
@@ -312,10 +317,12 @@ function runCombatShotExecutionSelfTest() {
     && executionEvents.filter(event => event.type === 'shoot-dispatch').length === modes.length
     && executionEvents.filter(event => event.type === 'shoot-dispatch').every(event => (
       Number(event.requestSequence) > 0
+        && event.executionClass === 'combat'
         && event.segmentGeneration === 'segment:execution-current'
     ))
     && actionStore.getCommandState(actionNow).shooting.pendingShots.every(request => (
-      request.segmentGeneration === 'segment:execution-current'
+      request.executionClass === 'combat'
+        && request.segmentGeneration === 'segment:execution-current'
     )));
 
   actionNow += 50;
@@ -373,10 +380,12 @@ function runCombatShotExecutionSelfTest() {
     && wireDispatches === modes.length);
   check('safety shot stop and stale skip remain structured and generation-bound', executionEvents.some(event => (
     event.type === 'shoot-stop'
+    && event.executionClass === 'safety'
     && event.engagementGeneration === 'execution-generation'
     && event.outcome === 'sealed'
   )) && executionEvents.some(event => (
     event.type === 'shoot-skip'
+    && event.executionClass === 'combat'
     && event.engagementGeneration === 'execution-generation'
     && event.outcome === 'shooting-sealed'
   )));

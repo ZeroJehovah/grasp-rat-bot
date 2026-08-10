@@ -32,10 +32,28 @@ const DEFAULT_IDLE_FINALIZE_MS = 15000;
 const BATTLES_DIR = 'battles';
 const INDEX_FILE = 'index.jsonl';
 const SHOT_AMENDMENTS_FILE = 'shot-amendments.jsonl';
+const SEGMENT_LIFECYCLE_FILE = 'segment-lifecycle.jsonl';
+const MAX_ORIGIN_RESOLUTION_CANDIDATES = 4;
 const MAX_INDEX_LINE_BYTES = 8192;
 const BATTLE_INDEX_FORMAT_VERSION = 2;
 const MAX_TRACKED_ENGAGEMENT_SEGMENTS = 256;
 const MAX_TRAJECTORY_COVERAGE_SHOT_EVENTS = 128;
+
+function normalizeExecutionClass(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  switch (normalized) {
+    case 'combat':
+    case 'profit-opportunity':
+    case 'safety':
+      return normalized;
+    default:
+      return 'unknown';
+  }
+}
+
+function isOutsideBattleExecutionClass(value) {
+  return value === 'profit-opportunity' || value === 'safety';
+}
 const SEGMENT_METRIC_FIELDS = Object.freeze([
   'intentShotCount',
   'wireRequestCount',
@@ -1271,6 +1289,28 @@ function createCombatBattleLog(options = {}) {
       io.finalize(battle.rawFile);
       summary = buildBattleSummary(battle, reason, atMs);
       io.appendIndex(path.join(battle.dir, INDEX_FILE), summary);
+      io.appendIndex(path.join(battle.dir, SEGMENT_LIFECYCLE_FILE), {
+        formatVersion: 1,
+        type: 'segment-close',
+        atMs,
+        segmentId: summary.segmentId,
+        segmentOrdinal: summary.segmentOrdinal,
+        engagementId: String(summary.engagementId || ''),
+        file: String(summary.file || path.basename(battle.gzFile)),
+        rawFile: path.basename(battle.rawFile),
+        targetId: String(summary.targetId || ''),
+        targetName: String(summary.targetName || ''),
+        controlGeneration: String(summary.controlGeneration || ''),
+        engagementGeneration: String(summary.engagementGeneration || ''),
+        segmentStartedAt: summary.segmentStartedAt,
+        segmentEndedAt: summary.segmentEndedAt,
+        segmentFrames: summary.segmentFrames,
+        dispatchCount: summary.combatAudit?.dispatchCount || 0,
+        acceptedAckCount: summary.combatAudit?.acceptedAckCount || 0,
+        reason,
+        runId: String(summary.runId || ''),
+        runtimeRevision: String(summary.runtimeRevision || '')
+      });
       finalizeOriginMaps(battle.segmentId);
       touchEngagementSegment(battle.engagementId, {
         nextOrdinal: battle.segmentOrdinal,
@@ -1351,9 +1391,26 @@ function createCombatBattleLog(options = {}) {
       file: path.basename(active.gzFile),
       controlGeneration: String(metrics?.controlGeneration || ''),
       engagementGeneration: String(metrics?.engagementGeneration || ''),
+      executionClass: 'combat',
       status: 'active-segment'
     };
     if (origin.engagementGeneration) rememberExecutionOrigin(origin.engagementGeneration, origin);
+    io.appendIndex(path.join(dir, SEGMENT_LIFECYCLE_FILE), {
+      formatVersion: 1,
+      type: 'segment-open',
+      atMs,
+      segmentId: active.segmentId,
+      segmentOrdinal,
+      engagementId: String(active.engagementId || ''),
+      file: path.basename(active.gzFile),
+      rawFile: path.basename(active.rawFile),
+      targetId: active.targetId,
+      targetName: active.targetName,
+      controlGeneration: origin.controlGeneration,
+      engagementGeneration: origin.engagementGeneration,
+      runId: active.runId,
+      runtimeRevision: active.runtimeRevision
+    });
   }
 
   // Record one combat frame. `detail` is the same enriched combat payload that
@@ -1446,6 +1503,7 @@ function createCombatBattleLog(options = {}) {
       sequence: Math.max(0, Number(detail?.sequence || 0)),
       type: String(detail?.type || 'shoot-execution'),
       atMs,
+      executionClass: normalizeExecutionClass(detail?.executionClass),
       requestId: detail?.requestId ?? null,
       commandId: detail?.commandId ?? null,
       requestSequence: numberOrNull(detail?.requestSequence),
@@ -1526,11 +1584,69 @@ function createCombatBattleLog(options = {}) {
           || publishedSegmentMatchesActive
           || (origin && String(origin.segmentId || '') === String(active.segmentId)))
     );
+    const hasPublishedBattleContext = Boolean(
+      event.engagementGeneration
+        || event.segmentGeneration
+        || explicitRequestOrigin
+        || generationOrigin
+    );
+    const outsideBattleContext = isOutsideBattleExecutionClass(event.executionClass)
+      && !hasPublishedBattleContext;
     event.originSegmentId = origin?.segmentId ?? (activeOrigin ? active.segmentId : null);
     event.originEngagementId = origin?.engagementId ?? (activeOrigin ? String(active.engagementId || '') : null);
     event.originFile = origin?.file ?? (activeOrigin ? path.basename(active.gzFile) : null);
-    event.originStatus = origin?.status ?? (activeOrigin ? 'active-segment' : 'unresolved');
-    event.segmentGeneration = String(event.originSegmentId || event.segmentGeneration || active?.segmentId || '');
+    const originResolved = Boolean(origin?.segmentId && origin?.status !== 'ambiguous-generation');
+    const originResolutionCandidates = Array.isArray(origin?.candidates)
+      ? origin.candidates
+        .map(candidate => typeof candidate === 'string' ? candidate : candidate?.segmentId)
+        .filter(Boolean)
+        .slice(0, MAX_ORIGIN_RESOLUTION_CANDIDATES)
+      : (!originResolved && active?.segmentId ? [String(active.segmentId)] : []);
+    const originResolutionSource = origin?.status === 'stale-segment-generation'
+      ? 'active-segment-rebind'
+      : requestConflict
+        ? 'request-conflict'
+        : requestOrigin
+          ? 'request-id'
+          : sequenceOrigin
+            ? 'sequence-generation'
+            : generationOrigin
+              ? 'engagement-generation'
+              : activeOrigin
+                ? 'active-segment'
+                : 'none';
+    let originResolutionReason = originResolved
+      ? String(origin?.status || 'resolved')
+      : '';
+    if (!originResolutionReason) {
+      if (activeOrigin) originResolutionReason = 'active-segment';
+      else if (requestConflict) originResolutionReason = 'ambiguous-request';
+      else if (outsideBattleContext) originResolutionReason = 'outside-battle-context';
+      else if (active && !eventTargetMatchesActive) originResolutionReason = 'current-segment-target-mismatch';
+      else if (active && !eventControlMatchesActive) originResolutionReason = 'current-segment-control-mismatch';
+      else if (active && !eventEngagementMatchesActive && !publishedSegmentMatchesActive) {
+        originResolutionReason = 'current-segment-engagement-mismatch';
+      } else if (!event.engagementGeneration && !event.segmentGeneration && !active) {
+        originResolutionReason = event.executionClass === 'unknown'
+          ? 'missing-execution-class-and-combat-context'
+          : 'missing-combat-context';
+      } else {
+        originResolutionReason = 'no-compatible-origin';
+      }
+    }
+    event.originResolutionSource = originResolutionSource;
+    event.originResolutionReason = originResolutionReason;
+    if (originResolutionCandidates.length > 0) event.originResolutionCandidates = originResolutionCandidates;
+    event.originStatus = origin?.status
+      ?? (activeOrigin
+        ? 'active-segment'
+        : (outsideBattleContext ? 'outside-battle-context' : 'unresolved'));
+    event.segmentGeneration = String(
+      event.originSegmentId
+        || event.segmentGeneration
+        || (!outsideBattleContext ? active?.segmentId : '')
+        || ''
+    );
     event.currentSegmentId = active?.segmentId || null;
     event.currentSegmentFile = active ? path.basename(active.gzFile) : null;
     if (requestConflict) event.ownershipDisposition = 'ambiguous-request';
@@ -1547,7 +1663,11 @@ function createCombatBattleLog(options = {}) {
         requestId: event.requestId,
         requestSequence: event.requestSequence
       };
-    } else if (!origin || origin.status === 'ambiguous-generation') event.ownershipDisposition = 'unresolved';
+    } else if (!origin || origin.status === 'ambiguous-generation') {
+      event.ownershipDisposition = outsideBattleContext
+        ? 'outside-battle-context'
+        : 'unresolved';
+    }
     else if (activeOrigin) event.ownershipDisposition = event.type === 'shoot-ack-late' ? 'late-ack' : 'on-time';
     else event.ownershipDisposition = origin.status || 'finalized-segment';
     if (activeOrigin) {
@@ -1704,6 +1824,7 @@ function runCombatBattleLogSelfTest() {
           sequence: index + 1,
           type: 'shoot-dispatch',
           atMs: nowMs,
+          executionClass: 'combat',
           requestId: `${prefix}-dispatch-${index + 1}`,
           controlGeneration: 'control:test',
           engagementGeneration: generation,
@@ -1717,6 +1838,7 @@ function runCombatBattleLogSelfTest() {
           sequence: count + index + 1,
           type: 'shoot-ack-accepted',
           atMs: nowMs,
+          executionClass: 'combat',
           requestId: `${prefix}-dispatch-${index + 1}`,
           controlGeneration: 'control:test',
           engagementGeneration: generation,
@@ -1928,6 +2050,21 @@ function runCombatBattleLogSelfTest() {
     // Index has exactly two battle summaries with the expected shape.
     const indexLines = fs.readFileSync(path.join(battlesDir, INDEX_FILE), 'utf8').trim().split('\n').filter(Boolean);
     assert('index has two battles', indexLines.length === 2);
+    const lifecycleRows = fs.readFileSync(path.join(battlesDir, SEGMENT_LIFECYCLE_FILE), 'utf8')
+      .trim().split('\n').filter(Boolean).map(JSON.parse);
+    assert('segment lifecycle pairs bounded open and close rows', lifecycleRows.length === 4
+      && lifecycleRows.every(row => row.formatVersion === 1
+        && ['segment-open', 'segment-close'].includes(row.type)
+        && row.segmentId
+        && row.file
+        && row.runId === 'run-1'
+        && row.runtimeRevision === 'rev-1')
+      && lifecycleRows.filter(row => row.type === 'segment-open').length === 2
+      && lifecycleRows.filter(row => row.type === 'segment-close').length === 2
+      && lifecycleRows[0].segmentId === lifecycleRows[1].segmentId
+      && lifecycleRows[1].reason === 'engagement-switch'
+      && lifecycleRows[2].segmentId === lifecycleRows[3].segmentId
+      && lifecycleRows[3].reason === 'shutdown');
     const first = JSON.parse(indexLines[0]);
     assert('index summary keeps engagement id', first.engagementId === '100:1000');
     assert('index summary has versioned segment identity', first.formatVersion === BATTLE_INDEX_FORMAT_VERSION
@@ -2005,6 +2142,9 @@ function runCombatBattleLogSelfTest() {
     ));
     assert('accepted ACK keeps only bounded replay geometry in the battle file',
       acceptedAckEntry?.detail?.ack?.bullet_id === 'a1-bullet-1'
+        && acceptedAckEntry.detail.executionClass === 'combat'
+        && acceptedAckEntry.detail.originResolutionSource === 'request-id'
+        && acceptedAckEntry.detail.originResolutionReason === 'active-segment'
         && acceptedAckEntry.detail.ack.owner_user_id === '7'
         && acceptedAckEntry.detail.ack.start_x === 10
         && acceptedAckEntry.detail.ack.target_y === 2000
@@ -2033,6 +2173,45 @@ function runCombatBattleLogSelfTest() {
       && lateAmendment.originSegmentId === '100:1000#1'
       && lateAmendment.originFile === '100_1000.jsonl.gz'
       && lateAmendment.originStatus === 'finalized-segment');
+
+    nowMs += 1;
+    const outsideProfit = log.recordShotExecution({
+      sequence: 100,
+      type: 'shoot-dispatch',
+      atMs: nowMs,
+      requestId: 'profit-outside-battle',
+      executionClass: 'profit-opportunity',
+      targetId: 'profit-target',
+      outcome: 'transport-accepted'
+    });
+    nowMs += 1;
+    const missingCombatContext = log.recordShotExecution({
+      sequence: 101,
+      type: 'shoot-dispatch',
+      atMs: nowMs,
+      requestId: 'combat-missing-context',
+      executionClass: 'combat',
+      targetId: 'combat-target',
+      outcome: 'transport-accepted'
+    });
+    nowMs += 1;
+    const unknownContext = log.recordShotExecution({
+      sequence: 102,
+      type: 'shoot-ack-orphan',
+      atMs: nowMs,
+      executionClass: 'unknown',
+      outcome: 'orphan-ack'
+    });
+    assert('explicit non-combat execution is separated from unresolved combat evidence',
+      outsideProfit.originStatus === 'outside-battle-context'
+        && outsideProfit.ownershipDisposition === 'outside-battle-context'
+        && outsideProfit.originResolutionReason === 'outside-battle-context'
+        && missingCombatContext.originStatus === 'unresolved'
+        && missingCombatContext.ownershipDisposition === 'unresolved'
+        && missingCombatContext.originResolutionReason === 'missing-combat-context'
+        && unknownContext.originStatus === 'unresolved'
+        && unknownContext.ownershipDisposition === 'unresolved'
+        && unknownContext.originResolutionReason === 'missing-execution-class-and-combat-context');
 
     // A -> B -> A carries an explicit prior file and only the new segment
     // delta, rather than duplicating the root engagement cumulative metrics.

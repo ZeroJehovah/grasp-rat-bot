@@ -663,6 +663,7 @@ function createBrowserlessStateStore(options = {}) {
       sequence: state.command.nextExecutionSequence++,
       type: String(event.type || 'shoot-execution'),
       atMs: optionalNumericOrNull(event.atMs) ?? now(),
+      executionClass: String(event.executionClass || 'unknown'),
       requestId: event.requestId ?? null,
       commandId: event.commandId ?? event.requestId ?? null,
       requestSequence: optionalNumericOrNull(event.requestSequence),
@@ -1030,6 +1031,7 @@ function createBrowserlessStateStore(options = {}) {
       const execution = recordShootExecution({
         type: 'shoot-ack-duplicate',
         atMs: meta.receivedAtMs,
+        executionClass: duplicate.executionClass,
         requestId: duplicate.requestId ?? duplicate.commandId ?? null,
         requestSequence: duplicate.requestSequence ?? duplicate.sequence,
         controlGeneration: duplicate.controlGeneration,
@@ -1124,6 +1126,7 @@ function createBrowserlessStateStore(options = {}) {
       recordShootExecution({
         type: pending.source === 'expired' ? 'shoot-ack-late' : 'shoot-ack-accepted',
         atMs: meta.receivedAtMs,
+        executionClass: confirmed.executionClass,
         requestId: confirmed.requestId ?? confirmed.commandId ?? null,
         requestSequence: confirmed.requestSequence ?? confirmed.sequence,
         controlGeneration: confirmed.controlGeneration,
@@ -1187,6 +1190,7 @@ function createBrowserlessStateStore(options = {}) {
       requestSequence,
       commandId: request.commandId ?? null,
       requestId: request.requestId ?? request.commandId ?? null,
+      executionClass: String(request.executionClass || 'unknown'),
       controlGeneration: String(request.controlGeneration || state.command.controlGeneration || ''),
       engagementGeneration: String(request.engagementGeneration || ''),
       segmentGeneration: String(request.segmentGeneration || ''),
