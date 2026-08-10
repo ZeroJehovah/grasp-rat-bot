@@ -10,6 +10,7 @@ const {
   readBrowserlessStateFile,
   sessionFromAnyState
 } = require('../src/node/browserless/state-file');
+const { DEFAULTS: BROWSERLESS_CONFIG_DEFAULTS } = require('../src/node/browserless/config');
 
 const DEFAULT_SERVICE_NAME = 'grasp-rat-browserless-runner';
 const DEFAULT_UNIT_PATH = `/etc/systemd/system/${DEFAULT_SERVICE_NAME}.service`;
@@ -145,6 +146,8 @@ function addEnvChecks(checks, env, envMode, persistedState = {}) {
   const dryRun = env.GRASP_RAT_BROWSERLESS_DRY_RUN || '';
   const sourceIpInterface = env.GRASP_RAT_BROWSERLESS_SOURCE_IP_INTERFACE || 'enp0s6';
   const legacySourceIpPool = env.GRASP_RAT_BROWSERLESS_SOURCE_IPS || '';
+  const configuredDailyFirstLoginDelayMs = String(env.GRASP_RAT_BROWSERLESS_DAILY_FIRST_LOGIN_DELAY_MS || '').trim();
+  const expectedDailyFirstLoginDelayMs = Number(BROWSERLESS_CONFIG_DEFAULTS.dailyFirstLoginDelayMs);
   const stateSession = sessionFromAnyState(persistedState);
   const stateLoginPoint = loginPointFromAnyState(persistedState);
   const profilePresent = Boolean(profile);
@@ -164,6 +167,14 @@ function addEnvChecks(checks, env, envMode, persistedState = {}) {
     'env-source-ip-static-pool-removed',
     !legacySourceIpPool,
     `GRASP_RAT_BROWSERLESS_SOURCE_IPS=${legacySourceIpPool ? '[legacy pool still configured]' : 'absent'}`
+  );
+  addCheck(
+    checks,
+    'env-daily-first-login-delay',
+    !configuredDailyFirstLoginDelayMs
+      || (isNumber(configuredDailyFirstLoginDelayMs)
+        && Number(configuredDailyFirstLoginDelayMs) === expectedDailyFirstLoginDelayMs),
+    `GRASP_RAT_BROWSERLESS_DAILY_FIRST_LOGIN_DELAY_MS=${configuredDailyFirstLoginDelayMs || `[default ${expectedDailyFirstLoginDelayMs}]`}, expected=${expectedDailyFirstLoginDelayMs}`
   );
 
   if (envMode === 'safe') {

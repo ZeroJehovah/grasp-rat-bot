@@ -29376,6 +29376,7 @@ async function runSelfTest() {
           'GRASP_RAT_BROWSERLESS_DRY_RUN=true',
           'GRASP_RAT_BROWSERLESS_CANARY_PROFILE=read-only',
           'GRASP_RAT_BROWSERLESS_CONTROL_MODE=read-only',
+          'GRASP_RAT_BROWSERLESS_DAILY_FIRST_LOGIN_DELAY_MS=30000',
           'GRASP_RAT_BROWSERLESS_WEB_TOKEN=local-secret-token',
           ''
         ].join('\n'));
@@ -29404,6 +29405,7 @@ async function runSelfTest() {
           'GRASP_RAT_BROWSERLESS_DRY_RUN=false',
           'GRASP_RAT_BROWSERLESS_CANARY_PROFILE=profit',
           'GRASP_RAT_BROWSERLESS_CONTROL_MODE=non-combat-profit',
+          'GRASP_RAT_BROWSERLESS_DAILY_FIRST_LOGIN_DELAY_MS=30000',
           'GRASP_RAT_BROWSERLESS_WEB_TOKEN=local-secret-token',
           'GRASP_RAT_BROWSERLESS_USER_ID=0',
           'GRASP_RAT_BROWSERLESS_SESSION_TOKEN=',
@@ -29444,6 +29446,16 @@ async function runSelfTest() {
           sourceDir: appDir,
           skipSystemctl: true
         }, auditDeps);
+        const staleDailyDelayEnvPath = path.join(dir, 'stale-daily-delay.env');
+        fs.writeFileSync(staleDailyDelayEnvPath, fs.readFileSync(envPath, 'utf8')
+          .replace('GRASP_RAT_BROWSERLESS_DAILY_FIRST_LOGIN_DELAY_MS=30000', 'GRASP_RAT_BROWSERLESS_DAILY_FIRST_LOGIN_DELAY_MS=120000'));
+        const staleDailyDelay = auditBrowserlessDeployment({
+          unitPath,
+          envPath: staleDailyDelayEnvPath,
+          envMode: 'live',
+          sourceDir: appDir,
+          skipSystemctl: true
+        }, auditDeps);
         const missingLoginPointEnvPath = path.join(dir, 'missing-login-point.env');
         fs.writeFileSync(missingLoginPointEnvPath, fs.readFileSync(envPath, 'utf8')
           .replace(`GRASP_RAT_BROWSERLESS_DATA_DIR=${dataDir}`, `GRASP_RAT_BROWSERLESS_DATA_DIR=${path.join(dir, 'missing-data')}`));
@@ -29479,6 +29491,8 @@ async function runSelfTest() {
           aggregate.failed.length,
           conflict.ok,
           conflict.failed.some(item => item.key === 'env-profile-control-consistency'),
+          staleDailyDelay.ok,
+          staleDailyDelay.failed.some(item => item.key === 'env-daily-first-login-delay'),
           missingLoginPoint.ok,
           missingLoginPoint.failed.some(item => item.key === 'env-login-point'),
           placeholder.ok,
@@ -29488,7 +29502,7 @@ async function runSelfTest() {
           linkedWorktree.failed.some(item => item.key === 'source-main-workspace')
         ].join('|');
       }),
-      want: 'true|0|true|0|true|0|false|true|false|true|false|true|true|false|true'
+      want: 'true|0|true|0|true|0|false|true|false|true|false|true|false|true|true|false|true'
     },
     {
       name: 'browserless acceptance report aggregates deployment canary and stop audits',
@@ -36338,6 +36352,7 @@ async function runSelfTest() {
           panelScript.includes("reentry ? '当前坐标' : '登录点坐标'"),
           panelScript.includes("if (loginDisplay.state === 'unsafe') {"),
           panelScript.includes("addRow(rowsOut, '等待原因', loginPointPendingReasonText(status));"),
+          panelScript.includes("if (!loginDisplay.afterOffline && !loginDisplay.cooldown)"),
           panelScript.includes("loginDisplay.reviewing ? '上次检查时间' : '检查时间'"),
           /function dangerousPlayerExitReasonText/.test(panelScript),
           panelScript.includes("evidence.push('快照为 Active')"),
@@ -36379,7 +36394,7 @@ async function runSelfTest() {
           hiddenActionLabels.every(label => !panelScript.includes("addRow(rowsOut, '" + label + "'"))
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless web panel explains shutdown exits and confirmed leave snapshot waits',
@@ -36415,7 +36430,7 @@ async function runSelfTest() {
           !panelScript.includes("setRichText('roleTitleMeta', [{ text: '已离线', className: 'muted' }], 'muted');")
         ].join('|');
       })(),
-      want: '2026.08.10.2|true|true|true|true|true|true'
+      want: '2026.08.11.1|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',
