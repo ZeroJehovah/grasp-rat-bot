@@ -14913,6 +14913,92 @@ async function runSelfTest() {
       want: 'single-coin-bait-hold|wait|bait|hold|foot-coin-priority|bait|true|true|false|single-coin-bait-hold|wait|single-coin-bait-release|coin|bait|release|best-opportunity-coin-route|profit-candidate|route-a|route-a,route-b,route-c'
     },
     {
+      name: 'browserless active bait preserves an independently profitable alternate coin route',
+      got: (() => {
+        const options = {
+          userId: 7,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: true,
+          singleCoinBaitHoldRadiusCm: 1000,
+          finalActionArbitrationHoldMs: 0
+        };
+        const baseSelf = {
+          entity_id: 1,
+          user_id: 7,
+          name: 'self',
+          x: 10949,
+          y: 67268,
+          hp: 100,
+          max_hp: 100,
+          stamina_1h_remaining_milli: 2483610,
+          stamina_1d_remaining_milli: 8424322
+        };
+        const coinDrops = [
+          { drop_id: 'bait', amount: 1, x: 11102, y: 67324 },
+          { drop_id: 'isolated', amount: 1, x: 21017, y: 73419 },
+          { drop_id: 'cluster-a', amount: 1, x: 16575, y: 83301 },
+          { drop_id: 'cluster-b', amount: 1, x: 14198, y: 84419 },
+          { drop_id: 'cluster-c', amount: 1, x: 9590, y: 85524 },
+          { drop_id: 'cluster-d', amount: 1, x: 7413, y: 88550 }
+        ];
+        const stateFor = (tick, drops, self = baseSelf) => ({
+          userId: 7,
+          realtime: {
+            tick,
+            frameAgeMs: 0,
+            self,
+            entities: [self],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: { tick, frameAgeMs: 100, entities: [self], coinDrops: drops }
+        });
+        const adapter = createBrowserlessDecisionAdapter(options);
+        const nowMs = Date.parse('2026-08-10T08:14:18.000Z');
+        const held = adapter.decide(stateFor(1, coinDrops), { nowMs });
+        const released = adapter.decide(stateFor(2, coinDrops), { nowMs: nowMs + 1000 });
+        const alternateRoute = released.profit.candidates.find(candidate => candidate.coin?.coinRoute);
+        const alternateEvaluation = released.profit.singleCoinBaitOpportunityEvaluations
+          .find(candidate => candidate.reward === 4);
+        const afterPickupSelf = { ...baseSelf, x: 11102, y: 67324 };
+        const afterPickup = adapter.decide(
+          stateFor(3, coinDrops.slice(1), afterPickupSelf),
+          { nowMs: nowMs + 2000 }
+        );
+        return [
+          held.reason,
+          held.action.target?.id,
+          held.input.profitCoinSource,
+          held.profit.singleCoinBaitContinuation?.routeIds?.join(','),
+          held.profit.singleCoinBaitContinuation?.profitThresholdEligible,
+          released.reason,
+          released.action.target?.id,
+          released.input.profitCoinSource,
+          released.profit.singleCoinBait?.phase,
+          released.profit.coinRouteBaitExclusion?.baitId,
+          released.profit.coinRouteBaitExclusion?.inputCount,
+          released.profit.coinRouteBaitExclusion?.candidateCount,
+          released.profit.coinRouteBaitExclusion?.excludedCount,
+          alternateRoute?.coin?.coinRoute?.ids?.join(','),
+          alternateRoute?.reward,
+          alternateRoute?.staminaCost,
+          alternateRoute?.profitThresholdEligible,
+          alternateEvaluation?.originId,
+          alternateEvaluation?.staminaCost,
+          alternateEvaluation?.profitThresholdEligible,
+          afterPickup.reason,
+          afterPickup.action.target?.id,
+          afterPickup.input.profitCoinSource,
+          afterPickup.action.coinRoute?.ids?.join(','),
+          afterPickup.action.coinRoute?.value,
+          afterPickup.action.profitThresholdEligible,
+          adapter.getState().singleCoinBait === null
+        ].join('|');
+      })(),
+      want: 'single-coin-bait-hold|bait|snapshot-fallback|isolated|false|single-coin-bait-release|bait|snapshot-fallback|release|bait|6|5|1|isolated,cluster-a,cluster-b,cluster-c|4|29998|true|bait|29838|true|best-opportunity-coin-route|isolated|snapshot-fallback|isolated,cluster-a,cluster-b,cluster-c|4|true|true'
+    },
+    {
       name: 'browserless bait follow-up uses the same ordinary coin threat source',
       got: (() => {
         const options = {

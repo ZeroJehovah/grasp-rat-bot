@@ -4408,9 +4408,9 @@ function singleCoinBaitResidualRouteContinuation(input, opportunity, bait, optio
   const aggregateStaminaCost = baitStaminaCost + staminaCost;
   const firstFollowUpReward = Number(firstFollowUpSummary.effectiveValue ?? firstFollowUpSummary.totalValue ?? 0);
   const firstFollowUpStaminaCost = Number(firstFollowUpSummary.totalStaminaCost || 0);
-  // The bait is the first leg of this plan. A later route may make the whole
-  // plan profitable even when its first follow-up coin is below the threshold
-  // by itself; the next planner frame will select that remaining route.
+  // Later remaining legs may make the continuation profitable even when its
+  // first follow-up coin is below the threshold by itself; the next planner
+  // frame will select that remaining route.
   const firstFollowUpProfitThresholdEligible = profitRewardAndCostEligible(
     firstFollowUpReward,
     firstFollowUpStaminaCost,
@@ -6513,13 +6513,29 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
         ...(fieldMigrationCoin ? [{ coins: [fieldMigrationCoin], maxDistance: Math.max(0, Number(options.fieldMigrationMaxDistance ?? BROWSER_RUNTIME_DEFAULTS.fieldMigrationMaxDistance)) }] : [])
       ]
     : [];
-  const routeCoin = input.self && coinGroups.length
+  const visibleRouteCoins = uniqueVisibleRouteCoinsCore(coinGroups, {
+    isSnapshotOnlyCoin: coin => Boolean(coin?.snapshotOnly && input.profitCoinSource !== 'snapshot-fallback'),
+    coinKey: coinRouteKey
+  });
+  const activeSingleCoinBait = thresholdContext.active
+    && options.singleCoinBaitEnabled !== false
+    ? (stateful.singleCoinBait || null)
+    : null;
+  const routeCoins = activeSingleCoinBait
+    ? visibleRouteCoins.filter(coin => !singleCoinBaitMatchesCore(coin, activeSingleCoinBait, {
+        sameCoinRadiusCm: options.singleCoinBaitSameCoinRadiusCm ?? BROWSER_RUNTIME_DEFAULTS.singleCoinBaitSameCoinRadiusCm
+      }))
+    : visibleRouteCoins;
+  const coinRouteBaitExclusion = activeSingleCoinBait ? {
+    baitId: coinRouteKey(activeSingleCoinBait),
+    inputCount: visibleRouteCoins.length,
+    candidateCount: routeCoins.length,
+    excludedCount: visibleRouteCoins.length - routeCoins.length
+  } : null;
+  const routeCoin = input.self && routeCoins.length
     ? pickCoinRouteOpportunityCore(
         input.self,
-        uniqueVisibleRouteCoinsCore(coinGroups, {
-          isSnapshotOnlyCoin: coin => Boolean(coin?.snapshotOnly && input.profitCoinSource !== 'snapshot-fallback'),
-          coinKey: coinRouteKey
-        }),
+        routeCoins,
         opportunityThreats,
         coinRouteCoreOptions(input, stateful, routeSelectionOptions)
       )
@@ -6960,6 +6976,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     profitMission: cloneJson(stateful.profitMission || null),
     action: remembered.action || action,
     missingEnemyHold,
+    coinRouteBaitExclusion,
     remoteProfit: {
       enabled: remoteProfit.enabled,
       valid: remoteProfit.valid,
@@ -11885,6 +11902,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       threshold: opportunity.threshold,
       switch: opportunity.switchDiagnostics || null,
       missingEnemyHold: cloneJson(opportunity.missingEnemyHold || null),
+      coinRouteBaitExclusion: cloneJson(opportunity.coinRouteBaitExclusion || null),
       remoteProfit: cloneJson(opportunity.remoteProfit || null),
       competition: cloneJson(input.activeCoinCompetition),
       singleCoinBait: singleCoinBait.summary,
