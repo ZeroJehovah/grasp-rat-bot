@@ -8189,6 +8189,8 @@ async function runBrowserlessRunnerSelfTest() {
           && pageHtml.includes('function syncMapTrailHistory(status, markers, nowMs)')
           && pageHtml.includes('function drawMapTrails(context, scene, markers, frame)')
           && pageHtml.includes('const backend = status?.mapTrails')
+          && pageHtml.includes("if (!key.startsWith('self:') && !markerColors.has(key)) continue;")
+          && pageHtml.includes('if (!currentMarker) continue;')
           && pageHtml.includes('syncMapTrailHistory(status, markers, trailNowMs)')
           && pageHtml.includes('context.lineWidth = MAP_TRAIL_LINE_WIDTH')
           && pageHtml.includes('context.globalAlpha = mapTrailOpacity(sample.at, scene.trailNowMs, MAP_TRAIL_MAX_AGE_MS)')
