@@ -256,6 +256,134 @@ function assertRealtimeSupersededMissionContinuity() {
   assert.strictEqual(resumed.profit?.mission?.highValue, true);
 }
 
+function assertSelfKillReleasesSupersededMission() {
+  const adapter = createBrowserlessDecisionAdapter({
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    singleCoinBaitEnabled: false,
+    finalActionArbitrationHoldMs: 0,
+    opportunitySwitchConfirmFrames: 1,
+    opportunitySwitchMargin: 0,
+    opportunitySwitchRelativeMargin: 0
+  });
+  const remote = remoteCandidate({
+    name: 'kane-shape',
+    drop: 61,
+    expectedReward: 61,
+    adjustedScore: 300000
+  });
+  const remoteBatch = batch(remote);
+  const first = decide(adapter, state(fullStaminaSelf()), 2000, remoteBatch, {
+    controlMode: 'profit-live',
+    combatEnabled: true
+  });
+  assert.strictEqual(first.action?.kind, 'seek-remote-player');
+  assert.strictEqual(first.profit?.mission?.targetId, '99');
+
+  const supersededBatch = {
+    ...remoteBatch,
+    realtimeSupersededIds: ['99']
+  };
+  const realtimeTarget = {
+    entity_id: 2,
+    user_id: 99,
+    name: 'kane-shape',
+    x: 48000,
+    y: 0,
+    vx: 0,
+    vy: 0,
+    hp: 1,
+    max_hp: 100,
+    drop: 61,
+    current_join_mode: 'Passive',
+    stamina_5s_remaining_milli: 1000000,
+    stamina_5s_limit_milli: 1000000,
+    stamina_1h_remaining_milli: 3000000,
+    stamina_1d_remaining_milli: 20000000
+  };
+  const handoff = decide(
+    adapter,
+    state(fullStaminaSelf({ x: 47800 }), [realtimeTarget]),
+    2200,
+    supersededBatch,
+    { controlMode: 'profit-live', combatEnabled: true }
+  );
+  assert.strictEqual(handoff.profit?.mission?.type, 'enemy');
+  assert.strictEqual(handoff.profit?.mission?.targetId, '99');
+  assert.strictEqual(handoff.profit?.mission?.highValue, true);
+
+  const killedState = state(fullStaminaSelf({ x: 47800 }));
+  killedState.realtime.tick = 6268;
+  killedState.fallback.tick = 6268;
+  killedState.fallback.coinDrops = [{
+    drop_id: 'drop-99',
+    source_user_id: 99,
+    amount: 61,
+    x: 48000,
+    y: 0,
+    created_tick: 6264
+  }];
+  killedState.fallback.messages = [{
+    kind: 'kill',
+    user_id: 7,
+    target_user_id: 99,
+    target_name: 'kane-shape',
+    tick: 6264
+  }];
+  const killed = decide(adapter, killedState, 3000, supersededBatch, {
+    controlMode: 'profit-live',
+    combatEnabled: true
+  });
+  assert.strictEqual(killed.action?.kind, 'coin');
+  assert.strictEqual(killed.action?.target?.selfKilledPlayerDrop, true);
+  assert.strictEqual(killed.input?.postKillSettlement?.phase, 'drop-visible');
+  assert.strictEqual(killed.profit?.mission, null);
+  assert.strictEqual(adapter.getState().profitMission, null);
+
+  const settledState = state(fullStaminaSelf({ x: 48000 }));
+  settledState.realtime.tick = 6290;
+  settledState.fallback.tick = 6290;
+  settledState.fallback.messages = killedState.fallback.messages;
+  const settled = decide(adapter, settledState, 3200, supersededBatch, {
+    controlMode: 'profit-live',
+    combatEnabled: true
+  });
+  assert.notStrictEqual(settled.action?.target?.userId, 99);
+  assert.strictEqual(settled.profit?.mission, null);
+  assert.strictEqual(
+    settled.input?.postKillSettlements?.find(item => item.targetId === '99')?.phase,
+    'settled'
+  );
+
+  adapter.patchState({
+    profitMission: {
+      active: true,
+      key: 'enemy:99',
+      missionKey: 'enemy:99',
+      type: 'enemy',
+      subjectId: '99',
+      targetId: '99',
+      navigationTarget: { ...realtimeTarget, hp: 100, x: 45000 },
+      choice: {
+        type: 'enemy',
+        id: 99,
+        sourceTarget: { ...realtimeTarget, hp: 100, x: 45000 }
+      },
+      highValue: true,
+      selectedAt: 6000,
+      expiresAt: 186000
+    }
+  });
+  const respawnedState = state(fullStaminaSelf(), [{ ...realtimeTarget, hp: 100, x: 45000 }]);
+  respawnedState.realtime.tick = 6291;
+  respawnedState.fallback.tick = 6291;
+  respawnedState.fallback.messages = killedState.fallback.messages;
+  adapter.evaluateRealtime(respawnedState, { nowMs: 6100 });
+  assert.strictEqual(adapter.getState().profitMission?.targetId, '99');
+  assert.strictEqual(adapter.getState().profitMission?.selectedAt, 6000);
+}
+
 function runRemoteProfitDecisionSelfTest() {
   const adapter = createBrowserlessDecisionAdapter({
     userId: 7,
@@ -593,6 +721,7 @@ function runRemoteProfitDecisionSelfTest() {
   assertImmediateRemoteRelease(batch(remoteCandidate(), { missSuppressedIds: ['99'] }));
   assertImmediateRemoteRelease(remoteBatch, 210900, 211000);
   assertRealtimeSupersededMissionContinuity();
+  assertSelfKillReleasesSupersededMission();
 
   const ordinaryAdapter = createBrowserlessDecisionAdapter({
     userId: 7,
@@ -805,7 +934,7 @@ function runRemoteProfitDecisionSelfTest() {
   assert.strictEqual(stale.input?.loot?.reason, 'snapshot-stale');
   assert.strictEqual(staleAdapter.getState().realtimeLootIntent, null);
 
-  return { ok: true, cases: 46 };
+  return { ok: true, cases: 47 };
 }
 
 if (require.main === module) {

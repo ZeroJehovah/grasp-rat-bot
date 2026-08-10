@@ -6553,6 +6553,28 @@ function updateProfitMissionProgress(input = {}, stateful = {}, options = {}) {
   return reconcileProfitMissionState(input, stateful, options);
 }
 
+function releaseProfitMissionForExplicitSelfKill(stateful = {}) {
+  const mission = stateful?.profitMission || null;
+  if (!mission || !['enemy', 'remote-player-navigation'].includes(String(mission.type || ''))) {
+    return false;
+  }
+  const missionId = profitMissionTargetId(mission);
+  const selectedAt = Number(mission.selectedAt || 0);
+  if (!missionId || !(selectedAt > 0)) return false;
+  const matched = Object.entries(stateful.postKillSettlements || {})
+    .filter(([key, settlement]) => (
+      key.startsWith('evidence:')
+        && String(settlement?.targetId ?? '') === missionId
+        && Number(settlement?.confirmedAt || 0) > 0
+        && Number(settlement?.startedAt || 0) >= selectedAt
+    ))
+    .sort((left, right) => (
+      Number(right[1]?.startedAt || 0) - Number(left[1]?.startedAt || 0)
+    ))[0];
+  if (!matched) return false;
+  return clearProfitMission(stateful, 'self-kill-confirmed');
+}
+
 function releaseProfitMissionForPickups(stateful = {}, pickups = [], nowMs = 0, options = {}) {
   const t = Number(nowMs) || Date.now();
   const ignoreMs = collectedCoinIgnoreMs(options);
@@ -7564,6 +7586,7 @@ function reconcilePostKillSettlement(input, stateful = {}, combat = {}, previous
   stateful.postKillSettlements = result.states || {};
   stateful.postKillEvidenceSeen = result.seenEvidenceKeys || {};
   stateful.postKillSettlement = result.selected ? settlementSummary(result.selected, input?.nowMs) : null;
+  releaseProfitMissionForExplicitSelfKill(stateful);
   return settlementSummary(stateful.postKillSettlement, input?.nowMs);
 }
 
@@ -11996,7 +12019,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       dataGaps: input.dataGaps
     },
     profit: {
-      mission: cloneJson(stateful.profitMission || opportunity.profitMission || null),
+      mission: cloneJson(stateful.profitMission || null),
       best: summarizeOpportunity(
         action?.finalCandidate?.switchReason === 'best-eligible-profit'
           ? (outputOpportunityChoice || opportunity.choice)
