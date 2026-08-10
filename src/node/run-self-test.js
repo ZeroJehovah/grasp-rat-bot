@@ -14302,6 +14302,94 @@ async function runSelfTest() {
       want: 'coin|stale-snapshot-coin|patrol|ignore-stale-coin-no-progress|-1|true|true|7200|wait|no-profitable-candidate|true'
     },
     {
+      name: 'browserless collected high-value snapshot coin stays suppressed while stale snapshots repeat',
+      got: (() => {
+        const options = {
+          controlMode: 'profit-live',
+          dynamicProfitThresholdEnabled: false,
+          coinCollectedIgnoreMs: 1000
+        };
+        const adapter = createBrowserlessDecisionAdapter(options);
+        const makeState = (tick, selfX, coinDrops) => ({
+          userId: 7,
+          realtime: {
+            tick,
+            frameAgeMs: 0,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: selfX, y: 0, hp: 100, max_hp: 100 },
+            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: selfX, y: 0, hp: 100, max_hp: 100 }],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: {
+            tick,
+            frameAgeMs: 0,
+            coinDropsObserved: true,
+            coinDrops,
+            messages: []
+          }
+        });
+        const collected = { drop_id: 'collected-high-value', amount: 50, x: 100, y: 0 };
+        const alternative = { drop_id: 'nearby-alternative', amount: 5, x: 500, y: 0 };
+        const first = adapter.decide(makeState(1, 0, [collected]), { nowMs: 1000 });
+        const second = adapter.decide(makeState(2, 100, []), { nowMs: 2000 });
+        const third = adapter.decide(makeState(3, 100, [collected, alternative]), { nowMs: 2500 });
+        const fourth = adapter.decide(makeState(4, 100, [collected, alternative]), { nowMs: 4000 });
+        const stateful = adapter.getState();
+        return [
+          first.action.target.id,
+          second.input.coinPickups.some(item => item.key === 'id:collected-high-value'),
+          third.action.target.id,
+          fourth.action.target.id,
+          stateful.profitMission?.key !== 'coin:id:collected-high-value',
+          stateful.ignoredCoins['id:collected-high-value'] > 4000
+        ].join('|');
+      })(),
+      want: 'collected-high-value|true|nearby-alternative|nearby-alternative|true|true'
+    },
+    {
+      name: 'browserless ignored high-value mission cannot reenter after stale escape',
+      got: (() => {
+        const stateful = {};
+        const makeState = selfX => ({
+          userId: 7,
+          realtime: {
+            tick: 60,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: selfX, y: 0, hp: 100, max_hp: 100 },
+            entities: [{ entity_id: 1, user_id: 7, name: 'self', x: selfX, y: 0, hp: 100, max_hp: 100 }],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: {
+            frameAgeMs: 100,
+            coinDrops: [
+              { drop_id: 'stale-high-value', amount: 50, x: 1000, y: 0 },
+              { drop_id: 'fallback-nearby', amount: 5, x: 500, y: 0 }
+            ]
+          }
+        });
+        const options = {
+          controlMode: 'profit-live',
+          dynamicProfitThresholdEnabled: false,
+          coinNoProgressMs: 1000,
+          coinNoProgressIgnoreMs: 5000,
+          coinFailureMaxIgnoreMs: 10000,
+          staleCoinEscapeMs: 200
+        };
+        const first = buildBrowserlessDecision(makeState(0), stateful, { ...options, nowMs: 1000 });
+        const second = buildBrowserlessDecision(makeState(0), stateful, { ...options, nowMs: 2200 });
+        buildBrowserlessDecision(makeState(0), stateful, { ...options, nowMs: 2600 });
+        const fourth = buildBrowserlessDecision(makeState(300), stateful, { ...options, nowMs: 4100 });
+        return [
+          first.action.target.id,
+          second.reason,
+          fourth.action.target.id,
+          stateful.profitMission?.key !== 'coin:id:stale-high-value'
+        ].join('|');
+      })(),
+      want: 'stale-high-value|ignore-stale-coin-no-progress|fallback-nearby|true'
+    },
+    {
       name: 'browserless profit live close stuck coin uses stale escape patrol',
       got: (() => {
         const stateful = {};

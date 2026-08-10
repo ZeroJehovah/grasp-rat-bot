@@ -85,6 +85,7 @@ function createInitialDecisionState(options = {}) {
     coinAttempts: asRecord(options.coinAttempts),
     coinFailures: asRecord(options.coinFailures),
     ignoredCoins: asRecord(options.ignoredCoins),
+    collectedCoinIgnores: asRecord(options.collectedCoinIgnores),
     coinApproachLock: cloneJson(options.coinApproachLock || null),
     staleCoinEscape: cloneJson(options.staleCoinEscape || null),
     coinCompetitionState: asRecord(options.coinCompetitionState),
@@ -177,6 +178,7 @@ function summarizeBrowserlessDecisionState(state, options = {}) {
   const coinAttempts = state.coinAttempts || {};
   const coinFailures = state.coinFailures || {};
   const ignoredCoins = state.ignoredCoins || {};
+  const collectedCoinIgnores = state.collectedCoinIgnores || {};
   return {
     lastTarget: redactBoundedValue(state.lastTarget || null),
     lastTargetAt: state.lastTargetAt || '',
@@ -191,6 +193,7 @@ function summarizeBrowserlessDecisionState(state, options = {}) {
       attemptCount: Object.keys(coinAttempts).length,
       failureCount: Object.keys(coinFailures).length,
       ignoredCount: Object.keys(ignoredCoins).length,
+      collectedIgnoreCount: Object.keys(collectedCoinIgnores).length,
       approachLock: redactBoundedValue(state.coinApproachLock || null),
       staleEscape: redactBoundedValue(state.staleCoinEscape || null),
       competitionState: recordEntries(state.coinCompetitionState || {}, limit),
@@ -200,7 +203,8 @@ function summarizeBrowserlessDecisionState(state, options = {}) {
       recentProgress: recordEntries(coinProgress, limit),
       recentAttempts: recordEntries(coinAttempts, limit),
       recentFailures: recordEntries(coinFailures, limit),
-      recentIgnored: recordEntries(ignoredCoins, limit)
+      recentIgnored: recordEntries(ignoredCoins, limit),
+      recentCollectedIgnores: recordEntries(collectedCoinIgnores, limit)
     },
     attackHistory: {
       count: Array.isArray(state.attackHistory) ? state.attackHistory.length : 0,

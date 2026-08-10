@@ -4857,8 +4857,57 @@ function filterIgnoredCoins(coins = [], stateful = {}, nowMs = 0) {
   });
 }
 
-function applyIgnoredCoinFilter(input, stateful = {}) {
+function collectedCoinIgnoreMs(options = {}) {
+  return Math.max(0, Number(
+    options.coinCollectedIgnoreMs ?? BROWSER_RUNTIME_DEFAULTS.coinCollectedIgnoreMs
+  ) || 0);
+}
+
+function inputCoinDecisionKeys(input = {}) {
+  const keys = new Set();
+  const sources = [
+    input.realtimeCoins,
+    input.snapshotCoins,
+    input.selfKilledPlayerDropCoins,
+    input.panelProfitCoins,
+    input.profitCoins
+  ];
+  for (const coins of sources) {
+    for (const coin of coins || []) {
+      const key = coinDecisionKey(coin);
+      if (key) keys.add(key);
+    }
+  }
+  return keys;
+}
+
+function refreshCollectedCoinIgnores(input, stateful = {}, options = {}) {
+  const t = Number(input?.nowMs) || 0;
+  const ignoreMs = collectedCoinIgnoreMs(options);
+  stateful.collectedCoinIgnores = stateful.collectedCoinIgnores
+    && typeof stateful.collectedCoinIgnores === 'object'
+    ? stateful.collectedCoinIgnores
+    : {};
+  const visibleKeys = inputCoinDecisionKeys(input);
+  for (const [key, rawRecord] of Object.entries(stateful.collectedCoinIgnores)) {
+    const record = rawRecord && typeof rawRecord === 'object' ? rawRecord : {};
+    if (visibleKeys.has(key)) {
+      record.lastSeenAt = t;
+      record.ignoreUntil = Math.max(Number(record.ignoreUntil || 0), t + ignoreMs);
+      stateful.collectedCoinIgnores[key] = record;
+      stateful.ignoredCoins[key] = Math.max(
+        Number(stateful.ignoredCoins[key] || 0),
+        Number(record.ignoreUntil || 0)
+      );
+    } else if (Number(record.ignoreUntil || 0) <= t) {
+      delete stateful.collectedCoinIgnores[key];
+    }
+  }
+}
+
+function applyIgnoredCoinFilter(input, stateful = {}, options = {}) {
   if (!input) return input;
+  refreshCollectedCoinIgnores(input, stateful, options);
   input.realtimeCoins = filterIgnoredCoins(input.realtimeCoins, stateful, input.nowMs);
   input.snapshotCoins = filterIgnoredCoins(input.snapshotCoins, stateful, input.nowMs);
   input.selfKilledPlayerDropCoins = filterIgnoredCoins(input.selfKilledPlayerDropCoins, stateful, input.nowMs);
@@ -4880,6 +4929,23 @@ function clearIgnoredCoinDecisionState(stateful = {}, progressId = '') {
     stateful.opportunityChoice = null;
     stateful.opportunitySwitchLock = null;
   }
+}
+
+function clearCollectedCoinDecisionState(stateful = {}, key = '') {
+  if (!key) return;
+  delete stateful.coinAttempts?.[key];
+  delete stateful.coinProgress?.[key];
+  delete stateful.coinFailures?.[key];
+  clearIgnoredCoinDecisionState(stateful, key);
+  if (String(stateful.staleCoinEscape?.id || '') === key) stateful.staleCoinEscape = null;
+  const arbitration = stateful.finalActionArbitration;
+  if (coinDecisionKey(arbitration?.lastAction?.target) === key) {
+    arbitration.lastAction = null;
+    arbitration.lastFocus = null;
+    arbitration.lastSelectedAt = 0;
+    arbitration.profitDropout = null;
+  }
+  clearProfitMissionForCoinKey(stateful, key, 'coin-picked-up');
 }
 
 function clearActiveCoinCompetitionDecisionState(input, stateful = {}) {
@@ -6309,6 +6375,15 @@ function clearProfitMission(stateful = {}, reason = '') {
   return true;
 }
 
+function clearProfitMissionForCoinKey(stateful = {}, key = '', reason = 'coin-ignored') {
+  const mission = stateful?.profitMission || null;
+  if (!mission || mission.type !== 'coin' || !key) return false;
+  const source = mission.navigationTarget || profitMissionChoiceSource(mission.choice) || mission.target || null;
+  const missionCoinKey = coinDecisionKey(source);
+  if (missionCoinKey !== key) return false;
+  return clearProfitMission(stateful, reason);
+}
+
 function reconcileProfitMissionState(input = {}, stateful = {}, options = {}, remoteProfit = null) {
   const mission = stateful?.profitMission || null;
   if (!mission) return null;
@@ -6316,6 +6391,13 @@ function reconcileProfitMissionState(input = {}, stateful = {}, options = {}, re
   if (mission.active === false || Number(mission.expiresAt || 0) <= nowMs) {
     clearProfitMission(stateful, 'expired');
     return null;
+  }
+  if (mission.type === 'coin') {
+    const source = mission.navigationTarget || profitMissionChoiceSource(mission.choice) || mission.target || null;
+    if (coinIgnoredUntil(stateful, source) > nowMs) {
+      clearProfitMission(stateful, 'coin-ignored');
+      return null;
+    }
   }
   const remoteState = profitMissionRemoteState(input, mission, nowMs, remoteProfit);
   if (remoteState.invalidated) {
@@ -6471,17 +6553,40 @@ function updateProfitMissionProgress(input = {}, stateful = {}, options = {}) {
   return reconcileProfitMissionState(input, stateful, options);
 }
 
-function releaseProfitMissionForPickups(stateful = {}, pickups = []) {
-  const mission = stateful?.profitMission || null;
-  if (!mission || mission.type !== 'coin') return false;
-  const missionKey = String(mission.key || '');
-  const matched = (pickups || []).some(pickup => {
+function releaseProfitMissionForPickups(stateful = {}, pickups = [], nowMs = 0, options = {}) {
+  const t = Number(nowMs) || Date.now();
+  const ignoreMs = collectedCoinIgnoreMs(options);
+  stateful.ignoredCoins = stateful.ignoredCoins && typeof stateful.ignoredCoins === 'object'
+    ? stateful.ignoredCoins
+    : {};
+  stateful.collectedCoinIgnores = stateful.collectedCoinIgnores
+    && typeof stateful.collectedCoinIgnores === 'object'
+    ? stateful.collectedCoinIgnores
+    : {};
+  let remembered = false;
+  for (const pickup of pickups || []) {
     const source = pickup?.coin || pickup?.target || pickup;
     const key = coinDecisionKey(source);
-    return key && missionKey === `coin:${key}`;
-  });
-  if (!matched) return false;
-  return clearProfitMission(stateful, 'coin-picked-up');
+    if (!key) continue;
+    const observedAt = Number(pickup?.at || t) || t;
+    const ignoreUntil = Math.max(t, observedAt) + ignoreMs;
+    const previous = stateful.collectedCoinIgnores[key] || {};
+    stateful.collectedCoinIgnores[key] = {
+      collectedAt: Number(previous.collectedAt || observedAt),
+      lastEvidenceAt: Math.max(Number(previous.lastEvidenceAt || 0), observedAt),
+      lastSeenAt: Number(previous.lastSeenAt || 0),
+      ignoreUntil: Math.max(Number(previous.ignoreUntil || 0), ignoreUntil),
+      amount: Math.max(0, Number(pickup?.amount || previous.amount || 0) || 0),
+      reason: String(pickup?.reason || previous.reason || 'coin-picked-up')
+    };
+    stateful.ignoredCoins[key] = Math.max(
+      Number(stateful.ignoredCoins[key] || 0),
+      stateful.collectedCoinIgnores[key].ignoreUntil
+    );
+    clearCollectedCoinDecisionState(stateful, key);
+    remembered = true;
+  }
+  return remembered;
 }
 
 function buildOpportunityDecision(input, stateful = {}, options = {}) {
@@ -11205,9 +11310,9 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     forcePostAttackCoinDecoration: true
   });
   const coinPickups = observeBrowserlessCoinPickups(input, stateful, options);
-  releaseProfitMissionForPickups(stateful, coinPickups);
+  releaseProfitMissionForPickups(stateful, coinPickups, input.nowMs, options);
   cleanupCoinProgressState(stateful, input.nowMs, options);
-  applyIgnoredCoinFilter(input, stateful);
+  applyIgnoredCoinFilter(input, stateful, options);
   clearActiveCoinCompetitionDecisionState(input, stateful);
   const easyKillTrackerState = reconcileEasyKillTracker(input, stateful, options);
   const easyKillApproachStopLoss = reconcileEasyKillApproach(input, stateful, options);
