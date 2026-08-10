@@ -105,6 +105,8 @@ function createInitialDecisionState(options = {}) {
     postAttackCoinBaseline: cloneJson(options.postAttackCoinBaseline || null),
     postAttackSettlements: cloneJson(options.postAttackSettlements || {}),
     postAttackSettlement: cloneJson(options.postAttackSettlement || null),
+    postKillSettlements: cloneJson(options.postKillSettlements || {}),
+    postKillEvidenceSeen: asRecord(options.postKillEvidenceSeen),
     postKillSettlement: cloneJson(options.postKillSettlement || null),
     combatTarget: cloneJson(options.combatTarget || null),
     combatEngagements: asRecord(options.combatEngagements),
@@ -213,6 +215,11 @@ function summarizeBrowserlessDecisionState(state, options = {}) {
       states: recordEntries(state.postAttackSettlements || {}, limit)
     },
     postKillSettlement: redactBoundedValue(state.postKillSettlement || null),
+    postKillSettlements: recordEntries(state.postKillSettlements || {}, limit),
+    postKillEvidenceSeen: {
+      count: Object.keys(state.postKillEvidenceSeen || {}).length,
+      recent: recordEntries(state.postKillEvidenceSeen || {}, limit)
+    },
     combat: {
       target: redactBoundedValue(state.combatTarget || null),
       engagements: Object.entries(state.combatEngagements || {})

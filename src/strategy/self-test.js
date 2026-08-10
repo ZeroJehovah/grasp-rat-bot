@@ -157,7 +157,11 @@ const {
   pickPostAttackDropCoinCore,
   pickPostAttackDropWaitTargetCore
 } = require('./post-attack-drop');
-const { updatePostKillSettlementCore } = require('./post-kill-settlement');
+const {
+  updatePostKillSettlementCore,
+  updatePostKillSettlementsCore,
+  postKillEvidenceKey
+} = require('./post-kill-settlement');
 const { buildDropMatchedKillCore } = require('./drop-matched-kill');
 const {
   dailyStaminaBudgetIsLimitingCore,
@@ -5917,6 +5921,91 @@ function runStrategyModuleSelfTests() {
       && postKillFreshDrop.state?.phase === 'drop-visible'
       && postKillFreshDrop.state?.matchedCoinKey === '91'
       && postKillFreshDrop.state?.matchedCoinCreatedTick === 57192
+  });
+
+  const switchedTargetKillEvidence = [{ targetUserId: 34083, tick: 90, kind: 'kill' }];
+  const switchedTargetSettlementKey = postKillEvidenceKey(switchedTargetKillEvidence[0]);
+  const switchedTargetPending = updatePostKillSettlementsCore({}, {
+    nowMs: 1000,
+    snapshotTick: 100,
+    currentCombatTarget: { userId: 32551, name: 'other-active-target', hp: 100, alive: true },
+    visibleTargets: [],
+    selfKillEvidence: switchedTargetKillEvidence,
+    playerDropCoins: [],
+    targetMemory: [{
+      userId: 34083,
+      name: 'target-after-switch',
+      drop: 19,
+      dropKnown: true,
+      x: 1000,
+      y: 1000,
+      at: 900
+    }]
+  }, {
+    confirmedMs: 5000,
+    pickupMs: 45000,
+    tickMs: 50,
+    maxEntries: 4
+  });
+  const switchedTargetDrop = updatePostKillSettlementsCore(switchedTargetPending.states, {
+    nowMs: 1200,
+    snapshotTick: 104,
+    currentCombatTarget: { userId: 32551, name: 'other-active-target', hp: 100, alive: true },
+    visibleTargets: [],
+    selfKillEvidence: switchedTargetKillEvidence,
+    playerDropCoins: [{
+      drop_id: 'drop-19',
+      source_user_id: 34083,
+      amount: 19,
+      created_tick: 91,
+      x: 1100,
+      y: 1000
+    }],
+    targetMemory: [{ userId: 34083, name: 'target-after-switch', drop: 19, dropKnown: true, x: 1000, y: 1000 }]
+  }, {
+    confirmedMs: 5000,
+    pickupMs: 45000,
+    tickMs: 50,
+    maxEntries: 4
+  });
+  const switchedTargetDropDisappeared = updatePostKillSettlementsCore(switchedTargetDrop.states, {
+    nowMs: 1300,
+    snapshotTick: 105,
+    currentCombatTarget: { userId: 32551, name: 'other-active-target', hp: 100, alive: true },
+    visibleTargets: [],
+    selfKillEvidence: switchedTargetKillEvidence,
+    playerDropCoins: [],
+    targetMemory: []
+  }, {
+    confirmedMs: 5000,
+    pickupMs: 45000,
+    tickMs: 50,
+    maxEntries: 4
+  });
+  const switchedTargetReplayed = updatePostKillSettlementsCore(switchedTargetDropDisappeared.states, {
+    nowMs: 1400,
+    snapshotTick: 106,
+    currentCombatTarget: { userId: 32551, name: 'other-active-target', hp: 100, alive: true },
+    visibleTargets: [],
+    selfKillEvidence: switchedTargetKillEvidence,
+    playerDropCoins: [],
+    targetMemory: []
+  }, {
+    confirmedMs: 5000,
+    pickupMs: 45000,
+    tickMs: 50,
+    maxEntries: 4
+  });
+  results.push({
+    name: 'post-kill-settlements-track-drop-after-combat-target-switch',
+    passed: switchedTargetPending.selected?.targetId === '34083'
+      && switchedTargetPending.selected?.phase === 'drop-pending'
+      && switchedTargetPending.states[switchedTargetSettlementKey]?.targetDrop === 19
+      && switchedTargetDrop.selected?.phase === 'drop-visible'
+      && switchedTargetDrop.selected?.matchedCoinKey === 'drop-19'
+      && switchedTargetDrop.selected?.matchedCoinAmount === 19
+      && switchedTargetDropDisappeared.states[switchedTargetSettlementKey]?.active === false
+      && switchedTargetReplayed.states[switchedTargetSettlementKey]?.active === false
   });
 
   const postAttackCovered = pickPostAttackDropWaitTargetCore([

@@ -13808,6 +13808,90 @@ async function runSelfTest() {
       want: 'post-attack-drop-wait|post-kill-settlement-wait|unconfirmed-tail|9667'
     },
     {
+      name: 'browserless realtime tracks self-kill drop after combat target switch',
+      got: (() => {
+        const stateful = {
+          profitMission: {
+            active: true,
+            key: 'enemy:34083',
+            targetId: '34083',
+            subjectId: '34083',
+            expiresAt: 999999,
+            navigationTarget: {
+              userId: 34083,
+              name: 'target-19',
+              x: 0,
+              y: 3000,
+              drop: 19,
+              dropKnown: true,
+              alive: true
+            }
+          }
+        };
+        const options = {
+          userId: 28886,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: false,
+          nowMs: 1000
+        };
+        const makeState = (tick, coinDrops = []) => ({
+          userId: 28886,
+          realtime: {
+            tick,
+            frameAgeMs: 0,
+            self: { entity_id: 1, user_id: 28886, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 28886, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+              {
+                entity_id: 2,
+                user_id: 32551,
+                name: 'other-active-target',
+                x: 5000,
+                y: 0,
+                hp: 100,
+                current_join_mode: 'Active',
+                firing: true,
+                drop: 1725
+              }
+            ],
+            bullets: []
+          },
+          fallback: {
+            tick,
+            frameAgeMs: 0,
+            coinDrops,
+            messages: [{
+              kind: 'kill',
+              user_id: 28886,
+              target_user_id: 34083,
+              target_name: 'target-19',
+              tick: 99
+            }]
+          }
+        });
+        const first = buildBrowserlessRealtimeControlDecision(makeState(100), stateful, options);
+        const second = buildBrowserlessRealtimeControlDecision(makeState(101, [{
+          drop_id: 'drop-19',
+          source_user_id: 34083,
+          amount: 19,
+          x: 100,
+          y: 0,
+          created_tick: 100
+        }]), stateful, { ...options, nowMs: 1200 });
+        return [
+          first.action.kind,
+          first.input.postKillSettlement.phase,
+          second.action.kind,
+          second.action.reason,
+          second.action.target.sourceUserId,
+          second.action.target.amount,
+          second.input.postKillSettlement.phase
+        ].join('|');
+      })(),
+      want: 'combat-live|drop-pending|coin|post-kill-drop-priority|34083|19|drop-visible'
+    },
+    {
       name: 'browserless realtime high-HP disappearance does not start post-kill wait',
       got: (() => {
         const stateful = {

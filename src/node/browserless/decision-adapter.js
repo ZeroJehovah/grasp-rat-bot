@@ -75,7 +75,7 @@ const {
 } = require('../../strategy/post-attack-drop');
 const {
   settlementSummary,
-  updatePostKillSettlementCore
+  updatePostKillSettlementsCore
 } = require('../../strategy/post-kill-settlement');
 const {
   coinFailureIgnoreCore,
@@ -1904,8 +1904,28 @@ function selectRealtimeLootCandidate(input, stateful = {}, options = {}) {
     : highValueRange;
   const hysteresisDistanceCm = realtimeLootDistanceHysteresisCm(options);
   const hysteresisHoldMs = realtimeLootDistanceHysteresisHoldMs(options);
+  const pendingSelfKillTargetIds = new Set(
+    Object.values(stateful.postKillSettlements || {})
+      .filter(settlement => settlement && settlement.active !== false
+        && ['drop-pending', 'drop-visible', 'unconfirmed-tail'].includes(String(settlement.phase || '')))
+      .map(settlement => String(settlement.targetId ?? ''))
+      .filter(Boolean)
+  );
+  if (stateful.postKillSettlement?.active !== false && stateful.postKillSettlement?.targetId) {
+    pendingSelfKillTargetIds.add(String(stateful.postKillSettlement.targetId));
+  }
+  const observedCoins = realtimeObservationCoins(observation, input?.self).map(coin => {
+    const sourceUserId = coin?.source_user_id ?? coin?.sourceUserId
+      ?? coin?.owner_user_id ?? coin?.ownerUserId;
+    if (!sourceUserId || !pendingSelfKillTargetIds.has(String(sourceUserId))) return coin;
+    return {
+      ...coin,
+      selfKilledPlayerDrop: true,
+      playerDropPriority: true
+    };
+  });
   const candidates = ageMs <= maxAgeMs
-    ? realtimeObservationCoins(observation, input?.self)
+    ? observedCoins
       .filter(coin => Number(coin.amount || 0) >= minAmount)
       .filter(coin => Number.isFinite(Number(coin.distance)) && (!maxDistance || Number(coin.distance) <= maxDistance))
       .filter(coin => opportunityStaminaAffordable(input?.self, opportunityCoinStaminaCost(coin, options), options))
@@ -1924,7 +1944,7 @@ function selectRealtimeLootCandidate(input, stateful = {}, options = {}) {
     && hysteresisDistanceCm > 0
     && hysteresisHoldMs > 0
     && previousIntentAgeMs <= hysteresisHoldMs
-    ? realtimeObservationCoins(observation, input?.self)
+    ? observedCoins
       .find(coin => String(coin?.key || '') === String(previousIntent.key))
     : null;
   const retainedBoundaryIntent = Boolean(
@@ -7352,6 +7372,7 @@ function reconcilePostAttackSettlements(input, stateful = {}, options = {}, comb
 
 function reconcilePostKillSettlement(input, stateful = {}, combat = {}, previousCombatTarget = null, options = {}) {
   const observation = stateful.realtimeSnapshotObservation || null;
+  const currentCombatTarget = combat?.target || combat?.dryRun?.target || null;
   const metricsTargetId = String(stateful.combatMetrics?.targetId ?? '');
   const previousTargetId = String(targetIdForAttackHistory(previousCombatTarget) ?? '');
   const disappearanceTarget = metricsTargetId && metricsTargetId === previousTargetId
@@ -7360,30 +7381,85 @@ function reconcilePostKillSettlement(input, stateful = {}, combat = {}, previous
   const disappearanceKillPlausible = disappearanceTarget
     ? postAttackDisappearanceKillPlausibility(disappearanceTarget, input, options)
     : null;
-  const result = updatePostKillSettlementCore(stateful.postKillSettlement || null, {
+  const selfKillEvidence = input?.selfKillEvidence?.length
+    ? input.selfKillEvidence
+    : (observation?.selfKillEvidence || []);
+  const missionTarget = stateful.profitMission?.navigationTarget
+    || stateful.profitMission?.target
+    || stateful.profitMission?.sourceTarget
+    || null;
+  const selectedOpportunityTarget = stateful.opportunityChoice?.target
+    || stateful.opportunityChoice?.sourceTarget
+    || null;
+  const targetMemory = [
+    ...((stateful.attackHistory || []).slice(-50)),
+    previousCombatTarget,
+    stateful.combatTarget,
+    currentCombatTarget,
+    missionTarget,
+    selectedOpportunityTarget,
+    ...(input?.visibleTargets || [])
+  ].filter(Boolean);
+  const previousSettlements = stateful.postKillSettlements && typeof stateful.postKillSettlements === 'object'
+    ? { ...stateful.postKillSettlements }
+    : {};
+  if (stateful.postKillSettlement && !Object.keys(previousSettlements).some(key => (
+    String(previousSettlements[key]?.targetId || '') === String(stateful.postKillSettlement.targetId || '')
+      && Number(previousSettlements[key]?.startedAt || 0) === Number(stateful.postKillSettlement.startedAt || 0)
+  ))) {
+    const legacyId = String(stateful.postKillSettlement.targetId ?? '') || 'unknown';
+    previousSettlements[`legacy:${legacyId}`] = stateful.postKillSettlement;
+  }
+  const playerDropCoins = mergeProfitCoinCandidates(
+    input?.selfKilledPlayerDropCoins || [],
+    observation?.coins || [],
+    input?.realtimeCoins || [],
+    input?.snapshotVisibleCoins || []
+  );
+  const result = updatePostKillSettlementsCore(previousSettlements, {
     nowMs: input?.nowMs,
     previousCombatTarget,
-    currentCombatTarget: combat?.target || combat?.dryRun?.target || null,
+    currentCombatTarget,
     combatMetrics: stateful.combatMetrics || null,
     visibleTargets: input?.visibleTargets || [],
-    selfKillEvidence: input?.selfKillEvidence?.length ? input.selfKillEvidence : (observation?.selfKillEvidence || []),
-    playerDropCoins: input?.selfKilledPlayerDropCoins?.length ? input.selfKilledPlayerDropCoins : (observation?.coins || []),
+    selfKillEvidence,
+    playerDropCoins,
+    targetMemory,
     snapshotTick: input?.fallback?.tick ?? observation?.tick ?? null,
-    disappearanceKillPlausible
+    disappearanceKillPlausible,
+    seenEvidenceKeys: stateful.postKillEvidenceSeen || {}
   }, {
     unconfirmedMs: options.postKillUnconfirmedTailMs
       ?? Math.max(1500, Number(options.postAttackDropWaitMs ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropWaitMs)),
     confirmedMs: options.postAttackDropResolveMaxMs ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropResolveMaxMs,
     pickupMs: options.postAttackDropCoinPriorityMs ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropCoinPriorityMs,
-    recentShotMs: options.postKillRecentShotMs ?? 1500
+    recentShotMs: options.postKillRecentShotMs ?? 1500,
+    maxEntries: options.postKillSettlementMaxEntries ?? 16,
+    retentionMs: options.postKillSettlementRetentionMs ?? 120000,
+    evidenceBootstrapMaxAgeMs: options.postKillEvidenceBootstrapMaxAgeMs ?? 12000,
+    evidenceBootstrapMaxAgeTicks: options.postKillEvidenceBootstrapMaxAgeTicks
   });
-  stateful.postKillSettlement = result.state || null;
+  stateful.postKillSettlements = result.states || {};
+  stateful.postKillEvidenceSeen = result.seenEvidenceKeys || {};
+  stateful.postKillSettlement = result.selected ? settlementSummary(result.selected, input?.nowMs) : null;
   return settlementSummary(stateful.postKillSettlement, input?.nowMs);
 }
 
-function buildPostKillSettlementWaitDecision(input, stateful = {}) {
+function summarizePostKillSettlements(stateful = {}, nowMs = Date.now()) {
+  return Object.entries(stateful.postKillSettlements || {})
+    .slice(0, 16)
+    .map(([key, state]) => ({
+      key,
+      ...settlementSummary(state, nowMs),
+      active: state?.active !== false
+    }));
+}
+
+function buildPostKillSettlementWaitDecision(input, stateful = {}, combat = null) {
   const settlement = stateful.postKillSettlement || null;
   if (!input?.self || !settlement || settlement.phase === 'drop-visible') return null;
+  const currentCombatTarget = combat?.target || combat?.dryRun?.target || null;
+  if (currentCombatTarget && settlement.reason === 'self-kill-evidence-observed') return null;
   return {
     kind: 'post-attack-drop-wait',
     band: 'profit',
@@ -7392,6 +7468,8 @@ function buildPostKillSettlementWaitDecision(input, stateful = {}) {
       type: 'post-attack-target',
       id: settlement.targetId,
       name: settlement.targetName || '',
+      x: numberOrNull(settlement.x),
+      y: numberOrNull(settlement.y),
       drop: numberOrNull(settlement.targetDrop),
       postAttackTarget: {
         id: settlement.targetId,
@@ -9322,7 +9400,7 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
   stageStarted = performance.now();
   rememberBrowserlessInjury(input, stateful, options);
   const postKillSettlement = reconcilePostKillSettlement(input, stateful, combat, previousCombatTarget, options);
-  const postKillSettlementWaitAction = buildPostKillSettlementWaitDecision(input, stateful);
+  const postKillSettlementWaitAction = buildPostKillSettlementWaitDecision(input, stateful, combat);
   const lootControl = buildRealtimeLootControl(input, combatForProfit, stateful, options);
   const combatActionEligible = isCombatActionEligibleForDecision(combat, options) && !realtimeEconomicSuppression;
   const reuseSafetyContextOptions = options?.[INTERNAL_REALTIME_OPTIONS] === true;
@@ -9546,6 +9624,7 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
       coinPickups: topItems(coinPickups, item => item, 20),
       selfKillEvidence: input.realtimeSnapshotObservation?.selfKillEvidence || [],
       postKillSettlement,
+      postKillSettlements: summarizePostKillSettlements(stateful, input.nowMs),
       loot: lootControl.summary,
       centerHardBoundary: summarizeCenterHardBoundary(centerHardBoundary.boundary),
       dataGaps: input.dataGaps
@@ -11459,7 +11538,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const staminaBudgetExitAction = rawCoinStaminaBudgetExitAction || eligibleProfitStaminaBudgetExitAction;
   const postAttackDropCoinAction = (profitLive || nonCombatProfit) ? buildPostAttackDropCoinDecision(profitSelectionInput, stateful, options, combat) : null;
   const postAttackDropWaitAction = (profitLive || nonCombatProfit)
-    ? (buildPostAttackDropWaitDecision(input, stateful, options, combat) || buildPostKillSettlementWaitDecision(input, stateful))
+    ? (buildPostAttackDropWaitDecision(input, stateful, options, combat) || buildPostKillSettlementWaitDecision(input, stateful, combat))
     : null;
   const recoveryFootCoinAction = (profitLive || nonCombatProfit) && !whitelistSafetyCombat
     ? buildRecoveryFootCoinDecision(profitSelectionInput, options)
@@ -11789,6 +11868,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       coinPickups: topItems(coinPickups, item => item, 20),
       selfKillEvidence: topItems(input.selfKillEvidence, item => item, 20),
       postKillSettlement,
+      postKillSettlements: summarizePostKillSettlements(stateful, input.nowMs),
       postAttackSettlement,
       nearby: summarizeNearbyForPanel(input, action, combat.dryRun || combat, options, stateful.singleCoinBait),
       dataGaps: input.dataGaps
@@ -12171,6 +12251,8 @@ function createBrowserlessDecisionAdapter(options = {}) {
         profitMission: decisionState.profitMission || null,
         recoveryContactGuard: decisionState.recoveryContactGuard || null,
         attackHistory: decisionState.attackHistory || [],
+        postKillSettlements: decisionState.postKillSettlements || {},
+        postKillEvidenceSeen: decisionState.postKillEvidenceSeen || {},
         postKillSettlement: decisionState.postKillSettlement || null,
         combatTarget: decisionState.combatTarget || null,
         combatEngagements: decisionState.combatEngagements || {},
