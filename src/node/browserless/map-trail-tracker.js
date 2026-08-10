@@ -3,7 +3,7 @@
 const DEFAULT_MAP_TRAIL_MAX_AGE_MS = 30000;
 const DEFAULT_MAP_TRAIL_MAX_SAMPLES = 720;
 const DEFAULT_MAP_TRAIL_STATUS_SAMPLES = 180;
-const DEFAULT_MAP_TRAIL_MAX_PLAYERS = 64;
+const DEFAULT_MAP_TRAIL_MAX_PLAYERS = 160;
 const DEFAULT_MAP_TRAIL_VISIBLE_RANGE = 50000;
 
 function numericOrNull(value) {
@@ -32,6 +32,19 @@ function mapTrailKey(entity, self = false) {
 
 function entityName(entity) {
   return String(entity?.name || entity?.username || entity?.display_name || '').slice(0, 96);
+}
+
+function entityMoving(entity) {
+  const vx = numericOrNull(entity?.vx);
+  const vy = numericOrNull(entity?.vy);
+  return vx !== null && vy !== null && Math.hypot(vx, vy) > 0.001;
+}
+
+function compareTrailPriority(left, right) {
+  return Number(Boolean(right?.moving)) - Number(Boolean(left?.moving))
+    || Number((right?.samples?.length || 0) > 1) - Number((left?.samples?.length || 0) > 1)
+    || Number(right?.lastSeenAtMs || 0) - Number(left?.lastSeenAtMs || 0)
+    || String(left?.key || '').localeCompare(String(right?.key || ''));
 }
 
 function compactTrailSamples(samples, limit) {
@@ -88,6 +101,7 @@ function createMapTrailTracker(options = {}) {
         key,
         name: entityName(entity),
         samples: [],
+        moving: false,
         lastSeenAtMs: 0,
         lastTick: null
       };
@@ -95,8 +109,9 @@ function createMapTrailTracker(options = {}) {
     }
     const previous = history.samples.at(-1);
     const previousAtMs = Number(previous?.[2] || 0);
-    if ((!previous || atMs >= previousAtMs)
-      && (!previous || Number(previous[0]) !== x || Number(previous[1]) !== y)) {
+    const positionChanged = Boolean(previous
+      && (Number(previous[0]) !== x || Number(previous[1]) !== y));
+    if ((!previous || atMs >= previousAtMs) && (!previous || positionChanged)) {
       const normalizedTick = numericOrNull(tick);
       history.samples.push(normalizedTick === null ? [x, y, atMs] : [x, y, atMs, normalizedTick]);
       if (history.samples.length > maxSamples) {
@@ -104,6 +119,7 @@ function createMapTrailTracker(options = {}) {
       }
     }
     if (entityName(entity)) history.name = entityName(entity);
+    history.moving = entityMoving(entity) || positionChanged;
     history.lastSeenAtMs = Math.max(Number(history.lastSeenAtMs || 0), atMs);
     history.lastTick = numericOrNull(tick);
     return true;
@@ -112,7 +128,7 @@ function createMapTrailTracker(options = {}) {
   function retainNewestPlayers() {
     const entries = [...histories.values()]
       .filter(history => !String(history.key).startsWith('self:'))
-      .sort((left, right) => Number(right.lastSeenAtMs || 0) - Number(left.lastSeenAtMs || 0));
+      .sort(compareTrailPriority);
     for (const history of entries.slice(maxPlayers)) histories.delete(history.key);
   }
 
@@ -169,7 +185,7 @@ function createMapTrailTracker(options = {}) {
     pruneExpired(observedAtMs);
     if (!latestObservedAtMs && !histories.size) return null;
     const items = [...histories.values()]
-      .sort((left, right) => Number(right.lastSeenAtMs || 0) - Number(left.lastSeenAtMs || 0))
+      .sort(compareTrailPriority)
       .map(history => ({
         k: history.key,
         n: history.name || '',
@@ -232,8 +248,39 @@ function runMapTrailTrackerSelfTest() {
     { ...inside, x: 900, y: 40 }
   ], { ...self, x: 300, y: 0 }, startAtMs + 150, 103);
   const reappeared = tracker.status(startAtMs + 150);
+  const crowdedTracker = createMapTrailTracker({
+    visibleRange: 5000,
+    maxPlayers: 64,
+    now: () => startAtMs
+  });
+  const crowdedSelf = { user_id: 70, entity_id: 70, name: 'crowded-self', x: 0, y: 0 };
+  const crowdedPlayers = Array.from({ length: 80 }, (_, index) => ({
+    user_id: 1000 + index,
+    entity_id: 1000 + index,
+    name: `crowded-${index}`,
+    x: 1000 + (index % 10) * 100,
+    y: Math.floor(index / 10) * 100,
+    vx: index === 79 ? 50 : 0,
+    vy: 0
+  }));
+  crowdedTracker.observeRealtime(
+    [crowdedSelf, ...crowdedPlayers],
+    crowdedSelf,
+    startAtMs,
+    200
+  );
+  crowdedTracker.observeRealtime(
+    [crowdedSelf, ...crowdedPlayers.map((player, index) => (
+      index === 79 ? { ...player, x: player.x + 50 } : player
+    ))],
+    crowdedSelf,
+    startAtMs + 50,
+    201
+  );
+  const crowded = crowdedTracker.status(startAtMs + 50);
   const initialPlayer = initial?.items?.find(item => item.k === 'player:8') || null;
   const reappearedPlayer = reappeared?.items?.find(item => item.k === 'player:8') || null;
+  const crowdedMovingPlayer = crowded?.items?.find(item => item.k === 'player:1079') || null;
   return {
     ok: initial?.authority === 'realtime'
       && initial?.source === 'pos'
@@ -241,10 +288,16 @@ function runMapTrailTrackerSelfTest() {
       && !initial.items.some(item => item.k === 'player:9')
       && !afterLeave.items.some(item => item.k === 'player:8')
       && reappearedPlayer?.s?.length === 1
-      && reappearedPlayer.s[0][0] === 900,
+      && reappearedPlayer.s[0][0] === 900
+      && crowdedMovingPlayer?.s?.length === 2
+      && crowded.items.length === 65,
     initialItems: initial?.items?.map(item => [item.k, item.s.length]) || [],
     afterLeaveItems: afterLeave?.items?.map(item => item.k) || [],
-    reappearedItems: reappeared?.items?.map(item => [item.k, item.s.length]) || []
+    reappearedItems: reappeared?.items?.map(item => [item.k, item.s.length]) || [],
+    crowded: {
+      itemCount: crowded?.items?.length || 0,
+      movingPlayer: crowdedMovingPlayer ? [crowdedMovingPlayer.k, crowdedMovingPlayer.s.length] : null
+    }
   };
 }
 

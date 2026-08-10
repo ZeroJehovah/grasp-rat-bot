@@ -22,6 +22,7 @@ const RECENT_EXIT_COMBAT_ASSOCIATION_MAX_AGE_MS = 6000;
 const HIGH_DROP_PANEL_THRESHOLD = 500;
 const COMPACT_NEARBY_VERSION = 3;
 const COMPACT_MAP_TRAILS_VERSION = 1;
+const COMPACT_MAP_TRAILS_MAX_ITEMS = 161;
 let stateWriteSequence = 0;
 
 function defaultBrowserlessState() {
@@ -2509,7 +2510,7 @@ function compactMapTrails(value) {
     observedAt: compactString(value.observedAt, 48),
     ageMs: compactNumber(value.ageMs),
     tick: compactNumber(value.tick),
-    items: items.slice(0, 64).map(item => ({
+    items: items.slice(0, COMPACT_MAP_TRAILS_MAX_ITEMS).map(item => ({
       k: compactString(item?.k ?? item?.key, 96),
       n: compactString(item?.n ?? item?.name, 96),
       s: (Array.isArray(item?.s) ? item.s : (Array.isArray(item?.samples) ? item.samples : []))

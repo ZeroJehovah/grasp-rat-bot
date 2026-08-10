@@ -6900,6 +6900,16 @@ async function runBrowserlessRunnerSelfTest() {
         && selectedRealtimePlayerRow[16] === 35,
       row: selectedRealtimePlayerRow
     };
+    const crowdedMapTrailItems = Array.from({ length: 79 }, (_, index) => ({
+      k: `player:${10000 + index}`,
+      n: `map-player-${index}`,
+      s: [[index, 0, Date.parse('2026-07-26T00:59:55.000Z'), 1]]
+    }));
+    crowdedMapTrailItems.push({
+      k: 'player:2480',
+      n: 'Pyro',
+      s: [[10000, 0, Date.parse('2026-07-26T00:59:55.000Z'), 1], [10100, 20, Date.parse('2026-07-26T01:00:00.000Z'), 2]]
+    });
     const nearbyMapCompact = buildCompactBrowserlessStatus({
       updatedAt: '2026-07-26T01:00:00.000Z',
       session: { userId: 7, sessionToken: 'nearby-map-self-test-token' },
@@ -6911,11 +6921,7 @@ async function runBrowserlessRunnerSelfTest() {
         visibleRange: 50000,
         maxAgeMs: 30000,
         observedAt: '2026-07-26T01:00:00.000Z',
-        items: [{
-          k: 'player:2480',
-          n: 'Pyro',
-          s: [[10000, 0, Date.parse('2026-07-26T00:59:55.000Z'), 1], [10100, 20, Date.parse('2026-07-26T01:00:00.000Z'), 2]]
-        }]
+        items: crowdedMapTrailItems
       },
       current: {
         self: { user_id: 7, name: 'self', x: 0, y: 0, vx: 35, vy: -35, hp: 100 },
@@ -6947,6 +6953,7 @@ async function runBrowserlessRunnerSelfTest() {
         && nearbyMapCompact.self?.vy === -35
         && nearbyMapCompact.mapTrails?.authority === 'realtime'
         && nearbyMapCompact.mapTrails?.source === 'pos'
+        && nearbyMapCompact.mapTrails?.items?.length === 80
         && nearbyMapCompact.mapTrails?.items?.find(item => item.k === 'player:2480')?.s?.length === 2,
       coin: nearbyMapCompact.nearby?.c?.find(row => row[0] === 'route-a') || null,
       player: nearbyMapCompact.nearby?.p?.find(row => row[0] === 'Pyro') || null,
