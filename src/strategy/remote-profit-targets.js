@@ -65,6 +65,16 @@ function entityPoint(entity) {
   return x === null || y === null ? null : { x, y };
 }
 
+function entityJoinModeActive(entity) {
+  return entity?.joinModeActive === true
+    || String(
+      entity?.current_join_mode
+        ?? entity?.mode
+        ?? entity?.joined
+        ?? ''
+    ).toLowerCase() === 'active';
+}
+
 function distanceBetween(a, b) {
   const first = entityPoint(a);
   const second = entityPoint(b);
@@ -106,7 +116,7 @@ function remoteProfitApproachEtaMs(distance, config = {}, classification = '') {
 }
 
 function basicNormalizedEntity(entity, options = {}) {
-  const mode = String(entity?.current_join_mode || entity?.mode || entity?.joined || '').toLowerCase();
+  const joinModeActive = entityJoinModeActive(entity);
   const vx = finiteNumber(entity?.vx) ?? 0;
   const vy = finiteNumber(entity?.vy) ?? 0;
   const speed = finiteNumber(entity?.speed ?? entity?.speed_per_tick ?? entity?.speedPerTick) ?? Math.hypot(vx, vy);
@@ -128,10 +138,10 @@ function basicNormalizedEntity(entity, options = {}) {
     hp: finiteNumber(entity?.hp),
     drop: entityDrop(entity),
     name: entityName(entity),
-    joinModeActive: mode === 'active',
+    joinModeActive,
     moving,
     firing,
-    active: Boolean(entity?.active || moving || firing || (mode === 'active' && entity?.staminaFull !== true)),
+    active: Boolean(entity?.active || moving || firing || (joinModeActive && entity?.staminaFull !== true)),
     alive,
     invulnerable: Boolean(entity?.invulnerable || invulnerableRemainingMs > 0),
     invulnerableRemainingMs,
@@ -154,7 +164,8 @@ function normalizeTarget(entity, helpers = {}, options = {}) {
     y: point?.y ?? null,
     hp: finiteNumber(normalized.hp),
     drop: entityDrop(normalized),
-    name: entityName(normalized)
+    name: entityName(normalized),
+    joinModeActive: entityJoinModeActive(normalized)
   };
 }
 
@@ -211,19 +222,21 @@ function classifyRemoteTarget(target, context, config, helpers) {
   if (!Number.isFinite(distance)) return { reject: 'non-finite-distance' };
 
   const easy = context.easyKills.get(id) || null;
+  const joinModeActive = entityJoinModeActive(target);
   const window = staminaWindow(target, helpers, config);
   const highDropAfk = target.hp === 100
     && window.remaining !== null
     && window.limit !== null
     && window.limit > 0
     && window.remaining >= window.limit * config.staminaFullRatio
+    && !joinModeActive
     && !target.moving
     && !target.firing
     && !target.active
     && !target.recentActivity;
   const easyKillActive = Boolean(easy)
     && target.hp > 0
-    && Boolean(target.active || target.joinModeActive || target.moving || target.firing);
+    && Boolean(target.active || joinModeActive || target.moving || target.firing);
   let classification = '';
   let score = null;
   if (highDropAfk && easyKillActive && context.diagnostics) {
@@ -236,7 +249,7 @@ function classifyRemoteTarget(target, context, config, helpers) {
   } else if (highDropAfk) {
     classification = 'high-drop-afk';
   } else {
-    return { reject: easy ? 'not-active-or-afk' : 'not-qualified-class' };
+    return { reject: joinModeActive ? 'active-join-mode' : (easy ? 'not-active-or-afk' : 'not-qualified-class') };
   }
 
   const invulnerableRemainingMs = finiteNumber(target.invulnerableRemainingMs);
@@ -288,7 +301,7 @@ function classifyRemoteTarget(target, context, config, helpers) {
       y: target.y,
       hp: target.hp,
       drop,
-      active: Boolean(target.active || target.joinModeActive || target.moving || target.firing),
+      active: Boolean(target.active || joinModeActive || target.moving || target.firing),
       moving: Boolean(target.moving),
       firing: Boolean(target.firing),
       invulnerable,

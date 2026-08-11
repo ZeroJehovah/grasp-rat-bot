@@ -77,6 +77,35 @@ function runRemoteProfitTargetsSelfTest() {
   assert.strictEqual(evaluate([target({ stamina_1d_remaining_milli: 980 })]).candidates.length, 1);
   assert.strictEqual(evaluate([target({ stamina_1d_remaining_milli: 981, stamina_1d_limit_milli: 1000 })]).candidates.length, 1);
   assert.strictEqual(evaluate([target({ stamina_1d_remaining_milli: 1000, stamina_1d_limit_milli: undefined })]).candidates.length, 0);
+  const fullStaminaActive = evaluate([target({ user_id: 18, current_join_mode: 'Active' })]);
+  assert.strictEqual(fullStaminaActive.candidates.length, 0, 'native Active players are not remote AFK targets');
+  assert.strictEqual(fullStaminaActive.diagnostics.filtered['active-join-mode'], 1);
+  const activeWithoutCanonicalFlag = evaluateRemoteProfitTargets({
+    generation: 6,
+    self: { user_id: 1, x: 0, y: 0 },
+    entities: [target({ user_id: 19, current_join_mode: 'Active' })],
+    easyKillPlayers: [],
+    config: {},
+    online: true
+  }, {
+    normalizeEntity: entity => ({
+      ...entity,
+      userId: entity.user_id,
+      x: entity.x,
+      y: entity.y,
+      hp: entity.hp,
+      drop: entity.drop,
+      active: false,
+      moving: false,
+      firing: false,
+      alive: true,
+      recentActivity: false,
+      stamina1dRemaining: entity.stamina_1d_remaining_milli,
+      stamina1dLimit: entity.stamina_1d_limit_milli
+    }),
+    scoreTarget: (_entity, details) => scoring({ ...details, drop: _entity.drop, distance: details.distance })
+  });
+  assert.strictEqual(activeWithoutCanonicalFlag.candidates.length, 0, 'raw Active mode survives custom normalization');
 
   const easyListed = evaluateRemoteProfitTargets({
     generation: 8,
@@ -218,7 +247,7 @@ function runRemoteProfitTargetsSelfTest() {
   });
   assert.strictEqual(conflict.candidates.length, 1);
   assert.strictEqual(conflict.candidates[0].classification, 'easy-kill-active');
-  assert.strictEqual(conflict.diagnostics.classificationConflictCount, 1);
+  assert.strictEqual(conflict.diagnostics.classificationConflictCount, 0, 'native Active mode keeps AFK and easy-kill classes exclusive');
 
   for (const economics of [
     { expectedReward: Infinity, staminaCost: 1, baseScore: 1 },
@@ -257,7 +286,7 @@ function runRemoteProfitTargetsSelfTest() {
   assert.strictEqual(movedSelfOpportunities[0].baseScore, opportunities[0].baseScore);
   assert.strictEqual(movedSelfOpportunities[0].distanceFactor, opportunities[0].distanceFactor);
   assert.strictEqual(movedSelfOpportunities[0].adjustedScore, opportunities[0].adjustedScore);
-  return { ok: true, cases: 47 };
+  return { ok: true, cases: 49 };
 }
 
 if (require.main === module) {
