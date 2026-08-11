@@ -18,6 +18,7 @@ const {
   solveInterceptAtCreationCore
 } = require('./combat-aim');
 const {
+  arrivalOccupancyModelCore,
   buildTrajectoryCoveragePlanCore,
   buildTrajectoryPathsCore,
   dynamicBehaviorTrajectoryEligibilityCore,
@@ -6725,6 +6726,31 @@ function runStrategyModuleSelfTests() {
         moving: true,
         targetSpeed: 2
       }) === false
+  });
+  const stopGoSamples = Array.from({ length: 32 }, (_, index) => ({
+    at: 1000 + index * 50,
+    x: 7000 + index * 25,
+    y: 0,
+    vx: index % 8 < 3 ? 0 : 50,
+    vy: 0
+  }));
+  const arrivalOccupancy = arrivalOccupancyModelCore(stopGoSamples, { flightTicks: 18 });
+  const longStopSamples = Array.from({ length: 32 }, (_, index) => ({
+    at: 1000 + index * 50,
+    x: 7000,
+    y: 0,
+    vx: index < 8 ? 50 : 0,
+    vy: 0
+  }));
+  const longStop = arrivalOccupancyModelCore(longStopSamples, { flightTicks: 8 });
+  results.push({
+    name: 'combat-shot-coverage-arrival-occupancy-requires-repeated-stop-go-evidence-and-bounded-dwell',
+    passed: arrivalOccupancy.active === true
+      && arrivalOccupancy.completedStopRuns >= 3
+      && arrivalOccupancy.restartDirection.vx === 50
+      && arrivalOccupancy.remainingStopTicks >= 0
+      && longStop.active === false
+      && longStop.reason === 'insufficient-stop-go-evidence'
   });
   let switchGate = null;
   const currentTarget = { user_id: 8, hp: 100 };

@@ -18904,6 +18904,47 @@ async function runSelfTest() {
       want: '1|101|confirmed-shoot-rolling|64|1050|4950|1|2'
     },
     {
+      name: 'browserless combat aim adds bounded arrival occupancy after repeated realtime stop-go evidence',
+      got: (() => {
+        const motionSamples = Array.from({ length: 32 }, (_, index) => ({
+          at: 1000 + index * 50,
+          selfX: 0,
+          selfY: 0,
+          x: 7000 + index * 25,
+          y: 0,
+          vx: index % 8 < 3 ? 0 : 50,
+          vy: 0,
+          distance: 7000 + index * 25
+        }));
+        const aim = estimateAim(
+          { user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+          { user_id: 8, x: 8000, y: 0, vx: 50, vy: 0, hp: 80, active: true, moving: true },
+          {
+            nowMs: 2600,
+            observedTick: 32,
+            executionTiming: {
+              sampleCount: 12,
+              medianTicks: 1,
+              p90Ticks: 2,
+              madTicks: 0,
+              source: 'confirmed-shoot-rolling'
+            },
+            combatTargetState: {
+              motionSamples,
+              opponentBehaviorState: { mode: 'mixed/unknown' }
+            }
+          }
+        );
+        return [
+          aim.arrivalOccupancy.active,
+          aim.routeCoverage?.selected,
+          aim.trajectoryAimProof.valid,
+          aim.routeCoverage?.arrivalOccupancy?.completedStopRuns
+        ].join('|');
+      })(),
+      want: 'true|arrival-occupancy|true|4'
+    },
+    {
       name: 'browserless combat aim protections preserve confirmed ACK creation delay',
       got: (() => {
         const aim = estimateAim(

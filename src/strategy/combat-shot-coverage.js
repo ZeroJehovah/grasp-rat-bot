@@ -57,6 +57,108 @@ function movingTargetStopRouteRejectedCore(input = {}, options = {}) {
   );
 }
 
+// Estimate whether a target is likely to change occupancy before a bullet
+// arrives.  This is deliberately based on the recent realtime motion samples,
+// not on a named target or on snapshot state.  The result is an aim candidate
+// hint; it never authorizes or suppresses a shot.
+function arrivalOccupancyModelCore(samples = [], options = {}) {
+  const stationarySpeed = Math.max(0, Number(options.stationarySpeed ?? 5));
+  const serverTickMs = Math.max(1, Number(options.serverTickMs ?? 50));
+  const flightTicks = Math.max(1, Number(options.flightTicks ?? 0));
+  const history = (Array.isArray(samples) ? samples : [])
+    .filter(sample => sample && Number.isFinite(Number(sample.at)))
+    .slice(-Math.max(8, Math.min(240, Number(options.maxSamples ?? 240))));
+  const insufficient = {
+    active: false,
+    reason: 'insufficient-motion-history',
+    sampleCount: history.length,
+    completedStopRuns: 0,
+    stopFraction: 0,
+    currentDirection: 'stop',
+    restartDirection: { vx: 0, vy: 0 },
+    expectedStopTicks: null,
+    currentStopTicks: 0,
+    remainingStopTicks: 0,
+    flightTicks
+  };
+  if (history.length < 4) return insufficient;
+  const speedOf = sample => Math.hypot(Number(sample.vx) || 0, Number(sample.vy) || 0);
+  const stateOf = sample => speedOf(sample) < stationarySpeed ? 'stop' : 'moving';
+  const states = history.map(stateOf);
+  const runs = [];
+  let runStart = 0;
+  for (let index = 1; index <= states.length; index += 1) {
+    if (index < states.length && states[index] === states[runStart]) continue;
+    runs.push({ state: states[runStart], start: runStart, end: index - 1 });
+    runStart = index;
+  }
+  const stopRuns = runs.filter(run => run.state === 'stop');
+  const completedStops = stopRuns.filter(run => run.end < history.length - 1
+    && runs.find(next => next.start === run.end + 1)?.state === 'moving');
+  const stopDurations = completedStops.map(run => Math.max(
+    0,
+    (Number(history[run.end]?.at) - Number(history[run.start]?.at)) / serverTickMs
+  ) + 1);
+  const stopSampleCount = states.filter(state => state === 'stop').length;
+  const stopFraction = stopSampleCount / Math.max(1, states.length);
+  const currentRun = runs.at(-1);
+  const currentDirection = states.at(-1) || 'stop';
+  const currentStopTicks = currentRun?.state === 'stop'
+    ? Math.max(0, (Number(history.at(-1)?.at) - Number(history[currentRun.start]?.at)) / serverTickMs) + 1
+    : 0;
+  const sortedDurations = stopDurations.slice().sort((left, right) => left - right);
+  const expectedStopTicks = sortedDurations.length
+    ? sortedDurations[Math.floor((sortedDurations.length - 1) * 0.5)]
+    : null;
+  const remainingStopTicks = expectedStopTicks === null
+    ? 0
+    : Math.max(0, expectedStopTicks - currentStopTicks);
+  const outgoing = completedStops.map(run => history[run.end + 1]).filter(Boolean);
+  const latestOutgoing = outgoing.at(-1) || null;
+  let restartVx = Number(latestOutgoing?.vx || 0);
+  let restartVy = Number(latestOutgoing?.vy || 0);
+  if (!(Math.hypot(restartVx, restartVy) >= stationarySpeed)) {
+    const average = outgoing.reduce((sum, sample) => ({
+      vx: sum.vx + (Number(sample.vx) || 0),
+      vy: sum.vy + (Number(sample.vy) || 0)
+    }), { vx: 0, vy: 0 });
+    restartVx = average.vx / Math.max(1, outgoing.length);
+    restartVy = average.vy / Math.max(1, outgoing.length);
+  }
+  const historyDurationMs = Math.max(
+    0,
+    Number(history.at(-1)?.at || 0) - Number(history[0]?.at || 0)
+  );
+  const evidenceReady = completedStops.length >= Math.max(2, Number(options.minimumCompletedStops ?? 2))
+    && stopSampleCount >= Math.max(4, Number(options.minimumStopSamples ?? 4))
+    && historyDurationMs >= Math.max(500, Number(options.minimumHistoryMs ?? 1000))
+    && stopFraction >= Math.max(0.05, Number(options.minimumStopFraction ?? 0.08));
+  const currentStopLikelyRestarts = currentRun?.state === 'stop'
+    && currentStopTicks < flightTicks * Math.max(1, Number(options.maxCurrentStopFlightRatio ?? 1.5));
+  const active = evidenceReady && (currentDirection === 'moving' || currentStopLikelyRestarts);
+  const restartProbability = active
+    ? Math.max(0.18, Math.min(0.65, stopFraction * 1.5))
+    : 0;
+  return {
+    active,
+    reason: active ? 'realtime-stop-go-occupancy' : (evidenceReady ? 'current-stop-dwell-too-long' : 'insufficient-stop-go-evidence'),
+    sampleCount: history.length,
+    historyDurationMs,
+    completedStopRuns: completedStops.length,
+    stopFraction: Number(stopFraction.toFixed(4)),
+    currentDirection,
+    restartDirection: {
+      vx: Math.round(restartVx * 100) / 100,
+      vy: Math.round(restartVy * 100) / 100
+    },
+    expectedStopTicks: expectedStopTicks === null ? null : Math.round(expectedStopTicks * 10) / 10,
+    currentStopTicks: Math.round(currentStopTicks * 10) / 10,
+    remainingStopTicks: Math.round(remainingStopTicks * 10) / 10,
+    restartProbability: Number(restartProbability.toFixed(4)),
+    flightTicks
+  };
+}
+
 function finiteNumber(value, fallback = null) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
@@ -946,6 +1048,7 @@ function buildTrajectoryCoveragePlanCore(input = {}, options = {}) {
 }
 
 module.exports = {
+  arrivalOccupancyModelCore,
   buildTrajectoryCoveragePlanCore,
   buildTrajectoryPathsCore,
   dynamicRouteCandidateWeight,

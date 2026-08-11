@@ -55,6 +55,7 @@ const {
 } = require('../../strategy/combat-aim');
 const {
   buildTrajectoryCoveragePlanCore,
+  arrivalOccupancyModelCore,
   dynamicBehaviorTrajectoryEligibilityCore,
   evaluateTrajectoryAimCore,
   movingTargetStopRouteRejectedCore,
@@ -1572,6 +1573,18 @@ function estimateAim(self, target, options = {}) {
   const stationarySpeed = Math.max(0, Number(options.stationarySpeed ?? options.combatStationarySpeed ?? 5));
   const behaviorStationary = behavior?.mode === 'stationary';
   const moving = !behaviorStationary && Boolean(target.moving || speed >= stationarySpeed || Math.hypot(vx, vy) >= stationarySpeed);
+  const arrivalOccupancy = arrivalOccupancyModelCore(samples, {
+    stationarySpeed,
+    serverTickMs: options.combatServerTickMs ?? 50,
+    flightTicks,
+    minimumCompletedStops: options.combatAimMinimumCompletedStops,
+    minimumStopSamples: options.combatAimMinimumStopSamples,
+    minimumHistoryMs: options.combatAimMinimumHistoryMs,
+    minimumStopFraction: options.combatAimMinimumStopFraction,
+    maxCurrentStopFlightRatio: options.combatAimMaxCurrentStopFlightRatio
+  });
+  const arrivalOccupancyActive = arrivalOccupancy.active === true;
+  const trajectoryAware = moving || arrivalOccupancyActive;
   let x = moving ? (intercept?.x ?? fallbackAim.x) : tx;
   let y = moving ? (intercept?.y ?? fallbackAim.y) : ty;
   const baseLeadX = x - tx;
@@ -1642,24 +1655,51 @@ function estimateAim(self, target, options = {}) {
       && Number(transitionModel?.transitionCount || 0) >= 4
       && Number(transitionModel?.next?.[0]?.probability || 0) >= 0.5
   );
-  if (moving && creationOracle.reachable === true) {
-    const ux = vx / targetSpeed;
-    const uy = vy / targetSpeed;
+  let arrivalOccupancyApplied = false;
+  if (trajectoryAware && creationOracle.reachable === true) {
+    const restartVx = Number(arrivalOccupancy.restartDirection?.vx || 0);
+    const restartVy = Number(arrivalOccupancy.restartDirection?.vy || 0);
+    const restartSpeed = Math.hypot(restartVx, restartVy);
+    const directionSpeed = moving ? targetSpeed : Math.max(1, restartSpeed);
+    const ux = moving ? vx / directionSpeed : restartVx / directionSpeed;
+    const uy = moving ? vy / directionSpeed : restartVy / directionSpeed;
     const targetAtCreationX = Number(intercept?.predictedTargetAtCreation?.x ?? tx + vx * observationToExecutionTicks);
     const targetAtCreationY = Number(intercept?.predictedTargetAtCreation?.y ?? ty + vy * observationToExecutionTicks);
-    const reachable = targetSpeed * flightTicks;
-    const uncertainDynamicRoute = highEntropyCoverage || dynamicBehaviorCoverage;
-    const staticCandidates = [
-      { hypothesis: 'continue', x: intercept?.x ?? targetAtCreationX + ux * reachable, y: intercept?.y ?? targetAtCreationY + uy * reachable, probability: uncertainDynamicRoute ? 0.27 : 0.58 },
-      { hypothesis: 'stop', x: targetAtCreationX, y: targetAtCreationY, probability: uncertainDynamicRoute ? 0.29 : 0.14 },
+    const reachable = directionSpeed * flightTicks;
+    const restartTravelTicks = Math.max(0, flightTicks - Number(arrivalOccupancy.remainingStopTicks || 0));
+    const restartReachable = restartSpeed * restartTravelTicks;
+    const uncertainDynamicRoute = highEntropyCoverage || dynamicBehaviorCoverage || arrivalOccupancyActive;
+    const arrivalProbability = Math.max(0.18, Math.min(0.65, Number(arrivalOccupancy.restartProbability || 0.18)));
+    const movingStopCandidate = arrivalOccupancyActive
+      ? { hypothesis: 'arrival-occupancy', x: targetAtCreationX, y: targetAtCreationY, probability: arrivalProbability }
+      : { hypothesis: 'stop', x: targetAtCreationX, y: targetAtCreationY, probability: uncertainDynamicRoute ? 0.29 : 0.14 };
+    const movingCandidates = [
+      { hypothesis: 'continue', x: intercept?.x ?? targetAtCreationX + ux * reachable, y: intercept?.y ?? targetAtCreationY + uy * reachable, probability: arrivalOccupancyActive ? Math.max(0.22, 1 - arrivalProbability) : (uncertainDynamicRoute ? 0.27 : 0.58) },
+      movingStopCandidate,
       { hypothesis: 'left-turn', x: targetAtCreationX - uy * reachable, y: targetAtCreationY + ux * reachable, probability: uncertainDynamicRoute ? 0.16 : 0.09 },
       { hypothesis: 'right-turn', x: targetAtCreationX + uy * reachable, y: targetAtCreationY - ux * reachable, probability: uncertainDynamicRoute ? 0.16 : 0.09 },
       { hypothesis: 'reverse', x: targetAtCreationX - ux * reachable, y: targetAtCreationY - uy * reachable, probability: 0.12 }
-    ].map(candidate => ({
+    ];
+    const stationaryCandidates = [
+      { hypothesis: 'stop-at-arrival', x: targetAtCreationX, y: targetAtCreationY, probability: Math.max(0.35, 1 - arrivalProbability) },
+      {
+        hypothesis: 'restart-after-stop',
+        x: targetAtCreationX + (restartSpeed > 0 ? restartVx / restartSpeed * restartReachable : 0),
+        y: targetAtCreationY + (restartSpeed > 0 ? restartVy / restartSpeed * restartReachable : 0),
+        probability: arrivalProbability * 0.7
+      },
+      {
+        hypothesis: 'restart-reverse',
+        x: targetAtCreationX - (restartSpeed > 0 ? restartVx / restartSpeed * restartReachable : 0),
+        y: targetAtCreationY - (restartSpeed > 0 ? restartVy / restartSpeed * restartReachable : 0),
+        probability: arrivalProbability * 0.3
+      }
+    ];
+    const staticCandidates = (moving ? movingCandidates : stationaryCandidates).map(candidate => ({
       ...candidate,
       directionState: movementDirectionState(
-        candidate.hypothesis === 'stop' ? 0 : Number(candidate.x) - tx,
-        candidate.hypothesis === 'stop' ? 0 : Number(candidate.y) - ty,
+        ['stop', 'arrival-occupancy', 'stop-at-arrival'].includes(candidate.hypothesis) ? 0 : Number(candidate.x) - tx,
+        ['stop', 'arrival-occupancy', 'stop-at-arrival'].includes(candidate.hypothesis) ? 0 : Number(candidate.y) - ty,
         0.001
       )
     }));
@@ -1702,7 +1742,7 @@ function estimateAim(self, target, options = {}) {
       const targetMotionReachable = Math.hypot(
         Number(candidate.x) - targetAtCreationX,
         Number(candidate.y) - targetAtCreationY
-      ) <= reachable + hitRadius + 1;
+      ) <= Math.max(reachable, restartReachable) + hitRadius + 1;
       const aimPointReachability = targetMotionReachable
         ? evaluateAimPointReachabilityCore(creationOrigin, candidate, {
             bulletSpeedCmPerTick: bulletSpeed,
@@ -1744,7 +1784,7 @@ function estimateAim(self, target, options = {}) {
           createdTick: Number(options.observedTick || 0) + observationToExecutionTicks,
           executionDelayTicks: observationToExecutionTicks,
           controlIntervalTicks: Math.max(1, Math.ceil(Number(options.combatControlIntervalMs || 50) / 50)),
-          learnedDwellTicks: 0,
+          learnedDwellTicks: moving ? 0 : Number(arrivalOccupancy.remainingStopTicks || 0),
           flightTicks,
           predictedShooterOrigin: creationOrigin,
           predictedTargetAtCreation: creationOracle.predictedTargetAtCreation || fallbackPredictedTargetAtCreation,
@@ -1859,6 +1899,12 @@ function estimateAim(self, target, options = {}) {
         };
         x = selected.x;
         y = selected.y;
+        arrivalOccupancyApplied = arrivalOccupancyActive && [
+          'arrival-occupancy',
+          'stop-at-arrival',
+          'restart-after-stop',
+          'restart-reverse'
+        ].includes(String(selected.hypothesis || ''));
       }
     }
     if (selected
@@ -1896,7 +1942,9 @@ function estimateAim(self, target, options = {}) {
       routeCoverage = {
         enabled: true,
         style: robustApplied
-          ? `robust-trajectory-medoid-${behavior?.mode || 'moving'}`
+          ? (arrivalOccupancyApplied
+              ? `arrival-occupancy-${String(selected.hypothesis || 'candidate').replace(/^arrival-occupancy(?:-)?/, '') || 'candidate'}`
+              : `robust-trajectory-medoid-${behavior?.mode || 'moving'}`)
           : dynamicBehaviorCoverage
           ? (routeSelectionMode === 'legacy-fixed'
               ? `dynamic-behavior-legacy-fixed-${behavior.mode}`
@@ -1930,6 +1978,7 @@ function estimateAim(self, target, options = {}) {
         } : null,
         contextKey: routeContextKey,
         phase: routePhase,
+        arrivalOccupancy,
         stopRouteRejected,
         candidates: persistedCandidates.map(item => ({
           hypothesis: item.hypothesis,
@@ -1979,7 +2028,7 @@ function estimateAim(self, target, options = {}) {
     ? { x: intercept.x, y: intercept.y }
     : null);
   const hasTrajectoryCandidates = Boolean(routeCoverage?.candidates?.length);
-  let trajectoryAimProof = moving
+  let trajectoryAimProof = trajectoryAware
     ? evaluateRealtimeTrajectoryAim({
         ok: true,
         x,
@@ -2007,7 +2056,7 @@ function estimateAim(self, target, options = {}) {
       };
   let trajectoryAimFallback = false;
   let trajectoryAimFallbackReason = '';
-  if (moving && creationAimPoint && (!hasTrajectoryCandidates || trajectoryAimProof.valid !== true)) {
+  if (trajectoryAware && creationAimPoint && (!hasTrajectoryCandidates || trajectoryAimProof.valid !== true)) {
     const changedAim = Math.hypot(
       Number(x) - Number(creationAimPoint.x),
       Number(y) - Number(creationAimPoint.y)
@@ -2016,7 +2065,7 @@ function estimateAim(self, target, options = {}) {
     y = Number(creationAimPoint.y);
     trajectoryAimFallback = changedAim;
     trajectoryAimFallbackReason = !hasTrajectoryCandidates
-      ? 'no-dynamic-trajectory-evidence'
+      ? (arrivalOccupancyActive ? 'no-arrival-occupancy-paths' : 'no-dynamic-trajectory-evidence')
       : (trajectoryAimProof.reason || 'dynamic-cpa-unproven');
     trajectoryAimProof = evaluateRealtimeTrajectoryAim({
       ok: true,
@@ -2079,8 +2128,12 @@ function estimateAim(self, target, options = {}) {
     x: Math.round(x),
     y: Math.round(y),
     mode: moving
-      ? (intercept ? (noDamageWidened ? 'quadratic-intercept-motion-probe' : 'quadratic-intercept') : 'relative-linear-intercept-fallback')
-      : 'exact',
+      ? (arrivalOccupancyApplied
+          ? `arrival-occupancy-${String(routeCoverage?.selected || 'candidate').replace(/^arrival-occupancy(?:-)?/, '') || 'candidate'}`
+          : (intercept ? (noDamageWidened ? 'quadratic-intercept-motion-probe' : 'quadratic-intercept') : 'relative-linear-intercept-fallback'))
+      : (arrivalOccupancyApplied
+          ? `arrival-occupancy-${String(routeCoverage?.selected || 'candidate').replace(/^arrival-occupancy(?:-)?/, '') || 'candidate'}`
+          : 'exact'),
     distance: Math.round(distance),
     intercept: moving,
     flightTicks: Math.round(flightTicks * 10) / 10,
@@ -2117,6 +2170,7 @@ function estimateAim(self, target, options = {}) {
     trajectoryAimProof,
     trajectoryAimFallback,
     trajectoryAimFallbackReason,
+    arrivalOccupancy,
     ackShooterOrigin: options.latestConfirmedShot?.ackShooterOrigin || null,
     shooterOriginErrorCm: numberOrNull(options.latestConfirmedShot?.shooterOriginErrorCm),
     shooterOriginErrorSummary: options.shooterOriginErrorSummary || null,
