@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.11.2';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.11.3';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -525,7 +525,7 @@ function renderBrowserlessWebPanel() {
     .chat-kill-toggle{min-height:24px;padding:2px 8px;font-size:11px;line-height:1.2}
     .chat-log{height:300px;overflow:auto;scrollbar-gutter:stable}
     .chat-row{display:grid;grid-template-columns:38px minmax(64px,.62fr) minmax(0,1.38fr);gap:6px;align-items:start;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.06)}
-    .chat-row:last-child{border-bottom:0}.chat-time{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums;transform:translateY(1px)}.chat-author{min-width:0;color:var(--blue);font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.chat-text{min-width:0;overflow-wrap:anywhere;white-space:pre-wrap}
+    .chat-row:last-child{border-bottom:0}.chat-time{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums;transform:translateY(2px)}.chat-author{min-width:0;color:var(--blue);font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.chat-text{min-width:0;overflow-wrap:anywhere;white-space:pre-wrap}
     .chat-row.chat-kill .chat-author,.chat-row.chat-kill .chat-text{color:var(--red)}.chat-row.chat-system .chat-author,.chat-row.chat-system .chat-text{color:var(--blue)}.chat-row.mine .chat-author{color:var(--green)}
     .chat-row.chat-fold-summary{display:flex;align-items:center;justify-content:center;color:var(--muted);text-align:center}
     .chat-fold-text{width:100%;color:var(--muted);font-weight:500;text-align:center}
