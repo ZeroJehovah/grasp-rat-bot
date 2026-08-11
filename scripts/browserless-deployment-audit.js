@@ -85,6 +85,16 @@ function parseEnvText(text) {
   return env;
 }
 
+function parseSystemctlShow(text) {
+  const values = {};
+  for (const rawLine of String(text || '').split(/\r?\n/)) {
+    const index = rawLine.indexOf('=');
+    if (index <= 0) continue;
+    values[rawLine.slice(0, index)] = rawLine.slice(index + 1).trim();
+  }
+  return values;
+}
+
 function commandRunner(command, args, options = {}) {
   const result = spawnSync(command, args, {
     encoding: 'utf8',
@@ -262,11 +272,18 @@ function auditDeployment(options = {}, deps = {}) {
   const systemctl = {
     skipped: Boolean(options.skipSystemctl),
     enabled: null,
-    active: null
+    active: null,
+    show: null,
+    processCwd: null
   };
   if (options.skipSystemctl) {
     addCheck(checks, 'systemctl-enabled', true, 'skipped by --skip-systemctl');
     addCheck(checks, 'systemctl-active', true, 'skipped by --skip-systemctl');
+    addCheck(checks, 'systemctl-running-state', true, 'skipped by --skip-systemctl');
+    addCheck(checks, 'systemctl-main-start', true, 'skipped by --skip-systemctl');
+    addCheck(checks, 'systemctl-loaded-working-directory', true, 'skipped by --skip-systemctl');
+    addCheck(checks, 'systemctl-main-pid', true, 'skipped by --skip-systemctl');
+    addCheck(checks, 'process-working-directory', true, 'skipped by --skip-systemctl');
   } else {
     const enabled = runCommand('systemctl', ['is-enabled', serviceName]);
     systemctl.enabled = enabled;
@@ -274,6 +291,80 @@ function auditDeployment(options = {}, deps = {}) {
     const active = runCommand('systemctl', ['is-active', serviceName]);
     systemctl.active = active;
     addCheck(checks, 'systemctl-active', active.status === 0 && active.stdout.trim() === 'active', `status=${active.status}, stdout=${active.stdout.trim() || ''}, stderr=${active.stderr.trim() || active.error || ''}`);
+
+    const show = runCommand('systemctl', [
+      'show',
+      serviceName,
+      '-p', 'ActiveState',
+      '-p', 'SubState',
+      '-p', 'Result',
+      '-p', 'ExecMainPID',
+      '-p', 'ExecMainStartTimestamp',
+      '-p', 'ExecMainStartTimestampMonotonic',
+      '-p', 'WorkingDirectory'
+    ]);
+    systemctl.show = show;
+    const showValues = parseSystemctlShow(show.stdout);
+    const showError = show.stderr.trim() || show.error || '';
+    const runningStateOk = show.status === 0
+      && showValues.ActiveState === 'active'
+      && showValues.SubState === 'running'
+      && showValues.Result === 'success';
+    addCheck(
+      checks,
+      'systemctl-running-state',
+      runningStateOk,
+      `status=${show.status}, ActiveState=${showValues.ActiveState || 'missing'}, SubState=${showValues.SubState || 'missing'}, Result=${showValues.Result || 'missing'}, ExecMainStartTimestamp=${showValues.ExecMainStartTimestamp || 'missing'}, stderr=${showError}`
+    );
+
+    const mainStartMonotonicText = String(showValues.ExecMainStartTimestampMonotonic || '').trim();
+    const mainStartMonotonic = /^\d+$/.test(mainStartMonotonicText) ? Number(mainStartMonotonicText) : 0;
+    addCheck(
+      checks,
+      'systemctl-main-start',
+      show.status === 0
+        && Boolean(showValues.ExecMainStartTimestamp)
+        && Number.isSafeInteger(mainStartMonotonic)
+        && mainStartMonotonic > 0,
+      `status=${show.status}, ExecMainStartTimestamp=${showValues.ExecMainStartTimestamp || 'missing'}, ExecMainStartTimestampMonotonic=${mainStartMonotonicText || 'missing'}, stderr=${showError}`
+    );
+
+    const loadedWorkingDirectory = showValues.WorkingDirectory || '';
+    addCheck(
+      checks,
+      'systemctl-loaded-working-directory',
+      show.status === 0 && Boolean(loadedWorkingDirectory) && path.resolve(loadedWorkingDirectory) === sourceDir,
+      `status=${show.status}, WorkingDirectory=${loadedWorkingDirectory || 'missing'}, expected=${sourceDir}, stderr=${showError}`
+    );
+
+    const mainPidText = String(showValues.ExecMainPID || '').trim();
+    const mainPid = /^\d+$/.test(mainPidText) ? Number(mainPidText) : 0;
+    const mainPidOk = show.status === 0 && Number.isSafeInteger(mainPid) && mainPid > 0;
+    addCheck(
+      checks,
+      'systemctl-main-pid',
+      mainPidOk,
+      `status=${show.status}, ExecMainPID=${mainPidText || 'missing'}, stderr=${showError}`
+    );
+
+    if (mainPidOk) {
+      const processCwd = runCommand('readlink', ['-f', `/proc/${mainPid}/cwd`]);
+      systemctl.processCwd = processCwd;
+      const actualProcessCwd = processCwd.stdout.trim();
+      addCheck(
+        checks,
+        'process-working-directory',
+        processCwd.status === 0 && Boolean(actualProcessCwd) && path.resolve(actualProcessCwd) === sourceDir,
+        `status=${processCwd.status}, ExecMainPID=${mainPid}, cwd=${actualProcessCwd || 'missing'}, expected=${sourceDir}, stderr=${processCwd.stderr.trim() || processCwd.error || ''}`
+      );
+    } else {
+      addCheck(
+        checks,
+        'process-working-directory',
+        false,
+        `not checked because ExecMainPID=${mainPidText || 'missing'} is not a positive running process ID`
+      );
+    }
   }
 
   const failed = checks.filter(check => !check.ok);
@@ -341,5 +432,6 @@ module.exports = {
   formatHuman,
   parseArgs,
   parseEnvText,
+  parseSystemctlShow,
   unitValue
 };

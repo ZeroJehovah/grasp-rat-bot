@@ -29421,12 +29421,40 @@ async function runSelfTest() {
           'GRASP_RAT_BROWSERLESS_WEB_TOKEN=local-secret-token',
           ''
         ].join('\n'));
-        const auditDeps = {
-          runCommand: (_command, args) => ({
-            status: 0,
-            stdout: args[0] === 'is-enabled' ? 'enabled\n' : 'active\n',
-            stderr: ''
-          }),
+        const auditDepsFor = (overrides = {}) => ({
+          runCommand: (command, args) => {
+            if (command === 'readlink') {
+              return overrides.processCwdResult || {
+                status: 0,
+                stdout: `${overrides.processCwd || appDir}\n`,
+                stderr: ''
+              };
+            }
+            if (args[0] === 'is-enabled') {
+              return { status: 0, stdout: 'enabled\n', stderr: '' };
+            }
+            if (args[0] === 'is-active') {
+              return { status: 0, stdout: 'active\n', stderr: '' };
+            }
+            if (args[0] === 'show') {
+              const showValues = {
+                Result: 'success',
+                ExecMainStartTimestamp: 'Tue 2026-08-11 22:59:17 CST',
+                ExecMainStartTimestampMonotonic: '444499993206',
+                ExecMainPID: '4242',
+                WorkingDirectory: appDir,
+                ActiveState: 'active',
+                SubState: 'running',
+                ...(overrides.showValues || {})
+              };
+              return {
+                status: Number(overrides.showStatus || 0),
+                stdout: Object.entries(showValues).map(([key, value]) => `${key}=${value}`).join('\n') + '\n',
+                stderr: overrides.showStderr || ''
+              };
+            }
+            return { status: 1, stdout: '', stderr: `unexpected command: ${command} ${args.join(' ')}` };
+          },
           networkInterfaces: () => ({
             enp0s6: [
               { family: 'IPv4', address: '10.0.0.18' },
@@ -29434,7 +29462,8 @@ async function runSelfTest() {
               { family: 'IPv4', address: '10.0.0.101' }
             ]
           })
-        };
+        });
+        const auditDeps = auditDepsFor();
         const ok = auditBrowserlessDeployment({
           unitPath,
           envPath,
@@ -29515,6 +29544,36 @@ async function runSelfTest() {
           sourceDir: appDir,
           skipSystemctl: true
         }, auditDeps);
+        const wrongProcessCwd = auditBrowserlessDeployment({
+          unitPath,
+          envPath,
+          envMode: 'live',
+          sourceDir: appDir
+        }, auditDepsFor({ processCwd: path.join(dir, 'wrong-app') }));
+        const unreadableProcessCwd = auditBrowserlessDeployment({
+          unitPath,
+          envPath,
+          envMode: 'live',
+          sourceDir: appDir
+        }, auditDepsFor({
+          processCwdResult: {
+            status: 1,
+            stdout: '',
+            stderr: 'Permission denied\n'
+          }
+        }));
+        const missingMainPid = auditBrowserlessDeployment({
+          unitPath,
+          envPath,
+          envMode: 'live',
+          sourceDir: appDir
+        }, auditDepsFor({ showValues: { ExecMainPID: '0' } }));
+        const wrongLoadedWorkingDirectory = auditBrowserlessDeployment({
+          unitPath,
+          envPath,
+          envMode: 'live',
+          sourceDir: appDir
+        }, auditDepsFor({ showValues: { WorkingDirectory: path.join(dir, 'stale-app') } }));
         fs.rmSync(path.join(appDir, '.git'), { recursive: true });
         fs.writeFileSync(path.join(appDir, '.git'), 'gitdir: /tmp/linked-worktree\n');
         const linkedWorktree = auditBrowserlessDeployment({
@@ -29539,11 +29598,20 @@ async function runSelfTest() {
           placeholder.ok,
           placeholder.failed.some(item => item.key === 'environment-file-reference'),
           placeholder.failed.some(item => item.key === 'env-web-token'),
+          wrongProcessCwd.ok,
+          wrongProcessCwd.failed.some(item => item.key === 'process-working-directory'),
+          unreadableProcessCwd.ok,
+          unreadableProcessCwd.failed.some(item => item.key === 'process-working-directory' && item.evidence.includes('Permission denied')),
+          missingMainPid.ok,
+          missingMainPid.failed.some(item => item.key === 'systemctl-main-pid'),
+          missingMainPid.failed.some(item => item.key === 'process-working-directory'),
+          wrongLoadedWorkingDirectory.ok,
+          wrongLoadedWorkingDirectory.failed.some(item => item.key === 'systemctl-loaded-working-directory'),
           linkedWorktree.ok,
           linkedWorktree.failed.some(item => item.key === 'source-main-workspace')
         ].join('|');
       }),
-      want: 'true|0|true|0|true|0|false|true|false|true|false|true|false|true|true|false|true'
+      want: 'true|0|true|0|true|0|false|true|false|true|false|true|false|true|true|false|true|false|true|false|true|true|false|true|true|false|true|false|true'
     },
     {
       name: 'browserless acceptance report aggregates deployment canary and stop audits',
