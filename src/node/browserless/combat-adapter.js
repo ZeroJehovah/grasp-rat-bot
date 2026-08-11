@@ -1581,7 +1581,10 @@ function estimateAim(self, target, options = {}) {
     minimumStopSamples: options.combatAimMinimumStopSamples,
     minimumHistoryMs: options.combatAimMinimumHistoryMs,
     minimumStopFraction: options.combatAimMinimumStopFraction,
-    maxCurrentStopFlightRatio: options.combatAimMaxCurrentStopFlightRatio
+    maxCurrentStopFlightRatio: options.combatAimMaxCurrentStopFlightRatio,
+    minimumCompletedMoves: options.combatAimMinimumCompletedMoves,
+    minimumCurrentMoveFlightRatio: options.combatAimMinimumCurrentMoveFlightRatio,
+    maxCurrentMoveFlightRatio: options.combatAimMaxCurrentMoveFlightRatio
   });
   const arrivalOccupancyActive = arrivalOccupancy.active === true;
   const trajectoryAware = moving || arrivalOccupancyActive;

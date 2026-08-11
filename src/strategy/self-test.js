@@ -6735,6 +6735,26 @@ function runStrategyModuleSelfTests() {
     vy: 0
   }));
   const arrivalOccupancy = arrivalOccupancyModelCore(stopGoSamples, { flightTicks: 18 });
+  const justStartedMoveSamples = stopGoSamples.map((sample, index) => ({
+    ...sample,
+    vx: index >= 29 ? (index === 31 ? 50 : 0) : sample.vx,
+    vy: 0
+  }));
+  const justStartedMove = arrivalOccupancyModelCore(justStartedMoveSamples, { flightTicks: 18 });
+  const irregularMoveSamples = Array.from({ length: 61 }, (_, index) => {
+    const moving = (index >= 3 && index < 5)
+      || (index >= 8 && index < 20)
+      || (index >= 23 && index < 53)
+      || index >= 56;
+    return {
+      at: 1000 + index * 50,
+      x: 7000 + index * 25,
+      y: 0,
+      vx: moving ? 50 : 0,
+      vy: 0
+    };
+  });
+  const irregularMove = arrivalOccupancyModelCore(irregularMoveSamples, { flightTicks: 18 });
   const longStopSamples = Array.from({ length: 32 }, (_, index) => ({
     at: 1000 + index * 50,
     x: 7000,
@@ -6747,8 +6767,12 @@ function runStrategyModuleSelfTests() {
     name: 'combat-shot-coverage-arrival-occupancy-requires-repeated-stop-go-evidence-and-bounded-dwell',
     passed: arrivalOccupancy.active === true
       && arrivalOccupancy.completedStopRuns >= 3
+      && arrivalOccupancy.completedMoveRuns >= 3
       && arrivalOccupancy.restartDirection.vx === 50
       && arrivalOccupancy.remainingStopTicks >= 0
+      && justStartedMove.active === false
+      && justStartedMove.reason === 'current-move-not-near-transition'
+      && irregularMove.active === false
       && longStop.active === false
       && longStop.reason === 'insufficient-stop-go-evidence'
   });

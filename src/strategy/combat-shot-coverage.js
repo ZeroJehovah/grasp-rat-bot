@@ -73,12 +73,19 @@ function arrivalOccupancyModelCore(samples = [], options = {}) {
     reason: 'insufficient-motion-history',
     sampleCount: history.length,
     completedStopRuns: 0,
+    completedMoveRuns: 0,
     stopFraction: 0,
     currentDirection: 'stop',
     restartDirection: { vx: 0, vy: 0 },
     expectedStopTicks: null,
     currentStopTicks: 0,
     remainingStopTicks: 0,
+    expectedMoveTicks: null,
+    moveTransitionTicks: null,
+    moveDurationMadTicks: null,
+    moveDurationMadRatio: null,
+    currentMoveTicks: 0,
+    remainingMoveTicks: 0,
     flightTicks
   };
   if (history.length < 4) return insufficient;
@@ -99,6 +106,13 @@ function arrivalOccupancyModelCore(samples = [], options = {}) {
     0,
     (Number(history[run.end]?.at) - Number(history[run.start]?.at)) / serverTickMs
   ) + 1);
+  const movingRuns = runs.filter(run => run.state === 'moving');
+  const completedMoves = movingRuns.filter(run => run.end < history.length - 1
+    && runs.find(next => next.start === run.end + 1)?.state === 'stop');
+  const moveDurations = completedMoves.map(run => Math.max(
+    0,
+    (Number(history[run.end]?.at) - Number(history[run.start]?.at)) / serverTickMs
+  ) + 1);
   const stopSampleCount = states.filter(state => state === 'stop').length;
   const stopFraction = stopSampleCount / Math.max(1, states.length);
   const currentRun = runs.at(-1);
@@ -106,13 +120,35 @@ function arrivalOccupancyModelCore(samples = [], options = {}) {
   const currentStopTicks = currentRun?.state === 'stop'
     ? Math.max(0, (Number(history.at(-1)?.at) - Number(history[currentRun.start]?.at)) / serverTickMs) + 1
     : 0;
+  const currentMoveTicks = currentRun?.state === 'moving'
+    ? Math.max(0, (Number(history.at(-1)?.at) - Number(history[currentRun.start]?.at)) / serverTickMs) + 1
+    : 0;
   const sortedDurations = stopDurations.slice().sort((left, right) => left - right);
   const expectedStopTicks = sortedDurations.length
     ? sortedDurations[Math.floor((sortedDurations.length - 1) * 0.5)]
     : null;
+  const sortedMoveDurations = moveDurations.slice().sort((left, right) => left - right);
+  const expectedMoveTicks = sortedMoveDurations.length
+    ? sortedMoveDurations[Math.floor((sortedMoveDurations.length - 1) * 0.5)]
+    : null;
+  const moveTransitionTicks = sortedMoveDurations.length
+    ? sortedMoveDurations[Math.floor((sortedMoveDurations.length - 1) * 0.75)]
+    : null;
+  const moveAbsoluteDeviations = expectedMoveTicks === null
+    ? []
+    : sortedMoveDurations.map(duration => Math.abs(duration - expectedMoveTicks)).sort((left, right) => left - right);
+  const moveDurationMadTicks = moveAbsoluteDeviations.length
+    ? moveAbsoluteDeviations[Math.floor((moveAbsoluteDeviations.length - 1) * 0.5)]
+    : null;
+  const moveDurationMadRatio = expectedMoveTicks && moveDurationMadTicks !== null
+    ? moveDurationMadTicks / expectedMoveTicks
+    : null;
   const remainingStopTicks = expectedStopTicks === null
     ? 0
     : Math.max(0, expectedStopTicks - currentStopTicks);
+  const remainingMoveTicks = expectedMoveTicks === null
+    ? 0
+    : Math.max(0, (moveTransitionTicks ?? expectedMoveTicks) - currentMoveTicks);
   const outgoing = completedStops.map(run => history[run.end + 1]).filter(Boolean);
   const latestOutgoing = outgoing.at(-1) || null;
   let restartVx = Number(latestOutgoing?.vx || 0);
@@ -135,16 +171,28 @@ function arrivalOccupancyModelCore(samples = [], options = {}) {
     && stopFraction >= Math.max(0.05, Number(options.minimumStopFraction ?? 0.08));
   const currentStopLikelyRestarts = currentRun?.state === 'stop'
     && currentStopTicks < flightTicks * Math.max(1, Number(options.maxCurrentStopFlightRatio ?? 1.5));
-  const active = evidenceReady && (currentDirection === 'moving' || currentStopLikelyRestarts);
+  const currentMoveLikelyStops = currentRun?.state === 'moving'
+    && completedMoves.length >= Math.max(3, Number(options.minimumCompletedMoves ?? 3))
+    && expectedMoveTicks !== null
+    && moveDurationMadRatio !== null
+    && moveDurationMadRatio <= Math.max(0.05, Number(options.maxMoveDurationMadRatio ?? 0.35))
+    && currentMoveTicks >= Math.max(1, flightTicks * Math.max(0.1, Number(options.minimumCurrentMoveFlightRatio ?? 0.25)))
+    && remainingMoveTicks <= flightTicks * Math.max(0.5, Number(options.maxCurrentMoveFlightRatio ?? 1.5));
+  const active = evidenceReady && (currentMoveLikelyStops || currentStopLikelyRestarts);
   const restartProbability = active
     ? Math.max(0.18, Math.min(0.65, stopFraction * 1.5))
     : 0;
   return {
     active,
-    reason: active ? 'realtime-stop-go-occupancy' : (evidenceReady ? 'current-stop-dwell-too-long' : 'insufficient-stop-go-evidence'),
+    reason: active
+      ? 'realtime-stop-go-occupancy'
+      : (evidenceReady
+          ? (currentDirection === 'moving' ? 'current-move-not-near-transition' : 'current-stop-dwell-too-long')
+          : 'insufficient-stop-go-evidence'),
     sampleCount: history.length,
     historyDurationMs,
     completedStopRuns: completedStops.length,
+    completedMoveRuns: completedMoves.length,
     stopFraction: Number(stopFraction.toFixed(4)),
     currentDirection,
     restartDirection: {
@@ -154,6 +202,12 @@ function arrivalOccupancyModelCore(samples = [], options = {}) {
     expectedStopTicks: expectedStopTicks === null ? null : Math.round(expectedStopTicks * 10) / 10,
     currentStopTicks: Math.round(currentStopTicks * 10) / 10,
     remainingStopTicks: Math.round(remainingStopTicks * 10) / 10,
+    expectedMoveTicks: expectedMoveTicks === null ? null : Math.round(expectedMoveTicks * 10) / 10,
+    moveTransitionTicks: moveTransitionTicks === null ? null : Math.round(moveTransitionTicks * 10) / 10,
+    moveDurationMadTicks: moveDurationMadTicks === null ? null : Math.round(moveDurationMadTicks * 10) / 10,
+    moveDurationMadRatio: moveDurationMadRatio === null ? null : Number(moveDurationMadRatio.toFixed(4)),
+    currentMoveTicks: Math.round(currentMoveTicks * 10) / 10,
+    remainingMoveTicks: Math.round(remainingMoveTicks * 10) / 10,
     restartProbability: Number(restartProbability.toFixed(4)),
     flightTicks
   };
