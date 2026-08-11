@@ -30,6 +30,21 @@ const {
 const { uniqueIpv4 } = require('./source-ip-preflight');
 
 const MAX_LEAVE_SOURCE_IP_SWITCHES = 2;
+const HTTP_REQUEST_PURPOSES = new Set([
+  'periodic-poll',
+  'prelogin-safety'
+]);
+
+function normalizeHttpRequestPurpose(value) {
+  const purpose = String(value || '').trim().toLowerCase();
+  if (!purpose) return 'unspecified';
+  return HTTP_REQUEST_PURPOSES.has(purpose) ? purpose : 'other';
+}
+
+function boundedSequence(value) {
+  const sequence = Number(value);
+  return Number.isSafeInteger(sequence) && sequence > 0 ? sequence : 0;
+}
 
 function splitSourceIpList(value) {
   if (Array.isArray(value)) return uniqueStrings(value);
@@ -288,15 +303,29 @@ function createSourceIpController(options = {}) {
     const {
       challengePolicy: _challengePolicy,
       requestClass: _requestClass,
+      requestPurpose: _requestPurpose,
+      schedulerRequestSequence: _schedulerRequestSequence,
       ...forwardOptions
     } = requestOptions;
     const sourceIp = currentSourceIp;
-    const response = await requestRatePolicy.run(requestClass, () => (
-      options.fetchWithTimeout || fetchWithTimeout
-    )(url, {
-      ...forwardOptions,
-      localAddress: sourceIp || undefined
-    }));
+    const response = await requestRatePolicy.run(requestClass, permit => {
+      if (logStore) {
+        logStore.append('runner', 'http-request-start', {
+          requestClass: permit.requestClass,
+          purpose: normalizeHttpRequestPurpose(_requestPurpose),
+          requestSequence: boundedSequence(_schedulerRequestSequence),
+          policySequence: boundedSequence(permit.sequence),
+          exempt: permit.exempt === true,
+          waitMs: Math.max(0, Number(permit.waitMs || 0)),
+          startedAt: new Date(Number(permit.startedAtMs)).toISOString(),
+          sourceIpSelectionGeneration: boundedSequence(selectionGeneration)
+        });
+      }
+      return (options.fetchWithTimeout || fetchWithTimeout)(url, {
+        ...forwardOptions,
+        localAddress: sourceIp || undefined
+      });
+    });
     if (challengePolicy === 'login-stop') {
       const challenge = await inspectResponseChallenge(response);
       if (challenge?.detected) {
@@ -626,6 +655,7 @@ module.exports = {
   chooseInitialSourceIp,
   createSourceIpController,
   discoverLocalSourceIps,
+  normalizeHttpRequestPurpose,
   resolveSourceIpCandidates,
   sourceIpSessionInFlight,
   splitSourceIpList

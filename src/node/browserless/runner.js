@@ -523,6 +523,9 @@ async function runRequestRateControllerSelfTest() {
   let nowMs = 0;
   const waits = [];
   const requests = [];
+  const httpStarts = [];
+  const sensitiveHeaderValue = 'self-test-sensitive-header';
+  const sensitiveBodyValue = 'self-test-sensitive-body';
   const controller = createSourceIpController({
     config: { sourceIp: '10.0.0.1' },
     now: () => nowMs,
@@ -532,7 +535,13 @@ async function runRequestRateControllerSelfTest() {
     },
     fetchWithTimeout: async (url, options = {}) => {
       requests.push({ url: String(url), atMs: nowMs, options });
+      if (String(url) === 'ordinary-failure') throw new Error('synthetic request failure');
       return { ok: true, status: 200 };
+    },
+    logStore: {
+      append: (stream, type, detail) => {
+        if (stream === 'runner' && type === 'http-request-start') httpStarts.push(detail);
+      }
     },
     requestAuthUrl: async options => {
       await options.fetchWithTimeout('login-auth', {});
@@ -550,10 +559,16 @@ async function runRequestRateControllerSelfTest() {
 
   await Promise.all([
     controller.fetchWithTimeout('gameplay-snapshot-1', {
-      requestClass: REQUEST_CLASSES.GAMEPLAY_SNAPSHOT
+      requestClass: REQUEST_CLASSES.GAMEPLAY_SNAPSHOT,
+      requestPurpose: 'periodic-poll',
+      schedulerRequestSequence: 41,
+      headers: { authorization: sensitiveHeaderValue },
+      body: sensitiveBodyValue
     }),
     controller.fetchWithTimeout('gameplay-snapshot-2', {
-      requestClass: REQUEST_CLASSES.GAMEPLAY_SNAPSHOT
+      requestClass: REQUEST_CLASSES.GAMEPLAY_SNAPSHOT,
+      requestPurpose: 'prelogin-safety',
+      schedulerRequestSequence: 42
     })
   ]);
   await controller.fetchWithTimeout('source-ip-probe', {
@@ -562,25 +577,95 @@ async function runRequestRateControllerSelfTest() {
   await controller.requestAuthUrl();
   await controller.submitCallbackInput('self-test-callback');
   await controller.leaveWithVerification();
+  await controller.fetchWithTimeout('source-ip-preflight', {
+    requestClass: REQUEST_CLASSES.SOURCE_IP_PREFLIGHT
+  });
+  await controller.fetchWithTimeout('unknown-class', {
+    requestClass: 'unknown-class',
+    requestPurpose: 'unbounded-purpose-that-must-not-be-logged'
+  });
+  let failureObserved = false;
+  try {
+    await controller.fetchWithTimeout('ordinary-failure');
+  } catch (error) {
+    failureObserved = error?.message === 'synthetic request failure';
+  }
+  await controller.fetchWithTimeout('ordinary-recovery');
 
   const snapshotRequests = requests.filter(item => item.url.startsWith('gameplay-snapshot-'));
   const snapshotGapMs = snapshotRequests.length === 2
     ? snapshotRequests[1].atMs - snapshotRequests[0].atMs
     : 0;
-  const exemptRequests = requests.filter(item => !item.url.startsWith('gameplay-snapshot-'));
+  const ordinaryStarts = httpStarts.filter(item => item.exempt !== true);
+  const ordinaryGaps = ordinaryStarts.slice(1).map((item, index) => (
+    Date.parse(item.startedAt) - Date.parse(ordinaryStarts[index].startedAt)
+  ));
+  const exemptStarts = httpStarts.filter(item => item.exempt === true);
+  const expectedFields = [
+    'exempt',
+    'policySequence',
+    'purpose',
+    'requestClass',
+    'requestSequence',
+    'sourceIpSelectionGeneration',
+    'startedAt',
+    'waitMs'
+  ];
+  const allowlistOk = httpStarts.every(item => (
+    JSON.stringify(Object.keys(item).sort()) === JSON.stringify(expectedFields)
+  ));
+  const snapshotStarts = httpStarts.filter(item => item.requestSequence > 0);
+  const forwardedDiagnosticsStripped = requests.every(item => (
+    !Object.hasOwn(item.options, 'requestClass')
+      && !Object.hasOwn(item.options, 'requestPurpose')
+      && !Object.hasOwn(item.options, 'schedulerRequestSequence')
+      && !Object.hasOwn(item.options, 'challengePolicy')
+  ));
+  const serializedEvents = JSON.stringify(httpStarts);
+  const sensitiveFieldsAbsent = !serializedEvents.includes(sensitiveHeaderValue)
+    && !serializedEvents.includes(sensitiveBodyValue)
+    && !/(?:url|headers|authorization|cookie|token|body|payload|response)/i.test(
+      Object.keys(httpStarts[0] || {}).join('|')
+    );
   return {
     ok: Boolean(
       snapshotRequests.length === 2
         && snapshotGapMs >= 30000
-        && waits.length === 1
-        && waits[0] >= 30000
-        && exemptRequests.length === 4
-        && new Set(exemptRequests.map(item => item.atMs)).size === 1
+        && ordinaryStarts.length === 5
+        && ordinaryGaps.every(gapMs => gapMs >= 30000)
+        && exemptStarts.length === 5
+        && exemptStarts.every(item => Date.parse(item.startedAt) === 30000)
+        && JSON.stringify(exemptStarts.map(item => item.requestClass)) === JSON.stringify([
+          REQUEST_CLASSES.SOURCE_IP_PROBE,
+          REQUEST_CLASSES.LOGIN,
+          REQUEST_CLASSES.LOGIN,
+          REQUEST_CLASSES.EXIT,
+          REQUEST_CLASSES.SOURCE_IP_PREFLIGHT
+        ])
+        && snapshotStarts.length === 2
+        && snapshotStarts[0].requestSequence === 41
+        && snapshotStarts[0].purpose === 'periodic-poll'
+        && snapshotStarts[1].requestSequence === 42
+        && snapshotStarts[1].purpose === 'prelogin-safety'
+        && ordinaryStarts[2].requestClass === REQUEST_CLASSES.ORDINARY
+        && ordinaryStarts[2].purpose === 'other'
+        && failureObserved
+        && requests.at(-1)?.url === 'ordinary-recovery'
+        && allowlistOk
+        && forwardedDiagnosticsStripped
+        && sensitiveFieldsAbsent
+        && httpStarts.every(item => item.sourceIpSelectionGeneration === 1)
     ),
     snapshotGapMs,
     waits,
     requests: requests.map(item => ({ url: item.url, atMs: item.atMs })),
-    exemptRequestCount: exemptRequests.length
+    ordinaryGaps,
+    exemptClasses: exemptStarts.map(item => item.requestClass),
+    snapshotStarts,
+    failureObserved,
+    allowlistOk,
+    forwardedDiagnosticsStripped,
+    sensitiveFieldsAbsent
   };
 }
 
@@ -2219,6 +2304,8 @@ async function runBrowserlessRunner(config, deps = {}) {
         timeoutMs: config.httpTimeoutMs || config.wsConnectTimeoutMs || 10000,
         method: 'GET',
         requestClass,
+        requestPurpose: detail.purpose,
+        schedulerRequestSequence: detail.requestSequence,
         challengePolicy: requestClass === REQUEST_CLASSES.LOGIN ? 'login-stop' : undefined,
         cache: 'no-store'
       });
