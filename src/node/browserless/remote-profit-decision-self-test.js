@@ -845,8 +845,10 @@ function runRemoteProfitDecisionSelfTest() {
     lootState({ tick: 4, selfX: -2, bullets: [incomingBullet] }),
     { nowMs: 1200 }
   );
-  assert.strictEqual(incoming.action?.reason, 'incoming-bullet-dodge');
-  assert.strictEqual(incoming.input?.loot?.blockedReason, 'incoming-bullet-without-target');
+  assert.strictEqual(incoming.action?.reason, 'post-kill-loot-safe-dodge');
+  assert.strictEqual(incoming.input?.loot?.mode, 'safe-dodge-toward-coin');
+  assert.strictEqual(incoming.input?.loot?.blockedReason, '');
+  assert.ok(Number(incoming.action?.dx || 0) > 0, 'healthy high-value loot keeps positive coin progress under fire');
 
   const missingCoinAdapter = createBrowserlessDecisionAdapter({
     userId: 7,

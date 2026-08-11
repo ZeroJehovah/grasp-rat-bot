@@ -7100,8 +7100,10 @@ async function runBrowserlessRunnerSelfTest() {
       mixedVersionCoinRowLength: nearbyMapMixedVersionCompact.nearby?.c?.[0]?.length || 0,
       mixedVersionPlayerRowLength: nearbyMapMixedVersionCompact.nearby?.p?.[0]?.length || 0
     };
-    const realtimeLootFixture = (selfHp, includeCoin) => {
+    const realtimeLootFixture = (selfHp, includeCoin, fixture = {}) => {
       const nowMs = Date.UTC(2026, 6, 23, 1, 29, 48);
+      const coinX = Number(fixture.coinX ?? 5000);
+      const coinY = Number(fixture.coinY ?? 0);
       return buildBrowserlessRealtimeControlDecision({
         userId: 28886,
         realtime: {
@@ -7132,14 +7134,14 @@ async function runBrowserlessRunnerSelfTest() {
             invulnerable: true,
             invulnerable_remaining_ms: 120000
           }],
-          bullets: []
+          bullets: fixture.bullets || []
         },
         fallback: {
           tick: 99,
           receivedAtMs: nowMs - 50,
           frameAgeMs: 50,
           entities: [],
-          coinDrops: includeCoin ? [{ id: 5422, x: 5000, y: 0, amount: 22 }] : []
+          coinDrops: includeCoin ? [{ id: 5422, x: coinX, y: coinY, amount: 22 }] : []
         }
       }, {}, {
         nowMs,
@@ -7154,13 +7156,60 @@ async function runBrowserlessRunnerSelfTest() {
     };
     const healthyLootRealtimeDecision = realtimeLootFixture(100, true);
     const lowHpLootRealtimeDecision = realtimeLootFixture(49, true);
+    const safeIncomingLootRealtimeDecision = realtimeLootFixture(79, true, {
+      coinX: 0,
+      coinY: 5000,
+      bullets: [{
+        bullet_id: 1,
+        owner_user_id: 21557,
+        start_x: 10000,
+        start_y: 0,
+        target_x: 0,
+        target_y: 0,
+        speed_per_tick: 500,
+        created_tick: 99,
+        expire_tick: 130
+      }]
+    });
+    const damageCommitLootRealtimeDecision = realtimeLootFixture(79, true, {
+      bullets: [{
+        bullet_id: 2,
+        owner_user_id: 21557,
+        x: 1000,
+        y: 0,
+        start_x: 10000,
+        start_y: 0,
+        target_x: 0,
+        target_y: 0,
+        speed_per_tick: 500,
+        created_tick: 99,
+        expire_tick: 130
+      }]
+    });
     const realtimeLootSafetyArbitrationTest = {
       ok: healthyLootRealtimeDecision.kind === 'coin'
         && healthyLootRealtimeDecision.action?.target?.id === 5422
         && lowHpLootRealtimeDecision.kind === 'flee'
-        && lowHpLootRealtimeDecision.reason === 'avoid-invulnerable-target',
+        && lowHpLootRealtimeDecision.reason === 'avoid-invulnerable-target'
+        && safeIncomingLootRealtimeDecision.kind === 'patrol'
+        && safeIncomingLootRealtimeDecision.reason === 'post-kill-loot-safe-dodge'
+        && safeIncomingLootRealtimeDecision.input?.loot?.mode === 'safe-dodge-toward-coin'
+        && Number(safeIncomingLootRealtimeDecision.action?.dy || 0) > 0
+        && damageCommitLootRealtimeDecision.kind === 'coin'
+        && damageCommitLootRealtimeDecision.input?.loot?.mode === 'damage-commit'
+        && damageCommitLootRealtimeDecision.input?.loot?.acceptedDamageRisk === true,
       healthy: { kind: healthyLootRealtimeDecision.kind, reason: healthyLootRealtimeDecision.reason },
-      lowHp: { kind: lowHpLootRealtimeDecision.kind, reason: lowHpLootRealtimeDecision.reason }
+      lowHp: { kind: lowHpLootRealtimeDecision.kind, reason: lowHpLootRealtimeDecision.reason },
+      safeIncoming: {
+        kind: safeIncomingLootRealtimeDecision.kind,
+        reason: safeIncomingLootRealtimeDecision.reason,
+        mode: safeIncomingLootRealtimeDecision.input?.loot?.mode
+      },
+      damageCommit: {
+        kind: damageCommitLootRealtimeDecision.kind,
+        reason: damageCommitLootRealtimeDecision.reason,
+        mode: damageCommitLootRealtimeDecision.input?.loot?.mode
+      }
     };
     const pickupObservationState = {};
     const pickupObservationAt = Date.parse('2026-07-20T00:00:00.000Z');

@@ -2009,29 +2009,144 @@ function selectRealtimeLootCandidate(input, stateful = {}, options = {}) {
   };
 }
 
-function safeLootDodgeDirection(combat, self, coin) {
-  const threatField = Array.isArray(combat?.dryRun?.movement?.dodge?.threatField)
+function safeLootDodgeDirection(combat, self, coin, incomingAssessment = null) {
+  const combatTarget = combat?.target || combat?.dryRun?.target || null;
+  const combatThreatField = Array.isArray(combat?.dryRun?.movement?.dodge?.threatField)
     ? combat.dryRun.movement.dodge.threatField
     : [];
+  const incomingThreatField = Array.isArray(incomingAssessment?.cover?.threatField)
+    ? incomingAssessment.cover.threatField
+    : [];
+  const useCombatThreatField = Boolean(combatTarget && combatThreatField.length);
+  const threatField = useCombatThreatField
+    ? combatThreatField
+    : (incomingThreatField.length ? incomingThreatField : combatThreatField);
+  const threatFieldSource = useCombatThreatField
+    ? 'combat-dodge'
+    : (incomingThreatField.length ? 'pre-target-incoming-cover' : 'combat-dodge-fallback');
   if (!threatField.length || !self || !coin) return null;
   const coinDx = Number(coin.x) - Number(self.x);
   const coinDy = Number(coin.y) - Number(self.y);
   const coinDistance = Math.hypot(coinDx, coinDy);
   if (!(coinDistance > 0)) return null;
-  return threatField
-    .filter(item => Number(item?.directHits || 0) === 0
-      && Number(item?.avoidableHits || 0) === 0
-      && Number(item?.unavoidableHits || 0) === 0)
-    .map(item => {
-      const dx = Number(item?.dx || 0);
-      const dy = Number(item?.dy || 0);
-      const magnitude = Math.hypot(dx, dy);
-      const progress = magnitude > 0 ? (dx * coinDx + dy * coinDy) / (magnitude * coinDistance) : -1;
-      return { item, progress };
-    })
-    .filter(item => item.progress > 0)
-    .sort((a, b) => b.progress - a.progress
-      || Number(b.item?.minCPA ?? -Infinity) - Number(a.item?.minCPA ?? -Infinity))[0]?.item || null;
+  let best = null;
+  let bestProgress = 0;
+  let bestMinCpa = -Infinity;
+  for (const item of threatField) {
+    if (Number(item?.directHits || 0) !== 0
+      || Number(item?.avoidableHits || 0) !== 0
+      || Number(item?.unavoidableHits || 0) !== 0) continue;
+    const dx = Number(item?.dx || 0);
+    const dy = Number(item?.dy || 0);
+    const magnitude = Math.hypot(dx, dy);
+    if (!(magnitude > 0)) continue;
+    const progress = (dx * coinDx + dy * coinDy) / (magnitude * coinDistance);
+    if (!(progress > 0)) continue;
+    const minCpa = Number(item?.minCPA ?? -Infinity);
+    if (!best || progress > bestProgress || (progress === bestProgress && minCpa > bestMinCpa)) {
+      best = item;
+      bestProgress = progress;
+      bestMinCpa = minCpa;
+    }
+  }
+  return best ? {
+    ...best,
+    lootProgress: Math.round(bestProgress * 1000) / 1000,
+    lootThreatFieldSource: threatFieldSource
+  } : null;
+}
+
+function highValueLootPressureEvidence(input, stateful = {}, incomingAssessment = null, options = {}) {
+  const nowMs = Number(input?.nowMs || Date.now());
+  const injury = stateful?.browserlessInjury || null;
+  const injuryAgeMs = injury?.at
+    ? Math.max(0, nowMs - Number(injury.at || nowMs))
+    : null;
+  const recentInjury = Boolean(
+    injury
+      && injuryAgeMs !== null
+      && injuryAgeMs <= browserlessInjuryRecentMs(options)
+  );
+  const collisionBulletCount = Number(incomingAssessment?.collisionBullets?.length || 0);
+  return {
+    active: collisionBulletCount > 0 || recentInjury,
+    collisionBulletCount,
+    recentInjury
+  };
+}
+
+function highValueLootCommitmentMeta(action, input, pressure, mode, safeDirection, options = {}) {
+  const coin = action?.lootTarget || action?.target || null;
+  const selfHp = hpValue(input?.self);
+  const healthyHp = highValueCoinPriorityHealthyHp(options);
+  return {
+    active: true,
+    mode,
+    acceptedDamageRisk: mode === 'damage-commit',
+    protectNoProgress: Boolean(pressure?.active),
+    targetKey: coinDecisionKey(coin),
+    amount: Math.max(0, Math.round(Number(coin?.amount || 0))),
+    selfHp,
+    healthyHp,
+    collisionBulletCount: Number(pressure?.collisionBulletCount || 0),
+    recentInjury: Boolean(pressure?.recentInjury),
+    safeDirection: safeDirection ? {
+      dx: Number(safeDirection.dx || 0),
+      dy: Number(safeDirection.dy || 0),
+      progress: numberOrNull(safeDirection.lootProgress),
+      source: safeDirection.lootThreatFieldSource || ''
+    } : null
+  };
+}
+
+function buildHealthyHighValueLootPressureAction(
+  action,
+  input,
+  combat,
+  stateful = {},
+  incomingAssessment = null,
+  options = {}
+) {
+  if (!action?.target || !input?.self) return action;
+  const selfHp = hpValue(input.self);
+  const healthyHp = highValueCoinPriorityHealthyHp(options);
+  if (selfHp === null || selfHp <= healthyHp) return action;
+  if (Number(action.target.amount || 0) < highValueCoinPriorityAmount(options)) return action;
+  const pressure = highValueLootPressureEvidence(input, stateful, incomingAssessment, options);
+  if (!pressure.active) return action;
+  const safeDirection = safeLootDodgeDirection(combat, input.self, action.target, incomingAssessment);
+  if (!safeDirection) {
+    return {
+      ...action,
+      realtimeLootPriority: true,
+      highValueLootCommitment: highValueLootCommitmentMeta(
+        action,
+        input,
+        pressure,
+        'damage-commit',
+        null,
+        options
+      )
+    };
+  }
+  return {
+    ...action,
+    kind: 'patrol',
+    band: 'profit',
+    reason: 'post-kill-loot-safe-dodge',
+    dx: Number(safeDirection.dx || 0),
+    dy: Number(safeDirection.dy || 0),
+    lootTarget: action.target,
+    realtimeLootPriority: true,
+    highValueLootCommitment: highValueLootCommitmentMeta(
+      action,
+      input,
+      pressure,
+      'safe-dodge-toward-coin',
+      safeDirection,
+      options
+    )
+  };
 }
 
 function realtimeNearbyObservationSummary(input, combat, lootAssessment, options = {}) {
@@ -4030,7 +4145,7 @@ function pickHighValueVisibleCoin(input, combatDecision, options = {}) {
   const minAmount = highValueCoinPriorityAmount(options);
   const healthyHp = highValueCoinPriorityHealthyHp(options);
   const hp = hpValue(input.self);
-  const healthy = hp !== null && hp >= healthyHp;
+  const healthy = hp !== null && hp > healthyHp;
   const maxDistance = highValueCoinPriorityRange(options);
   const threats = [
     ...(input.avoidanceThreats || input.activeThreats || []),
@@ -4996,8 +5111,43 @@ function applyCoinProgressToAction(action, input, stateful = {}, options = {}) {
   cleanupCoinProgressState(stateful, input?.nowMs, options);
   const progressAt = Number(input?.nowMs) || Date.now();
   const progressOptions = coinProgressCoreOptions(options);
+  const protectedCommitment = action?.highValueLootCommitment?.protectNoProgress === true;
+  const protectedTarget = protectedCommitment
+    ? (action.lootTarget || action.target || null)
+    : null;
+  const protectedProgressId = protectedTarget ? coinDecisionKey(protectedTarget) : '';
+  if (protectedProgressId && Number.isFinite(Number(protectedTarget.distance))) {
+    const protectedDistance = Number(protectedTarget.distance);
+    const previousAttempt = stateful.coinAttempts[protectedProgressId] || null;
+    if (previousAttempt) {
+      stateful.coinAttempts[protectedProgressId] = {
+        ...previousAttempt,
+        lastSeenAt: progressAt,
+        lastImprovedAt: progressAt,
+        bestDistance: protectedDistance,
+        lastDistance: protectedDistance,
+        closeStartedAt: 0,
+        nearStartedAt: 0
+      };
+    }
+    const previousProgress = stateful.coinProgress[protectedProgressId] || null;
+    stateful.coinProgress[protectedProgressId] = {
+      ...(previousProgress || {}),
+      id: protectedProgressId,
+      startedAt: Number(previousProgress?.startedAt || progressAt),
+      lastImprovedAt: progressAt,
+      bestDistance: protectedDistance,
+      lastDistance: protectedDistance,
+      amount: Math.max(0, Number(protectedTarget.amount || previousProgress?.amount || 0)),
+      x: numberOrNull(protectedTarget.x) ?? numberOrNull(previousProgress?.x),
+      y: numberOrNull(protectedTarget.y) ?? numberOrNull(previousProgress?.y),
+      pressureProtectedAt: progressAt,
+      pressureMode: action.highValueLootCommitment.mode || ''
+    };
+  }
   if (!coinProgressIntentCore(action)) {
-    if (!stateful.staleCoinEscape || progressAt >= Number(stateful.staleCoinEscape.until || 0)) {
+    if (!protectedProgressId
+      && (!stateful.staleCoinEscape || progressAt >= Number(stateful.staleCoinEscape.until || 0))) {
       stateful.coinApproachLock = null;
     }
     return action;
@@ -9546,7 +9696,6 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
   rememberBrowserlessInjury(input, stateful, options);
   const postKillSettlement = reconcilePostKillSettlement(input, stateful, combat, previousCombatTarget, options);
   const postKillSettlementWaitAction = buildPostKillSettlementWaitDecision(input, stateful, combat);
-  const lootControl = buildRealtimeLootControl(input, combatForProfit, stateful, options);
   const combatActionEligible = isCombatActionEligibleForDecision(combat, options) && !realtimeEconomicSuppression;
   const reuseSafetyContextOptions = options?.[INTERNAL_REALTIME_OPTIONS] === true;
   const safetyContextOptions = reuseSafetyContextOptions
@@ -9565,6 +9714,13 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     input,
     combat,
     safetyContextOptions
+  );
+  const lootControl = buildRealtimeLootControl(
+    input,
+    combatForProfit,
+    stateful,
+    safetyContextOptions,
+    incomingThreatAssessment
   );
   const preTargetIncomingSafetyAction = buildBrowserlessPreTargetIncomingSafetyDecision(
     input,
@@ -9624,6 +9780,15 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     && injuryHpExitAction?.reason === 'combat-hp-disadvantage-leave'
     ? null
     : injuryHpExitAction;
+  if (healthyLootPriority && lootControl.summary) {
+    const deferredExitReasons = [
+      combatExitAction?.reason === 'combat-hp-disadvantage-leave' ? combatExitAction.reason : '',
+      injuryHpExitAction?.reason === 'combat-hp-disadvantage-leave' ? injuryHpExitAction.reason : ''
+    ].filter(Boolean);
+    if (deferredExitReasons.length) {
+      lootControl.summary.deferredExitReasons = Array.from(new Set(deferredExitReasons));
+    }
+  }
   const combatAction = combatActionEligible ? combat.action : null;
   const closePressureCombatAction = combatAction && combatDecisionClosePressureActive(combat)
     ? combatAction
@@ -9654,6 +9819,14 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     safetyContextOptions,
     incomingThreatAssessment
   );
+  const selectedStandaloneIncomingDodgeAction = healthyLootPriority
+    ? null
+    : standaloneIncomingDodgeAction;
+  const selectedRecoveryContactGuardAction = healthyLootPriority
+    && recoveryContactGuardAction
+    && !recoveryContactGuardAction.shouldLeave
+    ? null
+    : recoveryContactGuardAction;
   const deferCombatExitForDynamicContact = dynamicWhitelistContactSupersedesLowHpExit(
     dynamicWhitelistContactExitAction,
     selectedCombatExitAction
@@ -9676,8 +9849,8 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     || deferredInjuryHpExitAction
     || pursuitLeaveAction
     || lowHpRecoveryThreatExitAction
-    || standaloneIncomingDodgeAction
-    || recoveryContactGuardAction
+    || selectedStandaloneIncomingDodgeAction
+    || selectedRecoveryContactGuardAction
     || (healthyLootPriority && safetyAction?.reason === 'avoid-invulnerable-target'
       ? null
       : safetyAction)
@@ -9737,7 +9910,7 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
   if (!dangerousCombatExit) {
     dangerousCombatExit = rememberDangerousSafetyExitTarget(
       input,
-      recoveryContactGuardAction,
+      selectedRecoveryContactGuardAction,
       stateful,
       options,
       'recovery-contact'
@@ -9794,7 +9967,7 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
   return output;
 }
 
-function buildRealtimeLootControl(input, combat, stateful = {}, options = {}) {
+function buildRealtimeLootControl(input, combat, stateful = {}, options = {}, incomingAssessment = null) {
   const assessment = selectRealtimeLootCandidate(input, stateful, options);
   const coin = assessment.selected || null;
   const summaryBase = {
@@ -9874,11 +10047,23 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}) {
       }
     };
   }
-  const incoming = incomingBulletPressure(input);
+  const pressure = highValueLootPressureEvidence(input, stateful, incomingAssessment, options);
+  const incomingCount = Number(pressure.collisionBulletCount || 0);
   const reason = coin.selfKilledPlayerDrop
     ? 'post-kill-drop-priority'
     : 'high-value-visible-coin-priority';
-  if (!incoming.hasIncoming) {
+  const directActionBase = {
+    kind: Number(coin.distance || Infinity) <= Number(options.coinMaxDistance ?? BROWSER_RUNTIME_DEFAULTS.coinMaxDistance)
+      ? 'coin'
+      : 'seek-coin',
+    band: 'profit',
+    reason,
+    reward: effectiveCoinProfitReward(coin),
+    staminaCost: opportunityCoinStaminaCost(coin, options),
+    target: summarizeCoin(coin),
+    realtimeLootPriority: true
+  };
+  if (!pressure.active) {
     const directCombatSummary = combat?.dryRun ? {
       ...combat.dryRun,
       shooting: {
@@ -9893,21 +10078,12 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}) {
         target: summarizeCoin(coin),
         incomingCount: 0,
         mode: 'direct-coin',
+        acceptedDamageRisk: false,
         deferredCombatExitReason
       }
     } : null;
     return {
-      action: {
-        kind: Number(coin.distance || Infinity) <= Number(options.coinMaxDistance ?? BROWSER_RUNTIME_DEFAULTS.coinMaxDistance)
-          ? 'coin'
-          : 'seek-coin',
-        band: 'profit',
-        reason,
-        reward: effectiveCoinProfitReward(coin),
-        staminaCost: opportunityCoinStaminaCost(coin, options),
-        target: summarizeCoin(coin),
-        realtimeLootPriority: true
-      },
+      action: directActionBase,
       combat: directCombatSummary,
       assessment,
       summary: {
@@ -9918,23 +10094,120 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}) {
         releasedOrdinaryProfitClosePressure: ordinaryProfitClosePressure,
         healthyHp,
         selfHp,
+        acceptedDamageRisk: false,
         deferredCombatExitReason
       }
     };
   }
-  const safeDirection = safeLootDodgeDirection(combat, input.self, coin);
-  if (!combat?.target || !safeDirection) {
+  const safeDirection = safeLootDodgeDirection(combat, input.self, coin, incomingAssessment);
+  if (!safeDirection) {
+    const damageCommitAction = {
+      ...directActionBase,
+      highValueLootCommitment: highValueLootCommitmentMeta(
+        directActionBase,
+        input,
+        pressure,
+        'damage-commit',
+        null,
+        options
+      )
+    };
+    const damageCommitCombatSummary = combat?.dryRun ? {
+      ...combat.dryRun,
+      shooting: {
+        ...(combat.dryRun.shooting || {}),
+        wouldShoot: false,
+        commandSuppressed: true,
+        state: 'loot-priority',
+        reason: 'post-kill-loot-priority'
+      },
+      realtimeLoot: {
+        reason,
+        target: summarizeCoin(coin),
+        incomingCount,
+        mode: 'damage-commit',
+        acceptedDamageRisk: true,
+        deferredCombatExitReason
+      }
+    } : null;
     return {
-      action: null,
-      combat: null,
+      action: damageCommitAction,
+      combat: damageCommitCombatSummary,
       assessment,
       summary: {
         ...summaryBase,
-        blockedReason: combat?.target ? 'no-safe-loot-progress-vector' : 'incoming-bullet-without-target',
+        active: true,
+        eligible: true,
+        mode: 'damage-commit',
+        acceptedDamageRisk: true,
         releasedOrdinaryProfitClosePressure: ordinaryProfitClosePressure,
         healthyHp,
         selfHp,
-        incomingCount: incoming.incomingCount
+        incomingCount,
+        deferredCombatExitReason
+      }
+    };
+  }
+  if (!combat?.target) {
+    const safeDodgeAction = {
+      ...directActionBase,
+      kind: 'patrol',
+      band: 'profit',
+      reason: 'post-kill-loot-safe-dodge',
+      dx: Number(safeDirection.dx || 0),
+      dy: Number(safeDirection.dy || 0),
+      lootTarget: directActionBase.target,
+      highValueLootCommitment: highValueLootCommitmentMeta(
+        directActionBase,
+        input,
+        pressure,
+        'safe-dodge-toward-coin',
+        safeDirection,
+        options
+      )
+    };
+    const safeDodgeCombatSummary = {
+      ...(combat?.dryRun || {}),
+      movement: {
+        ...(combat?.dryRun?.movement || {}),
+        dx: Number(safeDirection.dx || 0),
+        dy: Number(safeDirection.dy || 0),
+        reason: 'post-kill-loot-safe-dodge',
+        modifiers: Array.from(new Set([...(combat?.dryRun?.movement?.modifiers || []), 'post-kill-loot']))
+      },
+      shooting: {
+        ...(combat?.dryRun?.shooting || {}),
+        wouldShoot: false,
+        commandSuppressed: true,
+        state: 'loot-priority',
+        reason: 'post-kill-loot-priority'
+      },
+      realtimeLoot: {
+        reason,
+        target: summarizeCoin(coin),
+        incomingCount,
+        mode: 'safe-dodge-toward-coin',
+        acceptedDamageRisk: false,
+        deferredCombatExitReason,
+        safeDirection: { dx: Number(safeDirection.dx || 0), dy: Number(safeDirection.dy || 0) }
+      }
+    };
+    return {
+      action: safeDodgeAction,
+      combat: safeDodgeCombatSummary,
+      assessment,
+      summary: {
+        ...summaryBase,
+        active: true,
+        eligible: true,
+        mode: 'safe-dodge-toward-coin',
+        acceptedDamageRisk: false,
+        releasedOrdinaryProfitClosePressure: ordinaryProfitClosePressure,
+        healthyHp,
+        selfHp,
+        incomingCount,
+        deferredCombatExitReason,
+        safeDirection: { dx: Number(safeDirection.dx || 0), dy: Number(safeDirection.dy || 0) }
       }
     };
   }
@@ -9957,7 +10230,9 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}) {
     realtimeLoot: {
       reason,
       target: summarizeCoin(coin),
-      incomingCount: incoming.incomingCount,
+      incomingCount,
+      mode: 'safe-dodge-toward-coin',
+      acceptedDamageRisk: false,
       deferredCombatExitReason,
       safeDirection: { dx: Number(safeDirection.dx || 0), dy: Number(safeDirection.dy || 0) }
     }
@@ -9969,7 +10244,15 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}) {
       reason: 'post-kill-loot-safe-dodge',
       target: combat.target,
       lootTarget: summarizeCoin(coin),
-      realtimeLootPriority: true
+      realtimeLootPriority: true,
+      highValueLootCommitment: highValueLootCommitmentMeta(
+        { ...directActionBase, lootTarget: summarizeCoin(coin) },
+        input,
+        pressure,
+        'safe-dodge-toward-coin',
+        safeDirection,
+        options
+      )
     },
     combat: combatSummary,
     assessment,
@@ -9981,7 +10264,8 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}) {
       releasedOrdinaryProfitClosePressure: ordinaryProfitClosePressure,
       healthyHp,
       selfHp,
-      incomingCount: incoming.incomingCount,
+      incomingCount,
+      acceptedDamageRisk: false,
       deferredCombatExitReason,
       safeDirection: { dx: Number(safeDirection.dx || 0), dy: Number(safeDirection.dy || 0) }
     }
@@ -11384,7 +11668,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   if (combat?.dryRun && nonThreatEconomicStopLoss) {
     combat.dryRun.nonThreatEconomicStopLoss = nonThreatEconomicStopLoss;
   }
-  let dangerousCombatExit = rememberDangerousCombatExitTarget(input, combat, stateful, options);
+  let dangerousCombatExit = null;
   const combatPursuitSuppression = rememberNonThreatCombatEconomicSuppression(
     input,
     combat,
@@ -11517,9 +11801,22 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     postKillSettlement,
     preexistingCombatTarget: previousCombatTarget
   };
+  rememberBrowserlessInjury(input, stateful, safetyContextOptions);
   const incomingThreatAssessment = input.self && !realtimeStale
     ? buildBrowserlessIncomingThreatAssessment(state, input, combat, safetyContextOptions)
     : null;
+  const committedHighValueCoinPriorityAction = buildHealthyHighValueLootPressureAction(
+    highValueCoinPriorityAction,
+    input,
+    combatForProfit,
+    stateful,
+    incomingThreatAssessment,
+    safetyContextOptions
+  );
+  const healthyLootPriority = Boolean(
+    committedHighValueCoinPriorityAction
+      && hpValue(input.self) > highValueCoinPriorityHealthyHp(options)
+  );
   const preTargetIncomingSafetyAction = input.self && !realtimeStale
     ? buildBrowserlessPreTargetIncomingSafetyDecision(input, incomingThreatAssessment, safetyContextOptions)
     : null;
@@ -11554,6 +11851,14 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
         incomingThreatAssessment
       )
     : null;
+  const selectedStandaloneIncomingDodgeAction = healthyLootPriority
+    ? null
+    : standaloneIncomingDodgeAction;
+  const selectedRecoveryContactGuardAction = healthyLootPriority
+    && recoveryContactGuardAction
+    && !recoveryContactGuardAction.shouldLeave
+    ? null
+    : recoveryContactGuardAction;
   const lowHpRecoveryThreatExitAction = attachIncomingCoverToLeaveDecision(
     input.self && !realtimeStale
       ? buildLowHpRecoveryThreatExitDecision(input, safetyContextOptions)
@@ -11587,10 +11892,50 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       : null,
     incomingThreatAssessment
   );
+  const pursuitLeaveAction = attachIncomingCoverToLeaveDecision(
+    input.self && !realtimeStale
+      ? buildBrowserlessPursuitLeaveDecision(input, stateful, combat, safetyContextOptions)
+      : null,
+    incomingThreatAssessment
+  );
+  const longStaminaExhaustedLeaveAction = attachIncomingCoverToLeaveDecision(
+    input.self && !realtimeStale
+      ? buildLongStaminaExhaustedLeaveDecision(input, options)
+      : null,
+    incomingThreatAssessment
+  );
+  const hardSafetyAction = safetyActionIsHardLeave(safetyAction) ? safetyAction : null;
+  const combatExitAction = attachIncomingCoverToLeaveDecision(
+    combat.exitAction || null,
+    incomingThreatAssessment
+  );
+  const selectedCombatExitAction = healthyLootPriority
+    && combatExitAction?.reason === 'combat-hp-disadvantage-leave'
+    ? null
+    : combatExitAction;
+  const selectedInjuryHpExitAction = healthyLootPriority
+    && injuryHpExitAction?.reason === 'combat-hp-disadvantage-leave'
+    ? null
+    : injuryHpExitAction;
+  const deferCombatExitForDynamicContact = dynamicWhitelistContactSupersedesLowHpExit(
+    dynamicWhitelistContactExitAction,
+    selectedCombatExitAction
+  );
+  const deferInjuryExitForDynamicContact = dynamicWhitelistContactSupersedesLowHpExit(
+    dynamicWhitelistContactExitAction,
+    selectedInjuryHpExitAction
+  );
+  const immediateCombatExitAction = deferCombatExitForDynamicContact ? null : selectedCombatExitAction;
+  const immediateInjuryHpExitAction = deferInjuryExitForDynamicContact ? null : selectedInjuryHpExitAction;
+  const deferredCombatExitAction = deferCombatExitForDynamicContact ? selectedCombatExitAction : null;
+  const deferredInjuryHpExitAction = deferInjuryExitForDynamicContact ? selectedInjuryHpExitAction : null;
+  if (selectedCombatExitAction) {
+    dangerousCombatExit = rememberDangerousCombatExitTarget(input, combat, stateful, options);
+  }
   if (!dangerousCombatExit) {
     dangerousCombatExit = rememberDangerousSafetyExitTarget(
       input,
-      injuryHpExitAction,
+      selectedInjuryHpExitAction,
       stateful,
       options,
       'recent-injury-pressure'
@@ -11626,45 +11971,16 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   if (!dangerousCombatExit) {
     dangerousCombatExit = rememberDangerousSafetyExitTarget(
       input,
-      recoveryContactGuardAction,
+      selectedRecoveryContactGuardAction,
       stateful,
       options,
       'recovery-contact'
     );
   }
-  const pursuitLeaveAction = attachIncomingCoverToLeaveDecision(
-    input.self && !realtimeStale
-      ? buildBrowserlessPursuitLeaveDecision(input, stateful, combat, safetyContextOptions)
-      : null,
-    incomingThreatAssessment
-  );
-  const longStaminaExhaustedLeaveAction = attachIncomingCoverToLeaveDecision(
-    input.self && !realtimeStale
-      ? buildLongStaminaExhaustedLeaveDecision(input, options)
-      : null,
-    incomingThreatAssessment
-  );
-  const hardSafetyAction = safetyActionIsHardLeave(safetyAction) ? safetyAction : null;
-  const combatExitAction = attachIncomingCoverToLeaveDecision(
-    combat.exitAction || null,
-    incomingThreatAssessment
-  );
-  const deferCombatExitForDynamicContact = dynamicWhitelistContactSupersedesLowHpExit(
-    dynamicWhitelistContactExitAction,
-    combatExitAction
-  );
-  const deferInjuryExitForDynamicContact = dynamicWhitelistContactSupersedesLowHpExit(
-    dynamicWhitelistContactExitAction,
-    injuryHpExitAction
-  );
-  const immediateCombatExitAction = deferCombatExitForDynamicContact ? null : combatExitAction;
-  const immediateInjuryHpExitAction = deferInjuryExitForDynamicContact ? null : injuryHpExitAction;
-  const deferredCombatExitAction = deferCombatExitForDynamicContact ? combatExitAction : null;
-  const deferredInjuryHpExitAction = deferInjuryExitForDynamicContact ? injuryHpExitAction : null;
   const safetyYieldsToHighValueCoin = Boolean(
     safetyAction
       && safetyAction.reason === 'avoid-invulnerable-target'
-      && highValueCoinPriorityAction
+      && healthyLootPriority
   );
   const immediateSafetyAction = safetyAction
     && !hardSafetyAction
@@ -11672,6 +11988,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     && !safetyActionCanYieldToInjuredFootCoin(safetyAction)
     ? safetyAction
     : null;
+  const yieldableSafetyAction = safetyYieldsToHighValueCoin ? null : safetyAction;
   const rawCoinStaminaBudgetExitAction = (profitLive || nonCombatProfit)
     ? buildStaminaBudgetExitDecision(input, options)
     : null;
@@ -11691,6 +12008,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const recoveryAction = (profitLive || nonCombatProfit) && !whitelistSafetyCombat
     ? buildRecoveryDecision(input, opportunity, options)
     : null;
+  const selectedRecoveryFootCoinAction = healthyLootPriority ? null : recoveryFootCoinAction;
+  const selectedRecoveryAction = healthyLootPriority ? null : recoveryAction;
   const injuredCautionFootCoinAction = safetyAction
     && safetyActionCanYieldToInjuredFootCoin(safetyAction)
     && input.self
@@ -11698,7 +12017,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     ? buildFootCoinPriorityDecision(profitSelectionInput, 'foot-coin-before-active-caution', options)
     : null;
   const footCoinPriorityAction = (profitLive || nonCombatProfit) ? buildFootCoinPriorityDecision(profitSelectionInput, 'foot-coin-priority', options) : null;
-  const dailyFinalCoinAction = (profitLive || nonCombatProfit) && !recoveryAction
+  const dailyFinalCoinAction = (profitLive || nonCombatProfit) && !selectedRecoveryAction
     ? buildDailyStaminaFinalCoinDecision(profitSelectionInput, options)
     : null;
   const opportunisticShotWaitAction = (profitLive || nonCombatProfit)
@@ -11714,22 +12033,22 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       && !hardSafetyAction
       && !criticalIncomingExitAction
       && !dynamicWhitelistContactExitAction
-      && !standaloneIncomingDodgeAction
-      && !recoveryContactGuardAction
+      && !selectedStandaloneIncomingDodgeAction
+      && !selectedRecoveryContactGuardAction
       && !lowHpRecoveryThreatExitAction
       && !longStaminaExhaustedLeaveAction
       && !predictedThreatExitAction
-      && !combatExitAction
-      && !injuryHpExitAction
+      && !selectedCombatExitAction
+      && !selectedInjuryHpExitAction
       && !pursuitLeaveAction
       && !immediateSafetyAction
-      && !highValueCoinPriorityAction
+      && !committedHighValueCoinPriorityAction
       && !(combat.target && combatDecisionEnabled && combatActionEligible)
       && !postAttackDropCoinAction
       && !postAttackDropWaitAction
       && !staminaBudgetExitAction
-      && !recoveryFootCoinAction
-      && !recoveryAction
+      && !selectedRecoveryFootCoinAction
+      && !selectedRecoveryAction
       && !injuredCautionFootCoinAction
       && !safetyAction
       && !dailyFinalCoinAction
@@ -11799,8 +12118,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       candidate(deferredInjuryHpExitAction, 48, 'injury-low-hp-exit-after-whitelist-contact', true, { riskScore: 100 }),
       candidate(pursuitLeaveAction, 50, 'pursuit-hard-gate', true, { riskScore: 90 }),
       candidate(lowHpRecoveryThreatExitAction, 52, 'low-hp-recovery-threat-hard-gate', true, { riskScore: 100 }),
-      candidate(standaloneIncomingDodgeAction, 54, 'incoming-bullet-dodge-hard-gate', true, { riskScore: 100 }),
-      candidate(recoveryContactGuardAction, 56, 'recovery-contact-hard-gate', true, { riskScore: 100 }),
+      candidate(selectedStandaloneIncomingDodgeAction, 54, 'incoming-bullet-dodge-hard-gate', true, { riskScore: 100 }),
+      candidate(selectedRecoveryContactGuardAction, 56, 'recovery-contact-hard-gate', true, { riskScore: 100 }),
       candidate(immediateSafetyAction, 57, 'realtime-safety-hard-gate', true, { riskScore: immediateSafetyAction?.urgent ? 100 : 80 }),
       candidate(whitelistSafetyCombatAction, 58, 'dynamic-whitelist-safety-combat', combatHardGate, {
         staminaCost: combat.dryRun?.metrics?.totalStaminaSpent,
@@ -11811,14 +12130,20 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
         staminaCost: combat.dryRun?.metrics?.totalStaminaSpent,
         riskScore: combat.dryRun?.behavior?.mode === 'pressure-shooter' ? 70 : 40
       }),
-      candidate(highValueCoinPriorityAction && !singleCoinBaitReleaseAction ? highValueCoinPriorityAction : null, 70, 'high-value-visible-coin'),
+      candidate(
+        committedHighValueCoinPriorityAction && !singleCoinBaitReleaseAction
+          ? committedHighValueCoinPriorityAction
+          : null,
+        70,
+        'high-value-visible-coin'
+      ),
       candidate(postAttackDropCoinAction, 80, 'post-attack-drop-coin', false, { commitmentRank: 20 }),
       candidate(postAttackDropWaitAction, 90, 'post-attack-drop-wait', false, { commitmentRank: 20 }),
       candidate(staminaBudgetExitAction, 100, 'stamina-budget-exit', true, { riskScore: 100 }),
-      candidate(recoveryFootCoinAction, 110, 'recovery-foot-coin', true),
-      candidate(recoveryAction, 120, 'ordinary-recovery', true),
+      candidate(selectedRecoveryFootCoinAction, 110, 'recovery-foot-coin', true),
+      candidate(selectedRecoveryAction, 120, 'ordinary-recovery', true),
       candidate(injuredCautionFootCoinAction, 130, 'injured-caution-foot-coin'),
-      candidate(safetyAction, 140, 'yieldable-safety'),
+      candidate(yieldableSafetyAction, 140, 'yieldable-safety'),
       candidate(singleCoinBaitAction, 150, 'single-coin-bait', false, {
         commitmentRank: Number(singleCoinBait.commitmentRank || 0),
         netROI: Number.isFinite(Number(singleCoinBaitAction?.netROI)) ? Number(singleCoinBaitAction.netROI) : undefined

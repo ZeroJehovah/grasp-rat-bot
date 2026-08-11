@@ -14302,6 +14302,117 @@ async function runSelfTest() {
       want: 'coin|stale-snapshot-coin|patrol|ignore-stale-coin-no-progress|-1|true|true|7200|wait|no-profitable-candidate|true'
     },
     {
+      name: 'browserless pressured high-value loot resets no-progress baseline until pressure clears',
+      got: (() => {
+        const stateful = {};
+        const makeState = (nowMs, tick, selfX, withBullet) => {
+          const self = {
+            entity_id: 1,
+            user_id: 7,
+            name: 'self',
+            x: selfX,
+            y: 0,
+            hp: 79,
+            max_hp: 100,
+            current_join_mode: 'Active',
+            stamina_5s_remaining_milli: 10000,
+            stamina_5s_limit_milli: 10000,
+            stamina_1h_remaining_milli: 2000000,
+            stamina_1d_remaining_milli: 10000000
+          };
+          const threat = {
+            entity_id: 2,
+            user_id: 8,
+            name: 'invulnerable-pressure',
+            x: 10000,
+            y: 0,
+            hp: 100,
+            max_hp: 100,
+            current_join_mode: 'Active',
+            firing: withBullet,
+            invulnerable: true,
+            invulnerable_remaining_ms: 100000,
+            stamina_5s_remaining_milli: 10000,
+            stamina_5s_limit_milli: 10000
+          };
+          const bullet = {
+            bullet_id: tick,
+            owner_user_id: 8,
+            x: 1000,
+            y: 0,
+            start_x: 10000,
+            start_y: 0,
+            target_x: 0,
+            target_y: 0,
+            speed_per_tick: 500,
+            created_tick: tick - 1,
+            expire_tick: tick + 30
+          };
+          const coin = {
+            drop_id: 'pressured-high-value',
+            source_user_id: 8,
+            system_spawned: false,
+            amount: 119,
+            x: 5000,
+            y: 0,
+            created_tick: 90
+          };
+          return {
+            userId: 7,
+            realtime: {
+              tick,
+              receivedAtMs: nowMs,
+              frameAgeMs: 0,
+              self,
+              entities: [self, threat],
+              bullets: withBullet ? [bullet] : []
+            },
+            fallback: {
+              tick,
+              receivedAtMs: nowMs,
+              frameAgeMs: 0,
+              self,
+              entities: [self, threat],
+              coinDrops: [coin],
+              messages: [{ kind: 'kill', user_id: 7, target_user_id: 8, tick: 90 }]
+            }
+          };
+        };
+        const options = {
+          ...buildBrowserlessRuntimeDefaults({}),
+          userId: 7,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          dynamicProfitThresholdEnabled: false,
+          coinNoProgressMs: 1000,
+          coinNoProgressIgnoreMs: 5000,
+          coinFailureMaxIgnoreMs: 10000,
+          closeCoinStuckMs: 100000,
+          nearCoinStuckMs: 100000
+        };
+        const first = buildBrowserlessDecision(makeState(1000, 100, 0, true), stateful, { ...options, nowMs: 1000 });
+        const pushed = buildBrowserlessDecision(makeState(2200, 101, -1000, true), stateful, { ...options, nowMs: 2200 });
+        const pressured = buildBrowserlessDecision(makeState(3400, 102, -1000, true), stateful, { ...options, nowMs: 3400 });
+        const bestDistanceWhilePressured = stateful.coinProgress['id:pressured-high-value']?.bestDistance;
+        const ignoredWhilePressured = Number(stateful.ignoredCoins['id:pressured-high-value'] || 0) > 3400;
+        const released = buildBrowserlessDecision(makeState(3500, 103, -1000, false), stateful, { ...options, nowMs: 3500 });
+        const staleAfterRelease = buildBrowserlessDecision(makeState(4600, 104, -1000, false), stateful, { ...options, nowMs: 4600 });
+        return [
+          first.action?.highValueLootCommitment?.mode,
+          pushed.action?.kind,
+          pushed.action?.highValueLootCommitment?.mode,
+          pressured.action?.kind,
+          bestDistanceWhilePressured,
+          ignoredWhilePressured,
+          released.action?.highValueLootCommitment === undefined,
+          staleAfterRelease.action?.kind,
+          staleAfterRelease.action?.reason,
+          Number(stateful.ignoredCoins['id:pressured-high-value'] || 0) > 4600
+        ].join('|');
+      })(),
+      want: 'damage-commit|coin|damage-commit|coin|6000|false|true|patrol|ignore-stale-coin-no-progress|true'
+    },
+    {
       name: 'browserless collected high-value snapshot coin stays suppressed while stale snapshots repeat',
       got: (() => {
         const options = {
@@ -27543,6 +27654,164 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'coin|post-kill-drop-priority|57|34711|true|player:34711|true|true|57|huaming song|combat-live|post-kill-loot-safe-dodge|true|true|snapshot-stale|'
+    },
+    {
+      name: 'browserless healthy self-kill loot commitment survives invulnerable respawn fire and hp-gap pressure',
+      got: (() => {
+        const nowMs = Date.UTC(2026, 7, 11, 16, 15, 47);
+        const stateFor = ({
+          hp = 79,
+          coinX = 5000,
+          coinY = 0,
+          nearBullet = false,
+          includeCoin = true,
+          tick = 18215
+        } = {}) => {
+          const self = {
+            entity_id: 1,
+            user_id: 28886,
+            name: 'self',
+            x: 0,
+            y: 0,
+            hp,
+            max_hp: 100,
+            current_join_mode: 'Active',
+            stamina_5s_remaining_milli: 10000,
+            stamina_5s_limit_milli: 10000,
+            stamina_1h_remaining_milli: 2000000,
+            stamina_1d_remaining_milli: 10000000
+          };
+          const respawned = {
+            entity_id: 2,
+            user_id: 17180,
+            name: 'respawned-target',
+            x: 10000,
+            y: 0,
+            hp: 100,
+            max_hp: 100,
+            current_join_mode: 'Active',
+            firing: true,
+            invulnerable: true,
+            invulnerable_remaining_ms: 117000,
+            stamina_5s_remaining_milli: 10000,
+            stamina_5s_limit_milli: 10000
+          };
+          const bullet = {
+            bullet_id: nearBullet ? 2 : 1,
+            owner_user_id: 17180,
+            ...(nearBullet ? { x: 1000, y: 0 } : {}),
+            start_x: 10000,
+            start_y: 0,
+            target_x: 0,
+            target_y: 0,
+            speed_per_tick: 500,
+            created_tick: tick - 1,
+            expire_tick: tick + 30
+          };
+          return {
+            userId: 28886,
+            realtime: {
+              tick,
+              receivedAtMs: nowMs,
+              frameAgeMs: 0,
+              self,
+              entities: [self, respawned],
+              bullets: [bullet]
+            },
+            fallback: {
+              tick,
+              receivedAtMs: nowMs,
+              frameAgeMs: 0,
+              self,
+              entities: [self, respawned],
+              coinDrops: includeCoin ? [{
+                drop_id: 205,
+                source_user_id: 17180,
+                system_spawned: false,
+                amount: 119,
+                x: coinX,
+                y: coinY,
+                created_tick: tick - 5
+              }] : [],
+              messages: [{ kind: 'kill', user_id: 28886, target_user_id: 17180, tick: tick - 5 }]
+            }
+          };
+        };
+        const options = {
+          ...buildBrowserlessRuntimeDefaults({}),
+          userId: 28886,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          nowMs,
+          dynamicProfitThresholdEnabled: false,
+          combatDisadvantageConfirmMs: 0,
+          combatDisadvantageMinEngageMs: 0,
+          combatDisadvantageMinSamples: 1
+        };
+        const safeState = stateFor({ coinX: 0, coinY: 5000 });
+        const safe = buildBrowserlessRealtimeControlDecision(
+          safeState,
+          createBrowserlessDecisionState(),
+          options
+        );
+        const damageState = stateFor({ hp: 76, nearBullet: true });
+        const damagedStateful = createBrowserlessDecisionState({
+          browserlessLastSelf: { key: '28886', hp: 79, x: 0, y: 0, at: nowMs - 100 }
+        });
+        const damageCommit = buildBrowserlessRealtimeControlDecision(
+          damageState,
+          damagedStateful,
+          options
+        );
+        const fullPlanner = buildBrowserlessDecision(
+          damageState,
+          createBrowserlessDecisionState({
+            browserlessLastSelf: { key: '28886', hp: 79, x: 0, y: 0, at: nowMs - 100 }
+          }),
+          options
+        );
+        const threshold = buildBrowserlessRealtimeControlDecision(
+          stateFor({ hp: 50, nearBullet: true }),
+          createBrowserlessDecisionState(),
+          options
+        );
+        const critical = buildBrowserlessRealtimeControlDecision(
+          stateFor({ hp: 30, nearBullet: true }),
+          createBrowserlessDecisionState(),
+          options
+        );
+        const missing = buildBrowserlessRealtimeControlDecision(
+          stateFor({ hp: 76, nearBullet: true, includeCoin: false }),
+          createBrowserlessDecisionState({
+            browserlessLastSelf: { key: '28886', hp: 79, x: 0, y: 0, at: nowMs - 100 }
+          }),
+          options
+        );
+        const safeCoinProgress = Number(safe.action?.dx || 0) * 0
+          + Number(safe.action?.dy || 0) * 5000;
+        return [
+          safe.action?.kind,
+          safe.action?.reason,
+          safe.input?.loot?.mode,
+          safeCoinProgress > 0,
+          !safe.combat?.target,
+          damageCommit.action?.kind,
+          damageCommit.action?.reason,
+          damageCommit.input?.loot?.mode,
+          damageCommit.input?.loot?.acceptedDamageRisk,
+          damageCommit.input?.loot?.deferredExitReasons?.includes('combat-hp-disadvantage-leave'),
+          damageCommit.action?.shouldLeave === true,
+          fullPlanner.action?.kind,
+          fullPlanner.action?.highValueLootCommitment?.mode,
+          fullPlanner.action?.highValueLootCommitment?.acceptedDamageRisk,
+          threshold.action?.reason,
+          critical.action?.reason,
+          critical.action?.shouldLeave === true,
+          missing.input?.loot?.candidate === null,
+          ['coin', 'seek-coin', 'patrol'].includes(missing.action?.kind)
+        ].join('|');
+      })(),
+      want: 'patrol|post-kill-loot-safe-dodge|safe-dodge-toward-coin|true|true|coin|post-kill-drop-priority|damage-commit|true|true|false|coin|damage-commit|true|incoming-bullet-dodge|combat-critical-hp-leave|true|true|false'
     },
     {
       name: 'browserless healthy post-injury coin priority defers hp-gap exit',
