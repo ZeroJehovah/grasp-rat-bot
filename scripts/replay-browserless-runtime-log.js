@@ -636,6 +636,102 @@ function integerTickBulletMiss(rows, ack, aim = null) {
   return minimumMissCm;
 }
 
+function arrivalOccupancyCalibrationSummary(shotEvaluations = [], options = {}) {
+  const hypotheses = ['stop-at-arrival', 'restart-after-stop', 'restart-reverse'];
+  const hitRadiusCm = Math.max(1, Number(options.hitRadius || 90));
+  const paired = (shotEvaluations || []).filter(item => hypotheses.every(hypothesis => (
+    optionalNumberOrNull(item.routeCandidateIntegerMisses?.[hypothesis]) !== null
+  )));
+  const comparison = (candidateMiss, referenceMiss) => {
+    if (referenceMiss === null) return 'unavailable';
+    if (candidateMiss < referenceMiss) return 'better';
+    if (candidateMiss > referenceMiss) return 'worse';
+    return 'same';
+  };
+  const branchRows = Object.fromEntries(hypotheses.map(hypothesis => [hypothesis, []]));
+  const branches = Object.fromEntries(hypotheses.map(hypothesis => [hypothesis, {
+    pairedOpportunities: paired.length,
+    integerTickHits: 0,
+    integerTickHitRate: null,
+    integerTickMeanMissCm: null,
+    integerTickP50MissCm: null,
+    integerTickP90MissCm: null,
+    uniqueBestCount: 0,
+    tiedBestCount: 0,
+    currentReplaySelectedCount: 0,
+    versusLoggedWire: { better: 0, same: 0, worse: 0, unavailable: 0 },
+    versusCurrentReplayAim: { better: 0, same: 0, worse: 0, unavailable: 0 }
+  }]));
+  for (const item of paired) {
+    const misses = Object.fromEntries(hypotheses.map(hypothesis => [
+      hypothesis,
+      Number(item.routeCandidateIntegerMisses[hypothesis])
+    ]));
+    const bestMiss = Math.min(...Object.values(misses));
+    const winners = hypotheses.filter(hypothesis => Math.abs(misses[hypothesis] - bestMiss) < 1e-9);
+    for (const hypothesis of hypotheses) {
+      const miss = misses[hypothesis];
+      const branch = branches[hypothesis];
+      branchRows[hypothesis].push(miss);
+      branch.integerTickHits += miss <= hitRadiusCm ? 1 : 0;
+      if (winners.includes(hypothesis)) {
+        if (winners.length === 1) branch.uniqueBestCount += 1;
+        else branch.tiedBestCount += 1;
+      }
+      if (String(item.routeCandidate || '') === hypothesis) branch.currentReplaySelectedCount += 1;
+      branch.versusLoggedWire[comparison(miss, optionalNumberOrNull(item.baselineIntegerMiss))] += 1;
+      branch.versusCurrentReplayAim[comparison(miss, optionalNumberOrNull(item.improvedIntegerMiss))] += 1;
+    }
+  }
+  for (const hypothesis of hypotheses) {
+    const misses = branchRows[hypothesis];
+    const branch = branches[hypothesis];
+    branch.integerTickHitRate = misses.length
+      ? Number((branch.integerTickHits / misses.length).toFixed(4))
+      : null;
+    branch.integerTickMeanMissCm = misses.length
+      ? Number((misses.reduce((sum, miss) => sum + miss, 0) / misses.length).toFixed(1))
+      : null;
+    branch.integerTickP50MissCm = percentile(misses, 0.5);
+    branch.integerTickP90MissCm = percentile(misses, 0.9);
+  }
+  return {
+    primaryCollisionModel: 'integer-server-ticks',
+    pairedOpportunityCount: paired.length,
+    requiredCandidates: hypotheses,
+    branches,
+    realHpAttribution: 'logged-wire-only',
+    counterfactualServerConfirmed: false,
+    samples: paired.slice(0, 12).map(item => ({
+      line: item.line,
+      createdTick: optionalNumberOrNull(item.shot?.ack?.created_tick),
+      currentReplaySelected: String(item.routeCandidate || ''),
+      loggedWireMissCm: optionalNumberOrNull(item.baselineIntegerMiss) !== null
+        ? Number(Number(item.baselineIntegerMiss).toFixed(1))
+        : null,
+      currentReplayAimMissCm: optionalNumberOrNull(item.improvedIntegerMiss) !== null
+        ? Number(Number(item.improvedIntegerMiss).toFixed(1))
+        : null,
+      candidateProbability: Object.fromEntries(hypotheses.map(hypothesis => [
+        hypothesis,
+        optionalNumberOrNull(item.routeCandidateProbabilities?.[hypothesis])
+      ])),
+      arrivalOccupancy: item.arrivalOccupancy ? {
+        currentDirection: String(item.arrivalOccupancy.currentDirection || ''),
+        expectedStopTicks: optionalNumberOrNull(item.arrivalOccupancy.expectedStopTicks),
+        currentStopTicks: optionalNumberOrNull(item.arrivalOccupancy.currentStopTicks),
+        remainingStopTicks: optionalNumberOrNull(item.arrivalOccupancy.remainingStopTicks),
+        restartProbability: optionalNumberOrNull(item.arrivalOccupancy.restartProbability),
+        flightTicks: optionalNumberOrNull(item.arrivalOccupancy.flightTicks)
+      } : null,
+      candidateMissCm: Object.fromEntries(hypotheses.map(hypothesis => [
+        hypothesis,
+        Number(Number(item.routeCandidateIntegerMisses[hypothesis]).toFixed(1))
+      ]))
+    }))
+  };
+}
+
 function counterfactualSelfAtTick(frames, tick) {
   if (!frames.length) return null;
   let low = 0;
@@ -1591,6 +1687,10 @@ function replayCombat(options) {
     delete cell.missTotalCm;
     delete cell.integerMissTotalCm;
   }
+  const arrivalOccupancyCalibration = {
+    ...arrivalOccupancyCalibrationSummary(shotEvaluations, options),
+    scope: 'logged-origin-current-replay-aim'
+  };
   const damageEvents = combatDamageEvents(rows);
   const damageAttributions = attributeTargetDamageToShots(rows, shotEvaluations, damageEvents.target, {
     hitRadius: options.hitRadius
@@ -1905,7 +2005,8 @@ function replayCombat(options) {
     closePressureCoverageReplay,
     targetSwitchReplay: replayTargetSwitchHysteresis(allRows),
     aimDiagnostics,
-    routeCandidateOracle
+    routeCandidateOracle,
+    arrivalOccupancyCalibration
   };
   const integerAimImprovement = result.improved.integerTick.hits > result.baseline.integerTick.hits;
   const realHpEvidence = result.validation.realHpDamage.attributedShotCount > 0
@@ -2082,6 +2183,7 @@ function replayCombatBallisticClose(options) {
   }
   const baselineMisses = [];
   const candidateMisses = [];
+  const closeAimEvaluations = [];
   const samples = [];
   for (let index = 0; index < confirmedShots.length; index += 1) {
     const shot = confirmedShots[index];
@@ -2142,6 +2244,27 @@ function replayCombatBallisticClose(options) {
         start_y: counterfactualStart.y
       };
       candidateMiss = integerTickBulletMiss(rows, counterfactualAck, candidateAim);
+      const routeCandidateIntegerMisses = Object.fromEntries(
+        (candidateAim.routeCoverage?.candidates || []).map(candidate => [
+          candidate.hypothesis,
+          integerTickBulletMiss(rows, counterfactualAck, candidate)
+        ])
+      );
+      closeAimEvaluations.push({
+        shot,
+        line: frame.row.line,
+        baselineIntegerMiss: baselineMiss,
+        improvedIntegerMiss: candidateMiss,
+        routeCandidate: String(candidateAim.routeCoverage?.selected || ''),
+        routeCandidateIntegerMisses,
+        routeCandidateProbabilities: Object.fromEntries(
+          (candidateAim.routeCoverage?.candidates || []).map(candidate => [
+            candidate.hypothesis,
+            optionalNumberOrNull(candidate.probability)
+          ])
+        ),
+        arrivalOccupancy: candidateAim.routeCoverage?.arrivalOccupancy || null
+      });
     }
     baselineMisses.push(baselineMiss);
     candidateMisses.push(candidateMiss);
@@ -2170,6 +2293,7 @@ function replayCombatBallisticClose(options) {
   });
   const baseline = summary(baselineMisses);
   const improved = summary(candidateMisses);
+  const arrivalOccupancyCalibration = arrivalOccupancyCalibrationSummary(closeAimEvaluations, options);
   const damageEvents = combatDamageEvents(rows);
   const baselineShotEvaluations = confirmedShots.map((shot, index) => ({
     shot,
@@ -2222,6 +2346,10 @@ function replayCombatBallisticClose(options) {
         selfDamage: observedSelfDamage,
         samples: damageAttributions.slice(0, 12)
       }
+    },
+    arrivalOccupancyCalibration: {
+      ...arrivalOccupancyCalibration,
+      scope: 'post-ballistic-close-counterfactual-origin'
     },
     samples,
     accepted
@@ -7824,6 +7952,55 @@ function runDistanceAwareReplaySelfTest() {
       && integerTickMiss > 400
       && Math.abs(Math.hypot(syntheticVelocity.vx, syntheticVelocity.vy) - 50) < 1e-9
   });
+  const pairedArrivalCalibration = arrivalOccupancyCalibrationSummary([{
+    line: 11,
+    shot: { ack: { created_tick: 101 } },
+    baselineIntegerMiss: 180,
+    improvedIntegerMiss: 120,
+    routeCandidate: 'restart-after-stop',
+    routeCandidateIntegerMisses: {
+      'stop-at-arrival': 80,
+      'restart-after-stop': 120,
+      'restart-reverse': 240
+    }
+  }, {
+    line: 12,
+    shot: { ack: { created_tick: 102 } },
+    baselineIntegerMiss: 100,
+    improvedIntegerMiss: 140,
+    routeCandidate: 'stop-at-arrival',
+    routeCandidateIntegerMisses: {
+      'stop-at-arrival': 140,
+      'restart-after-stop': 70,
+      'restart-reverse': 70
+    }
+  }, {
+    line: 13,
+    shot: { ack: { created_tick: 103 } },
+    baselineIntegerMiss: 50,
+    improvedIntegerMiss: 50,
+    routeCandidate: 'restart-reverse',
+    routeCandidateIntegerMisses: {
+      'stop-at-arrival': 50,
+      'restart-after-stop': 50
+    }
+  }], { hitRadius: 90 });
+  checks.push({
+    name: 'arrival-occupancy-calibration-requires-paired-integer-tick-candidates',
+    passed: pairedArrivalCalibration.pairedOpportunityCount === 2
+      && pairedArrivalCalibration.branches['stop-at-arrival'].integerTickHits === 1
+      && pairedArrivalCalibration.branches['stop-at-arrival'].uniqueBestCount === 1
+      && pairedArrivalCalibration.branches['stop-at-arrival'].tiedBestCount === 0
+      && pairedArrivalCalibration.branches['restart-after-stop'].integerTickHits === 1
+      && pairedArrivalCalibration.branches['restart-after-stop'].tiedBestCount === 1
+      && pairedArrivalCalibration.branches['restart-after-stop'].currentReplaySelectedCount === 1
+      && pairedArrivalCalibration.branches['restart-reverse'].integerTickHits === 1
+      && pairedArrivalCalibration.branches['restart-reverse'].tiedBestCount === 1
+      && pairedArrivalCalibration.branches['restart-reverse'].versusLoggedWire.better === 1
+      && pairedArrivalCalibration.branches['restart-reverse'].versusLoggedWire.worse === 1
+      && pairedArrivalCalibration.realHpAttribution === 'logged-wire-only'
+      && pairedArrivalCalibration.counterfactualServerConfirmed === false
+  });
   const amendmentFile = path.join('/synthetic', 'day', 'battles', 'amendment.jsonl.gz');
   const amendmentInputs = {
     segments: [{
@@ -8143,6 +8320,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  arrivalOccupancyCalibrationSummary,
   independentCreationReachabilityOracleCore,
   parseArgs,
   replayEngagementIntentStep,
