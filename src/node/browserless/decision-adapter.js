@@ -6465,6 +6465,14 @@ function buildProfitMissionFromChoice(choice, input = {}, previous = null, optio
       : 'selected-profit-target',
     originKey: same ? String(previous.originKey || '') : '',
     originType: same ? String(previous.originType || '') : '',
+    heldCandidateSource: String(choice.heldCandidateSource || ''),
+    heldRewardSource: String(choice.heldRewardSource || ''),
+    heldRewardKnown: choice.heldRewardKnown === undefined ? null : Boolean(choice.heldRewardKnown),
+    heldRewardObservedAt: numberOrNull(choice.heldRewardObservedAt),
+    heldProvenanceExpiresAt: numberOrNull(choice.heldProvenanceExpiresAt),
+    lastSeenAt: Number.isFinite(Number(choice.lastSeenAt || choice.at))
+      ? Number(choice.lastSeenAt || choice.at)
+      : nowMs,
     navigationPaused: Boolean(same && previous.navigationPaused),
     navigationPauseReason: same ? String(previous.navigationPauseReason || '') : '',
     navigationPausedAt: same ? Number(previous.navigationPausedAt || 0) : 0,
@@ -6525,6 +6533,112 @@ function clearProfitMission(stateful = {}, reason = '') {
   return true;
 }
 
+function clearExpiredRealtimeEnemyMissionState(stateful = {}, mission = {}, reason = 'realtime-target-missing') {
+  if (!stateful || typeof stateful !== 'object' || !mission) return false;
+  const missionId = profitMissionTargetId(mission);
+  if (!missionId) return false;
+  const choiceId = opportunityChoiceTargetId(stateful.opportunityChoice || stateful.currentOpportunity || null);
+  if (choiceId === missionId) {
+    stateful.opportunityChoice = null;
+    stateful.currentOpportunity = null;
+    stateful.opportunitySwitchLock = null;
+    stateful.switchLock = null;
+  }
+  const arbitration = stateful.finalActionArbitration;
+  const finalTarget = arbitration?.lastAction?.target || null;
+  const finalTargetId = targetIdentity(finalTarget);
+  if (finalTargetId && finalTargetId === missionId
+    && (finalTarget?.cachedNavigationOnly === true
+      || arbitration?.lastAction?.reason === 'missing-realtime-enemy-hold')) {
+    arbitration.lastAction = null;
+    arbitration.lastFocus = null;
+    arbitration.lastSelectedAt = 0;
+    arbitration.profitDropout = null;
+  }
+  return clearProfitMission(stateful, reason);
+}
+
+function realtimeEnemyMissionMissingState(input = {}, mission = {}, nowMs = Date.now(), options = {}) {
+  if (String(mission?.type || '') !== 'enemy') return null;
+  const missionId = profitMissionTargetId(mission);
+  if (!missionId) return null;
+  const visible = (input.visibleTargets || []).find(target => (
+    String(targetIdentity(target) || '') === missionId
+  ));
+  if (visible) return {
+    missing: false,
+    expired: false,
+    targetId: missionId,
+    visible
+  };
+  const choice = mission.choice || {};
+  const source = profitMissionChoiceSource(choice) || mission.navigationTarget || {};
+  const authority = String(
+    mission.heldCandidateSource
+      || choice.heldCandidateSource
+      || source.authority
+      || mission.navigationAuthority
+      || ''
+  );
+  const realtimeProvenance = authority === 'realtime-visible'
+    || String(source.authority || mission.navigationAuthority || '') === 'realtime';
+  if (!realtimeProvenance) return {
+    missing: true,
+    expired: false,
+    targetId: missionId,
+    reason: 'non-realtime-mission-provenance'
+  };
+  const holdMs = Math.max(0, Number(options.enemyMissingHoldMs ?? 1800));
+  const observedAt = numberOrNull(
+    mission.heldRewardObservedAt
+      ?? choice.heldRewardObservedAt
+      ?? mission.lastSeenAt
+      ?? choice.lastSeenAt
+      ?? choice.at
+      ?? mission.lastConfirmedAt
+      ?? mission.selectedAt
+  );
+  const provenanceExpiresAt = numberOrNull(
+    mission.heldProvenanceExpiresAt
+      ?? choice.heldProvenanceExpiresAt
+  );
+  const ageMs = observedAt === null ? null : Math.max(0, nowMs - observedAt);
+  const expired = holdMs <= 0
+    || (provenanceExpiresAt !== null && provenanceExpiresAt < nowMs)
+    || (ageMs !== null && ageMs > holdMs);
+  return {
+    missing: true,
+    expired,
+    targetId: missionId,
+    ageMs,
+    holdMs,
+    provenanceExpiresAt,
+    observedAt,
+    reason: expired ? 'held-provenance-expired' : 'held-provenance-fresh'
+  };
+}
+
+function profitMissionCoinMissingState(input = {}, mission = {}) {
+  if (String(mission?.type || '') !== 'coin') return null;
+  const source = mission.navigationTarget || profitMissionChoiceSource(mission.choice) || mission.target || null;
+  const key = coinDecisionKey(source);
+  if (!key) return null;
+  const snapshotOnly = source?.snapshotOnly === true
+    || String(source?.authority || mission.navigationAuthority || '') === 'snapshot';
+  const observed = snapshotOnly
+    ? input?.fallback?.coinDropsObserved === true
+    : input?.rawRealtime?.coinDropsObserved === true;
+  if (!observed) return { observed: false, missing: false, key };
+  const coins = snapshotOnly ? input.snapshotObservedCoins : input.realtimeObservedCoins;
+  const visible = (coins || []).some(coin => coinDecisionKey(coin) === key);
+  return {
+    observed: true,
+    missing: !visible,
+    key,
+    authority: snapshotOnly ? 'snapshot' : 'realtime'
+  };
+}
+
 function clearProfitMissionForCoinKey(stateful = {}, key = '', reason = 'coin-ignored') {
   const mission = stateful?.profitMission || null;
   if (!mission || mission.type !== 'coin' || !key) return false;
@@ -6548,6 +6662,18 @@ function reconcileProfitMissionState(input = {}, stateful = {}, options = {}, re
       clearProfitMission(stateful, 'coin-ignored');
       return null;
     }
+    const coinState = mission.highValue === true
+      ? profitMissionCoinMissingState(input, mission)
+      : null;
+    if (coinState?.missing) {
+      clearProfitMission(stateful, 'coin-disappeared');
+      return null;
+    }
+  }
+  const missingRealtimeEnemy = realtimeEnemyMissionMissingState(input, mission, nowMs, options);
+  if (missingRealtimeEnemy?.expired) {
+    clearExpiredRealtimeEnemyMissionState(stateful, mission, missingRealtimeEnemy.reason);
+    return null;
   }
   const remoteState = profitMissionRemoteState(input, mission, nowMs, remoteProfit);
   if (remoteState.invalidated) {
@@ -6592,7 +6718,7 @@ function reconcileProfitMissionState(input = {}, stateful = {}, options = {}, re
       if (delta > 0) mission.lastForwardProgressAt = nowMs;
     }
   }
-  if (!mission.navigationPaused) {
+  if (!mission.navigationPaused && !missingRealtimeEnemy?.missing) {
     mission.lastConfirmedAt = Math.max(Number(mission.lastConfirmedAt || 0), nowMs);
   }
   mission.lastReconciledAt = nowMs;
@@ -6630,6 +6756,15 @@ function buildProfitMissionHeldOpportunity(input = {}, mission = {}, thresholdCo
   held.profitThresholdActive = Boolean(thresholdContext.active);
   held.profitThresholdRewardCoins = thresholdContext.threshold?.rewardCoins ?? null;
   held.profitThresholdStaminaMilli = thresholdContext.threshold?.staminaMilli ?? null;
+  held.heldCandidateSource = String(mission.heldCandidateSource || held.heldCandidateSource || '');
+  held.heldRewardSource = String(mission.heldRewardSource || held.heldRewardSource || '');
+  held.heldRewardKnown = mission.heldRewardKnown === undefined
+    ? (held.heldRewardKnown === undefined ? null : Boolean(held.heldRewardKnown))
+    : Boolean(mission.heldRewardKnown);
+  held.heldRewardObservedAt = numberOrNull(mission.heldRewardObservedAt ?? held.heldRewardObservedAt);
+  held.heldProvenanceExpiresAt = numberOrNull(mission.heldProvenanceExpiresAt ?? held.heldProvenanceExpiresAt);
+  held.lastSeenAt = numberOrNull(mission.lastSeenAt ?? held.lastSeenAt ?? held.at);
+  held.at = numberOrNull(mission.lastSeenAt ?? held.at);
   if (type === 'coin') {
     held.sourceCoin = { ...source, ...target, distance: held.distance };
   } else {
@@ -7037,7 +7172,13 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
         : (thresholdContext.active && !storedCurrentEligible ? null : storedCurrent));
   const currentEnemyPresent = current?.type === 'enemy'
     && opportunities.some(item => String(item.type) === 'enemy' && String(item.id) === String(current.id));
-  const enemyLastSeenAt = Number(current?.lastSeenAt || current?.at || 0);
+  const enemyLastSeenAt = Number(
+    current?.lastSeenAt
+      || current?.at
+      || current?.heldRewardObservedAt
+      || current?.heldProvenanceExpiresAt - enemyMissingHoldMs
+      || 0
+  );
   let missingEnemyHold = null;
   if (current?.type === 'enemy' && !currentEnemyPresent) {
     const ageMs = Math.max(0, input.nowMs - enemyLastSeenAt);
@@ -11322,18 +11463,15 @@ function reconcileEasyKillApproach(input, stateful = {}, options = {}) {
     approach.missingSince = missingSince;
     const missingHoldMs = Math.max(1000, Number(options.enemyMissingHoldMs || 1800));
     if (nowMs - missingSince >= missingHoldMs) {
-      return recordEasyKillApproachFailure(input, stateful, {
-        userId: approach.targetId,
-        name: approach.name || '',
-        x: approach.x,
-        y: approach.y,
-        distance: approach.lastDistance,
-        active: true,
-        easyKillKnown: true,
-        easyKillProfitTarget: true
-      }, options, 'easy-kill-approach-target-missing', {
+      stateful.easyKillApproach = null;
+      return {
+        reason: 'easy-kill-approach-target-missing',
+        targetId: String(approach.targetId || ''),
+        at: nowMs,
+        windowMs: easyKillApproachWindowMs(options),
+        minClosingCm: easyKillApproachMinClosingCm(options),
         missingMs: Math.max(0, nowMs - missingSince)
-      });
+      };
     }
     stateful.easyKillApproach = approach;
     return null;

@@ -46,7 +46,7 @@ function remoteCandidate(overrides = {}) {
   };
 }
 
-function state(self, entities = [], coinDrops = []) {
+function state(self, entities = [], coinDrops = [], coinDropsObserved = false) {
   return {
     userId: 7,
     realtime: {
@@ -55,7 +55,8 @@ function state(self, entities = [], coinDrops = []) {
       self,
       entities: [self, ...entities],
       bullets: [],
-      coinDrops
+      coinDrops,
+      coinDropsObserved
     },
     fallback: {
       tick: 1,
@@ -216,6 +217,17 @@ function assertRealtimeSupersededMissionContinuity() {
   assert.strictEqual(handoff.profit?.mission?.highValue, true);
   assert.strictEqual(handoff.profit?.mission?.lockReason, 'same-target-authority-handoff');
 
+  const missingWithinHold = decide(
+    adapter,
+    state(fullStaminaSelf()),
+    2300,
+    supersededBatch,
+    { controlMode: 'profit-live', combatEnabled: true }
+  );
+  assert.strictEqual(missingWithinHold.action?.kind, 'seek-enemy');
+  assert.strictEqual(missingWithinHold.action?.target?.cachedNavigationOnly, true);
+  assert.strictEqual(missingWithinHold.profit?.mission?.highValue, true);
+
   const missing = decide(
     adapter,
     state(fullStaminaSelf()),
@@ -223,25 +235,25 @@ function assertRealtimeSupersededMissionContinuity() {
     supersededBatch,
     { controlMode: 'profit-live', combatEnabled: true }
   );
-  assert.strictEqual(missing.action?.kind, 'seek-enemy');
-  assert.strictEqual(missing.action?.target?.userId, 99);
-  assert.strictEqual(missing.action?.target?.cachedNavigationOnly, true);
-  assert.strictEqual(missing.profit?.mission?.highValue, true);
+  assert.notStrictEqual(missing.action?.kind, 'seek-enemy');
+  assert.strictEqual(missing.profit?.mission, null);
+  assert.strictEqual(missing.profit?.missingEnemyHold?.releaseReason, 'missing-hold-expired');
+  assert.strictEqual(adapter.getState().easyKillTargetSuppressions?.['99'], undefined);
 
   const highValueDetour = decide(
     adapter,
-    state(fullStaminaSelf(), [], [{ drop_id: 'high-detour', amount: 100, x: 100, y: 0 }]),
+    state(fullStaminaSelf(), [], [{ drop_id: 'high-detour', amount: 100, x: 100, y: 0 }], true),
     5100,
     supersededBatch,
     { controlMode: 'profit-live', combatEnabled: true }
   );
   assert.strictEqual(highValueDetour.action?.target?.type, 'coin');
-  assert.strictEqual(highValueDetour.profit?.mission?.targetId, '99');
-  assert.strictEqual(highValueDetour.profit?.mission?.highValue, true);
+  assert.strictEqual(highValueDetour.profit?.mission?.type, 'coin');
+  assert.notStrictEqual(highValueDetour.profit?.mission?.targetId, '99');
 
   const resumed = decide(
     adapter,
-    state(fullStaminaSelf(), [{ ...realtimeMango, x: 45000 }]),
+    state(fullStaminaSelf(), [{ ...realtimeMango, x: 45000 }], [], true),
     5200,
     supersededBatch,
     {
@@ -253,7 +265,9 @@ function assertRealtimeSupersededMissionContinuity() {
   );
   assert.strictEqual(resumed.action?.target?.userId, 99);
   assert.strictEqual(resumed.profit?.mission?.targetId, '99');
-  assert.strictEqual(resumed.profit?.mission?.highValue, true);
+  assert.strictEqual(resumed.profit?.mission?.selectedAt, 5200);
+  assert.notStrictEqual(resumed.profit?.mission?.selectedAt, handoff.profit?.mission?.selectedAt);
+  assert.strictEqual(resumed.action?.target?.cachedNavigationOnly, false);
 }
 
 function assertSelfKillReleasesSupersededMission() {

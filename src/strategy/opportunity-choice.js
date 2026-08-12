@@ -515,6 +515,10 @@ function rememberOpportunityChoiceCore(item, action, previous = null, options = 
   const key = opportunityKey(item);
   const same = previous && opportunityMatchesChoiceCore(item, previous, options);
   const missingHold = Boolean(item.missingHold);
+  const sourceTarget = item.sourceTarget || item.target || null;
+  const sourceX = item.x ?? sourceTarget?.x;
+  const sourceY = item.y ?? sourceTarget?.y;
+  const sourceDistance = item.distance ?? sourceTarget?.distance;
   const routeMeta = item.coinRoute || action?.coinRoute || action?.target?.coinRoute || null;
   const routeIds = opportunityRouteIds(routeMeta);
   const switchHoldMs = Math.max(0, Number(options.switchHoldMs) || 0);
@@ -543,10 +547,10 @@ function rememberOpportunityChoiceCore(item, action, previous = null, options = 
     profitThresholdRewardCoins: Number.isFinite(Number(item.profitThresholdRewardCoins)) ? Number(item.profitThresholdRewardCoins) : null,
     profitThresholdStaminaMilli: Number.isFinite(Number(item.profitThresholdStaminaMilli)) ? Number(item.profitThresholdStaminaMilli) : null,
     reason: action?.reason || item.reason || '',
-    x: Number.isFinite(Number(item.x)) ? Number(item.x) : null,
-    y: Number.isFinite(Number(item.y)) ? Number(item.y) : null,
+    x: Number.isFinite(Number(sourceX)) ? Number(sourceX) : null,
+    y: Number.isFinite(Number(sourceY)) ? Number(sourceY) : null,
     amount: Number.isFinite(Number(item.amount)) ? Number(item.amount) : null,
-    distance: Number.isFinite(Number(item.distance)) ? Math.round(Number(item.distance)) : null,
+    distance: Number.isFinite(Number(sourceDistance)) ? Math.round(Number(sourceDistance)) : null,
     actionKind: item.actionKind || action?.kind || '',
     remoteGeneration: item.type === 'remote-player-navigation'
       ? Number(item.generation || 0)
@@ -570,6 +574,13 @@ function rememberOpportunityChoiceCore(item, action, previous = null, options = 
       opportunityChoice: {
         type: choice.type,
         id: choice.id,
+        key: choice.key,
+        at: choice.at,
+        lastSeenAt: choice.lastSeenAt,
+        until: choice.until,
+        x: choice.x,
+        y: choice.y,
+        distance: choice.distance,
         score: choice.score,
         staminaCost: choice.staminaCost,
         reward: choice.reward,

@@ -35322,13 +35322,14 @@ async function runSelfTest() {
           remoteSnapshotProfitTargetTitleCore(activeTarget),
           targetAuthoritySourceTextCore(activeTarget.authority),
           targetAuthoritySourceTextCore('snapshot'),
+          targetAuthoritySourceTextCore('realtime', { cachedNavigationOnly: true }),
           panelHtml.includes("'remote-snapshot-profit-target': '远程快照收益目标'"),
           panelHtml.includes("'seek-remote-player': '靠近远程收益玩家'"),
           panelHtml.includes("if (kind === 'seek-remote-player') return remoteSnapshotProfitTargetTitle(target);"),
           panelHtml.includes("if (reason === 'remote-snapshot-profit-target') return '远程快照收益目标';")
         ].join('|');
       })(),
-      want: '2026.08.10.2|活动玩家|挂机玩家|正在靠近高Drop活动玩家|HTTP全局快照|WS状态帧|true|true|true|true'
+      want: '2026.08.12.1|活动玩家|挂机玩家|正在靠近高Drop活动玩家|HTTP全局快照|WS状态帧|WS最后位置|true|true|true|true'
     },
     {
       name: 'browserless web panel colors each transport metric value by severity',
@@ -35354,7 +35355,7 @@ async function runSelfTest() {
           panelHtml.includes('.transport-metric.muted,.transport-metric.muted .metric-value{color:var(--muted)}')
         ].join('|');
       })(),
-      want: '2026.08.10.2|ok|warn|bad|ok|warn|bad|ok|warn|bad|muted|true|true|true|true|true|true'
+      want: '2026.08.12.1|ok|warn|bad|ok|warn|bad|ok|warn|bad|muted|true|true|true|true|true|true'
     },
     {
       name: 'browserless web panel animates keyed map markers between status refreshes',
@@ -35392,7 +35393,7 @@ async function runSelfTest() {
           /function stopAutoRefresh\(\)\s*\{\s*cancelMapMarkerAnimation\(true\);/.test(panelScript)
         ].join('|');
       })(),
-      want: '2026.08.10.2|coin:0|player:alice||0|0.875|1|97.5|195.0|110|220|true|true|true|true|true|true|true|true|true|true|true'
+      want: '2026.08.12.1|coin:0|player:alice||0|0.875|1|97.5|195.0|110|220|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless status server adds dynamic whitelist players by name',
