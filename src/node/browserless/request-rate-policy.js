@@ -75,19 +75,27 @@ function createRequestRatePolicy(options = {}) {
     };
     try {
       const beforeWaitMs = finiteNow(now);
-      const waitMs = lastOrdinaryStartAtMs === null
-        ? 0
-        : Math.max(0, lastOrdinaryStartAtMs + minimumIntervalMs - beforeWaitMs);
-      if (waitMs > 0) await sleep(waitMs);
-      const startedAtMs = finiteNow(now);
-      lastOrdinaryStartAtMs = startedAtMs;
+      const scheduledStartAtMs = lastOrdinaryStartAtMs === null
+        ? beforeWaitMs
+        : lastOrdinaryStartAtMs + minimumIntervalMs;
+      let waitMs = 0;
+      // Timers can resolve slightly early. Recheck the monotonic boundary after
+      // every sleep so an early wake cannot authorize a sub-interval request.
+      while (true) {
+        const remainingMs = scheduledStartAtMs - finiteNow(now);
+        if (!(remainingMs > 0)) break;
+        waitMs += remainingMs;
+        await sleep(remainingMs);
+      }
+      const permittedStartAtMs = finiteNow(now);
+      lastOrdinaryStartAtMs = permittedStartAtMs;
       sequence += 1;
       return {
         requestClass: normalizedClass,
         exempt: false,
         sequence,
         waitMs,
-        startedAtMs,
+        startedAtMs: permittedStartAtMs,
         release
       };
     } catch (error) {
@@ -157,12 +165,36 @@ async function runRequestRatePolicySelfTest() {
     REQUEST_CLASSES.SOURCE_IP_PROBE,
     REQUEST_CLASSES.SOURCE_IP_PREFLIGHT
   ]);
+  let earlyWakeNowMs = 0;
+  const earlyWakePolicy = createRequestRatePolicy({
+    now: () => earlyWakeNowMs,
+    sleep: async delayMs => {
+      earlyWakeNowMs += Math.max(1, delayMs - 1);
+    }
+  });
+  const earlyWakeStarts = [];
+  await earlyWakePolicy.run(REQUEST_CLASSES.GAMEPLAY_SNAPSHOT, async permit => {
+    earlyWakeStarts.push(permit.startedAtMs);
+  });
+  await earlyWakePolicy.run(REQUEST_CLASSES.GAMEPLAY_SNAPSHOT, async permit => {
+    earlyWakeStarts.push(permit.startedAtMs);
+  });
+  const earlyWakeGaps = earlyWakeStarts.slice(1)
+    .map((atMs, index) => atMs - earlyWakeStarts[index]);
+  const earlyWakeOk = earlyWakeGaps.length === 1
+    && earlyWakeGaps[0] >= DEFAULT_REQUEST_MIN_INTERVAL_MS;
   return {
-    ok: ordinaryOk && exemptOk && waits.every(waitMs => waitMs >= DEFAULT_REQUEST_MIN_INTERVAL_MS),
+    ok: ordinaryOk
+      && exemptOk
+      && waits.every(waitMs => waitMs >= DEFAULT_REQUEST_MIN_INTERVAL_MS)
+      && earlyWakeOk,
     ordinaryStarts,
     ordinaryGaps,
     exemptLabels,
-    waits
+    waits,
+    earlyWakeStarts,
+    earlyWakeGaps,
+    earlyWakeOk
   };
 }
 
