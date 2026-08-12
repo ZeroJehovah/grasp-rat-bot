@@ -290,6 +290,12 @@ function numberOrNull(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function coordinateOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
 function browserlessCenterActivityRadius(options = {}) {
   const value = Number(options.browserlessCenterActivityRadiusCm
     ?? BROWSER_RUNTIME_DEFAULTS.browserlessCenterActivityRadiusCm
@@ -7904,8 +7910,8 @@ function buildPostKillSettlementWaitDecision(input, stateful = {}, combat = null
       type: 'post-attack-target',
       id: settlement.targetId,
       name: settlement.targetName || '',
-      x: numberOrNull(settlement.x),
-      y: numberOrNull(settlement.y),
+      x: coordinateOrNull(settlement.x),
+      y: coordinateOrNull(settlement.y),
       drop: numberOrNull(settlement.targetDrop),
       postAttackTarget: {
         id: settlement.targetId,
@@ -7975,8 +7981,8 @@ function buildPostAttackDropWaitDecision(input, stateful = {}, options = {}, com
       type: 'post-attack-target',
       id: target.targetId,
       name: target.targetName || '',
-      x: numberOrNull(target.x),
-      y: numberOrNull(target.y),
+      x: coordinateOrNull(target.x),
+      y: coordinateOrNull(target.y),
       drop: numberOrNull(target.targetDrop),
       distance: Math.round(distance),
       postAttackTarget: {

@@ -5960,7 +5960,7 @@ function runStrategyModuleSelfTests() {
 
   const postKillTail = updatePostKillSettlementCore(null, {
     nowMs: 1600,
-    previousCombatTarget: { id: 9667, name: 'target', drop: 32 },
+    previousCombatTarget: { id: 9667, name: 'target', x: 4500, y: -1200, drop: 32 },
     currentCombatTarget: null,
     combatMetrics: { targetId: '9667', targetName: 'target', acceptedShots: 35, actualLastShotAt: 1200 },
     visibleTargets: [],
@@ -5985,6 +5985,8 @@ function runStrategyModuleSelfTests() {
   results.push({
     name: 'post-kill-settlement-tail-confirm-drop-and-clear',
     passed: postKillTail.state?.phase === 'unconfirmed-tail'
+      && postKillTail.state?.x === 4500
+      && postKillTail.state?.y === -1200
       && postKillDrop.state?.phase === 'drop-visible'
       && postKillDrop.state?.matchedCoinAmount === 32
       && postKillPicked.state === null

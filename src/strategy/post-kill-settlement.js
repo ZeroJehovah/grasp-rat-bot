@@ -31,6 +31,14 @@ function finiteNumber(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function firstFiniteNumber(...values) {
+  for (const value of values) {
+    const number = finiteNumber(value);
+    if (number !== null) return number;
+  }
+  return null;
+}
+
 function knownTargetDrop(target) {
   if (!target || target.dropKnown !== true) return { known: false, value: null };
   const value = finiteNumber(
@@ -151,18 +159,24 @@ function updatePostKillSettlementCore(previous, context = {}, options = {}) {
       && lastShotAt > 0
       && nowMs - lastShotAt <= recentShotMs) {
       const matchingPriorTarget = targetId(priorTarget) === candidateId ? priorTarget : null;
+      const rememberedTarget = matchingTargetMemory(context, candidateId);
       const visibleDrop = knownTargetDrop(visible);
       const priorDrop = knownTargetDrop(matchingPriorTarget);
-      const selectedDrop = visibleDrop.known ? visibleDrop : priorDrop;
+      const rememberedDrop = knownTargetDrop(rememberedTarget);
+      const selectedDrop = visibleDrop.known
+        ? visibleDrop
+        : (priorDrop.known ? priorDrop : rememberedDrop);
       const candidateState = {
         active: true,
         phase: 'unconfirmed-tail',
         targetId: candidateId,
-        targetName: String(matchingPriorTarget?.name || metrics?.targetName || ''),
+        targetName: String(matchingPriorTarget?.name || rememberedTarget?.name || metrics?.targetName || ''),
         targetDrop: selectedDrop.known
           ? selectedDrop.value
-          : (Number.isFinite(Number(matchingPriorTarget?.drop)) ? Number(matchingPriorTarget.drop) : null),
+          : firstFiniteNumber(matchingPriorTarget?.drop, rememberedTarget?.drop),
         targetDropKnown: selectedDrop.known,
+        x: firstFiniteNumber(matchingPriorTarget?.x, visible?.x, rememberedTarget?.x),
+        y: firstFiniteNumber(matchingPriorTarget?.y, visible?.y, rememberedTarget?.y),
         startedAt: nowMs,
         confirmedAt: 0,
         expiresAt: nowMs + unconfirmedMs,

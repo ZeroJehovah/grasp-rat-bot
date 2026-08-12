@@ -13780,7 +13780,7 @@ async function runSelfTest() {
       name: 'browserless realtime post-kill settlement suppresses ordinary profit gap',
       got: (() => {
         const stateful = {
-          combatTarget: { id: 9667, name: 'target', drop: 32, hp: 1, at: 1000, lastInRangeAt: 1200 },
+          combatTarget: { id: 9667, name: 'target', x: 4500, y: -1200, drop: 32, hp: 1, at: 1000, lastInRangeAt: 1200 },
           combatMetrics: { targetId: '9667', targetName: 'target', acceptedShots: 35, actualLastShotAt: 1200 }
         };
         const decision = buildBrowserlessRealtimeControlDecision({
@@ -13804,9 +13804,9 @@ async function runSelfTest() {
           controlMode: 'profit-live',
           combatEnabled: true
         });
-        return [decision.action.kind, decision.action.reason, decision.input.postKillSettlement.phase, decision.input.postKillSettlement.targetId].join('|');
+        return [decision.action.kind, decision.action.reason, decision.action.target.x, decision.action.target.y, decision.input.postKillSettlement.phase, decision.input.postKillSettlement.targetId].join('|');
       })(),
-      want: 'post-attack-drop-wait|post-kill-settlement-wait|unconfirmed-tail|9667'
+      want: 'post-attack-drop-wait|post-kill-settlement-wait|4500|-1200|unconfirmed-tail|9667'
     },
     {
       name: 'browserless realtime tracks self-kill drop after combat target switch',
@@ -24781,6 +24781,18 @@ async function runSelfTest() {
             target: { type: 'coin', id: 'drop-wait', x: 1000, y: 0 }
           }
         });
+        const missingPostAttackPosition = adapter.applyDecision({
+          realtime: { self: { x: 1000, y: 1000 }, tick: 2 }
+        }, {
+          kind: 'post-attack-drop-wait',
+          band: 'profit',
+          action: {
+            kind: 'post-attack-drop-wait',
+            band: 'profit',
+            reason: 'post-kill-settlement-wait',
+            target: { type: 'post-attack-target', id: 'missing-position', x: null, y: null }
+          }
+        });
         const leave = adapter.applyDecision({
           realtime: { self: { x: 0, y: 0 }, tick: 3 }
         }, {
@@ -24806,6 +24818,8 @@ async function runSelfTest() {
           wait.handledBy,
           postAttackWait.kind,
           postAttackWait.reason,
+          missingPostAttackPosition.kind,
+          missingPostAttackPosition.reason,
           leave.kind,
           leave.handledBy,
           leave.shouldLeave,
@@ -24815,7 +24829,7 @@ async function runSelfTest() {
           commands.join(',')
         ].join('|');
       })(),
-      want: 'wait|no-profitable-candidate|action-adapter-stop|post-attack-drop-wait|post-attack-drop-wait-position|leave|safety-controller|true|unsupported-action|dance|unknown-action|vel 0 0,vel 1 0,vel 0 0,vel 0 0'
+      want: 'wait|no-profitable-candidate|action-adapter-stop|post-attack-drop-wait|post-attack-drop-wait-position|post-attack-drop-wait|missing-position|leave|safety-controller|true|unsupported-action|dance|unknown-action|vel 0 0,vel 1 0,vel 0 0,vel 0 0,vel 0 0'
     },
     {
       name: 'browserless action adapter executes flee and return-block scan velocity',

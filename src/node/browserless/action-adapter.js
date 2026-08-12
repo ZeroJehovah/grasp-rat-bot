@@ -62,6 +62,12 @@ function numberOrNull(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function coordinateOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
 function optionalNumber(value) {
   if (value === null || value === undefined || value === '') return null;
   return numberOrNull(value);
@@ -205,10 +211,10 @@ function applyCoinApproachLockUpdate(state, update) {
 }
 
 function coinMotionVectorToTarget(self, target, options = {}, state = null, nowMs = Date.now()) {
-  const sx = numberOrNull(self?.x);
-  const sy = numberOrNull(self?.y);
-  const tx = numberOrNull(target?.x);
-  const ty = numberOrNull(target?.y);
+  const sx = coordinateOrNull(self?.x);
+  const sy = coordinateOrNull(self?.y);
+  const tx = coordinateOrNull(target?.x);
+  const ty = coordinateOrNull(target?.y);
   if (sx === null || sy === null || tx === null || ty === null) {
     return { ok: false, reason: 'missing-position', dx: 0, dy: 0, distance: null };
   }
@@ -255,10 +261,10 @@ function coinMotionVectorToTarget(self, target, options = {}, state = null, nowM
 }
 
 function movementVectorToTarget(self, target, options = {}) {
-  const sx = numberOrNull(self?.x);
-  const sy = numberOrNull(self?.y);
-  const tx = numberOrNull(target?.x);
-  const ty = numberOrNull(target?.y);
+  const sx = coordinateOrNull(self?.x);
+  const sy = coordinateOrNull(self?.y);
+  const tx = coordinateOrNull(target?.x);
+  const ty = coordinateOrNull(target?.y);
   if (sx === null || sy === null || tx === null || ty === null) {
     return { ok: false, reason: 'missing-position', dx: 0, dy: 0, distance: null };
   }
