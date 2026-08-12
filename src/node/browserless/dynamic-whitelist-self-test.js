@@ -150,6 +150,38 @@ async function runDynamicWhitelistSelfTest() {
     }
 
     {
+      const { file, whitelist } = createFixture(directory, 'renamed-player');
+      const sameName = whitelist.observePlayerNames([
+        { user_id: 8, name: 'friendly' }
+      ], { atMs: 2000, tick: 100, source: 'gap-http' });
+      const renamed = whitelist.observePlayerNames([
+        { user_id: 8, name: 'renamed' },
+        { user_id: 9, name: 'not-a-member' }
+      ], { atMs: 3000, tick: 120, source: 'gap-http' });
+      const stale = whitelist.observePlayerNames([
+        { user_id: 8, name: 'friendly' }
+      ], { atMs: 4000, tick: 110, source: 'stale-snapshot' });
+      const persisted = JSON.parse(fs.readFileSync(file, 'utf8')).players['user:8'];
+      const reloaded = createDynamicWhitelist({ file, now: () => 5000 });
+      assert.strictEqual(sameName.updated, 0);
+      assert.strictEqual(renamed.updated, 1);
+      assert.deepStrictEqual(renamed.updates[0], {
+        type: 'name-updated',
+        at: '1970-01-01T00:00:03.000Z',
+        source: 'gap-http',
+        userId: 8,
+        oldName: 'friendly',
+        name: 'renamed'
+      });
+      assert.strictEqual(stale.updated, 0);
+      assert.strictEqual(persisted.name, 'renamed');
+      assert.strictEqual(persisted.nameObservedTick, 120);
+      assert.strictEqual(reloaded.status().players[0].name, 'renamed');
+      assert.strictEqual(reloaded.isMember({ user_id: 8, name: 'anything' }), true);
+      cases.push('stable-id-member-name-refresh-persists-and-rejects-stale-observation');
+    }
+
+    {
       const { whitelist } = createFixture(directory, 'crossfire');
       const state = battleState();
       state.realtime.entities.push({ user_id: 9, x: -1000, y: 0, hp: 100, drop: 1 });

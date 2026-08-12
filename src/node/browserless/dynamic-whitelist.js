@@ -113,6 +113,8 @@ function normalize(value) {
       key: playerKey(userId),
       userId,
       name: playerName(raw, `#${userId}`),
+      nameUpdatedAt: String(raw?.nameUpdatedAt || raw?.addedAt || ''),
+      nameObservedTick: numberOrNull(raw?.nameObservedTick),
       addedAt: String(raw?.addedAt || '')
     };
   }
@@ -170,10 +172,55 @@ function createDynamicWhitelist(options = {}) {
     if (id === null) return { ok: false, reason: 'missing-user-id' };
     const name = playerName(target, `#${id}`);
     const key = playerKey(id);
-    const existed = Boolean(store.players[key]);
-    store.players[key] = { key, userId: id, name, addedAt: store.players[key]?.addedAt || new Date(atMs).toISOString() };
+    const existing = store.players[key] || null;
+    const existed = Boolean(existing);
+    const at = new Date(atMs).toISOString();
+    store.players[key] = {
+      key,
+      userId: id,
+      name,
+      nameUpdatedAt: existing?.name === name ? String(existing.nameUpdatedAt || existing.addedAt || at) : at,
+      nameObservedTick: numberOrNull(target?.lastObservedTick ?? target?.nameObservedTick ?? target?.tick)
+        ?? numberOrNull(existing?.nameObservedTick),
+      addedAt: existing?.addedAt || at
+    };
     persist(atMs);
     return { ok: true, added: !existed, player: clone(store.players[key]) };
+  }
+  function observePlayerNames(targets = [], detail = {}) {
+    const atMs = Number.isFinite(Number(detail.atMs)) ? Number(detail.atMs) : now();
+    const at = new Date(atMs).toISOString();
+    const sourceTick = numberOrNull(detail.tick);
+    const updates = [];
+    for (const target of targets || []) {
+      const id = userId(target);
+      if (id === null) continue;
+      const key = playerKey(id);
+      const existing = store.players[key] || null;
+      if (!existing) continue;
+      const name = playerName(target);
+      if (!name) continue;
+      const tick = numberOrNull(target?.tick) ?? sourceTick;
+      const previousTick = numberOrNull(existing.nameObservedTick);
+      if (tick !== null && previousTick !== null && tick < previousTick) continue;
+      if (tick !== null) existing.nameObservedTick = tick;
+      if (existing.name === name) continue;
+      const oldName = existing.name;
+      existing.name = name;
+      existing.nameUpdatedAt = at;
+      const disabled = temporarilyDisabled.get(key);
+      if (disabled) disabled.name = name;
+      updates.push({
+        type: 'name-updated',
+        at,
+        source: String(detail.source || 'observation'),
+        userId: id,
+        oldName,
+        name
+      });
+    }
+    if (updates.length) persist(atMs);
+    return { ok: true, updated: updates.length, updates: clone(updates) };
   }
   function observeDamage(target, state, detail = {}) {
     const id = userId(target);
@@ -335,6 +382,7 @@ function createDynamicWhitelist(options = {}) {
   return {
     file,
     add,
+    observePlayerNames,
     observeDamage,
     observeBattles,
     restoreAll,

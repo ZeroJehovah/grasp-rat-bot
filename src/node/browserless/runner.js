@@ -2051,6 +2051,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       scheduleAtMs: detail.scheduleAtMs
     });
     let chatResult = null;
+    let dynamicWhitelistNameResult = null;
     let easyKillNameResult = null;
     let easyKillEvidenceResult = null;
     let damageNameResult = null;
@@ -2105,6 +2106,19 @@ async function runBrowserlessRunner(config, deps = {}) {
     } catch (err) {
       recordSupervisorError(err, { operation: 'chat-snapshot-observe', source: detail.source || 'snapshot' });
       logStore.append('runner', 'chat-snapshot-observation-error', {
+        source: detail.source || 'snapshot',
+        error: errorMessage(err)
+      });
+    }
+    try {
+      dynamicWhitelistNameResult = dynamicWhitelist.observePlayerNames?.(payload?.entities || [], {
+        atMs: observedAtMs,
+        source: detail.source || 'snapshot',
+        tick: payload?.tick
+      }) || null;
+    } catch (err) {
+      recordSupervisorError(err, { operation: 'dynamic-whitelist-player-name-observe', source: detail.source || 'snapshot' });
+      logStore.append('runner', 'dynamic-whitelist-player-name-observation-error', {
         source: detail.source || 'snapshot',
         error: errorMessage(err)
       });
@@ -2187,6 +2201,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         chatMessagesObserved: Number(chatResult?.observed || 0),
         chatMessagesUpdated: Number(chatResult?.updated || 0),
         chatSendConfirmed: Boolean(chatResult?.confirmed),
+        dynamicWhitelistNamesUpdated: Number(dynamicWhitelistNameResult?.updated || 0),
         easyKillNamesUpdated: Number(easyKillNameResult?.updated || 0),
         easyKillKillsConfirmed: Number(easyKillEvidenceResult?.confirmed?.length || 0),
         damageNamesUpdated: Number(damageNameResult?.updated || 0)
@@ -2202,7 +2217,8 @@ async function runBrowserlessRunner(config, deps = {}) {
         error: errorMessage(err),
         chatMessagesObserved: Number(chatResult?.observed || 0),
         chatMessagesUpdated: Number(chatResult?.updated || 0),
-        chatSendConfirmed: Boolean(chatResult?.confirmed)
+        chatSendConfirmed: Boolean(chatResult?.confirmed),
+        dynamicWhitelistNamesUpdated: Number(dynamicWhitelistNameResult?.updated || 0)
       };
     }
   };
