@@ -2332,6 +2332,113 @@ function runStrategyModuleSelfTests() {
       && ballisticCloseEconomicPhase.active === true
       && ballisticCloseEconomicPhase.latched === true
   });
+  const defensiveBallisticClose = combatBallisticCloseCore({
+    targetId: 'defensive-8',
+    nowMs: 5000,
+    distanceCm: 5000,
+    noDamageMs: 4000,
+    selfNoDamageMs: 4000,
+    acceptedShotsSinceDamage: 12,
+    selfHp: 100,
+    targetFiring: false,
+    targetBulletPressure: false,
+    persistentThreat: false,
+    recentSelfDamage: false,
+    passiveRunnerConfirmed: false,
+    originIntent: 'defensive',
+    currentIntent: 'engaged',
+    ordinaryProfit: false,
+    directionDwells: [350, 400, 400, 450]
+  });
+  const defensiveRelease = combatBallisticCloseCore({
+    targetId: 'defensive-8',
+    previousState: defensiveBallisticClose.state,
+    nowMs: 5100,
+    distanceCm: 4200,
+    noDamageMs: 4100,
+    selfNoDamageMs: 100,
+    acceptedShotsSinceDamage: 13,
+    selfHp: 79,
+    targetFiring: false,
+    targetBulletPressure: false,
+    persistentThreat: false,
+    recentSelfDamage: true,
+    passiveRunnerConfirmed: false,
+    originIntent: 'defensive',
+    currentIntent: 'reengage',
+    ordinaryProfit: false,
+    directionDwells: [350, 400, 400, 450]
+  });
+  const defensiveBulletRelease = combatBallisticCloseCore({
+    targetId: 'defensive-8',
+    previousState: defensiveBallisticClose.state,
+    nowMs: 5200,
+    distanceCm: 4200,
+    noDamageMs: 4200,
+    selfNoDamageMs: 4200,
+    acceptedShotsSinceDamage: 14,
+    selfHp: 100,
+    targetFiring: false,
+    targetBulletPressure: true,
+    persistentThreat: false,
+    recentSelfDamage: false,
+    passiveRunnerConfirmed: false,
+    originIntent: 'defensive',
+    currentIntent: 'reengage',
+    ordinaryProfit: false,
+    directionDwells: [350, 400, 400, 450]
+  });
+  const defensiveDamageRelease = combatBallisticCloseCore({
+    targetId: 'defensive-8',
+    previousState: defensiveBallisticClose.state,
+    nowMs: 5300,
+    distanceCm: 4200,
+    noDamageMs: 4300,
+    selfNoDamageMs: 100,
+    acceptedShotsSinceDamage: 15,
+    selfHp: 100,
+    targetFiring: false,
+    targetBulletPressure: false,
+    persistentThreat: false,
+    recentSelfDamage: true,
+    passiveRunnerConfirmed: false,
+    originIntent: 'defensive',
+    currentIntent: 'reengage',
+    ordinaryProfit: false,
+    directionDwells: [350, 400, 400, 450]
+  });
+  const defensivePersistentThreatRelease = combatBallisticCloseCore({
+    targetId: 'defensive-8',
+    previousState: defensiveBallisticClose.state,
+    nowMs: 5400,
+    distanceCm: 4200,
+    noDamageMs: 4400,
+    selfNoDamageMs: 4400,
+    acceptedShotsSinceDamage: 16,
+    selfHp: 100,
+    targetFiring: false,
+    targetBulletPressure: false,
+    persistentThreat: true,
+    recentSelfDamage: false,
+    passiveRunnerConfirmed: false,
+    originIntent: 'defensive',
+    currentIntent: 'reengage',
+    ordinaryProfit: false,
+    directionDwells: [350, 400, 400, 450]
+  });
+  results.push({
+    name: 'combat-ballistic-close-defensive-origin-escalates-after-threat-clears-and-releases-on-injury',
+    passed: defensiveBallisticClose.active === true
+      && defensiveBallisticClose.defensiveThreatCleared === true
+      && defensiveRelease.active === false
+      && defensiveRelease.reason === 'unsafe-self-hp'
+      && defensiveBulletRelease.active === false
+      && defensiveBulletRelease.reason === 'target-bullet-pressure'
+      && defensiveDamageRelease.active === false
+      && defensiveDamageRelease.reason === 'recent-self-damage'
+      && defensivePersistentThreatRelease.active === false
+      && defensivePersistentThreatRelease.reason === 'persistent-target-threat'
+  });
 
   const efficiencyThreshold100 = combatDamageEfficiencyThresholdCore(100, {
     profitThresholdCoinsPer10Stamina: 1

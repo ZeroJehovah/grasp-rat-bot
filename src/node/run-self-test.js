@@ -111,6 +111,7 @@ const {
   buildBrowserlessCombatDryRun,
   buildCombatMovementPlan,
   combatLearningCellCount,
+  currentCombatShotOriginDiagnostics,
   estimateAim,
   recordCombatShotLearning,
   rememberBrowserlessCombatEngagement
@@ -18247,6 +18248,74 @@ async function runSelfTest() {
       want: 'true|2|10|11|1020'
     },
     {
+      name: 'browserless target change releases ballistic latch and starts fresh engagement intent and shots',
+      got: (() => {
+        const stateful = {};
+        const self = { user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100 };
+        const targetA = {
+          user_id: 8,
+          x: 5000,
+          y: 0,
+          hp: 100,
+          distance: 5000,
+          active: true,
+          moving: true,
+          firing: false,
+          combatIntent: 'defensive'
+        };
+        const targetB = {
+          ...targetA,
+          user_id: 9,
+          combatIntent: 'engaged'
+        };
+        const commandShooting = {
+          controlGeneration: 'control:test',
+          lastConfirmationSequence: 20,
+          lastRequestSequence: 30
+        };
+        rememberBrowserlessCombatEngagement(stateful, self, targetA, {
+          nowMs: 1000,
+          currentTick: 10,
+          bullets: [],
+          commandShooting
+        });
+        const firstGeneration = stateful.combatMetrics.engagementGeneration;
+        stateful.combatTarget.ballisticClose = {
+          active: true,
+          targetId: '8',
+          activatedAt: 1000,
+          targetRangeCm: 3000,
+          medianDirectionDwellMs: 400
+        };
+        stateful.combatMetrics.acceptedShots = 12;
+        stateful.combatMetricsByTarget['8'] = stateful.combatMetrics;
+        stateful.combatEngagements['8'] = stateful.combatTarget;
+        rememberBrowserlessCombatEngagement(stateful, self, targetB, {
+          nowMs: 1050,
+          currentTick: 11,
+          bullets: [],
+          commandShooting
+        });
+        rememberBrowserlessCombatEngagement(stateful, self, {
+          ...targetA,
+          combatIntent: 'engaged'
+        }, {
+          nowMs: 1100,
+          currentTick: 12,
+          bullets: [],
+          commandShooting
+        });
+        return [
+          stateful.combatTarget.originIntent,
+          stateful.combatTarget.ballisticClose === null,
+          stateful.combatMetrics.acceptedShots,
+          stateful.combatMetrics.confirmationSequenceBaseline,
+          stateful.combatMetrics.engagementGeneration !== firstGeneration
+        ].join('|');
+      })(),
+      want: 'engaged|true|0|20|true'
+    },
+    {
       name: 'browserless combat hit metrics credit only recorded shots',
       got: (() => {
         const stateful = {};
@@ -18653,14 +18722,14 @@ async function runSelfTest() {
           distance: 5000,
           drop: 20,
           active: true,
-          combatIntent: 'defensive'
+          combatIntent: 'engaged'
         };
         const baseState = {
           id: '8',
           firstSeenAt: 1000,
           at: 1000,
-          originIntent: 'profit',
-          intent: 'defensive',
+          originIntent: 'defensive',
+          intent: 'engaged',
           noDamageMs: 4000,
           acceptedShotsSinceDamage: 12,
           opponentBehaviorState: {
@@ -18737,6 +18806,66 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'combat-ballistic-flight-close|3000|true|true|false|combat-ballistic-flight-close|true|profit-escort-forward|true|damage-progress-or-insufficient-observation|false|flight-shorter-than-direction-dwell'
+    },
+    {
+      name: 'browserless shooter origin diagnostics exclude prior engagement ACK and samples',
+      got: (() => {
+        const stateful = {
+          combatMetrics: {
+            targetId: '8',
+            controlGeneration: 'control:new',
+            engagementGeneration: 'engagement:new',
+            confirmationSequenceBaseline: 10
+          }
+        };
+        const state = {
+          command: {
+            lastAck: {
+              matchedShot: {
+                targetId: '9',
+                controlGeneration: 'control:old',
+                engagementGeneration: 'engagement:old',
+                confirmationSequence: 9,
+                shooterOriginErrorCm: 75001
+              }
+            },
+            shooting: {
+              shooterOrigin: { sampleCount: 64, medianCm: 32000, p90Cm: 75001, madCm: 1000 },
+              confirmedShots: [{
+                targetId: '9',
+                controlGeneration: 'control:old',
+                engagementGeneration: 'engagement:old',
+                confirmationSequence: 9,
+                shooterOriginErrorCm: 75001
+              }, {
+                targetId: '8',
+                controlGeneration: 'control:new',
+                engagementGeneration: 'engagement:new',
+                confirmationSequence: 11,
+                bullet_id: 'new-1',
+                shooterOriginErrorCm: 0
+              }]
+            }
+          }
+        };
+        const current = currentCombatShotOriginDiagnostics(state, stateful, { user_id: 8 });
+        const next = currentCombatShotOriginDiagnostics(state, {
+          combatMetrics: {
+            targetId: '8',
+            controlGeneration: 'control:new',
+            engagementGeneration: 'engagement:next',
+            confirmationSequenceBaseline: 11
+          }
+        }, { user_id: 8 });
+        return [
+          current.latestConfirmedShot?.bullet_id,
+          current.shooterOriginErrorSummary?.sampleCount,
+          current.shooterOriginErrorSummary?.medianCm,
+          next.latestConfirmedShot === null,
+          next.shooterOriginErrorSummary === null
+        ].join('|');
+      })(),
+      want: 'new-1|1|0|true|true'
     },
     {
       name: 'browserless combat ignores trailing trade estimates while static hp rules are safe',
@@ -37193,13 +37322,26 @@ async function runSelfTest() {
       want: 'attack:combat-spacing:hp-gap:false'
     },
     {
-      name: 'healthy high-value visible coin beats active combat state',
+      name: 'healthy high-value visible coin beats active ballistic-close combat state',
       got: (() => {
+        bot.combatTarget = {
+          id: 2,
+          at: Date.now(),
+          firstSeenAt: Date.now() - 5000,
+          intent: 'engaged',
+          originIntent: 'defensive',
+          ballisticClose: {
+            active: true,
+            targetId: '2',
+            targetRangeCm: 3000
+          }
+        };
         const action = choose({
           self: { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
-          local: [{ user_id: 2, x: 1000, y: 0, current_join_mode: 'Active', vx: 30, hp: 100, death_reward_preview: 30 }],
-          coins: [{ drop_id: 1, x: 5000, y: 0, amount: 10, native: true }]
+          local: [{ user_id: 2, x: 1000, y: 0, current_join_mode: 'Active', vx: 30, hp: 100, death_reward_preview: 10 }],
+          coins: [{ drop_id: 1, x: 5000, y: 0, amount: 30, native: true }]
         });
+        bot.combatTarget = null;
         return action.kind + ':' + action.reason;
       })(),
       want: 'coin:high-value-visible-coin-priority'

@@ -128,8 +128,18 @@ function combatBallisticCloseCore(input = {}, options = {}) {
   ));
   const distanceCm = numberOrNull(input.distanceCm ?? input.distance);
   const noDamageMs = Math.max(0, Number(input.noDamageMs || 0));
+  const selfNoDamageMs = Math.max(0, Number(input.selfNoDamageMs || 0));
   const acceptedShotsSinceDamage = Math.max(0, Number(input.acceptedShotsSinceDamage || 0));
   const selfHp = numberOrNull(input.selfHp);
+  const originIntent = String(input.originIntent || '');
+  const currentIntent = String(input.currentIntent || '');
+  const defensiveThreatCleared = Boolean(
+    originIntent === 'defensive'
+      && ['engaged', 'reengage'].includes(currentIntent)
+      && selfNoDamageMs >= noDamageMinMs
+      && input.recentSelfDamage !== true
+  );
+  const eligibleEngagement = input.ordinaryProfit === true || defensiveThreatCleared;
   const directionDwells = (Array.isArray(input.directionDwells) ? input.directionDwells : [])
     .map(Number)
     .filter(value => Number.isFinite(value) && value > 0);
@@ -139,14 +149,19 @@ function combatBallisticCloseCore(input = {}, options = {}) {
     : distanceCm / bulletSpeedCmPerTick * tickMs;
   let reason = '';
   if (!targetId) reason = 'missing-target';
-  else if (input.ordinaryProfit !== true) reason = 'non-profit-engagement';
   else if (selfHp === null || selfHp < minSelfHp) reason = 'unsafe-self-hp';
   else if (input.targetFiring === true) reason = 'target-firing';
   else if (input.targetBulletPressure === true) reason = 'target-bullet-pressure';
   else if (input.persistentThreat === true) reason = 'persistent-target-threat';
+  else if (originIntent === 'defensive' && input.recentSelfDamage === true) reason = 'recent-self-damage';
+  else if (!eligibleEngagement) reason = originIntent === 'defensive'
+    ? 'defensive-threat-not-cleared'
+    : 'non-profit-engagement';
   else if (noDamageMs < noDamageMinMs) reason = 'damage-progress-or-insufficient-observation';
   else if (acceptedShotsSinceDamage < minAcceptedShots) reason = 'insufficient-accepted-shots';
-  else if (!sameTargetLatch && input.passiveRunnerConfirmed !== true) reason = 'passive-runner-unconfirmed';
+  else if (!sameTargetLatch
+    && !defensiveThreatCleared
+    && input.passiveRunnerConfirmed !== true) reason = 'passive-runner-unconfirmed';
   else if (!sameTargetLatch && directionDwells.length < minDirectionDwells) reason = 'insufficient-direction-dwells';
   else if (!sameTargetLatch && (distanceCm === null || currentFlightMs === null)) reason = 'missing-distance';
   else if (!sameTargetLatch
@@ -162,6 +177,8 @@ function combatBallisticCloseCore(input = {}, options = {}) {
       latched: false,
       state: null,
       noDamageMs: Math.round(noDamageMs),
+      selfNoDamageMs: Math.round(selfNoDamageMs),
+      defensiveThreatCleared,
       acceptedShotsSinceDamage,
       directionDwellSamples: directionDwells.length,
       medianDirectionDwellMs: medianDirectionDwellMs === null
@@ -194,7 +211,11 @@ function combatBallisticCloseCore(input = {}, options = {}) {
   };
   return {
     active: true,
-    reason: sameTargetLatch ? 'same-target-latched' : 'projectile-flight-exceeds-direction-dwell',
+    reason: sameTargetLatch
+      ? 'same-target-latched'
+      : (defensiveThreatCleared
+          ? 'defensive-threat-cleared-projectile-flight-exceeds-direction-dwell'
+          : 'projectile-flight-exceeds-direction-dwell'),
     targetId,
     latched: sameTargetLatch,
     state,
@@ -203,6 +224,8 @@ function combatBallisticCloseCore(input = {}, options = {}) {
     maxRangeCm,
     hysteresisCm,
     noDamageMs: Math.round(noDamageMs),
+    selfNoDamageMs: Math.round(selfNoDamageMs),
+    defensiveThreatCleared,
     acceptedShotsSinceDamage,
     directionDwellSamples: directionDwells.length,
     medianDirectionDwellMs: state.medianDirectionDwellMs,

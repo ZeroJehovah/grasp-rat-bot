@@ -218,6 +218,46 @@ function selectedEntries(options) {
   return entries;
 }
 
+function replayEngagementIntentStep(previous = null, row = {}, targetId = '') {
+  const detail = row.detail || {};
+  const currentTargetId = String(detail.target?.userId ?? detail.target?.user_id ?? targetId ?? '');
+  const observedEngagementKey = String(
+    detail.metrics?.engagementGeneration
+      || detail.metrics?.engagementId
+      || detail.movement?.distanceAwareDodge?.state?.engagementId
+      || ''
+  );
+  const engagementKey = observedEngagementKey || (
+    previous && String(previous.targetId || '') === currentTargetId
+      ? String(previous.engagementKey || '')
+      : `${currentTargetId}:selected-range`
+  );
+  const sameEngagement = Boolean(
+    previous
+      && currentTargetId
+      && String(previous.targetId || '') === currentTargetId
+      && String(previous.engagementKey || '') === engagementKey
+  );
+  const currentIntent = String(detail.target?.combatIntent || '');
+  return {
+    targetId: currentTargetId,
+    engagementKey,
+    originIntent: sameEngagement ? String(previous.originIntent || '') : currentIntent,
+    currentIntent,
+    sameEngagement
+  };
+}
+
+function replayEngagementIntentTimeline(rows = [], targetId = '') {
+  const timeline = [];
+  let state = null;
+  for (const row of rows) {
+    state = replayEngagementIntentStep(state, row, targetId);
+    timeline.push(state);
+  }
+  return timeline;
+}
+
 function runtimeLogDirectoryForBattle(file) {
   const directory = path.dirname(file);
   return path.basename(directory) === 'battles' ? path.dirname(directory) : directory;
@@ -1200,8 +1240,12 @@ function replayCombat(options) {
   const rows = allRows.filter(({ detail }) => String(detail.target?.userId ?? '') === options.targetId);
   const confirmedShots = confirmedShotsForRows(options, rows, allRows);
   const state = { motionSamples: [] };
+  const intentTimeline = replayEngagementIntentTimeline(rows, options.targetId);
+  const damageEventsForIntent = combatDamageEvents(rows);
   const baselineMisses = [];
   const improvedMisses = [];
+  const baselineIntegerMisses = [];
+  const improvedIntegerMisses = [];
   const trajectoryCoverageMisses = [];
   const trajectoryCoverageSelections = {};
   const trajectoryCoverageVirtualShots = [];
@@ -1215,6 +1259,7 @@ function replayCombat(options) {
     const observedTick = numberOrNull(shot.ack.observedTick) ?? createdTick;
     const rowIndex = Math.max(0, rows.findLastIndex(row => Number(row.detail.tick) <= observedTick));
     const row = rows[rowIndex];
+    const intentState = intentTimeline[rowIndex];
     const history = rows.slice(Math.max(0, rowIndex - 40), rowIndex + 1).map(item => ({
       at: Date.parse(item.entry.at),
       x: item.detail.target?.x,
@@ -1254,6 +1299,13 @@ function replayCombat(options) {
       : replayBehavior;
     state.provenHitRate = Math.max(Number(state.provenHitRate || 0), Number(row.detail.behavior?.recentHitRate || 0));
     state.noDamageMs = Number(row.detail.aim?.noDamageMs || 0);
+    state.originIntent = intentState.originIntent;
+    state.intent = intentState.currentIntent;
+    state.selfNoDamageMs = Math.max(
+      0,
+      Date.parse(row.entry.at) - Number(damageEventsForIntent.self.slice().reverse()
+        .find(event => Number(event.tick) <= Number(observedTick))?.at || Date.parse(rows[0]?.entry?.at || row.entry.at))
+    );
     // Preserve the production classification captured with the frame when it
     // exists. Recomputing it from the shortened replay history can incorrectly
     // admit high-entropy route coverage before the logged runtime did.
@@ -1301,6 +1353,8 @@ function replayCombat(options) {
     state.fireRiskClassification = improved.fireRiskClassification || state.fireRiskClassification || null;
     const baselineMiss = bulletCorridorMiss(rows, shot.ack);
     const improvedMiss = bulletCorridorMiss(rows, shot.ack, improved);
+    const baselineIntegerMiss = integerTickBulletMiss(rows, shot.ack);
+    const improvedIntegerMiss = integerTickBulletMiss(rows, shot.ack, improved);
     const coverageEligible = Boolean(
       (improved.fireRiskClassification?.highEntropy
         || /^high-entropy-/.test(String(improved.routeCoverage?.style || ''))
@@ -1390,8 +1444,14 @@ function replayCombat(options) {
       candidate.hypothesis,
       bulletCorridorMiss(rows, shot.ack, candidate)
     ]));
+    const routeCandidateIntegerMisses = Object.fromEntries((improved.routeCoverage?.candidates || []).map(candidate => [
+      candidate.hypothesis,
+      integerTickBulletMiss(rows, shot.ack, candidate)
+    ]));
     baselineMisses.push(baselineMiss);
     improvedMisses.push(improvedMiss);
+    baselineIntegerMisses.push(baselineIntegerMiss);
+    improvedIntegerMisses.push(improvedIntegerMiss);
     const selectedRoute = improved.routeCoverage?.candidates?.find(candidate => candidate.hypothesis === improved.routeCoverage?.selected) || null;
     const closeRangeRows = rows.slice(Math.max(0, rowIndex - 2), rowIndex + 1);
     const closeRangeFireOverride = closeRangeRows.length === 3
@@ -1403,6 +1463,8 @@ function replayCombat(options) {
       shot,
       baselineMiss,
       improvedMiss,
+      baselineIntegerMiss,
+      improvedIntegerMiss,
       trajectoryCoverageMiss,
       trajectoryCoveragePlan: coveragePlan,
       coverageApplied,
@@ -1430,6 +1492,7 @@ function replayCombat(options) {
       fireReachability: improved.fireReachability || null,
       theoreticalMinimumMiss: theoreticalShotMinimumMiss(rows, shot.ack),
       routeCandidateMisses,
+      routeCandidateIntegerMisses,
       routeContextKey: String(improved.routeCoverage?.contextKey || ''),
       routeCandidate: String(improved.routeCoverage?.selected || ''),
       behaviorMode: String(row.detail.behavior?.mode || ''),
@@ -1460,6 +1523,14 @@ function replayCombat(options) {
   const startedAt = rows.length ? Date.parse(rows[0].entry.at) : 0;
   const baselineHits = baselineMisses.filter(value => value <= options.hitRadius).length;
   const improvedHits = improvedMisses.filter(value => value <= options.hitRadius).length;
+  const integerSummary = misses => ({
+    shots: misses.length,
+    hits: misses.filter(value => value <= options.hitRadius).length,
+    meanMissCm: misses.length
+      ? Number((misses.reduce((sum, miss) => sum + miss, 0) / misses.length).toFixed(1))
+      : null,
+    hitRadiusCm: options.hitRadius
+  });
   const stats = values => ({
     mean: values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null,
     p50: percentile(values, 0.5),
@@ -1471,29 +1542,54 @@ function replayCombat(options) {
   const aimDiagnostics = {};
   for (const item of shotEvaluations) {
     const key = `${item.routeStyle || item.aimMode || 'unknown'}|${item.hypothesis || 'baseline'}`;
-    const cell = aimDiagnostics[key] || { shots: 0, estimatedHits: 0, missTotalCm: 0 };
+    const cell = aimDiagnostics[key] || {
+      shots: 0,
+      estimatedHits: 0,
+      integerTickHits: 0,
+      missTotalCm: 0,
+      integerMissTotalCm: 0
+    };
     cell.shots += 1;
     cell.estimatedHits += item.improvedMiss <= options.hitRadius ? 1 : 0;
+    cell.integerTickHits += item.improvedIntegerMiss <= options.hitRadius ? 1 : 0;
     cell.missTotalCm += Number(item.improvedMiss || 0);
+    cell.integerMissTotalCm += Number(item.improvedIntegerMiss || 0);
     aimDiagnostics[key] = cell;
   }
   for (const cell of Object.values(aimDiagnostics)) {
     cell.meanAimMissCm = cell.shots ? Number((cell.missTotalCm / cell.shots).toFixed(1)) : null;
+    cell.integerTickMeanMissCm = cell.shots
+      ? Number((cell.integerMissTotalCm / cell.shots).toFixed(1))
+      : null;
     delete cell.missTotalCm;
+    delete cell.integerMissTotalCm;
   }
   const routeCandidateOracle = {};
   for (const item of shotEvaluations) {
     for (const [hypothesis, miss] of Object.entries(item.routeCandidateMisses || {})) {
-      const cell = routeCandidateOracle[hypothesis] || { shots: 0, estimatedHits: 0, missTotalCm: 0 };
+      const cell = routeCandidateOracle[hypothesis] || {
+        shots: 0,
+        estimatedHits: 0,
+        integerTickHits: 0,
+        missTotalCm: 0,
+        integerMissTotalCm: 0
+      };
       cell.shots += 1;
       cell.estimatedHits += miss <= options.hitRadius ? 1 : 0;
+      const integerMiss = Number(item.routeCandidateIntegerMisses?.[hypothesis]);
+      cell.integerTickHits += integerMiss <= options.hitRadius ? 1 : 0;
       cell.missTotalCm += Number(miss || 0);
+      cell.integerMissTotalCm += Number(integerMiss || 0);
       routeCandidateOracle[hypothesis] = cell;
     }
   }
   for (const cell of Object.values(routeCandidateOracle)) {
     cell.meanAimMissCm = cell.shots ? Number((cell.missTotalCm / cell.shots).toFixed(1)) : null;
+    cell.integerTickMeanMissCm = cell.shots
+      ? Number((cell.integerMissTotalCm / cell.shots).toFixed(1))
+      : null;
     delete cell.missTotalCm;
+    delete cell.integerMissTotalCm;
   }
   const damageEvents = combatDamageEvents(rows);
   const damageAttributions = attributeTargetDamageToShots(rows, shotEvaluations, damageEvents.target, {
@@ -1761,7 +1857,8 @@ function replayCombat(options) {
       p90AimMissCm: baselineStats.p90,
       p95AimMissCm: baselineStats.p95,
       firstObservedDamageDelayMs: firstObservedDamageAt ? firstObservedDamageAt - startedAt : null,
-      firstEstimatedDamageDelayMs: baselineFirstHitAt ? baselineFirstHitAt - startedAt : null
+      firstEstimatedDamageDelayMs: baselineFirstHitAt ? baselineFirstHitAt - startedAt : null,
+      integerTick: integerSummary(baselineIntegerMisses)
     },
     improved: {
       confirmedShots: confirmedShots.length,
@@ -1776,7 +1873,8 @@ function replayCombat(options) {
       p90AimMissCm: improvedStats.p90,
       p95AimMissCm: improvedStats.p95,
       firstObservedDamageDelayMs: firstObservedDamageAt ? firstObservedDamageAt - startedAt : null,
-      firstEstimatedDamageDelayMs: improvedFirstHitAt ? improvedFirstHitAt - startedAt : null
+      firstEstimatedDamageDelayMs: improvedFirstHitAt ? improvedFirstHitAt - startedAt : null,
+      integerTick: integerSummary(improvedIntegerMisses)
     },
     damageAttribution: {
       lagWindowTicks: { before: 2, after: 12 },
@@ -1784,6 +1882,21 @@ function replayCombat(options) {
       associatedShotCount: damageAttributions.length,
       associatedTargetDamage,
       samples: damageAttributions.slice(0, 12)
+    },
+    validation: {
+      primaryCollisionModel: 'integer-server-ticks',
+      continuousCpaDiagnostic: {
+        baselineHits,
+        improvedHits,
+        baselineMeanMissCm: baselineStats.mean === null ? null : Number(baselineStats.mean.toFixed(1)),
+        improvedMeanMissCm: improvedStats.mean === null ? null : Number(improvedStats.mean.toFixed(1))
+      },
+      realHpDamage: {
+        observedTargetDamage,
+        attributedShotCount: damageAttributions.length,
+        attributedTargetDamage: associatedTargetDamage,
+        selfDamage: observedSelfDamage
+      }
     },
     exchangeStopLossReplay,
     fireDisciplineReplay,
@@ -1794,17 +1907,24 @@ function replayCombat(options) {
     aimDiagnostics,
     routeCandidateOracle
   };
-  result.improved.accepted = rows.length > 0 && (
-    Boolean(exchangeStopLossReplay?.accepted)
-      || (confirmedShots.length > 0 && (
-        improvedHits > baselineHits
-        || result.improved.meanAimMissCm < result.baseline.meanAimMissCm
-        || (physicalReachability.theoreticalHits === 0 && fireDisciplineReplay?.accepted)
-        || (result.improved.firstEstimatedDamageDelayMs !== null
-          && (result.baseline.firstEstimatedDamageDelayMs === null
-            || result.improved.firstEstimatedDamageDelayMs < result.baseline.firstEstimatedDamageDelayMs))
-      ))
+  const integerAimImprovement = result.improved.integerTick.hits > result.baseline.integerTick.hits;
+  const realHpEvidence = result.validation.realHpDamage.attributedShotCount > 0
+    && result.validation.realHpDamage.attributedTargetDamage > 0;
+  const integerAimAccepted = integerAimImprovement;
+  result.validation.accepted = Boolean(
+    exchangeStopLossReplay?.accepted
+      || integerAimAccepted
+      || (physicalReachability.theoreticalHits === 0 && fireDisciplineReplay?.accepted)
   );
+  result.validation.acceptanceEvidence = {
+    integerAimImprovement,
+    realHpEvidence,
+    integerAimAccepted,
+    counterfactualServerConfirmed: false,
+    exchangeStopLossAccepted: Boolean(exchangeStopLossReplay?.accepted),
+    fireDisciplineAccepted: Boolean(fireDisciplineReplay?.accepted)
+  };
+  result.improved.accepted = result.validation.accepted;
   return result;
 }
 
@@ -1827,11 +1947,17 @@ function replayCombatBallisticClose(options) {
   let previousVelocity = { vx: 0, vy: 0 };
   let activationEffectiveTick = Infinity;
   let acceptedShots = 0;
+  let acceptedShotsAtLastTargetDamage = 0;
+  let intentState = null;
+  let previousSelfHp = null;
+  let previousTargetHp = null;
+  let lastSelfDamageAt = 0;
   let confirmedShotCursor = 0;
   for (const row of rows) {
     const tick = Number(row.detail.tick);
     const loggedSelf = row.detail.self;
     const target = row.detail.target;
+    intentState = replayEngagementIntentStep(intentState, row, options.targetId);
     if (!simulatedSelf) {
       simulatedSelf = { x: Number(loggedSelf.x), y: Number(loggedSelf.y) };
     } else if (!ballisticState?.active) {
@@ -1851,6 +1977,16 @@ function replayCombatBallisticClose(options) {
     acceptedShots = confirmedShotCursor;
     const startedAt = rows.length ? Date.parse(rows[0].entry.at) : Date.parse(row.entry.at);
     const nowMs = Date.parse(row.entry.at);
+    const currentSelfHp = numberOrNull(row.detail.self?.hp);
+    if (previousSelfHp !== null && currentSelfHp !== null && currentSelfHp < previousSelfHp) {
+      lastSelfDamageAt = nowMs;
+    }
+    if (currentSelfHp !== null) previousSelfHp = currentSelfHp;
+    const currentTargetHp = numberOrNull(row.detail.target?.hp);
+    if (previousTargetHp !== null && currentTargetHp !== null && currentTargetHp < previousTargetHp) {
+      acceptedShotsAtLastTargetDamage = confirmedShotCursor;
+    }
+    if (currentTargetHp !== null) previousTargetHp = currentTargetHp;
     const targetBulletPressure = Boolean(
       row.detail.target?.firing
         || row.detail.movement?.dodge?.threatField?.some(field => (
@@ -1860,16 +1996,12 @@ function replayCombatBallisticClose(options) {
             ))
         ))
     );
-    const persistentThreat = Boolean(
-      targetBulletPressure
-        || Number(row.detail.metrics?.selfDamage || 0) > 0
-    );
+    const persistentThreat = targetBulletPressure;
     const noDamageMs = Math.max(0, Number(
       row.detail.aim?.noDamageMs
         ?? row.detail.movement?.ballisticClose?.noDamageMs
         ?? nowMs - startedAt
     ));
-    const targetIntent = String(row.detail.target?.combatIntent || 'engaged');
     const ballistic = combatBallisticCloseCore({
       targetId: options.targetId,
       previousState: ballisticState,
@@ -1879,11 +2011,13 @@ function replayCombatBallisticClose(options) {
         Number(target.y) - Number(simulatedSelf.y)
       ),
       noDamageMs,
-      acceptedShotsSinceDamage: acceptedShots,
+      selfNoDamageMs: Math.max(0, nowMs - Number(lastSelfDamageAt || startedAt)),
+      acceptedShotsSinceDamage: Math.max(0, acceptedShots - acceptedShotsAtLastTargetDamage),
       selfHp: row.detail.self?.hp,
       targetFiring: row.detail.target?.firing,
       targetBulletPressure,
       persistentThreat,
+      recentSelfDamage: lastSelfDamageAt > 0 && nowMs - lastSelfDamageAt < 3000,
       passiveRunnerConfirmed: Boolean(
         nowMs - startedAt >= 2500
           && row.detail.target?.moving !== false
@@ -1891,7 +2025,9 @@ function replayCombatBallisticClose(options) {
           && !row.detail.target?.firing
           && Number(row.detail.target?.drop || 0) > 0
       ),
-      ordinaryProfit: ['profit', 'engaged', 'reengage', 'afk-profit'].includes(targetIntent),
+      originIntent: intentState.originIntent,
+      currentIntent: intentState.currentIntent,
+      ordinaryProfit: ['profit', 'engaged', 'reengage', 'afk-profit'].includes(intentState.originIntent),
       directionDwells: row.detail.behavior?.metrics?.directionDwells
     }, {
       combatServerTickMs: 50,
@@ -2034,6 +2170,21 @@ function replayCombatBallisticClose(options) {
   });
   const baseline = summary(baselineMisses);
   const improved = summary(candidateMisses);
+  const damageEvents = combatDamageEvents(rows);
+  const baselineShotEvaluations = confirmedShots.map((shot, index) => ({
+    shot,
+    baselineMiss: baselineMisses[index],
+    expectedArrivalTick: expectedBulletArrivalTick(rows, shot.ack)
+  }));
+  const damageAttributions = attributeTargetDamageToShots(
+    rows,
+    baselineShotEvaluations,
+    damageEvents.target,
+    { hitRadius: options.hitRadius }
+  );
+  const observedTargetDamage = damageEvents.target.reduce((sum, event) => sum + Number(event.damage || 0), 0);
+  const observedSelfDamage = damageEvents.self.reduce((sum, event) => sum + Number(event.damage || 0), 0);
+  const associatedTargetDamage = damageAttributions.reduce((sum, event) => sum + Number(event.damage || 0), 0);
   const expectedActivation = confirmedShots.length >= 8
     && rows.some(row => (row.detail.behavior?.metrics?.directionDwells || []).length >= 4);
   const accepted = rows.length > 0 && confirmedShots.length > 0 && (
@@ -2059,6 +2210,19 @@ function replayCombatBallisticClose(options) {
     firstActivation,
     baseline,
     improved,
+    validation: {
+      primaryCollisionModel: 'integer-server-ticks',
+      counterfactualAccepted: accepted,
+      counterfactualServerConfirmed: false,
+      loggedRealHp: {
+        targetDamageEvents: damageEvents.target.length,
+        observedTargetDamage,
+        attributedShotCount: damageAttributions.length,
+        attributedTargetDamage: associatedTargetDamage,
+        selfDamage: observedSelfDamage,
+        samples: damageAttributions.slice(0, 12)
+      }
+    },
     samples,
     accepted
   };
@@ -7563,6 +7727,23 @@ function replayDistanceAwareCombat(options = {}) {
 
 function runDistanceAwareReplaySelfTest() {
   const checks = [];
+  const defensiveIntentRows = [
+    { line: 1, detail: { target: { userId: '8', combatIntent: 'defensive' }, metrics: { engagementGeneration: 'engagement:test' } } },
+    { line: 2, detail: { target: { userId: '8', combatIntent: 'engaged' }, metrics: { engagementGeneration: 'engagement:test' } } },
+    { line: 3, detail: { target: { userId: '8', combatIntent: 'reengage' }, metrics: { engagementGeneration: 'engagement:test' } } },
+    { line: 4, detail: { target: { userId: '8', combatIntent: 'defensive' }, metrics: { engagementGeneration: 'engagement:next' } } }
+  ];
+  const defensiveIntentTimeline = replayEngagementIntentTimeline(defensiveIntentRows, '8');
+  checks.push({
+    name: 'replay-latches-first-frame-origin-intent-through-defensive-engaged-reengage',
+    passed: defensiveIntentTimeline[0]?.originIntent === 'defensive'
+      && defensiveIntentTimeline[1]?.originIntent === 'defensive'
+      && defensiveIntentTimeline[1]?.currentIntent === 'engaged'
+      && defensiveIntentTimeline[2]?.originIntent === 'defensive'
+      && defensiveIntentTimeline[2]?.currentIntent === 'reengage'
+      && defensiveIntentTimeline[3]?.originIntent === 'defensive'
+      && defensiveIntentTimeline[3]?.sameEngagement === false
+  });
   const replayAt = Date.parse('2026-08-06T00:00:00.000Z');
   const replayCombatRows = [{
     line: 1,
@@ -7964,6 +8145,8 @@ if (require.main === module) {
 module.exports = {
   independentCreationReachabilityOracleCore,
   parseArgs,
+  replayEngagementIntentStep,
+  replayEngagementIntentTimeline,
   replayDistanceAwareCombat,
   replayCombatClosePressure,
   replayCombatBallisticClose,

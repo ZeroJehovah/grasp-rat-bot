@@ -589,6 +589,66 @@ function recentAcceptedShotHitSummary(stateful, targetId, limit = 15) {
   };
 }
 
+function currentCombatShotOriginDiagnostics(state = {}, stateful = {}, target = null) {
+  const metrics = stateful?.combatMetrics || {};
+  const targetId = String(combatTargetId(target) || metrics.targetId || '');
+  const controlGeneration = String(metrics.controlGeneration || '');
+  const engagementGeneration = String(metrics.engagementGeneration || '');
+  if (!targetId || !controlGeneration || !engagementGeneration) {
+    return { latestConfirmedShot: null, shooterOriginErrorSummary: null };
+  }
+  const confirmationBaseline = Math.max(0, Number(metrics.confirmationSequenceBaseline || 0));
+  const confirmedShots = state?.command?.shooting?.confirmedShots || [];
+  const lastAckShot = state?.command?.lastAck?.matchedShot || null;
+  const shots = [...confirmedShots, ...(lastAckShot ? [lastAckShot] : [])].filter(shot => (
+    String(shot?.targetId ?? '') === targetId
+      && String(shot?.controlGeneration || '') === controlGeneration
+      && String(shot?.engagementGeneration || '') === engagementGeneration
+      && (shot?.confirmationSequence === null
+        || shot?.confirmationSequence === undefined
+        || Number(shot?.confirmationSequence || 0) > confirmationBaseline)
+  ));
+  const uniqueShots = [];
+  const seenShotKeys = new Set();
+  for (const shot of shots) {
+    const shotKey = String(
+      shot?.bullet_id
+        ?? shot?.bulletId
+        ?? `${shot?.confirmationSequence ?? ''}:${shot?.requestId ?? shot?.commandId ?? ''}`
+    );
+    if (shotKey && seenShotKeys.has(shotKey)) continue;
+    if (shotKey) seenShotKeys.add(shotKey);
+    uniqueShots.push(shot);
+  }
+  const errors = uniqueShots
+    .map(shot => numberOrNull(shot?.shooterOriginErrorCm))
+    .filter(value => value !== null)
+    .slice(-64)
+    .sort((left, right) => left - right);
+  const percentileValue = ratio => {
+    if (!errors.length) return null;
+    return errors[Math.max(0, Math.min(errors.length - 1, Math.ceil(errors.length * ratio) - 1))];
+  };
+  const median = percentileValue(0.5);
+  const deviations = median === null
+    ? []
+    : errors.map(value => Math.abs(value - median)).sort((left, right) => left - right);
+  const madIndex = deviations.length
+    ? Math.max(0, Math.min(deviations.length - 1, Math.ceil(deviations.length * 0.5) - 1))
+    : -1;
+  return {
+    latestConfirmedShot: uniqueShots.at(-1) || null,
+    shooterOriginErrorSummary: errors.length
+      ? {
+          sampleCount: errors.length,
+          medianCm: median,
+          p90Cm: percentileValue(0.9),
+          madCm: madIndex >= 0 ? deviations[madIndex] : null
+        }
+      : null
+  };
+}
+
 function compactCoverageShotAttribution(stateful, targetId, limit = 64) {
   const shots = ensureCombatLearningState(stateful).recentShots
     .filter(item => String(item.targetId) === String(targetId))
@@ -2422,18 +2482,43 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   const finishingTarget = Number(target.hp ?? 100) <= Number(options.combatFinishLowThreatHp ?? COMBAT_CONSTANTS.FINISH_LOW_THREAT_HP);
   const highEntropyOpponent = opponentBehavior?.dimensions?.controlStyle?.state === 'human-like'
     || Number(opponentBehavior?.automationLikelihood) < 0.45;
+  const currentTargetId = String(combatTargetId(target) || '');
+  const targetCollisionBulletPressure = (bullets || []).some(bullet => (
+    bullet?.incoming === true
+      && String(bullet?.ownerId ?? '') === currentTargetId
+      && incomingBulletHasCollisionRiskCore(bullet, options)
+  ));
+  const nowMs = Number(options.nowMs || Date.now());
+  const selfNoDamageMs = Math.max(
+    0,
+    nowMs - Number(combatTargetState?.lastSelfDamageAt || combatTargetState?.firstSeenAt || nowMs)
+  );
+  const recentSelfDamage = Number(combatTargetState?.lastSelfDamageAt || 0) > 0
+    && nowMs - Number(combatTargetState.lastSelfDamageAt) < Math.max(
+      0,
+      Number(options.combatBallisticCloseNoDamageMs ?? 3000)
+    );
+  const recentPersistentThreat = Number(combatTargetState?.lastThreatAt || 0) > 0
+    && nowMs - Number(combatTargetState.lastThreatAt) <= Math.max(
+      1000,
+      Number(options.combatBallisticCloseThreatClearMs ?? 2500)
+    );
   const ballisticClose = combatBallisticCloseCore({
-    targetId: combatTargetId(target),
+    targetId: currentTargetId,
     previousState: combatTargetState?.ballisticClose || null,
     nowMs: options.nowMs,
     distanceCm: target.distance,
     noDamageMs,
+    selfNoDamageMs,
     acceptedShotsSinceDamage: combatTargetState?.acceptedShotsSinceDamage,
     selfHp: hpValue(self),
     targetFiring: target.firing,
-    targetBulletPressure: targetPressure,
-    persistentThreat: passiveRunner.persistentThreat,
+    targetBulletPressure: targetCollisionBulletPressure,
+    persistentThreat: recentPersistentThreat,
+    recentSelfDamage,
     passiveRunnerConfirmed: passiveRunner.active,
+    originIntent: combatTargetState?.originIntent,
+    currentIntent: combatTargetState?.intent || target.combatIntent,
     ordinaryProfit: ['profit', 'engaged', 'reengage', 'afk-profit'].includes(String(
       combatTargetState?.originIntent || combatTargetState?.intent || target.combatIntent || ''
     )),
@@ -2686,7 +2771,6 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       ?? missionTarget?.id
       ?? ''
   );
-  const currentTargetId = String(combatTargetId(target) || '');
   const missionIsDifferentTarget = Boolean(
     missionTargetId
       && currentTargetId
@@ -3190,7 +3274,7 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     ? currentPrevious
     : (rememberedPrevious && nowMs - Number(rememberedPrevious.at || 0) <= engagementTtlMs ? rememberedPrevious : null);
   const same = Boolean(previous && String(previous.id ?? '') === String(id));
-  if (same && String(stateful.combatMetrics?.targetId ?? '') !== String(id)) {
+  if (continuesActiveGeneration && String(stateful.combatMetrics?.targetId ?? '') !== String(id)) {
     const rememberedMetrics = stateful.combatMetricsByTarget[String(id)] || null;
     if (rememberedMetrics) stateful.combatMetrics = cloneJson(rememberedMetrics);
   }
@@ -3292,7 +3376,10 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
       && incomingOwnerId !== undefined
       && String(incomingOwnerId) === String(id)
   );
-  const previousMetrics = same && stateful.combatMetrics?.targetId === String(id) ? stateful.combatMetrics : {};
+  const previousMetrics = continuesActiveGeneration
+    && stateful.combatMetrics?.targetId === String(id)
+    ? stateful.combatMetrics
+    : {};
   const behaviorMap = ensureOpponentBehaviorMap(stateful);
   const previousBehavior = behaviorMap[String(id)] || null;
   const previousThreatBulletIds = previousMetrics.threatBulletIds || [];
@@ -3448,12 +3535,16 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     easyKillThreatExempt: Boolean(target.easyKillThreatExempt),
     reason: options.reason || target.reason || 'combat-live-realtime',
     intent: target.combatIntent || (target.incomingBullet ? 'defensive' : 'profit'),
-    originIntent: same ? String(previous.originIntent || previous.intent || target.combatIntent || '') : String(target.combatIntent || ''),
-    originReason: same ? String(previous.originReason || previous.reason || '') : String(options.reason || target.reason || ''),
+    originIntent: continuesActiveGeneration
+      ? String(previous.originIntent || previous.intent || target.combatIntent || '')
+      : String(target.combatIntent || ''),
+    originReason: continuesActiveGeneration
+      ? String(previous.originReason || previous.reason || '')
+      : String(options.reason || target.reason || ''),
     lastDamageAt: damaged ? nowMs : (same ? Number(previous.lastDamageAt || previous.at || nowMs) : nowMs),
     acceptedShotsAtLastDamage: damaged
       ? Number(previousMetrics.acceptedShots || 0)
-      : (same ? Number(previous.acceptedShotsAtLastDamage || 0) : 0),
+      : (continuesActiveGeneration ? Number(previous.acceptedShotsAtLastDamage || 0) : 0),
     lastSelfDamageAt: selfDamaged ? nowMs : (same ? Number(previous.lastSelfDamageAt || 0) : 0),
     lastSelfDamage: selfDamaged ? Math.max(0, previousSelfHp - currentSelfHp) : 0,
     selfHpLossObserved: selfDamaged,
@@ -3479,7 +3570,7 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     fireRiskClassification,
     probeState: same ? previous.probeState || null : null,
     closeBandReserve: same ? previous.closeBandReserve || null : null,
-    ballisticClose: same ? previous.ballisticClose || null : null,
+    ballisticClose: continuesActiveGeneration ? previous.ballisticClose || null : null,
     responsePolicyShadow: same ? previous.responsePolicyShadow || null : null,
     escapeDecision,
     provenHitRate: Math.max(
@@ -4156,13 +4247,14 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     if ([startX, startY, currentX, currentY].some(value => value === null)) return null;
     return Math.round(Math.hypot(currentX - startX, currentY - startY));
   })();
+  const shotOriginDiagnostics = currentCombatShotOriginDiagnostics(state, stateful, target);
   let aim = withOptionOverrides(options, {
     combatTargetState,
     observedTick: realtime.tick,
     realtimeStateObservedAtMs: realtime.receivedAtMs,
     executionTiming: state?.command?.shooting?.timing || options.executionTiming,
-    latestConfirmedShot: state?.command?.lastAck?.matchedShot || null,
-    shooterOriginErrorSummary: state?.command?.shooting?.shooterOrigin || null,
+    latestConfirmedShot: shotOriginDiagnostics.latestConfirmedShot,
+    shooterOriginErrorSummary: shotOriginDiagnostics.shooterOriginErrorSummary,
     actualShots: stateful?.combatMetrics?.acceptedShots || stateful?.combatMetrics?.actualShots || 0
   }, mergedOptions => estimateAim(self, target, mergedOptions));
   if (!aim.ok) dataGaps.push(aim.reason);
@@ -5166,6 +5258,7 @@ module.exports = {
   buildBrowserlessCombatDryRun,
   buildCombatMovementPlan,
   combatLearningCellCount,
+  currentCombatShotOriginDiagnostics,
   estimateAim,
   normalizeCombatBullet,
   normalizeCombatEntity,
