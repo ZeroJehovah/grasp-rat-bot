@@ -183,6 +183,7 @@ const {
 } = require('./chase-mode');
 const { COMBAT_CONSTANTS, validateCombatConstants } = require('./combat-constants');
 const {
+  combatBallisticCloseCore,
   combatDamageEfficiencyThresholdCore,
   combatEfficiencyWindowCore,
   combatPressurePhaseCore,
@@ -2185,6 +2186,79 @@ function runStrategyModuleSelfTests() {
     combatClosePressureMinRangeCm: 4500,
     combatClosePressureMaxRangeCm: 5500
   });
+  const ballisticClose = combatBallisticCloseCore({
+    targetId: '8',
+    nowMs: 5000,
+    distanceCm: 5000,
+    noDamageMs: 4000,
+    acceptedShotsSinceDamage: 12,
+    selfHp: 100,
+    targetFiring: false,
+    targetBulletPressure: false,
+    persistentThreat: false,
+    passiveRunnerConfirmed: true,
+    ordinaryProfit: true,
+    directionDwells: [350, 400, 400, 450]
+  });
+  const ballisticCloseLatched = combatBallisticCloseCore({
+    targetId: '8',
+    previousState: ballisticClose.state,
+    nowMs: 5100,
+    distanceCm: 4200,
+    noDamageMs: 4100,
+    acceptedShotsSinceDamage: 13,
+    selfHp: 100,
+    targetFiring: false,
+    targetBulletPressure: false,
+    persistentThreat: false,
+    passiveRunnerConfirmed: false,
+    ordinaryProfit: true,
+    directionDwells: [350, 400, 400, 450]
+  });
+  const ballisticCloseThreatRelease = combatBallisticCloseCore({
+    targetId: '8',
+    previousState: ballisticClose.state,
+    nowMs: 5200,
+    distanceCm: 4200,
+    noDamageMs: 4200,
+    acceptedShotsSinceDamage: 14,
+    selfHp: 100,
+    targetFiring: true,
+    targetBulletPressure: true,
+    persistentThreat: true,
+    passiveRunnerConfirmed: false,
+    ordinaryProfit: true,
+    directionDwells: [350, 400, 400, 450]
+  });
+  const ballisticCloseStableMotion = combatBallisticCloseCore({
+    targetId: '9',
+    nowMs: 5000,
+    distanceCm: 4000,
+    noDamageMs: 4000,
+    acceptedShotsSinceDamage: 12,
+    selfHp: 100,
+    targetFiring: false,
+    targetBulletPressure: false,
+    persistentThreat: false,
+    passiveRunnerConfirmed: true,
+    ordinaryProfit: true,
+    directionDwells: [1300, 1400, 1500, 1600]
+  });
+  const ballisticCloseEconomicPhase = combatBallisticCloseCore({
+    targetId: '8',
+    previousState: ballisticClose.state,
+    nowMs: 35000,
+    distanceCm: 3200,
+    noDamageMs: 34000,
+    acceptedShotsSinceDamage: 60,
+    selfHp: 100,
+    targetFiring: false,
+    targetBulletPressure: false,
+    persistentThreat: false,
+    passiveRunnerConfirmed: false,
+    ordinaryProfit: true,
+    directionDwells: [350, 400, 400, 450]
+  });
   const pressureStrafeA = combatPressureStrafeCore(
     { x: 0, y: 0 },
     { id: '8', x: 2500, y: 0 },
@@ -2240,6 +2314,23 @@ function runStrategyModuleSelfTests() {
       && pressureStrafeLong.segmentIndex > 128
       && pressureStrafeLong.dx === 0
       && Math.abs(pressureStrafeLong.dy) === 1
+  });
+  results.push({
+    name: 'combat-ballistic-close-uses-fast-direction-dwells-latches-stops-and-releases-threats',
+    passed: ballisticClose.active === true
+      && ballisticClose.reason === 'projectile-flight-exceeds-direction-dwell'
+      && ballisticClose.targetRangeCm === 3000
+      && ballisticClose.targetFlightMs === 300
+      && ballisticClose.currentFlightMs === 500
+      && ballisticCloseLatched.active === true
+      && ballisticCloseLatched.latched === true
+      && ballisticCloseLatched.targetRangeCm === 3000
+      && ballisticCloseThreatRelease.active === false
+      && ballisticCloseThreatRelease.reason === 'target-firing'
+      && ballisticCloseStableMotion.active === false
+      && ballisticCloseStableMotion.reason === 'flight-shorter-than-direction-dwell'
+      && ballisticCloseEconomicPhase.active === true
+      && ballisticCloseEconomicPhase.latched === true
   });
 
   const efficiencyThreshold100 = combatDamageEfficiencyThresholdCore(100, {

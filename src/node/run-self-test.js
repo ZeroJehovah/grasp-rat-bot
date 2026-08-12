@@ -18630,6 +18630,115 @@ async function runSelfTest() {
       want: '8|passive-runner-close|true|1|0|passive-runner'
     },
     {
+      name: 'browserless ballistic close shortens fast-transition flight and preserves profit mission resume',
+      got: (() => {
+        const self = {
+          user_id: 7,
+          x: 0,
+          y: 0,
+          vx: 0,
+          vy: 0,
+          hp: 100,
+          stamina_5s_remaining_milli: 10000
+        };
+        const target = {
+          user_id: 8,
+          x: 5000,
+          y: 0,
+          vx: 0,
+          vy: 50,
+          moving: true,
+          firing: false,
+          hp: 100,
+          distance: 5000,
+          drop: 20,
+          active: true,
+          combatIntent: 'defensive'
+        };
+        const baseState = {
+          id: '8',
+          firstSeenAt: 1000,
+          at: 1000,
+          originIntent: 'profit',
+          intent: 'defensive',
+          noDamageMs: 4000,
+          acceptedShotsSinceDamage: 12,
+          opponentBehaviorState: {
+            metrics: { directionDwells: [350, 400, 400, 450] }
+          }
+        };
+        const options = {
+          nowMs: 5000,
+          combatTargetState: baseState,
+          combatPassiveRunnerConfirmMs: 2500,
+          profitMission: {
+            active: true,
+            targetId: '9',
+            navigationTarget: { userId: '9', x: 0, y: 10000 }
+          }
+        };
+        const active = buildCombatMovementPlan(self, target, [], options);
+        const stopped = buildCombatMovementPlan(self, {
+          ...target,
+          x: 4200,
+          distance: 4200,
+          vx: 0,
+          vy: 0,
+          moving: false
+        }, [], {
+          ...options,
+          nowMs: 5100,
+          combatTargetState: {
+            ...baseState,
+            noDamageMs: 4100,
+            acceptedShotsSinceDamage: 13,
+            ballisticClose: active.ballisticClose.state
+          }
+        });
+        const resumed = buildCombatMovementPlan(self, target, [], {
+          ...options,
+          nowMs: 5200,
+          combatTargetState: {
+            ...baseState,
+            noDamageMs: 0,
+            acceptedShotsSinceDamage: 0,
+            ballisticClose: active.ballisticClose.state
+          }
+        });
+        const stable = buildCombatMovementPlan(self, {
+          ...target,
+          x: 4000,
+          distance: 4000,
+          combatIntent: 'profit'
+        }, [], {
+          ...options,
+          profitMission: null,
+          combatTargetState: {
+            ...baseState,
+            intent: 'profit',
+            opponentBehaviorState: {
+              metrics: { directionDwells: [1300, 1400, 1500, 1600] }
+            }
+          }
+        });
+        return [
+          active.reason,
+          active.spacing,
+          active.ballisticClose.targetFlightMs < active.ballisticClose.currentFlightMs,
+          active.profitEscort.active,
+          active.modifiers.includes('profit-escort'),
+          stopped.reason,
+          stopped.ballisticClose.latched,
+          resumed.reason,
+          resumed.modifiers.includes('profit-escort'),
+          resumed.ballisticClose.reason,
+          stable.ballisticClose.active,
+          stable.ballisticClose.reason
+        ].join('|');
+      })(),
+      want: 'combat-ballistic-flight-close|3000|true|true|false|combat-ballistic-flight-close|true|profit-escort-forward|true|damage-progress-or-insufficient-observation|false|flight-shorter-than-direction-dwell'
+    },
+    {
       name: 'browserless combat ignores trailing trade estimates while static hp rules are safe',
       got: (() => {
         const stateful = {

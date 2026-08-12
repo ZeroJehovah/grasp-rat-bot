@@ -62,6 +62,7 @@ const {
   updateCombatProbePhaseCore
 } = require('../src/strategy/combat-fire-discipline');
 const {
+  combatBallisticCloseCore,
   combatPressurePhaseCore,
   combatPressureStrafeCore,
   combatPressureTargetRangeCore
@@ -565,6 +566,76 @@ function bulletCorridorMiss(rows, ack, aim = null) {
     );
   }
   return minMiss;
+}
+
+function integerTickBulletMiss(rows, ack, aim = null) {
+  const startX = Number(ack.start_x);
+  const startY = Number(ack.start_y);
+  let dx = Number(ack.dir_x_micros) / 1000000;
+  let dy = Number(ack.dir_y_micros) / 1000000;
+  if (aim) {
+    const direction = normalizeVector(Number(aim.x) - startX, Number(aim.y) - startY);
+    dx = direction.x;
+    dy = direction.y;
+  }
+  const speed = Math.max(1, Number(ack.speed_per_tick || 500));
+  const createdTick = Math.ceil(Number(ack.created_tick));
+  const expireTick = Math.floor(Number(ack.expire_tick || createdTick + 30));
+  let minimumMissCm = Infinity;
+  for (let tick = createdTick; tick <= expireTick; tick += 1) {
+    const target = targetAtTick(rows, tick);
+    if (!target) continue;
+    const elapsedTicks = tick - Number(ack.created_tick);
+    const bulletX = startX + dx * speed * elapsedTicks;
+    const bulletY = startY + dy * speed * elapsedTicks;
+    minimumMissCm = Math.min(
+      minimumMissCm,
+      Math.hypot(bulletX - Number(target.x), bulletY - Number(target.y))
+    );
+  }
+  return minimumMissCm;
+}
+
+function counterfactualSelfAtTick(frames, tick) {
+  if (!frames.length) return null;
+  let low = 0;
+  let high = frames.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (Number(frames[middle].tick) < Number(tick)) low = middle + 1;
+    else high = middle;
+  }
+  const after = frames[low] || null;
+  const before = after && Number(after.tick) === Number(tick)
+    ? after
+    : (frames[low - 1] || null);
+  if (!before) return after?.self || null;
+  if (!after || Number(after.tick) === Number(before.tick)) return before.self;
+  const ratio = (Number(tick) - Number(before.tick)) / (Number(after.tick) - Number(before.tick));
+  return {
+    x: Number(before.self.x) + (Number(after.self.x) - Number(before.self.x)) * ratio,
+    y: Number(before.self.y) + (Number(after.self.y) - Number(before.self.y)) * ratio,
+    vx: Number(before.self.vx || 0),
+    vy: Number(before.self.vy || 0)
+  };
+}
+
+function ballisticMovementVelocity(self, target, targetRangeCm, hysteresisCm, speedPerTick = 50) {
+  const deltaX = Number(target?.x) - Number(self?.x);
+  const deltaY = Number(target?.y) - Number(self?.y);
+  const distance = Math.hypot(deltaX, deltaY);
+  let sign = 0;
+  if (distance > Number(targetRangeCm) + Number(hysteresisCm)) sign = 1;
+  else if (distance < Number(targetRangeCm) - Number(hysteresisCm)) sign = -1;
+  const directionX = sign * Math.sign(deltaX);
+  const directionY = sign * Math.sign(deltaY);
+  const diagonal = directionX !== 0 && directionY !== 0;
+  const component = diagonal ? Number(speedPerTick) / Math.sqrt(2) : Number(speedPerTick);
+  return {
+    vx: directionX * component,
+    vy: directionY * component,
+    distance
+  };
 }
 
 function theoreticalShotMinimumMiss(rows, ack) {
@@ -1735,6 +1806,262 @@ function replayCombat(options) {
       ))
   );
   return result;
+}
+
+function replayCombatBallisticClose(options) {
+  const allRows = selectedEntries(options);
+  const rows = allRows.filter(({ detail }) => (
+    String(detail.target?.userId ?? '') === options.targetId
+      && Number.isFinite(Number(detail.tick))
+      && detail.self
+      && detail.target
+  ));
+  const confirmedShots = confirmedShotsForRows(options, rows, allRows)
+    .slice()
+    .sort((left, right) => Number(left.ack?.created_tick) - Number(right.ack?.created_tick));
+  const frames = [];
+  let ballisticState = null;
+  let firstActivation = null;
+  let previousRow = null;
+  let simulatedSelf = null;
+  let previousVelocity = { vx: 0, vy: 0 };
+  let activationEffectiveTick = Infinity;
+  let acceptedShots = 0;
+  let confirmedShotCursor = 0;
+  for (const row of rows) {
+    const tick = Number(row.detail.tick);
+    const loggedSelf = row.detail.self;
+    const target = row.detail.target;
+    if (!simulatedSelf) {
+      simulatedSelf = { x: Number(loggedSelf.x), y: Number(loggedSelf.y) };
+    } else if (!ballisticState?.active) {
+      simulatedSelf.x = Number(loggedSelf.x);
+      simulatedSelf.y = Number(loggedSelf.y);
+    } else if (previousRow) {
+      const previousTick = Number(previousRow.detail.tick);
+      const movementStartTick = Math.max(previousTick, Math.min(tick, activationEffectiveTick));
+      const movementTicks = Math.max(0, tick - movementStartTick);
+      simulatedSelf.x += Number(previousVelocity.vx || 0) * movementTicks;
+      simulatedSelf.y += Number(previousVelocity.vy || 0) * movementTicks;
+    }
+    while (confirmedShotCursor < confirmedShots.length
+      && Number(confirmedShots[confirmedShotCursor].ack?.created_tick) <= tick) {
+      confirmedShotCursor += 1;
+    }
+    acceptedShots = confirmedShotCursor;
+    const startedAt = rows.length ? Date.parse(rows[0].entry.at) : Date.parse(row.entry.at);
+    const nowMs = Date.parse(row.entry.at);
+    const targetBulletPressure = Boolean(
+      row.detail.target?.firing
+        || row.detail.movement?.dodge?.threatField?.some(field => (
+          Number(field?.directHits || 0) > 0
+            && (field?.dangerousBullets || []).some(bullet => (
+              String(bullet?.ownerId ?? '') === options.targetId
+            ))
+        ))
+    );
+    const persistentThreat = Boolean(
+      targetBulletPressure
+        || Number(row.detail.metrics?.selfDamage || 0) > 0
+    );
+    const noDamageMs = Math.max(0, Number(
+      row.detail.aim?.noDamageMs
+        ?? row.detail.movement?.ballisticClose?.noDamageMs
+        ?? nowMs - startedAt
+    ));
+    const targetIntent = String(row.detail.target?.combatIntent || 'engaged');
+    const ballistic = combatBallisticCloseCore({
+      targetId: options.targetId,
+      previousState: ballisticState,
+      nowMs,
+      distanceCm: Math.hypot(
+        Number(target.x) - Number(simulatedSelf.x),
+        Number(target.y) - Number(simulatedSelf.y)
+      ),
+      noDamageMs,
+      acceptedShotsSinceDamage: acceptedShots,
+      selfHp: row.detail.self?.hp,
+      targetFiring: row.detail.target?.firing,
+      targetBulletPressure,
+      persistentThreat,
+      passiveRunnerConfirmed: Boolean(
+        nowMs - startedAt >= 2500
+          && row.detail.target?.moving !== false
+          && (Number(row.detail.target?.vx || 0) || Number(row.detail.target?.vy || 0))
+          && !row.detail.target?.firing
+          && Number(row.detail.target?.drop || 0) > 0
+      ),
+      ordinaryProfit: ['profit', 'engaged', 'reengage', 'afk-profit'].includes(targetIntent),
+      directionDwells: row.detail.behavior?.metrics?.directionDwells
+    }, {
+      combatServerTickMs: 50,
+      combatBulletSpeedPerTick: 500
+    });
+    ballisticState = ballistic.state;
+    if (ballistic.active && !firstActivation) {
+      const commandDelayTicks = Math.max(0, Number(
+        row.detail.aim?.timing?.rollingP90Ticks
+          ?? row.detail.aim?.timing?.executionDelayTicks
+          ?? options.executionDelayTicks
+      ));
+      activationEffectiveTick = tick + commandDelayTicks;
+      firstActivation = {
+        line: row.line,
+        at: row.entry.at,
+        observedTick: tick,
+        effectiveTick: activationEffectiveTick,
+        distanceCm: Math.round(Math.hypot(
+          Number(target.x) - Number(simulatedSelf.x),
+          Number(target.y) - Number(simulatedSelf.y)
+        )),
+        acceptedShots,
+        noDamageMs: Math.round(noDamageMs),
+        medianDirectionDwellMs: ballistic.medianDirectionDwellMs,
+        currentFlightMs: ballistic.currentFlightMs,
+        targetRangeCm: ballistic.targetRangeCm,
+        targetFlightMs: ballistic.targetFlightMs
+      };
+    }
+    previousVelocity = ballistic.active
+      ? ballisticMovementVelocity(
+          simulatedSelf,
+          target,
+          ballistic.targetRangeCm,
+          ballistic.hysteresisCm,
+          50
+        )
+      : { vx: Number(loggedSelf.vx || 0), vy: Number(loggedSelf.vy || 0) };
+    frames.push({
+      tick,
+      row,
+      self: {
+        x: simulatedSelf.x,
+        y: simulatedSelf.y,
+        vx: previousVelocity.vx,
+        vy: previousVelocity.vy
+      },
+      ballistic
+    });
+    previousRow = row;
+  }
+  const baselineMisses = [];
+  const candidateMisses = [];
+  const samples = [];
+  for (let index = 0; index < confirmedShots.length; index += 1) {
+    const shot = confirmedShots[index];
+    const createdTick = Number(shot.ack.created_tick);
+    const observedTick = numberOrNull(shot.ack.observedTick) ?? createdTick;
+    const frameIndex = Math.max(0, frames.findLastIndex(frame => Number(frame.tick) <= observedTick));
+    const frame = frames[frameIndex];
+    const baselineMiss = integerTickBulletMiss(rows, shot.ack);
+    let candidateMiss = baselineMiss;
+    let candidateAim = null;
+    let counterfactualStart = null;
+    if (frame?.ballistic?.active && createdTick >= activationEffectiveTick) {
+      const historyFrames = frames.slice(Math.max(0, frameIndex - 40), frameIndex + 1);
+      const motionSamples = historyFrames.map(item => ({
+        at: Date.parse(item.row.entry.at),
+        x: item.row.detail.target?.x,
+        y: item.row.detail.target?.y,
+        vx: item.row.detail.target?.vx,
+        vy: item.row.detail.target?.vy,
+        selfX: item.self.x,
+        selfY: item.self.y,
+        distance: Math.hypot(
+          Number(item.row.detail.target?.x) - Number(item.self.x),
+          Number(item.row.detail.target?.y) - Number(item.self.y)
+        )
+      }));
+      const replaySelf = normalizedReplayCombatEntity({
+        ...frame.row.detail.self,
+        ...frame.self
+      });
+      const replayTarget = normalizedReplayCombatEntity(frame.row.detail.target);
+      const executionDelayTicks = numberOrNull(shot.ack.executionDelayTicks)
+        ?? (Number.isFinite(createdTick) && Number.isFinite(observedTick)
+          ? createdTick - observedTick
+          : options.executionDelayTicks);
+      candidateAim = estimateAim(replaySelf, replayTarget, {
+        combatTargetState: {
+          motionSamples,
+          opponentBehaviorState: frame.row.detail.behavior || null,
+          noDamageMs: Number(frame.row.detail.aim?.noDamageMs || 0),
+          provenHitRate: Number(frame.row.detail.behavior?.recentHitRate || 0),
+          fireRiskClassification: frame.row.detail.shooting?.fireRiskClassification || null
+        },
+        observedTick,
+        executionTiming: {
+          sampleCount: 1,
+          medianTicks: executionDelayTicks,
+          p90Ticks: executionDelayTicks,
+          madTicks: 0,
+          source: 'confirmed-shoot-rolling'
+        },
+        actualShots: index
+      });
+      counterfactualStart = counterfactualSelfAtTick(frames, createdTick) || frame.self;
+      const counterfactualAck = {
+        ...shot.ack,
+        start_x: counterfactualStart.x,
+        start_y: counterfactualStart.y
+      };
+      candidateMiss = integerTickBulletMiss(rows, counterfactualAck, candidateAim);
+    }
+    baselineMisses.push(baselineMiss);
+    candidateMisses.push(candidateMiss);
+    if (samples.length < 12 && candidateMiss + 1e-6 < baselineMiss) {
+      samples.push({
+        createdTick,
+        baselineMissCm: Number(baselineMiss.toFixed(1)),
+        candidateMissCm: Number(candidateMiss.toFixed(1)),
+        counterfactualStart: counterfactualStart ? {
+          x: Math.round(counterfactualStart.x),
+          y: Math.round(counterfactualStart.y)
+        } : null,
+        aimMode: String(candidateAim?.mode || '')
+      });
+    }
+  }
+  const summary = misses => ({
+    shots: misses.length,
+    integerTickHits: misses.filter(miss => miss <= Number(options.hitRadius || 90)).length,
+    meanMissCm: misses.length
+      ? Number((misses.reduce((sum, miss) => sum + miss, 0) / misses.length).toFixed(1))
+      : null,
+    p50MissCm: percentile(misses, 0.5),
+    p90MissCm: percentile(misses, 0.9),
+    hitRadiusCm: Number(options.hitRadius || 90)
+  });
+  const baseline = summary(baselineMisses);
+  const improved = summary(candidateMisses);
+  const expectedActivation = confirmedShots.length >= 8
+    && rows.some(row => (row.detail.behavior?.metrics?.directionDwells || []).length >= 4);
+  const accepted = rows.length > 0 && confirmedShots.length > 0 && (
+    firstActivation
+      ? (improved.integerTickHits > baseline.integerTickHits
+        && improved.meanMissCm < baseline.meanMissCm)
+      : (!expectedActivation
+        && improved.integerTickHits === baseline.integerTickHits
+        && improved.meanMissCm === baseline.meanMissCm)
+  );
+  return {
+    mode: 'combat-ballistic-close',
+    targetId: options.targetId,
+    lines: `${options.startLine}-${options.endLine}`,
+    frames: rows.length,
+    model: {
+      collisionSampling: 'integer-server-ticks',
+      movementSpeedPerTickCm: 50,
+      diagonalMovement: 'euclidean-50cm',
+      activationCommandDelay: 'logged-shoot-p90-or-execution-delay',
+      targetPath: 'observed-realtime'
+    },
+    firstActivation,
+    baseline,
+    improved,
+    samples,
+    accepted
+  };
 }
 
 function replayTargetSwitchIdentityRemap(rows = []) {
@@ -7284,6 +7611,38 @@ function runDistanceAwareReplaySelfTest() {
       && battleShots[0].ack.observedTick === 100
       && battleShots[0].ack.executionDelayTicks === 1
   });
+  const integerTickRows = [0, 1, 2, 3].map(tick => ({
+    line: tick + 1,
+    entry: { at: new Date(replayAt + tick * 50).toISOString(), type: 'combat-live' },
+    detail: {
+      tick,
+      target: { x: 1000, y: 0, vx: 0, vy: 0 }
+    }
+  }));
+  const integerTickAck = {
+    start_x: 0,
+    start_y: 0,
+    dir_x_micros: 1000000,
+    dir_y_micros: 0,
+    speed_per_tick: 500,
+    created_tick: 0,
+    expire_tick: 3
+  };
+  const integerTickHit = integerTickBulletMiss(integerTickRows, integerTickAck);
+  const integerTickMiss = integerTickBulletMiss(integerTickRows, integerTickAck, { x: 1000, y: 500 });
+  const syntheticVelocity = ballisticMovementVelocity(
+    { x: 0, y: 0 },
+    { x: 5000, y: 5000 },
+    3000,
+    250,
+    50
+  );
+  checks.push({
+    name: 'ballistic-close-replay-samples-integer-ticks-and-bounds-diagonal-speed',
+    passed: integerTickHit === 0
+      && integerTickMiss > 400
+      && Math.abs(Math.hypot(syntheticVelocity.vx, syntheticVelocity.vy) - 50) < 1e-9
+  });
   const amendmentFile = path.join('/synthetic', 'day', 'battles', 'amendment.jsonl.gz');
   const amendmentInputs = {
     segments: [{
@@ -7578,6 +7937,7 @@ function runReplay(options) {
   if (options.mode === 'movement-stall-exit') return replayMovementStallExit(options);
   if (options.mode === 'recovery-threat-exit') return replayRecoveryThreatExit(options);
   if (options.mode === 'combat-pursuit') return replayCombatPursuit(options);
+  if (options.mode === 'combat-ballistic-close') return replayCombatBallisticClose(options);
   if (options.mode === 'post-attack-drop-attribution') return replayPostAttackDropAttribution(options);
   if (options.mode === 'arbitration') return replayArbitration(options);
   if (options.mode === 'combat-close-pressure') return replayCombatClosePressure(options);
@@ -7606,6 +7966,7 @@ module.exports = {
   parseArgs,
   replayDistanceAwareCombat,
   replayCombatClosePressure,
+  replayCombatBallisticClose,
   replayCombatEfficiencyWindowGrid,
   replayResponsePolicyShadow,
   replayCombatTargetSwitch,

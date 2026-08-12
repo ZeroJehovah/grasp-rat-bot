@@ -24,6 +24,15 @@ const DEFAULT_EFFICIENCY_REFERENCE_DAMAGE_HP = 9;
 const DEFAULT_EFFICIENCY_EXPECTED_DAMAGE_PER_SHOT = 3;
 const DEFAULT_EFFICIENCY_EXPECTED_SHOT_CADENCE_MS = 160;
 const DEFAULT_EFFICIENCY_MIN_WINDOW_MS = 1000;
+const DEFAULT_BALLISTIC_CLOSE_NO_DAMAGE_MS = 3000;
+const DEFAULT_BALLISTIC_CLOSE_MIN_ACCEPTED_SHOTS = 8;
+const DEFAULT_BALLISTIC_CLOSE_MIN_SELF_HP = 80;
+const DEFAULT_BALLISTIC_CLOSE_MIN_DIRECTION_DWELLS = 4;
+const DEFAULT_BALLISTIC_CLOSE_MIN_RANGE_CM = 3000;
+const DEFAULT_BALLISTIC_CLOSE_MAX_RANGE_CM = 4500;
+const DEFAULT_BALLISTIC_CLOSE_FLIGHT_DWELL_RATIO = 0.65;
+const DEFAULT_BALLISTIC_CLOSE_ACTIVATION_RATIO = 1;
+const DEFAULT_BALLISTIC_CLOSE_HYSTERESIS_CM = 250;
 const STAMINA_MILLI_PER_UNIT = 1000;
 const PRESSURE_RANGE_CACHE = new WeakMap();
 
@@ -49,6 +58,158 @@ function movementP90Ticks(options = {}) {
     ?? options.combatMovementP90Ticks
     ?? DEFAULT_MOVEMENT_P90_TICKS;
   return Math.max(0, Number.isFinite(Number(value)) ? Number(value) : DEFAULT_MOVEMENT_P90_TICKS);
+}
+
+function median(values = []) {
+  const ordered = values
+    .map(Number)
+    .filter(value => Number.isFinite(value) && value > 0)
+    .sort((left, right) => left - right);
+  if (!ordered.length) return null;
+  const middle = Math.floor(ordered.length / 2);
+  return ordered.length % 2
+    ? ordered[middle]
+    : (ordered[middle - 1] + ordered[middle]) / 2;
+}
+
+/**
+ * Shorten projectile flight only after realtime evidence shows that a passive
+ * opponent changes direction at least as quickly as a shot currently travels.
+ * The same-target latch survives brief stop phases and the later economic
+ * pressure phase, while any threat, damage progress, or unsafe HP releases it.
+ */
+function combatBallisticCloseCore(input = {}, options = {}) {
+  const targetId = String(input.targetId ?? '');
+  const previous = input.previousState && typeof input.previousState === 'object'
+    ? input.previousState
+    : null;
+  const sameTargetLatch = Boolean(
+    previous?.active === true
+      && targetId
+      && String(previous.targetId ?? '') === targetId
+  );
+  const noDamageMinMs = Math.max(0, Number(
+    options.combatBallisticCloseNoDamageMs ?? DEFAULT_BALLISTIC_CLOSE_NO_DAMAGE_MS
+  ));
+  const minAcceptedShots = Math.max(1, Number(
+    options.combatBallisticCloseMinAcceptedShots ?? DEFAULT_BALLISTIC_CLOSE_MIN_ACCEPTED_SHOTS
+  ));
+  const minSelfHp = Math.max(1, Number(
+    options.combatBallisticCloseMinSelfHp ?? DEFAULT_BALLISTIC_CLOSE_MIN_SELF_HP
+  ));
+  const minDirectionDwells = Math.max(2, Number(
+    options.combatBallisticCloseMinDirectionDwells
+      ?? DEFAULT_BALLISTIC_CLOSE_MIN_DIRECTION_DWELLS
+  ));
+  const minRangeCm = Math.max(1, Number(
+    options.combatBallisticCloseMinRangeCm ?? DEFAULT_BALLISTIC_CLOSE_MIN_RANGE_CM
+  ));
+  const maxRangeCm = Math.max(minRangeCm, Number(
+    options.combatBallisticCloseMaxRangeCm ?? DEFAULT_BALLISTIC_CLOSE_MAX_RANGE_CM
+  ));
+  const flightDwellRatio = clamp(Number(
+    options.combatBallisticCloseFlightDwellRatio
+      ?? DEFAULT_BALLISTIC_CLOSE_FLIGHT_DWELL_RATIO
+  ), 0.1, 1);
+  const activationRatio = Math.max(0.1, Number(
+    options.combatBallisticCloseActivationRatio
+      ?? DEFAULT_BALLISTIC_CLOSE_ACTIVATION_RATIO
+  ));
+  const hysteresisCm = Math.max(0, Number(
+    options.combatBallisticCloseHysteresisCm ?? DEFAULT_BALLISTIC_CLOSE_HYSTERESIS_CM
+  ));
+  const tickMs = Math.max(1, Number(
+    options.combatServerTickMs ?? options.serverTickMs ?? DEFAULT_SERVER_TICK_MS
+  ));
+  const bulletSpeedCmPerTick = Math.max(1, Number(
+    options.combatBulletSpeedPerTick
+      ?? options.bulletSpeedPerTick
+      ?? DEFAULT_BULLET_SPEED_CM_PER_TICK
+  ));
+  const distanceCm = numberOrNull(input.distanceCm ?? input.distance);
+  const noDamageMs = Math.max(0, Number(input.noDamageMs || 0));
+  const acceptedShotsSinceDamage = Math.max(0, Number(input.acceptedShotsSinceDamage || 0));
+  const selfHp = numberOrNull(input.selfHp);
+  const directionDwells = (Array.isArray(input.directionDwells) ? input.directionDwells : [])
+    .map(Number)
+    .filter(value => Number.isFinite(value) && value > 0);
+  const medianDirectionDwellMs = median(directionDwells);
+  const currentFlightMs = distanceCm === null
+    ? null
+    : distanceCm / bulletSpeedCmPerTick * tickMs;
+  let reason = '';
+  if (!targetId) reason = 'missing-target';
+  else if (input.ordinaryProfit !== true) reason = 'non-profit-engagement';
+  else if (selfHp === null || selfHp < minSelfHp) reason = 'unsafe-self-hp';
+  else if (input.targetFiring === true) reason = 'target-firing';
+  else if (input.targetBulletPressure === true) reason = 'target-bullet-pressure';
+  else if (input.persistentThreat === true) reason = 'persistent-target-threat';
+  else if (noDamageMs < noDamageMinMs) reason = 'damage-progress-or-insufficient-observation';
+  else if (acceptedShotsSinceDamage < minAcceptedShots) reason = 'insufficient-accepted-shots';
+  else if (!sameTargetLatch && input.passiveRunnerConfirmed !== true) reason = 'passive-runner-unconfirmed';
+  else if (!sameTargetLatch && directionDwells.length < minDirectionDwells) reason = 'insufficient-direction-dwells';
+  else if (!sameTargetLatch && (distanceCm === null || currentFlightMs === null)) reason = 'missing-distance';
+  else if (!sameTargetLatch
+    && (medianDirectionDwellMs === null
+      || medianDirectionDwellMs > currentFlightMs * activationRatio)) {
+    reason = 'flight-shorter-than-direction-dwell';
+  }
+  if (reason) {
+    return {
+      active: false,
+      reason,
+      targetId,
+      latched: false,
+      state: null,
+      noDamageMs: Math.round(noDamageMs),
+      acceptedShotsSinceDamage,
+      directionDwellSamples: directionDwells.length,
+      medianDirectionDwellMs: medianDirectionDwellMs === null
+        ? null
+        : Math.round(medianDirectionDwellMs),
+      currentFlightMs: currentFlightMs === null ? null : Math.round(currentFlightMs)
+    };
+  }
+  const activatedAt = sameTargetLatch
+    ? Number(previous.activatedAt || input.nowMs || Date.now())
+    : Number(input.nowMs || Date.now());
+  const targetRangeCm = sameTargetLatch
+    ? clamp(Number(previous.targetRangeCm || minRangeCm), minRangeCm, maxRangeCm)
+    : clamp(
+        bulletSpeedCmPerTick * medianDirectionDwellMs / tickMs * flightDwellRatio,
+        minRangeCm,
+        maxRangeCm
+      );
+  const targetFlightMs = targetRangeCm / bulletSpeedCmPerTick * tickMs;
+  const state = {
+    active: true,
+    targetId,
+    activatedAt,
+    targetRangeCm: Math.round(targetRangeCm),
+    medianDirectionDwellMs: Math.round(
+      sameTargetLatch
+        ? Number(previous.medianDirectionDwellMs || medianDirectionDwellMs || 0)
+        : medianDirectionDwellMs
+    )
+  };
+  return {
+    active: true,
+    reason: sameTargetLatch ? 'same-target-latched' : 'projectile-flight-exceeds-direction-dwell',
+    targetId,
+    latched: sameTargetLatch,
+    state,
+    targetRangeCm: state.targetRangeCm,
+    minRangeCm,
+    maxRangeCm,
+    hysteresisCm,
+    noDamageMs: Math.round(noDamageMs),
+    acceptedShotsSinceDamage,
+    directionDwellSamples: directionDwells.length,
+    medianDirectionDwellMs: state.medianDirectionDwellMs,
+    currentFlightMs: currentFlightMs === null ? null : Math.round(currentFlightMs),
+    targetFlightMs: Math.round(targetFlightMs),
+    flightDwellRatio
+  };
 }
 
 /**
@@ -868,6 +1029,7 @@ function combatPressureStrafeCore(self = {}, target = {}, phase = {}, options = 
 }
 
 module.exports = {
+  combatBallisticCloseCore,
   combatDamageEfficiencyThresholdCore,
   combatEfficiencyWindowCore,
   combatPressureTargetRangeCore,
