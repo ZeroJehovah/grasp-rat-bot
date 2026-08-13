@@ -285,7 +285,22 @@ if ! [[ "$STATUS_PORT" =~ ^[1-9][0-9]{0,4}$ ]] || [ "$STATUS_PORT" -gt 65535 ]; 
   echo "Invalid browserless status port: $STATUS_PORT" >&2
   exit 1
 fi
-curl -fsS "http://127.0.0.1:$STATUS_PORT/api/health" >/dev/null
+HEALTH_FILE="$BUILD_ROOT/health.json"
+HEALTH_READY=0
+for _attempt in $(seq 1 30); do
+  if curl -fsS "http://127.0.0.1:$STATUS_PORT/api/health" > "$HEALTH_FILE" 2>/dev/null \
+    && node -e 'const fs=require("fs"); const health=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if (health?.ok !== true) process.exit(1);' "$HEALTH_FILE" 2>/dev/null; then
+    HEALTH_READY=1
+    break
+  fi
+  sleep 1
+done
+if [ "$HEALTH_READY" -ne 1 ]; then
+  echo "Browserless health endpoint did not become ready within 30 seconds: http://127.0.0.1:$STATUS_PORT/api/health" >&2
+  systemctl status "$SERVICE_NAME" --no-pager -l || true
+  "${SUDO[@]}" journalctl -u "$SERVICE_NAME" -n 120 --no-pager || true
+  exit 1
+fi
 "${SUDO[@]}" node "$APP_DIR/scripts/verify-browserless-runner-start.js" \
   --log-dir "$LOG_DIR" \
   --after "$RESTART_REQUESTED_AT" \

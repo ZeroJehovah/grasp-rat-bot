@@ -30012,11 +30012,13 @@ async function runSelfTest() {
           releaseDeployer.includes('--fail-on-budget'),
           releaseDeployer.includes('"${SUDO[@]}" test -f "$ENV_PATH"'),
           releaseDeployer.includes('"${SUDO[@]}" sed -n'),
+          releaseDeployer.includes('HEALTH_READY=0'),
+          releaseDeployer.includes('health endpoint did not become ready within 30 seconds'),
           releaseDeployer.includes('verify-browserless-runner-start.js'),
           releaseDeployer.includes('attempting immutable rollback')
         ].join('|');
       })(),
-      want: Array(74).fill('true').join('|')
+      want: Array(76).fill('true').join('|')
     },
     {
       name: 'browserless immutable release verifier rejects manifest and file tampering',
