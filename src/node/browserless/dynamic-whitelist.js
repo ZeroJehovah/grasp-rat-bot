@@ -342,6 +342,9 @@ function createDynamicWhitelist(options = {}) {
     }
     return restored;
   }
+  function hasPendingBattleObservation() {
+    return temporarilyDisabled.size > 0;
+  }
   function restoreAll(reason = 'combat-session-ended', atMs = now()) {
     const restored = [];
     for (const disabled of temporarilyDisabled.values()) {
@@ -385,6 +388,7 @@ function createDynamicWhitelist(options = {}) {
     observePlayerNames,
     observeDamage,
     observeBattles,
+    hasPendingBattleObservation,
     restoreAll,
     isMember,
     isEnabled: isWhitelistedTarget,

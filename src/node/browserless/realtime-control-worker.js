@@ -111,10 +111,14 @@ function createBrowserlessRealtimeControlWorker(options = {}) {
         worker.postMessage({
           kind: 'evaluate',
           id,
-          state: serializableDecisionOptions(state),
+          // Decision-state views are already plain data assembled by the
+          // state store. Let Worker.postMessage perform the one required
+          // structured clone instead of recursively copying the full frame
+          // on the latency-sensitive WebSocket callback first.
+          state,
           options: serializableDecisionOptions(nextOptions),
           context: serializableDecisionOptions(context) || {},
-          statePatch: serializableDecisionOptions(statePatch),
+          statePatch,
           includePersistence: includePersistence === true,
           requestAtMs
         });

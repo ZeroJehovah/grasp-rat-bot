@@ -2190,6 +2190,8 @@ async function runReadOnlyCanary(config, options = {}) {
   const observeDynamicWhitelistBattles = (currentState, atMs) => {
     const whitelist = options.dynamicWhitelist;
     if (typeof whitelist?.observeBattles !== 'function') return [];
+    if (typeof whitelist.hasPendingBattleObservation === 'function'
+      && !whitelist.hasPendingBattleObservation()) return [];
     const restored = whitelist.observeBattles(currentState, {
       atMs,
       disengageRangeCm: runtimeDefaults.combatDisengageRange,
@@ -3063,22 +3065,36 @@ async function runReadOnlyCanary(config, options = {}) {
     return actionResult;
   };
   const publishFullDecision = (decision, currentState, atMs, detail = {}) => {
+    const outerStages = detail.outerStages || null;
+    let fullStageStarted = performance.now();
+    const markFullStage = name => {
+      if (!outerStages) return;
+      const completedAt = performance.now();
+      outerStages[`full-decision-${name}`] = completedAt - fullStageStarted;
+      fullStageStarted = completedAt;
+    };
     const appliedDecision = applyRestartDrainDecisionGate(decision);
+    markFullStage('restart-gate');
     try {
       options.onRemoteProfitDecision?.(appliedDecision, atMs);
     } catch (err) {
       log('canary-remote-profit-decision-callback-error', { error: errorMessage(err) });
     }
+    markFullStage('remote-profit');
     const summary = attachCombatAudit(summarizeBrowserlessDecision(appliedDecision));
+    markFullStage('summary-audit');
     result.decisions.evaluatedCount += 1;
     result.decisions.last = summary;
     scheduleCombatPersistence(atMs);
+    markFullStage('persistence');
     observeDynamicWhitelistBattles(currentState, atMs);
+    markFullStage('whitelist');
     logDecision(summary);
     result.decisions.loggedCount += 1;
     if (controlMode === 'combat-dry-run' || controlMode === 'combat-live' || combatLiveEnabled) {
       logCombat(summary);
     }
+    markFullStage('logs');
     if (typeof options.onDecision === 'function') {
       try {
         options.onDecision(summary, { state: currentState, decision, worker: detail.worker || null });
@@ -3086,6 +3102,7 @@ async function runReadOnlyCanary(config, options = {}) {
         log('canary-decision-status-error', { error: err?.message || String(err) });
       }
     }
+    markFullStage('status');
     const decisionSafetyEvent = safetyController.evaluate(currentState, {
       startedAtMs: noSelfGuardStartedAtMs(atMs),
       frameGapAlertMs,
@@ -3097,11 +3114,15 @@ async function runReadOnlyCanary(config, options = {}) {
       decision: summary,
       nowMs: atMs
     });
+    markFullStage('safety-evaluate');
     if (handleSafetyAssessment(decisionSafetyEvent, { state: currentState, decision: summary, atMs })) return summary;
+    markFullStage('safety-handle');
     applyDecisionAction(currentState, summary, appliedDecision, atMs, {
       notifyDecisionWorker: detail.notifyDecisionWorker,
-      errorReason: 'action-apply-failed'
+      errorReason: 'action-apply-failed',
+      outerStages
     });
+    markFullStage('action');
     return summary;
   };
   const realtimeControlKey = summary => [
@@ -3635,7 +3656,8 @@ async function runReadOnlyCanary(config, options = {}) {
           publishFullDecision(workerResult.decision, latestState, responseAtMs, {
             worker: result.decisions.worker,
             summary: workerResult.summary,
-            notifyDecisionWorker: true
+            notifyDecisionWorker: true,
+            outerStages: stages
           });
           stages['planner-response-apply'] = performance.now() - stageStarted;
         } finally {

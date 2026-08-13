@@ -138,7 +138,9 @@ async function runDynamicWhitelistSelfTest() {
   try {
     {
       const { file, whitelist } = createFixture(directory, 'persistence');
+      assert.strictEqual(whitelist.hasPendingBattleObservation(), false);
       disableDirectly(whitelist);
+      assert.strictEqual(whitelist.hasPendingBattleObservation(), true);
       const status = whitelist.status();
       const persisted = JSON.parse(fs.readFileSync(file, 'utf8'));
       assert.strictEqual(typeof whitelist.remove, 'undefined');
@@ -221,6 +223,7 @@ async function runDynamicWhitelistSelfTest() {
       });
       assert.strictEqual(restored.length, 1);
       assert.strictEqual(restored[0].reason, expectedReason);
+      assert.strictEqual(whitelist.hasPendingBattleObservation(), false);
       assert.strictEqual(whitelist.isWhitelistedTarget({ userId: 8 }), true);
       assert.strictEqual(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')).players).length, 1);
       cases.push(name);

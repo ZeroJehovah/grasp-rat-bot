@@ -168,7 +168,11 @@ function createBrowserlessDecisionWorker(options = {}) {
           state,
           options: serializableDecisionOptions(nextOptions),
           context: serializableValue(context) || {},
-          statePatch: serializableValue(statePatch),
+          // Persistence snapshots come from the decision adapter as plain
+          // structured-clone-compatible data. Avoid a full recursive copy on
+          // the WebSocket callback before postMessage performs the required
+          // clone into the Worker.
+          statePatch,
           requestAtMs
         });
         request.postMs = performance.now() - postStarted;

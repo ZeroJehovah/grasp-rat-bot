@@ -37,6 +37,8 @@ const { createEasyKillPlayerTracker } = require('../src/node/browserless/easy-ki
 const { createDailyDamagePlayerTracker } = require('../src/node/browserless/daily-damage-player-tracker');
 const { createCombatCompletionTracker } = require('../src/node/browserless/combat-completion-tracker');
 const { createCombatBattleLog } = require('../src/node/browserless/combat-battle-log');
+const { createDynamicWhitelist } = require('../src/node/browserless/dynamic-whitelist');
+const { createMapTrailTracker } = require('../src/node/browserless/map-trail-tracker');
 const { startStatusServer } = require('../src/node/browserless/status-server');
 
 const RELEASE_PROCESS_NICE = -10;
@@ -56,7 +58,7 @@ function parseArgs(argv) {
     maxMs: 50,
     learningFile: '',
     stateFile: '',
-    realtimeEntities: 80,
+    realtimeEntities: 128,
     snapshotCoins: 88,
     bullets: 2,
     routePoolLimit: null,
@@ -92,7 +94,7 @@ function parseArgs(argv) {
   options.iterations = Math.max(10, Math.round(Number(options.iterations) || 200));
   options.warmup = Math.max(0, Math.round(Number(options.warmup) || 0));
   options.maxMs = Math.max(1, Number(options.maxMs) || 50);
-  options.realtimeEntities = Math.max(2, Math.round(Number(options.realtimeEntities) || 80));
+  options.realtimeEntities = Math.max(2, Math.round(Number(options.realtimeEntities) || 128));
   options.snapshotCoins = Math.max(0, Math.round(Number(options.snapshotCoins) || 88));
   options.bullets = Math.max(0, Math.round(Number(options.bullets) || 2));
   options.canaryDurationMs = Math.max(1000, Math.round(Number(options.canaryDurationMs) || 3000));
@@ -113,7 +115,7 @@ function usage() {
     '  --max-ms <ms>             Main-thread CPU-work budget. Default: 50',
     '  --learning-file <file>    Optional production combat-learning.json',
     '  --state-file <file>       Optional persisted state.json update benchmark',
-    '  --realtime-entities <n>   Realtime entity count. Default: 80',
+    '  --realtime-entities <n>   Realtime entity count. Default: 128',
     '  --snapshot-coins <n>      Snapshot coin count. Default: 88',
     '  --bullets <n>             Realtime bullet count. Default: 2',
     '  --route-pool-limit <n>    Override coin-route candidate pool',
@@ -461,6 +463,15 @@ async function runCompleteCallbackScenario(options, combatLearning, activeCombat
     now: fixture.now,
     selfUserId: fixture.self.user_id
   });
+  const dynamicWhitelist = createDynamicWhitelist({
+    file: fixtureFile('dynamic-whitelist.json'),
+    now: fixture.now,
+    backgroundIo
+  });
+  const mapTrailTracker = createMapTrailTracker({
+    now: fixture.now,
+    visibleRange: fixture.runtimeDefaults.globalCoinMaxDistance
+  });
   const observeSnapshotPayload = (payload, detail = {}) => {
     const atMs = Number(detail.observedAtMs || fixture.now());
     chatService.observeSnapshot(payload, { ...detail, observedAtMs: atMs });
@@ -606,9 +617,23 @@ async function runCompleteCallbackScenario(options, combatLearning, activeCombat
       easyKillPlayerTracker,
       combatCompletionTracker,
       damagePlayerTracker,
+      dynamicWhitelist,
       onSnapshotPayload: observeSnapshotPayload,
       onDecision: observeDecision,
       onCombatControl: observeDecision,
+      onLoginSuccess: entry => {
+        mapTrailTracker.clear();
+        const loginAt = entry?.firstSelfAt || new Date(fixture.now()).toISOString();
+        const loginPatch = { runner: { lastLoginAt: loginAt }, updatedAt: loginAt };
+        patchLiveState(loginPatch);
+        backgroundIo.writeJsonPatchAtomic(path.join(dataDir, 'state.json'), loginPatch);
+      },
+      onMapTrailRealtime: (state, atMs) => mapTrailTracker.observeRealtime(
+        state?.realtime?.entities || [],
+        state?.realtime?.self || null,
+        atMs,
+        state?.realtime?.tick
+      ),
       onAction: (action, context = {}) => {
         const actionSnapshot = { ...(action || {}), actionState: context.actionState || null };
         liveState = mergeLiveActionState(liveState, actionSnapshot);
@@ -621,8 +646,7 @@ async function runCompleteCallbackScenario(options, combatLearning, activeCombat
         }
       },
       openBrowserlessWs: async wsOptions => {
-        setImmediate(() => wsOptions.onMessage(snapshotFrame));
-        timer = setInterval(() => {
+        const sendPosFrame = () => {
           fixture.self.vx = simulatedVelocity.dx;
           fixture.self.vy = simulatedVelocity.dy;
           fixture.self.x += simulatedVelocity.dx * 120;
@@ -635,7 +659,16 @@ async function runCompleteCallbackScenario(options, combatLearning, activeCombat
           });
           posFrameIndex += 1;
           wsOptions.onMessage(frame);
-        }, options.frameIntervalMs);
+        };
+        // Production can enter realtime with a crowded native pos frame
+        // before any pushed snapshot arrives. Make that cold callback
+        // deterministic, then retain snapshot-observer coverage immediately
+        // afterward and sustained pos traffic for the rest of the scenario.
+        setImmediate(() => {
+          sendPosFrame();
+          setImmediate(() => wsOptions.onMessage(snapshotFrame));
+        });
+        timer = setInterval(sendPosFrame, options.frameIntervalMs);
         timer.unref?.();
         return {
           isOpen: () => true,
