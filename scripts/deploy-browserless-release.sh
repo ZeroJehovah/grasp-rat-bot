@@ -83,10 +83,6 @@ if [ ! -d "$APP_DIR/.git" ]; then
   echo "Deployment must run from the primary source checkout: $APP_DIR" >&2
   exit 1
 fi
-if [ ! -f "$ENV_PATH" ]; then
-  echo "Environment file is missing: $ENV_PATH" >&2
-  exit 1
-fi
 RELEASE_ROOT="${RELEASE_ROOT%/}"
 if [ -z "$RELEASE_ROOT" ] || [ "$RELEASE_ROOT" = "/" ]; then
   echo "Unsafe release root: $RELEASE_ROOT" >&2
@@ -126,6 +122,10 @@ if [ "$(id -u)" -eq 0 ]; then
   SUDO=()
 else
   SUDO=(sudo -n)
+fi
+if ! "${SUDO[@]}" test -f "$ENV_PATH"; then
+  echo "Environment file is missing or inaccessible through sudo: $ENV_PATH" >&2
+  exit 1
 fi
 
 if [ -z "$BUILD_ROOT" ]; then
@@ -279,7 +279,7 @@ fi
   --expected-revision "$SOURCE_REVISION" \
   --fail-on-incomplete
 
-STATUS_PORT="$(sed -n 's/^GRASP_RAT_BROWSERLESS_STATUS_PORT=//p' "$ENV_PATH" | tail -1)"
+STATUS_PORT="$("${SUDO[@]}" sed -n 's/^GRASP_RAT_BROWSERLESS_STATUS_PORT=//p' "$ENV_PATH" | tail -1)"
 STATUS_PORT="${STATUS_PORT:-18767}"
 if ! [[ "$STATUS_PORT" =~ ^[1-9][0-9]{0,4}$ ]] || [ "$STATUS_PORT" -gt 65535 ]; then
   echo "Invalid browserless status port: $STATUS_PORT" >&2
