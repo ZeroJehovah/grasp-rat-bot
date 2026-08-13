@@ -25,7 +25,8 @@ const {
   movingTargetStopRouteRejectedCore,
   selectRobustTrajectoryAimCore,
   shouldApplyTrajectoryCoverageCore,
-  shotCorridorMissCore
+  shotCorridorMissCore,
+  trajectoryCoverageRouteReliabilityCore
 } = require('./combat-shot-coverage');
 const {
   classifyFireRiskCore,
@@ -6926,6 +6927,44 @@ function runStrategyModuleSelfTests() {
         moving: true,
         targetSpeed: 2
       }) === false
+  });
+  const retreatRouteConflict = trajectoryCoverageRouteReliabilityCore({
+    mode: 'retreat-kite',
+    internalHypothesis: 'right-turn',
+    coverageHypothesis: 'continue'
+  });
+  const retreatRouteAgreement = trajectoryCoverageRouteReliabilityCore({
+    mode: 'retreat-kite',
+    internalHypothesis: 'continue',
+    coverageHypothesis: 'continue'
+  });
+  const fireAuthorizationBeforeRouteGuard = Object.freeze({
+    allowed: true,
+    minimumCadenceMs: 400,
+    dodgeReserveMilli: 1200
+  });
+  results.push({
+    name: 'combat-shot-coverage-preserves-conflicting-retreat-route',
+    passed: retreatRouteConflict.allowCoverageAim === false
+      && retreatRouteConflict.reason === 'retreat-route-conflict'
+      && retreatRouteAgreement.allowCoverageAim === true
+      && shouldApplyTrajectoryCoverageCore({
+        mode: 'live-single',
+        highEntropy: false,
+        dynamicBehaviorEligible: true,
+        trajectoryRouteReliable: retreatRouteConflict.allowCoverageAim,
+        planActive: true,
+        hasSelection: true,
+        improvementQualified: true
+      }) === false
+      && trajectoryCoverageRouteReliabilityCore({
+        mode: 'zigzag-strafe',
+        internalHypothesis: 'right-turn',
+        coverageHypothesis: 'continue'
+      }).allowCoverageAim === true
+      && fireAuthorizationBeforeRouteGuard.allowed === true
+      && fireAuthorizationBeforeRouteGuard.minimumCadenceMs === 400
+      && fireAuthorizationBeforeRouteGuard.dodgeReserveMilli === 1200
   });
   const stopGoSamples = Array.from({ length: 32 }, (_, index) => ({
     at: 1000 + index * 50,

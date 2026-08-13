@@ -39,7 +39,8 @@ const {
   buildTrajectoryCoveragePlanCore,
   dynamicBehaviorTrajectoryEligibilityCore,
   movingTargetStopRouteRejectedCore,
-  shouldApplyTrajectoryCoverageCore
+  shouldApplyTrajectoryCoverageCore,
+  trajectoryCoverageRouteReliabilityCore
 } = require('../src/strategy/combat-shot-coverage');
 const {
   applyCombatTargetSwitchHysteresisCore,
@@ -103,6 +104,7 @@ function parseArgs(argv) {
     executionDelayTicks: 5,
     trajectoryRouteSelectionMode: 'weighted',
     trajectoryImprovementGate: true,
+    trajectoryRouteReliability: true,
     trajectoryRouteSequencePhase: 0,
     cutoffAt: '',
     expectCases: 0,
@@ -136,6 +138,7 @@ function parseArgs(argv) {
     else if (arg === '--execution-delay-ticks') options.executionDelayTicks = Number(argv[++index] || 5);
     else if (arg === '--trajectory-route-selection-mode') options.trajectoryRouteSelectionMode = String(argv[++index] || 'weighted');
     else if (arg === '--trajectory-improvement-gate') options.trajectoryImprovementGate = String(argv[++index] || 'on') !== 'off';
+    else if (arg === '--trajectory-route-reliability') options.trajectoryRouteReliability = String(argv[++index] || 'on') !== 'off';
     else if (arg === '--trajectory-route-sequence-phase') options.trajectoryRouteSequencePhase = Number(argv[++index] || 0);
     else if (arg === '--cutoff-at') options.cutoffAt = String(argv[++index] || '');
     else if (arg === '--expect-cases') options.expectCases = Number(argv[++index] || 0);
@@ -1343,7 +1346,9 @@ function replayCombat(options) {
   const baselineIntegerMisses = [];
   const improvedIntegerMisses = [];
   const trajectoryCoverageMisses = [];
+  const trajectoryCoverageIntegerMisses = [];
   const trajectoryCoverageSelections = {};
+  const trajectoryRouteReliabilityReasons = {};
   const trajectoryCoverageVirtualShots = [];
   let trajectoryCoverageActiveShots = 0;
   let trajectoryCoverageFallbackShots = 0;
@@ -1485,12 +1490,23 @@ function replayCombat(options) {
     const coverageRecentShotCount = Number(row.detail.shooting?.recentAcceptedShotCount || 0);
     const coverageRecentHitRate = Number(row.detail.shooting?.recentAcceptedHitRate || 0);
     const coverageSuccessfulAimProtected = coverageRecentShotCount >= 10 && coverageRecentHitRate >= 0.12;
+    const trajectoryRouteReliability = trajectoryCoverageRouteReliabilityCore({
+      mode: state.opponentBehaviorState?.mode || 'mixed/unknown',
+      internalHypothesis: improved.routeCoverage?.selected,
+      coverageHypothesis: coveragePlan?.selected?.hypothesis
+    });
+    trajectoryRouteReliabilityReasons[trajectoryRouteReliability.reason] = Number(
+      trajectoryRouteReliabilityReasons[trajectoryRouteReliability.reason] || 0
+    ) + 1;
     const coverageQualified = shouldApplyTrajectoryCoverageCore({
       mode: 'live-single',
       highEntropy: Boolean(improved.fireRiskClassification?.highEntropy
         || /^high-entropy-/.test(String(improved.routeCoverage?.style || ''))),
       dynamicBehaviorEligible: dynamicBehaviorTrajectoryEligibilityCore(state.opponentBehaviorState || replayBehavior),
       successfulAimProtected: coverageSuccessfulAimProtected,
+      trajectoryRouteReliable: options.trajectoryRouteReliability === false
+        ? true
+        : trajectoryRouteReliability.allowCoverageAim,
       planActive: coveragePlan?.active === true,
       hasSelection: Boolean(coveragePlan?.selected),
       improvementQualified: options.trajectoryImprovementGate === false
@@ -1507,7 +1523,9 @@ function replayCombat(options) {
       ? { x: coveragePlan.selected.aimX, y: coveragePlan.selected.aimY }
       : improved;
     const trajectoryCoverageMiss = bulletCorridorMiss(rows, shot.ack, coverageAim);
+    const trajectoryCoverageIntegerMiss = integerTickBulletMiss(rows, shot.ack, coverageAim);
     trajectoryCoverageMisses.push(trajectoryCoverageMiss);
+    trajectoryCoverageIntegerMisses.push(trajectoryCoverageIntegerMiss);
     if (coverageApplied) {
       trajectoryCoverageActiveShots += 1;
       const key = `${coveragePlan.selected.hypothesis}:${coveragePlan.selected.variant}`;
@@ -1562,7 +1580,22 @@ function replayCombat(options) {
       baselineIntegerMiss,
       improvedIntegerMiss,
       trajectoryCoverageMiss,
+      trajectoryCoverageIntegerMiss,
       trajectoryCoveragePlan: coveragePlan,
+      trajectoryRouteReliability,
+      internalAim: {
+        x: numberOrNull(improved.x),
+        y: numberOrNull(improved.y),
+        proof: improved.trajectoryAimProof || null,
+        selectedRoute: improved.routeCoverage?.selected || null,
+        selectionMode: improved.routeCoverage?.selection?.mode || null
+      },
+      targetAtShot: {
+        x: numberOrNull(replayTarget?.x),
+        y: numberOrNull(replayTarget?.y),
+        vx: numberOrNull(replayTarget?.vx),
+        vy: numberOrNull(replayTarget?.vy)
+      },
       coverageApplied,
       line: row.line,
       at: Number(shot.at || 0),
@@ -1890,6 +1923,7 @@ function replayCombat(options) {
   const trajectoryCoverageReplay = {
     routeSelectionMode: options.trajectoryRouteSelectionMode || 'weighted',
     improvementGate: options.trajectoryImprovementGate !== false,
+    routeReliabilityGate: options.trajectoryRouteReliability !== false,
     shots: trajectoryCoverageMisses.length,
     activeShots: trajectoryCoverageActiveShots,
     fallbackShots: trajectoryCoverageFallbackShots,
@@ -1900,6 +1934,58 @@ function replayCombat(options) {
       : null,
     p50AimMissCm: percentile(trajectoryCoverageMisses, 0.5),
     p90AimMissCm: percentile(trajectoryCoverageMisses, 0.9),
+    integerTick: integerSummary(trajectoryCoverageIntegerMisses),
+    routeReliabilityReasons: Object.fromEntries(Object.entries(trajectoryRouteReliabilityReasons)
+      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))),
+    appliedOpportunities: shotEvaluations
+      .filter(item => item.coverageApplied)
+      .slice(0, 100)
+      .map(item => ({
+        line: item.line,
+        at: item.shot?.at || null,
+        distanceCm: item.distance,
+        mode: item.trajectoryRouteReliability?.mode || null,
+        reliabilityReason: item.trajectoryRouteReliability?.reason || null,
+        targetSpeedCmPerTick: Math.hypot(
+          Number(item.targetAtShot?.vx || 0),
+          Number(item.targetAtShot?.vy || 0)
+        ),
+        internalAimShiftCm: item.trajectoryCoveragePlan?.selected
+          ? Math.hypot(
+              Number(item.trajectoryCoveragePlan.selected.aimX) - Number(item.internalAim?.x),
+              Number(item.trajectoryCoveragePlan.selected.aimY) - Number(item.internalAim?.y)
+            )
+          : null,
+        internalProof: item.internalAim?.proof
+          ? {
+              valid: item.internalAim.proof.valid,
+              hardCoverageMass: item.internalAim.proof.hardCoverageMass,
+              minMissCm: item.internalAim.proof.minMissCm,
+              expectedMissCm: item.internalAim.proof.expectedMissCm
+            }
+          : null,
+        routeStyle: item.routeStyle,
+        internalSelectedRoute: item.internalAim?.selectedRoute || null,
+        internalSelectionMode: item.internalAim?.selectionMode || null,
+        aimConfidence: item.aimConfidence,
+        selectedRouteProbability: item.selectedRouteProbability,
+        expectedHitProbability: item.expectedHitProbability,
+        selected: item.trajectoryCoveragePlan?.selected
+          ? {
+              hypothesis: item.trajectoryCoveragePlan.selected.hypothesis,
+              variant: item.trajectoryCoveragePlan.selected.variant,
+              marginalCoverage: item.trajectoryCoveragePlan.selected.marginalCoverage,
+              hardMarginalCoverage: item.trajectoryCoveragePlan.selected.hardMarginalCoverage,
+              baselineExpectedMissCm: item.trajectoryCoveragePlan.selected.baselineExpectedMissCm,
+              selectedExpectedMissCm: item.trajectoryCoveragePlan.selected.selectedExpectedMissCm,
+              expectedMissImprovementCm: item.trajectoryCoveragePlan.selected.expectedMissImprovementCm
+            }
+          : null,
+        internalMissCm: item.improvedMiss,
+        coverageMissCm: item.trajectoryCoverageMiss,
+        internalIntegerMissCm: item.improvedIntegerMiss,
+        coverageIntegerMissCm: item.trajectoryCoverageIntegerMiss
+      })),
     firstEstimatedDamageDelayMs: (() => {
       const index = trajectoryCoverageMisses.findIndex(value => value <= options.hitRadius);
       return index >= 0 ? Math.max(0, Number(confirmedShots[index]?.at || 0) - Number(confirmedShots[0]?.at || 0)) : null;

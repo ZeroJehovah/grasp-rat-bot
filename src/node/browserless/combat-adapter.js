@@ -63,7 +63,8 @@ const {
   normalizedDynamicRouteSelectionMode,
   selectDynamicRouteCandidateCore,
   selectRobustTrajectoryAimCore,
-  shouldApplyTrajectoryCoverageCore
+  shouldApplyTrajectoryCoverageCore,
+  trajectoryCoverageRouteReliabilityCore
 } = require('../../strategy/combat-shot-coverage');
 const {
   behaviorLearningBaseKey,
@@ -4340,6 +4341,12 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
           clusters: [],
           candidates: []
         };
+    const trajectoryRouteReliability = trajectoryCoverageRouteReliabilityCore({
+      mode: combatTargetState?.opponentBehaviorState?.mode || aim.opponentBehavior?.mode || 'mixed/unknown',
+      internalHypothesis: aim.routeCoverage?.selected,
+      coverageHypothesis: plan.selected?.hypothesis
+    });
+    const trajectoryRouteReliable = trajectoryRouteReliability.allowCoverageAim !== false;
     const coverageQualified = shouldApplyTrajectoryCoverageCore({
       mode: effectiveCoverageMode,
       highEntropy: highEntropyCoverage,
@@ -4347,7 +4354,8 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       successfulAimProtected: coverageSuccessfulAimProtected,
       planActive: plan.active === true,
       hasSelection: Boolean(plan.selected),
-      improvementQualified: plan.selected?.improvementQualified === true
+      improvementQualified: plan.selected?.improvementQualified === true,
+      trajectoryRouteReliable
     });
     const coverageStopRouteRejected = movingTargetStopRouteRejectedCore({
       hypothesis: plan.selected?.hypothesis,
@@ -4438,6 +4446,8 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       successfulAimHitRate: coverageHitSummary.hitRate,
       reason: applied
         ? 'live-single-applied'
+        : (!trajectoryRouteReliable
+        ? 'retreat-route-conflict-fallback'
         : (coverageStopRouteRejected
         ? 'moving-target-stop-route-rejected'
         : (coverageQualified && coverageAimProof
@@ -4450,7 +4460,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
                 ? 'live-single-requires-coverage-qualification'
                     : (effectiveCoverageMode === 'live-single' && plan.active && plan.selected?.improvementQualified !== true
                         ? 'live-single-insufficient-aim-improvement'
-                    : plan.reason)))))),
+                    : plan.reason))))))),
       sessionId: coverageSessionId,
       slot: 1,
       selected: plan.selected,
@@ -4462,6 +4472,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       clusters: plan.clusters,
       candidates: plan.candidates,
       trajectoryAimProof: coverageAimProof,
+      trajectoryRouteReliability,
       actualAim: { x: aim.x, y: aim.y }
     };
   }

@@ -21,6 +21,7 @@ function shouldApplyTrajectoryCoverageCore(input = {}) {
   return normalizeTrajectoryCoverageMode(input.mode, 'shadow') === 'live-single'
     && (input.highEntropy === true || input.dynamicBehaviorEligible === true)
     && input.successfulAimProtected !== true
+    && input.trajectoryRouteReliable !== false
     && input.planActive === true
     && input.hasSelection === true
     // A coverage candidate may add geometric diversity without improving the
@@ -42,6 +43,33 @@ function dynamicBehaviorTrajectoryEligibilityCore(behavior = {}, options = {}) {
     && confidence >= Math.max(0, Number(options.minimumConfidence ?? 0.7))
     && sampleCount >= Math.max(1, Number(options.minimumSampleCount ?? 8))
     && durationMs >= Math.max(0, Number(options.minimumDurationMs ?? 2500));
+}
+
+// Retreat-kite is directional behavior, so preserve the route already chosen
+// by the realtime intercept model when the outer coverage optimizer proposes
+// a different route. This guard changes only the aim replacement; it never
+// suppresses an otherwise valid shot.
+function trajectoryCoverageRouteReliabilityCore(input = {}) {
+  const mode = String(input.mode || 'mixed/unknown');
+  const internalHypothesis = String(input.internalHypothesis || '');
+  const coverageHypothesis = String(input.coverageHypothesis || '');
+  const routeConflict = Boolean(
+    internalHypothesis
+      && coverageHypothesis
+      && internalHypothesis !== coverageHypothesis
+  );
+  const preserveInternalRoute = mode === 'retreat-kite' && routeConflict;
+  return {
+    allowCoverageAim: !preserveInternalRoute,
+    reason: preserveInternalRoute
+      ? 'retreat-route-conflict'
+      : 'route-consistent-or-unconstrained',
+    mode,
+    internalHypothesis: internalHypothesis || null,
+    coverageHypothesis: coverageHypothesis || null,
+    routeConflict,
+    preserveInternalRoute
+  };
 }
 
 function movingTargetStopRouteRejectedCore(input = {}, options = {}) {
@@ -1107,6 +1135,7 @@ module.exports = {
   buildTrajectoryPathsCore,
   dynamicRouteCandidateWeight,
   dynamicBehaviorTrajectoryEligibilityCore,
+  trajectoryCoverageRouteReliabilityCore,
   evaluateTrajectoryAimCore,
   movingTargetStopRouteRejectedCore,
   normalizeTrajectoryCoverageMode,
