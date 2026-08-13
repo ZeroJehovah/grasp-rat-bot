@@ -138,6 +138,9 @@ const { runRemoteProfitWorkerSelfTest } = require('./remote-profit-worker-self-t
 const { runRemoteProfitActionSelfTest } = require('./remote-profit-action-self-test');
 const { runRemoteProfitDecisionSelfTest } = require('./remote-profit-decision-self-test');
 const { runMissingEnemyHoldSelfTest } = require('./missing-enemy-hold-self-test');
+const { runInvulnerableProfitCommitmentSelfTest } = require('./invulnerable-profit-commitment-self-test');
+const { runAfkDynamicFireSelfTest } = require('./afk-dynamic-fire-self-test');
+const { runInvulnerableAfkSelfTest } = require('../../strategy/invulnerable-afk-self-test');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
@@ -6161,6 +6164,9 @@ async function runBrowserlessRunnerSelfTest() {
     const remoteProfitWorker = await runRemoteProfitWorkerSelfTest();
     const remoteProfitAction = runRemoteProfitActionSelfTest();
     const remoteProfitDecision = runRemoteProfitDecisionSelfTest();
+    const invulnerableProfitCommitment = runInvulnerableProfitCommitmentSelfTest();
+    const afkDynamicFire = runAfkDynamicFireSelfTest();
+    const invulnerableAfk = runInvulnerableAfkSelfTest();
     const missingEnemyHold = runMissingEnemyHoldSelfTest();
     const requestRatePolicy = await runRequestRatePolicySelfTest();
     const requestRateController = await runRequestRateControllerSelfTest();
@@ -8455,6 +8461,9 @@ async function runBrowserlessRunnerSelfTest() {
         && remoteProfitWorker.ok
         && remoteProfitAction.ok
         && remoteProfitDecision.ok
+        && invulnerableProfitCommitment.ok
+        && afkDynamicFire.ok
+        && invulnerableAfk.ok
         && missingEnemyHold.ok
         && requestRateController.ok
         && snapshotRequestScheduler.ok
@@ -8542,6 +8551,9 @@ async function runBrowserlessRunnerSelfTest() {
       remoteProfitWorker,
       remoteProfitAction,
       remoteProfitDecision,
+      invulnerableProfitCommitment,
+      afkDynamicFire,
+      invulnerableAfk,
       missingEnemyHold,
       requestRateController,
       snapshotRequestScheduler,

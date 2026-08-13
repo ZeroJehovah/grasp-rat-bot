@@ -4,6 +4,7 @@ const {
   protocolInvulnerabilityMsFrom,
   rawInvulnerabilityMsFrom
 } = require('./invulnerability-time');
+const { estimateEightWayRouteCore } = require('./eight-way-route-eta');
 
 const DEFAULT_REMOTE_PROFIT_TARGET_CONFIG = Object.freeze({
   minDrop: 50,
@@ -13,9 +14,12 @@ const DEFAULT_REMOTE_PROFIT_TARGET_CONFIG = Object.freeze({
   distanceHalfFactorCm: 150000,
   distanceFloorFactor: 0.5,
   staminaFullRatio: 0.98,
-  invulnerableAfkApproachDistanceCm: 5000,
+  invulnerableAfkApproachDistanceCm: 1000,
   invulnerableActiveApproachDistanceCm: 15000,
-  invulnerableMoveSpeedCmPerSec: 1000,
+  invulnerableAxisSpeedCmPerSec: 950,
+  invulnerableDiagonalSpeedCmPerSec: 940,
+  invulnerableRouteSegmentOverheadMs: 120,
+  invulnerableAfkApproachSlackMs: 10000,
   maxCandidates: 64,
   arrivalToleranceCm: 1000
 });
@@ -104,15 +108,23 @@ function remoteProfitApproachDistanceCm(classification = '', config = {}) {
   return Math.max(0, Number(configured ?? config.invulnerableApproachDistanceCm ?? fallback));
 }
 
-function remoteProfitApproachEtaMs(distance, config = {}, classification = '') {
+function remoteProfitApproachEtaMs(distance, config = {}, classification = '', from = null, to = null) {
   const value = Number(distance);
   const approachDistance = remoteProfitApproachDistanceCm(classification, config);
-  const speed = Math.max(1, Number(
-    config.invulnerableMoveSpeedCmPerSec
-      ?? DEFAULT_REMOTE_PROFIT_TARGET_CONFIG.invulnerableMoveSpeedCmPerSec
-  ));
   if (!Number.isFinite(value)) return null;
-  return Math.max(0, value - approachDistance) / speed * 1000;
+  return estimateEightWayRouteCore(from || { distance: value }, to || {}, {
+    arrivalRadiusCm: approachDistance,
+    distanceCm: value,
+    axisSpeedCmPerSec: config.invulnerableAxisSpeedCmPerSec
+      ?? config.invulnerableProfitAxisSpeedCmPerSec
+      ?? DEFAULT_REMOTE_PROFIT_TARGET_CONFIG.invulnerableAxisSpeedCmPerSec,
+    diagonalSpeedCmPerSec: config.invulnerableDiagonalSpeedCmPerSec
+      ?? config.invulnerableProfitDiagonalSpeedCmPerSec
+      ?? DEFAULT_REMOTE_PROFIT_TARGET_CONFIG.invulnerableDiagonalSpeedCmPerSec,
+    segmentOverheadMs: config.invulnerableRouteSegmentOverheadMs
+      ?? config.invulnerableProfitRouteSegmentOverheadMs
+      ?? DEFAULT_REMOTE_PROFIT_TARGET_CONFIG.invulnerableRouteSegmentOverheadMs
+  }).etaMs;
 }
 
 function basicNormalizedEntity(entity, options = {}) {
@@ -255,11 +267,16 @@ function classifyRemoteTarget(target, context, config, helpers) {
   const invulnerableRemainingMs = finiteNumber(target.invulnerableRemainingMs);
   const invulnerable = Boolean(target.invulnerable || (invulnerableRemainingMs !== null && invulnerableRemainingMs > 0));
   const approachDistanceCm = remoteProfitApproachDistanceCm(classification, config);
-  const approachEtaMs = remoteProfitApproachEtaMs(distance, config, classification);
+  const approachEtaMs = remoteProfitApproachEtaMs(distance, config, classification, context.self, target);
+  const approachSlackMs = classification === 'high-drop-afk'
+    ? Math.max(0, Number(config.invulnerableAfkApproachSlackMs
+      ?? config.invulnerableProfitApproachSlackMs
+      ?? DEFAULT_REMOTE_PROFIT_TARGET_CONFIG.invulnerableAfkApproachSlackMs))
+    : 0;
   if (invulnerable && (
     invulnerableRemainingMs === null
       || approachEtaMs === null
-      || invulnerableRemainingMs > approachEtaMs
+      || invulnerableRemainingMs > approachEtaMs + approachSlackMs
   )) return { reject: 'invulnerable-not-ready-on-approach' };
 
   const scoringTarget = {
@@ -312,6 +329,7 @@ function classifyRemoteTarget(target, context, config, helpers) {
       centerDistance,
       approachDistanceCm,
       approachEtaMs,
+      approachSlackMs,
       expectedReward,
       staminaCost,
       baseScore,

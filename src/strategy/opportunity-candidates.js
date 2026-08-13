@@ -165,7 +165,7 @@ function buildEnemyOpportunityCandidatesCore(targets, options = {}) {
       score,
       actionKind,
       reason: '',
-      priorityTier: priorityTier({ type: 'enemy', kind: actionKind, distance: target.distance }),
+      priorityTier: priorityTier({ type: 'enemy', kind: actionKind, distance: target.distance, sourceTarget: target }),
       sourceTarget: target
     });
   }

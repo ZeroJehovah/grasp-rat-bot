@@ -7,6 +7,8 @@ const {
   coinMotionMetaCore,
   targetLaneAlignmentDirectionCore
 } = require('../../strategy/coin-motion');
+const { evaluateAfkFirePolicyCore } = require('../../strategy/afk-fire-policy');
+const { isInvulnerableEntity } = require('../../strategy/combat-target-selection');
 const { stamina5sRemaining } = require('../../strategy/combat-fire-discipline');
 
 const BROWSER_RUNTIME_DEFAULTS = buildRuntimeDefaults({}, false);
@@ -33,7 +35,6 @@ const DEFAULT_AFK_SHOOT_STAMINA_COST_MS = Math.max(
 const DEFAULT_REPEAT_MAX_DRIFT_MS = 125;
 const DEFAULT_TRANSPORT_HIGH_WATER_BYTES = 64 * 1024;
 const DEFAULT_ATTACK_RANGE_CM = BROWSER_RUNTIME_DEFAULTS.attackRange;
-const DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM = 10000;
 const DEFAULT_AFK_ATTACK_FULL_RANGE_CM = BROWSER_RUNTIME_DEFAULTS.afkAttackFullRangeCm;
 const DEFAULT_COIN_FEEDBACK_MIN_TIMEOUT_MS = 250;
 const DEFAULT_COIN_FEEDBACK_MAX_TIMEOUT_MS = 800;
@@ -306,20 +307,39 @@ function movementVectorToTarget(self, target, options = {}) {
   };
 }
 
-function afkAttackCommitRangeCm(options = {}) {
-  const value = Number(options.afkAttackCommitRangeCm
-    ?? options.afkAttackCommitRange
-    ?? options.browserlessAfkAttackCommitRangeCm
-    ?? DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM);
-  return Number.isFinite(value) ? Math.max(0, value) : DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM;
-}
-
 function afkAttackFullRangeCm(options = {}) {
   const value = Number(options.afkAttackFullRangeCm
     ?? options.afkAttackFullRange
     ?? options.browserlessAfkAttackFullRangeCm
     ?? DEFAULT_AFK_ATTACK_FULL_RANGE_CM);
   return Number.isFinite(value) ? Math.max(0, value) : DEFAULT_AFK_ATTACK_FULL_RANGE_CM;
+}
+
+function afkAttackFireMaxRangeCm(options = {}) {
+  const value = Number(options.afkAttackFireMaxRangeCm
+    ?? options.afkAttackFireMaxRange
+    ?? BROWSER_RUNTIME_DEFAULTS.afkAttackFireMaxRangeCm
+    ?? DEFAULT_ATTACK_RANGE_CM);
+  return Number.isFinite(value) ? Math.max(0, value) : DEFAULT_ATTACK_RANGE_CM;
+}
+
+function afkFirePolicyOptions(options = {}) {
+  return {
+    fullRangeCm: afkAttackFullRangeCm(options),
+    maxRangeCm: afkAttackFireMaxRangeCm(options),
+    ownDamageRateHpPerSec: options.afkAttackOwnDamageRateHpPerSec ?? BROWSER_RUNTIME_DEFAULTS.afkAttackOwnDamageRateHpPerSec ?? 3,
+    externalDamageRateHpPerSec: options.afkAttackExternalDamageRateHpPerSec ?? BROWSER_RUNTIME_DEFAULTS.afkAttackExternalDamageRateHpPerSec ?? 2.05,
+    hpSafetyBuffer: options.afkAttackHpSafetyBuffer ?? BROWSER_RUNTIME_DEFAULTS.afkAttackHpSafetyBuffer ?? 3,
+    shotDamageHp: options.afkAttackShotDamageHp ?? options.combatEfficiencyExpectedDamagePerShot ?? 3,
+    shotFlightMs: options.afkAttackShotFlightMs,
+    projectileSpeedCmPerSec: options.afkAttackProjectileSpeedCmPerSec
+      ?? BROWSER_RUNTIME_DEFAULTS.afkAttackProjectileSpeedCmPerSec
+      ?? 10000,
+    shotCadenceMs: DEFAULT_AFK_SHOOT_MIN_INTERVAL_MS,
+    axisSpeedCmPerSec: options.invulnerableProfitAxisSpeedCmPerSec ?? BROWSER_RUNTIME_DEFAULTS.invulnerableProfitAxisSpeedCmPerSec,
+    diagonalSpeedCmPerSec: options.invulnerableProfitDiagonalSpeedCmPerSec ?? BROWSER_RUNTIME_DEFAULTS.invulnerableProfitDiagonalSpeedCmPerSec,
+    segmentOverheadMs: options.invulnerableProfitRouteSegmentOverheadMs ?? BROWSER_RUNTIME_DEFAULTS.invulnerableProfitRouteSegmentOverheadMs
+  };
 }
 
 function profitActionFromDecision(decision) {
@@ -512,6 +532,8 @@ function createInitialActionState() {
     shootRepeatAimOffsetX: null,
     shootRepeatAimOffsetY: null,
     shootRepeatCorrelationSlot: null,
+    afkTargetDamageObservations: {},
+    afkDispatchedDamageByTarget: {},
     lastVelocityRepeatError: '',
     lastShootRepeatError: '',
     shootingSealed: false,
@@ -1810,9 +1832,8 @@ function createBrowserlessActionAdapter(options = {}) {
     const attackRange = Math.max(0, Number(
       options.attackRangeCm ?? options.attackRange ?? DEFAULT_ATTACK_RANGE_CM
     ));
-    const commitRange = afkAttackCommitRangeCm(options);
-    const shootRange = commitRange > 0 ? Math.min(attackRange, commitRange) : attackRange;
-    const fullAttackRange = Math.min(shootRange, afkAttackFullRangeCm(options));
+    const shootRange = Math.min(attackRange, afkAttackFireMaxRangeCm(options));
+    const fullAttackRange = afkAttackFullRangeCm(options);
     const distance = Math.hypot(targetX - selfX, targetY - selfY);
     const movementStaminaPerCm = Math.max(0, Number(
       options.afkShootMoveStaminaPerCm
@@ -1833,10 +1854,53 @@ function createBrowserlessActionAdapter(options = {}) {
   }
 
   function afkShootGate(self, target, commandShooting = null, gateOptions = {}) {
+    const realtimeTarget = realtimeAfkTarget(gateOptions.stateSnapshot, target);
+    if (!realtimeTarget.ok) {
+      return {
+        ok: false,
+        reason: realtimeTarget.reason,
+        stamina5s: stamina5sRemaining(self),
+        requiredStaminaMs: null,
+        staminaPlan: null,
+        outstanding: null,
+        firePolicy: null
+      };
+    }
+    target = realtimeTarget.target;
     const stamina5s = stamina5sRemaining(self);
     const staminaPlan = afkShootStaminaPlan(self, target, gateOptions.staminaMode);
     const requiredStaminaMs = staminaPlan.requiredStaminaMs;
     const outstanding = afkOutstandingShot(target, commandShooting);
+    let firePolicy = null;
+    if (gateOptions.dynamicFire !== false && options.afkAttackDynamicFireEnabled !== false) {
+      const targetKey = targetRepeatKey(target);
+      const externalEvidence = externalAfkDamageEvidence(gateOptions.stateSnapshot, self, target);
+      const pendingDamage = pendingOwnDamageHp(target, commandShooting);
+      firePolicy = evaluateAfkFirePolicyCore({
+        self,
+        target,
+        distanceCm: Math.hypot(Number(target?.x) - Number(self?.x), Number(target?.y) - Number(self?.y)),
+        hp: target?.hp,
+        remainingHp: target?.hp,
+        invulnerable: target?.invulnerable,
+        pendingOwnDamageHp: pendingDamage,
+        externalDamageRateHpPerSec: externalEvidence.externalDamageRateHpPerSec,
+        targetKey
+      }, afkFirePolicyOptions(options));
+      firePolicy.externalBulletEvidenceCount = externalEvidence.bulletEvidenceCount;
+      firePolicy.unexplainedExternalDamageRateHpPerSec = externalEvidence.unexplainedDamageRateHpPerSec;
+      if (!firePolicy.authorized) {
+        return {
+          ok: false,
+          reason: firePolicy.reason,
+          stamina5s,
+          requiredStaminaMs,
+          staminaPlan,
+          outstanding: null,
+          firePolicy
+        };
+      }
+    }
     if (stamina5s !== null && stamina5s < requiredStaminaMs) {
       return {
         ok: false,
@@ -1858,7 +1922,9 @@ function createBrowserlessActionAdapter(options = {}) {
       retryAtMs: outstanding?.retryAtMs ?? null,
       retryInMs: outstanding?.retryAtMs === null || outstanding?.retryAtMs === undefined
         ? null
-        : Math.max(0, outstanding.retryAtMs - now())
+        : Math.max(0, outstanding.retryAtMs - now()),
+      firePolicy,
+      target
     };
   }
 
@@ -1883,10 +1949,13 @@ function createBrowserlessActionAdapter(options = {}) {
       outstanding: gate.outstanding,
       retryAtMs: gate.retryAtMs ?? null,
       retryInMs: gate.retryInMs ?? null,
+      firePolicy: gate.firePolicy || null,
       execution: recordSkip
         ? skippedShootExecution(gate.reason, target, {}, {
             executionClass: SHOOT_EXECUTION_CLASSES.PROFIT_OPPORTUNITY,
-            outcome: 'stamina-reserve'
+            outcome: String(gate.reason || '').startsWith('afk-fire-')
+              ? 'dynamic-fire-delay'
+              : 'stamina-reserve'
           })
         : null
     };
@@ -1895,10 +1964,13 @@ function createBrowserlessActionAdapter(options = {}) {
   function sendAfkShoot(stateSnapshot, self, target, reason, cadenceMs, sendOptions = {}) {
     expirePendingShootCommands();
     const gate = afkShootGate(self, target, stateSnapshot?.command?.shooting || null, {
-      staminaMode: sendOptions.staminaMode
+      staminaMode: sendOptions.staminaMode,
+      dynamicFire: sendOptions.dynamicFire,
+      stateSnapshot
     });
     if (state.shootRepeat) updateShootRepeatGate(gate);
     if (!gate.ok) return blockedAfkShootResult(gate, target, sendOptions.recordSkip !== false);
+    target = gate.target || target;
     const startX = numberOrNull(self?.x);
     const startY = numberOrNull(self?.y);
     const baseTargetX = numberOrNull(target?.x);
@@ -1943,6 +2015,7 @@ function createBrowserlessActionAdapter(options = {}) {
     sent.stamina5s = gate.stamina5s;
     sent.requiredStaminaMs = gate.requiredStaminaMs;
     sent.staminaPlan = gate.staminaPlan || null;
+    sent.firePolicy = gate.firePolicy || null;
     if (state.shootRepeat && !sent.skipped && sent.command) {
       state.shootRepeatWaitReason = '';
       state.shootRepeatOutstandingCommandId = sent.command.id ?? null;
@@ -1966,6 +2039,151 @@ function createBrowserlessActionAdapter(options = {}) {
     return entities.find(entity => targetRepeatKey(entity) === key) || null;
   }
 
+  function realtimeAfkTarget(stateSnapshot, target) {
+    const key = targetRepeatKey(target);
+    const entity = findRealtimeEntity(stateSnapshot, key);
+    if (!entity) return { ok: false, reason: 'afk-fire-missing-realtime-target', target: null };
+    const hp = numberOrNull(entity.hp);
+    const x = numberOrNull(entity.x);
+    const y = numberOrNull(entity.y);
+    if (hp === null || x === null || y === null) {
+      return { ok: false, reason: 'afk-fire-missing-realtime-hp-or-distance', target: null };
+    }
+    if (entityActiveLike(entity)) return { ok: false, reason: 'afk-fire-target-active', target: null };
+    if (isInvulnerableEntity(entity)) return { ok: false, reason: 'afk-fire-invulnerable', target: null };
+    if (hp <= 0 || entity.alive === false || entity.dead === true) {
+      return { ok: false, reason: 'afk-fire-target-dead', target: null };
+    }
+    return {
+      ok: true,
+      reason: 'afk-fire-realtime-target',
+      target: {
+        ...target,
+        ...entity,
+        hp,
+        x,
+        y,
+        invulnerable: false,
+        authority: 'realtime'
+      }
+    };
+  }
+
+  function afkShotDamageHp() {
+    return Math.max(0, Number(
+      options.afkAttackShotDamageHp
+        ?? options.combatEfficiencyExpectedDamagePerShot
+        ?? BROWSER_RUNTIME_DEFAULTS.combatEfficiencyExpectedDamagePerShot
+        ?? 3
+    ) || 0);
+  }
+
+  function pendingOwnDamageHp(target, commandShooting = null) {
+    return afkTrackedShots(target, commandShooting).length * afkShotDamageHp();
+  }
+
+  function bulletOwnerKey(bullet) {
+    const id = bullet?.owner_user_id ?? bullet?.ownerUserId ?? bullet?.owner_id ?? bullet?.ownerId ?? bullet?.user_id ?? bullet?.userId;
+    return id === null || id === undefined || id === '' ? '' : String(id);
+  }
+
+  function entityIdentityKeys(entity) {
+    return new Set([
+      entity?.userId,
+      entity?.user_id,
+      entity?.entityId,
+      entity?.entity_id,
+      entity?.id
+    ].filter(value => value !== null && value !== undefined && value !== '').map(String));
+  }
+
+  function externalAfkDamageEvidence(stateSnapshot, self, target) {
+    const selfKeys = entityIdentityKeys(self);
+    const targetX = numberOrNull(target?.x);
+    const targetY = numberOrNull(target?.y);
+    const evidenceRadius = Math.max(500, Number(options.afkAttackExternalBulletEvidenceRadiusCm ?? 2500));
+    const bullets = Array.isArray(stateSnapshot?.realtime?.bullets) ? stateSnapshot.realtime.bullets : [];
+    const evidence = bullets.filter(bullet => {
+      const owner = bulletOwnerKey(bullet);
+      if (!owner || selfKeys.has(owner)) return false;
+      const currentTick = numberOrNull(stateSnapshot?.realtime?.tick);
+      const createdTick = numberOrNull(bullet?.created_tick ?? bullet?.createdTick);
+      const startX = numberOrNull(bullet?.start_x ?? bullet?.startX ?? bullet?.x);
+      const startY = numberOrNull(bullet?.start_y ?? bullet?.startY ?? bullet?.y);
+      const targetBulletX = numberOrNull(bullet?.target_x ?? bullet?.targetX);
+      const targetBulletY = numberOrNull(bullet?.target_y ?? bullet?.targetY);
+      const microsX = numberOrNull(bullet?.dir_x_micros ?? bullet?.dirXMicros);
+      const microsY = numberOrNull(bullet?.dir_y_micros ?? bullet?.dirYMicros);
+      let directionX = numberOrNull(bullet?.dir_x ?? bullet?.direction?.dx);
+      let directionY = numberOrNull(bullet?.dir_y ?? bullet?.direction?.dy);
+      if (directionX === null && microsX !== null) directionX = microsX / 1000000;
+      if (directionY === null && microsY !== null) directionY = microsY / 1000000;
+      if ((directionX === null || directionY === null)
+        && [startX, startY, targetBulletX, targetBulletY].every(value => value !== null)) {
+        const length = Math.hypot(targetBulletX - startX, targetBulletY - startY);
+        if (length > 0) {
+          directionX = (targetBulletX - startX) / length;
+          directionY = (targetBulletY - startY) / length;
+        }
+      }
+      const directionLength = Math.hypot(Number(directionX || 0), Number(directionY || 0));
+      const speed = Math.max(1, Number(bullet?.speed_per_tick ?? bullet?.speedPerTick ?? bullet?.speed ?? 500));
+      const ageTicks = currentTick !== null && createdTick !== null
+        ? Math.max(0, currentTick - createdTick)
+        : 0;
+      const projectedX = startX !== null && directionLength > 0
+        ? startX + Number(directionX || 0) / directionLength * speed * ageTicks
+        : startX;
+      const projectedY = startY !== null && directionLength > 0
+        ? startY + Number(directionY || 0) / directionLength * speed * ageTicks
+        : startY;
+      const x = numberOrNull(bullet?.x ?? projectedX);
+      const y = numberOrNull(bullet?.y ?? projectedY);
+      return targetX !== null && targetY !== null && x !== null && y !== null
+        && Math.hypot(x - targetX, y - targetY) <= evidenceRadius;
+    });
+    const configured = Math.max(0, Number(
+      options.afkAttackExternalDamageRateHpPerSec
+        ?? BROWSER_RUNTIME_DEFAULTS.afkAttackExternalDamageRateHpPerSec
+        ?? 2.05
+    ) || 0);
+    const targetKey = targetRepeatKey(target);
+    const hp = numberOrNull(target?.hp);
+    const observedAtMs = numberOrNull(stateSnapshot?.realtime?.receivedAtMs) ?? now();
+    const previous = targetKey ? state.afkTargetDamageObservations[targetKey] : null;
+    const pendingOwnDamage = pendingOwnDamageHp(target, stateSnapshot?.command?.shooting || null);
+    const dispatchedDamage = targetKey
+      ? Math.max(0, Number(state.afkDispatchedDamageByTarget[targetKey]?.damageHp || 0))
+      : 0;
+    let unexplainedRate = 0;
+    if (previous && hp !== null && observedAtMs > Number(previous.atMs || 0)) {
+      const hpDrop = Math.max(0, Number(previous.hp) - hp);
+      const newlyDispatchedOwnDamage = Math.max(0, dispatchedDamage - Number(previous.dispatchedDamageHp || 0));
+      const explainableOwnDamage = Math.max(0, Number(previous.pendingOwnDamageHp || 0))
+        + newlyDispatchedOwnDamage;
+      const unexplainedDrop = Math.max(0, hpDrop - explainableOwnDamage);
+      if (unexplainedDrop > 0) unexplainedRate = unexplainedDrop * 1000 / (observedAtMs - previous.atMs);
+    }
+    if (targetKey && hp !== null) {
+      state.afkTargetDamageObservations[targetKey] = {
+        hp,
+        atMs: observedAtMs,
+        pendingOwnDamageHp: pendingOwnDamage,
+        dispatchedDamageHp: dispatchedDamage
+      };
+      for (const [key, item] of Object.entries(state.afkTargetDamageObservations)) {
+        if (observedAtMs - Number(item?.atMs || 0) <= 10000) continue;
+        delete state.afkTargetDamageObservations[key];
+        delete state.afkDispatchedDamageByTarget[key];
+      }
+    }
+    return {
+      externalDamageRateHpPerSec: Math.max(evidence.length ? configured : 0, unexplainedRate),
+      bulletEvidenceCount: evidence.length,
+      unexplainedDamageRateHpPerSec: Number(unexplainedRate.toFixed(3))
+    };
+  }
+
   function validateShootRepeatState(stateSnapshot) {
     const repeat = state.shootRepeat;
     if (!repeat) return true;
@@ -1984,10 +2202,19 @@ function createBrowserlessActionAdapter(options = {}) {
         cancelShootRepeat('shoot-repeat-target-active', { error: true });
         return false;
       }
+      if (isInvulnerableEntity(entity)) {
+        cancelShootRepeat('shoot-repeat-target-invulnerable');
+        return false;
+      }
+      if (numberOrNull(entity.hp) === null || numberOrNull(entity.x) === null || numberOrNull(entity.y) === null) {
+        cancelShootRepeat('shoot-repeat-target-missing-realtime-state', { error: true });
+        return false;
+      }
       repeat.target = { ...repeat.target, ...entity };
     }
     repeat.self = mergeRealtimeSelfStaminaMetadata(realtime.self, repeat.self);
     repeat.commandShooting = stateSnapshot?.command?.shooting || repeat.commandShooting || null;
+    repeat.stateSnapshot = stateSnapshot;
     repeat.observedTick = optionalNumber(realtime.tick);
     return true;
   }
@@ -2030,11 +2257,22 @@ function createBrowserlessActionAdapter(options = {}) {
       return null;
     }
     const gate = afkShootGate(repeat.self, repeat.target, repeat.commandShooting, {
-      staminaMode: repeat.staminaMode
+      staminaMode: repeat.staminaMode,
+      dynamicFire: repeat.dynamicFire,
+      stateSnapshot: repeat.stateSnapshot
     });
     updateShootRepeatGate(gate);
     if (!gate.ok) {
       clearShootRepeatTimer();
+      if (gate.reason === 'afk-fire-delay-own-kill-before-near'
+        || gate.reason === 'afk-fire-delay-external-kill-before-near'
+        || gate.reason === 'afk-fire-approach-range'
+        || gate.reason === 'afk-shoot-stamina-reserve') {
+        state.shootRepeatWaitReason = gate.reason;
+        armShootRepeatTimer(repeat.cadenceMs);
+      } else {
+        cancelShootRepeat(gate.reason);
+      }
       return blockedAfkShootResult(gate, repeat.target, false);
     }
     const lastSentAtMs = optionalNumber(state.lastShootCommand?.sentAtMs);
@@ -2061,9 +2299,10 @@ function createBrowserlessActionAdapter(options = {}) {
         reason: 'shoot-repeat-overloaded'
       };
     }
-    const sent = sendAfkShoot({ command: { shooting: repeat.commandShooting } }, repeat.self, repeat.target, repeat.reason, repeat.cadenceMs, {
+    const sent = sendAfkShoot(repeat.stateSnapshot || { command: { shooting: repeat.commandShooting } }, repeat.self, repeat.target, repeat.reason, repeat.cadenceMs, {
       recordSkip: false,
-      staminaMode: repeat.staminaMode
+      staminaMode: repeat.staminaMode,
+      dynamicFire: repeat.dynamicFire
     });
     if (!sent.ok) {
       cancelShootRepeat(sent.error || sent.reason || 'shoot-repeat-failed', { error: true });
@@ -2102,7 +2341,9 @@ function createBrowserlessActionAdapter(options = {}) {
       cadenceMs: repeatCadenceMs,
       staminaMode,
       commandShooting: stateSnapshot?.command?.shooting || null,
-      observedTick: optionalNumber(stateSnapshot?.realtime?.tick)
+      observedTick: optionalNumber(stateSnapshot?.realtime?.tick),
+      dynamicFire: repeatOptions.dynamicFire !== false,
+      stateSnapshot
     };
     const token = state.shootRepeatToken + 1;
     state.shootRepeatToken = token;
@@ -2489,6 +2730,13 @@ function createBrowserlessActionAdapter(options = {}) {
     nextCommandId += 1;
     state.sentCount += 1;
     state.shootSentCount += 1;
+    if (executionClass === SHOOT_EXECUTION_CLASSES.PROFIT_OPPORTUNITY && command.targetId) {
+      const current = state.afkDispatchedDamageByTarget[command.targetId] || { damageHp: 0 };
+      state.afkDispatchedDamageByTarget[command.targetId] = {
+        damageHp: Math.max(0, Number(current.damageHp || 0)) + afkShotDamageHp(),
+        atMs
+      };
+    }
     state.lastShootCommand = command;
     retainPendingShootCommand(command);
     if (onShootRequest) {
@@ -2848,6 +3096,9 @@ function createBrowserlessActionAdapter(options = {}) {
       || shoot.reason === 'shoot-command-throttled'
       || shoot.reason === 'afk-shoot-stamina-reserve'
       || shoot.reason === 'afk-shoot-correlation-slots-exhausted'
+      || shoot.reason === 'afk-fire-delay-own-kill-before-near'
+      || shoot.reason === 'afk-fire-delay-external-kill-before-near'
+      || shoot.reason === 'afk-fire-approach-range'
     ));
   }
 
@@ -2856,21 +3107,30 @@ function createBrowserlessActionAdapter(options = {}) {
       stateSnapshot?.realtime?.self || null,
       decision?.input?.self || null
     );
-    const stopped = stop('opportunistic-shot-hold');
+    const realtimeTarget = realtimeAfkTarget(stateSnapshot, target);
+    const currentTarget = realtimeTarget.target || target;
+    const vector = movementVectorToTarget(self, currentTarget, options);
     const shoot = sendOpportunisticShot(stateSnapshot, self, target, decision);
+    const dynamicDelay = String(shoot.reason || '').startsWith('afk-fire-delay-')
+      || shoot.reason === 'afk-fire-approach-range';
+    const fullRange = afkAttackFullRangeCm(options);
+    const distance = Number.isFinite(Number(vector.distance)) ? Number(vector.distance) : Infinity;
+    const movement = dynamicDelay && vector.ok && distance > fullRange
+      ? sendVelocity(vector.dx, vector.dy, 'opportunistic-shot-dynamic-approach', currentTarget)
+      : stop('opportunistic-shot-hold');
     const repeat = canScheduleShootRepeat(shoot)
-      ? scheduleShootRepeat(stateSnapshot, self, target, target?.reason || decision?.reason || 'opportunistic-afk-drop-shot', shoot.cadenceMs)
+      ? scheduleShootRepeat(stateSnapshot, self, currentTarget, target?.reason || decision?.reason || 'opportunistic-afk-drop-shot', shoot.cadenceMs)
       : null;
     return {
-      ok: Boolean(stopped.ok && shoot.ok),
+      ok: Boolean(movement.ok && shoot.ok),
       kind: 'opportunistic-shot',
       reason: target?.reason || decision?.reason || 'opportunistic-afk-drop-shot',
       movement: {
-        ok: stopped.ok,
-        skipped: Boolean(stopped.skipped),
-        reason: stopped.reason || 'opportunistic-shot-hold',
-        command: stopped.command || null,
-        ...transportFailure(stopped)
+        ok: movement.ok,
+        skipped: Boolean(movement.skipped),
+        reason: dynamicDelay ? 'opportunistic-shot-dynamic-approach' : (movement.reason || 'opportunistic-shot-hold'),
+        command: movement.command || null,
+        ...transportFailure(movement)
       },
       shoot: {
         ok: shoot.ok,
@@ -2884,13 +3144,14 @@ function createBrowserlessActionAdapter(options = {}) {
         outstanding: shoot.outstanding || null,
         retryAtMs: shoot.retryAtMs ?? null,
         retryInMs: shoot.retryInMs ?? null,
+        firePolicy: shoot.firePolicy || null,
         aimCorrelation: shoot.aimCorrelation || null,
         repeat,
         ...transportFailure(shoot)
       },
-      target,
-      opportunisticShot: target,
-      ...transportFailure(stopped, shoot)
+      target: currentTarget,
+      opportunisticShot: currentTarget,
+      ...transportFailure(movement, shoot)
     };
   }
 
@@ -2987,6 +3248,30 @@ function createBrowserlessActionAdapter(options = {}) {
 
   function applyProfitEnemyDecision(stateSnapshot, self, target, decision) {
     clearNearCoinContinuation('profit-enemy-action');
+    const rawRealtimeTarget = findRealtimeEntity(stateSnapshot, targetRepeatKey(target));
+    const committedRealtimeRequired = target?.invulnerableProfitCommitment === true
+      || decision?.action?.invulnerableProfitCommitment;
+    if (committedRealtimeRequired && !rawRealtimeTarget) {
+      const stopped = stop('profit-committed-target-missing-realtime');
+      return {
+        ok: stopped.ok,
+        kind: 'stop',
+        reason: 'profit-committed-target-missing-realtime',
+        command: stopped.command || null,
+        skipped: Boolean(stopped.skipped),
+        target,
+        ...transportFailure(stopped)
+      };
+    }
+    if (rawRealtimeTarget) {
+      target = {
+        ...target,
+        ...rawRealtimeTarget,
+        authority: 'realtime',
+        invulnerable: isInvulnerableEntity(rawRealtimeTarget),
+        active: entityActiveLike(rawRealtimeTarget)
+      };
+    }
     if (target?.active && target?.easyKillProfitTarget) {
       const invulnerableApproach = target?.invulnerable
         && target?.easyKillInvulnerableApproachEligible === true;
@@ -3067,9 +3352,8 @@ function createBrowserlessActionAdapter(options = {}) {
       ? Number(vector.distance)
       : Math.hypot(Number(target?.x) - Number(self?.x), Number(target?.y) - Number(self?.y));
     const attackRange = Math.max(0, Number(options.attackRangeCm ?? options.attackRange ?? DEFAULT_ATTACK_RANGE_CM));
-    const commitRange = afkAttackCommitRangeCm(options);
-    const shootRange = commitRange > 0 ? Math.min(attackRange, commitRange) : attackRange;
-    const fullAttackRange = Math.min(shootRange, afkAttackFullRangeCm(options));
+    const shootRange = Math.min(attackRange, afkAttackFireMaxRangeCm(options));
+    const fullAttackRange = afkAttackFullRangeCm(options);
     if (target?.cachedNavigationOnly) {
       if (!vector.ok || (Number.isFinite(distance) && distance <= Math.max(300, Number(options.targetDeadZoneCm || DEFAULT_TARGET_DEAD_ZONE_CM)))) {
         const stopped = stop('cached-enemy-position-reached');
@@ -3077,6 +3361,35 @@ function createBrowserlessActionAdapter(options = {}) {
       }
       const sent = sendVelocity(vector.dx, vector.dy, 'missing-realtime-enemy-hold', target);
       return { ok: sent.ok, kind: 'velocity', reason: 'missing-realtime-enemy-hold', vector, command: sent.command || null, skipped: Boolean(sent.skipped), target, cachedNavigationOnly: true, ...transportFailure(sent) };
+    }
+    if (target?.invulnerable) {
+      if (!vector.ok || (Number.isFinite(distance) && distance <= fullAttackRange)) {
+        const stopped = stop('profit-invulnerable-target-close-wait');
+        return {
+          ok: stopped.ok,
+          kind: 'stop',
+          reason: 'profit-invulnerable-target-close-wait',
+          command: stopped.command || null,
+          skipped: Boolean(stopped.skipped),
+          target,
+          invulnerableApproach: true,
+          approachDistanceCm: Math.round(fullAttackRange),
+          ...transportFailure(stopped)
+        };
+      }
+      const sent = sendVelocity(vector.dx, vector.dy, 'profit-invulnerable-target-approach', target);
+      return {
+        ok: sent.ok,
+        kind: 'velocity',
+        reason: 'profit-invulnerable-target-approach',
+        vector,
+        command: sent.command || null,
+        skipped: Boolean(sent.skipped),
+        target,
+        invulnerableApproach: true,
+        approachDistanceCm: Math.round(fullAttackRange),
+        ...transportFailure(sent)
+      };
     }
     if (!(Number.isFinite(distance) && distance <= shootRange)) {
       if (!vector.ok) {
@@ -3103,29 +3416,11 @@ function createBrowserlessActionAdapter(options = {}) {
         skipped: Boolean(sent.skipped),
         ...transportFailure(sent),
         target,
-        afkAttackCommit: {
-          commitRangeCm: Math.round(shootRange),
+        afkAttackRange: {
+          fireMaxRangeCm: Math.round(shootRange),
           attackRangeCm: Math.round(attackRange),
           distance: Math.round(distance)
         }
-      };
-    }
-
-    if (target?.invulnerable) {
-      const stopped = stop('profit-invulnerable-target-wait');
-      return {
-        ok: stopped.ok,
-        kind: 'stop',
-        reason: 'profit-invulnerable-target-wait',
-        command: stopped.command || null,
-        skipped: Boolean(stopped.skipped),
-        target,
-        afkAttackCommit: {
-          commitRangeCm: Math.round(shootRange),
-          attackRangeCm: Math.round(attackRange),
-          distance: Math.round(distance)
-        },
-        ...transportFailure(stopped)
       };
     }
 
@@ -3140,7 +3435,7 @@ function createBrowserlessActionAdapter(options = {}) {
       target,
       decision?.action?.reason || decision?.reason || 'profit-afk-attack',
       combatShootMinIntervalMs,
-      { staminaMode }
+      { staminaMode, dynamicFire: options.afkAttackDynamicFireEnabled !== false }
     );
     const repeat = canScheduleShootRepeat(shoot)
       ? scheduleShootRepeat(
@@ -3149,7 +3444,7 @@ function createBrowserlessActionAdapter(options = {}) {
           target,
           decision?.action?.reason || decision?.reason || 'profit-afk-attack',
           shoot.cadenceMs,
-          { staminaMode }
+          { staminaMode, dynamicFire: options.afkAttackDynamicFireEnabled !== false }
         )
       : null;
     return {
@@ -3177,6 +3472,7 @@ function createBrowserlessActionAdapter(options = {}) {
         outstanding: shoot.outstanding || null,
         retryAtMs: shoot.retryAtMs ?? null,
         retryInMs: shoot.retryInMs ?? null,
+        firePolicy: shoot.firePolicy || null,
         aimCorrelation: shoot.aimCorrelation || null,
         repeat,
         ...transportFailure(shoot)
@@ -3406,6 +3702,7 @@ function createBrowserlessActionAdapter(options = {}) {
       shootRepeatAimOffsetX: state.shootRepeatAimOffsetX,
       shootRepeatAimOffsetY: state.shootRepeatAimOffsetY,
       shootRepeatCorrelationSlot: state.shootRepeatCorrelationSlot,
+      afkTargetDamageObservationCount: Object.keys(state.afkTargetDamageObservations || {}).length,
       lastVelocityRepeatError: state.lastVelocityRepeatError,
       lastShootRepeatError: state.lastShootRepeatError,
       shootingSealed: state.shootingSealed,
@@ -3484,7 +3781,6 @@ function createBrowserlessActionAdapter(options = {}) {
 
 module.exports = {
   DEFAULT_COMMAND_INTERVAL_MS,
-  DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM,
   DEFAULT_AFK_ATTACK_FULL_RANGE_CM,
   DEFAULT_COIN_TARGET_DEAD_ZONE_CM,
   DEFAULT_COMBAT_SHOOT_MIN_INTERVAL_MS,

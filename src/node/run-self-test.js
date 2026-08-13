@@ -691,6 +691,14 @@ async function runSelfTest() {
     stamina_5s_remaining_milli: remaining,
     stamina_5s_limit_milli: limit
   });
+  const realtimePassiveAfk = (entity = {}) => ({
+    hp: 100,
+    max_hp: 100,
+    current_join_mode: 'Passive',
+    vx: 0,
+    vy: 0,
+    ...entity
+  });
   const bot = { lastTarget: null, lastTargetAt: 0, lastDecision: null, combatTarget: null, combatRetreatIgnore: new Map(), combatDisadvantageObservation: null, opportunityChoice: null, opportunitySwitchLock: null, opportunityAfkStamina: new Map(), ignoredCoins: new Map(), coinAttempts: new Map(), coinProgress: null, coinApproachLock: null, currentVisibleCoins: null, finalActionArbitration: null };
   const dist = (a, b) => Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y));
   const dropValue = e => Number(e.death_reward_preview ?? e.death_drop_coins ?? e.drop ?? 0) || 0;
@@ -8718,7 +8726,6 @@ async function runSelfTest() {
           controlMode: 'profit-live',
           nowMs: 1200,
           tickMs: 120,
-          afkAttackCommitRangeCm: 5000,
           invulnerableProfitMoveSpeedCmPerSec: 1000
         });
         const target = input.visibleTargets.find(entity => Number(entity.user_id) === 2634);
@@ -9602,7 +9609,6 @@ async function runSelfTest() {
           nowMs: 1200,
           controlMode: 'profit-live',
           attackRange: 14500,
-          afkAttackCommitRangeCm: 5000,
           invulnerableProfitMoveSpeedCmPerSec: 1000
         });
         const eligible = choose(20000, 14000);
@@ -13237,17 +13243,37 @@ async function runSelfTest() {
       name: 'browserless action adapter pre-approaches AFK target before shooting',
       got: (() => {
         const farCommands = [];
+        const farSelf = {
+          entity_id: 1,
+          user_id: 7,
+          x: 0,
+          y: 0,
+          stamina_5s_remaining_milli: 1000000,
+          stamina_5s_limit_milli: 1000000
+        };
+        const farTarget = {
+          entity_id: 2,
+          user_id: 8,
+          x: 11000,
+          y: 0,
+          hp: 20,
+          max_hp: 100,
+          current_join_mode: 'Passive',
+          vx: 0,
+          vy: 0
+        };
         const farAdapter = createBrowserlessActionAdapter({
           now: () => 1200 + farCommands.length * 200,
           commandIntervalMs: 1,
           attackRangeCm: 14500,
+          shootRepeatEnabled: false,
           transport: {
             sendVelocity: (dx, dy) => farCommands.push(`vel ${dx} ${dy}`),
             sendShoot: () => farCommands.push('shoot')
           }
         });
         const far = farAdapter.applyDecision({
-          realtime: { self: { user_id: 7, x: 0, y: 0 }, tick: 1 }
+          realtime: { self: farSelf, entities: [farSelf, farTarget], bullets: [], tick: 1 }
         }, {
           kind: 'profit-candidate',
           band: 'profit',
@@ -13259,17 +13285,20 @@ async function runSelfTest() {
           }
         });
         const closeCommands = [];
+        const closeSelf = { ...farSelf };
+        const closeTarget = { ...farTarget, x: 4900, hp: 100 };
         const closeAdapter = createBrowserlessActionAdapter({
           now: () => 1400 + closeCommands.length * 200,
           commandIntervalMs: 1,
           attackRangeCm: 14500,
+          shootRepeatEnabled: false,
           transport: {
             sendVelocity: (dx, dy) => closeCommands.push(`vel ${dx} ${dy}`),
             sendShoot: (targetX, targetY, startX, startY) => closeCommands.push(`shoot ${targetX} ${targetY} ${startX} ${startY}`)
           }
         });
         const close = closeAdapter.applyDecision({
-          realtime: { self: { user_id: 7, x: 0, y: 0 }, tick: 2 }
+          realtime: { self: closeSelf, entities: [closeSelf, closeTarget], bullets: [], tick: 2 }
         }, {
           kind: 'profit-candidate',
           band: 'profit',
@@ -13281,17 +13310,20 @@ async function runSelfTest() {
           }
         });
         const fullCommands = [];
+        const fullSelf = { ...farSelf };
+        const fullTarget = { ...farTarget, x: 900, hp: 3 };
         const fullAdapter = createBrowserlessActionAdapter({
           now: () => 1600 + fullCommands.length * 200,
           commandIntervalMs: 1,
           attackRangeCm: 14500,
+          shootRepeatEnabled: false,
           transport: {
             sendVelocity: (dx, dy) => fullCommands.push(`vel ${dx} ${dy}`),
             sendShoot: (targetX, targetY, startX, startY) => fullCommands.push(`shoot ${targetX} ${targetY} ${startX} ${startY}`)
           }
         });
         const full = fullAdapter.applyDecision({
-          realtime: { self: { user_id: 7, x: 0, y: 0 }, tick: 3 }
+          realtime: { self: fullSelf, entities: [fullSelf, fullTarget], bullets: [], tick: 3 }
         }, {
           kind: 'profit-candidate',
           band: 'profit',
@@ -13304,8 +13336,10 @@ async function runSelfTest() {
         });
         return [
           far.kind,
-          far.reason,
-          far.afkAttackCommit.commitRangeCm,
+          far.shoot.reason,
+          far.shoot.skipped,
+          far.shoot.firePolicy.remainingHp,
+          far.movement.reason,
           farCommands.join(','),
           !farCommands.includes('shoot'),
           close.kind,
@@ -13319,7 +13353,7 @@ async function runSelfTest() {
           fullCommands.join(',')
         ].join('|');
       })(),
-      want: 'velocity|profit-afk-preengage|10000|vel 1 0|true|profit-attack|true|profit-afk-attack-approach|false|true|profit-attack|profit-afk-attack-hold|true|vel 0 0,shoot 900 0 0 0'
+      want: 'profit-attack|afk-fire-delay-own-kill-before-near|true|20|profit-afk-attack-approach|vel 1 0|true|profit-attack|true|profit-afk-attack-approach|false|true|profit-attack|profit-afk-attack-hold|true|vel 0 0,shoot 900 0 0 0'
     },
     {
       name: 'browserless action adapter never fires while profit target remains invulnerable',
@@ -13329,7 +13363,6 @@ async function runSelfTest() {
           now: () => 1200 + approachCommands.length * 200,
           commandIntervalMs: 1,
           attackRangeCm: 14500,
-          afkAttackCommitRangeCm: 5000,
           transport: {
             sendVelocity: (dx, dy) => approachCommands.push(`vel ${dx} ${dy}`),
             sendShoot: () => approachCommands.push('shoot')
@@ -13351,7 +13384,6 @@ async function runSelfTest() {
           now: () => 1600 + waitCommands.length * 200,
           commandIntervalMs: 1,
           attackRangeCm: 14500,
-          afkAttackCommitRangeCm: 5000,
           transport: {
             sendVelocity: (dx, dy) => waitCommands.push(`vel ${dx} ${dy}`),
             sendShoot: () => waitCommands.push('shoot')
@@ -24908,6 +24940,25 @@ async function runSelfTest() {
       name: 'browserless action adapter attacks visible AFK profit target',
       got: (() => {
         const commands = [];
+        const self = {
+          entity_id: 1,
+          user_id: 7,
+          x: 0,
+          y: 0,
+          stamina_5s_remaining_milli: 1000000,
+          stamina_5s_limit_milli: 1000000
+        };
+        const target = {
+          entity_id: 2,
+          user_id: 8,
+          x: 1000,
+          y: 0,
+          hp: 100,
+          max_hp: 100,
+          current_join_mode: 'Passive',
+          vx: 0,
+          vy: 0
+        };
         const adapter = createBrowserlessActionAdapter({
           now: () => 1000 + commands.length * 200,
           commandIntervalMs: 1,
@@ -24919,7 +24970,7 @@ async function runSelfTest() {
           }
         });
         const action = adapter.applyDecision({
-          realtime: { self: { x: 0, y: 0 }, tick: 1 }
+          realtime: { self, entities: [self, target], bullets: [], tick: 1 }
         }, {
           kind: 'profit-candidate',
           band: 'profit',
@@ -24947,7 +24998,7 @@ async function runSelfTest() {
         let t = 1000;
         const commands = [];
         const timers = [];
-        const target = { type: 'enemy', userId: 8, x: 1000, y: 0, active: false };
+        const target = realtimePassiveAfk({ type: 'enemy', userId: 8, user_id: 8, x: 1000, y: 0, active: false });
         const self = { x: 0, y: 0, stamina_5s_remaining_milli: 10000 };
         const adapter = createBrowserlessActionAdapter({
           now: () => t,
@@ -25012,7 +25063,7 @@ async function runSelfTest() {
         let t = 1000;
         const commands = [];
         const timers = [];
-        const target = { type: 'enemy', userId: 8, x: 1000, y: 0, active: false };
+        const target = realtimePassiveAfk({ type: 'enemy', userId: 8, user_id: 8, x: 1000, y: 0, active: false });
         const self = { x: 0, y: 0, stamina_5s_remaining_milli: 10000 };
         const adapter = createBrowserlessActionAdapter({
           now: () => t,
@@ -25101,7 +25152,7 @@ async function runSelfTest() {
         let t = 1000;
         const commands = [];
         const timers = [];
-        const target = { type: 'enemy', userId: 8, x: 1000, y: 0, active: false };
+        const target = realtimePassiveAfk({ type: 'enemy', userId: 8, user_id: 8, x: 1000, y: 0, active: false });
         const self = { x: 0, y: 0, stamina_5s_remaining_milli: 10000 };
         const adapter = createBrowserlessActionAdapter({
           now: () => t,
@@ -25177,7 +25228,7 @@ async function runSelfTest() {
       name: 'browserless AFK fire ignores a partial pending ACK record for marker selection',
       got: (() => {
         const commands = [];
-        const target = { type: 'enemy', userId: 8, x: 1000, y: 0, active: false };
+        const target = realtimePassiveAfk({ type: 'enemy', userId: 8, user_id: 8, x: 1000, y: 0, active: false });
         const adapter = createBrowserlessActionAdapter({
           now: () => 1000,
           commandIntervalMs: 1,
@@ -25217,7 +25268,7 @@ async function runSelfTest() {
       name: 'browserless AFK attack allows zero stamina in full-attack range',
       got: (() => {
         const commands = [];
-        const target = { type: 'enemy', userId: 8, x: 1000, y: 0, active: false };
+        const target = realtimePassiveAfk({ type: 'enemy', userId: 8, user_id: 8, x: 1000, y: 0, active: false });
         const adapter = createBrowserlessActionAdapter({
           now: () => 1000,
           commandIntervalMs: 1,
@@ -25259,7 +25310,7 @@ async function runSelfTest() {
     {
       name: 'browserless AFK attack reserves only approach movement stamina',
       got: (() => {
-        const target = { type: 'enemy', userId: 8, x: 4900, y: 0, active: false };
+        const target = realtimePassiveAfk({ type: 'enemy', userId: 8, user_id: 8, x: 4900, y: 0, active: false });
         const makeAdapter = () => {
           const commands = [];
           return {
@@ -25320,7 +25371,7 @@ async function runSelfTest() {
         let bufferedAmount = 0;
         const commands = [];
         const timers = [];
-        const target = { type: 'enemy', userId: 8, x: 1000, y: 0, active: false };
+        const target = realtimePassiveAfk({ type: 'enemy', userId: 8, user_id: 8, x: 1000, y: 0, active: false });
         const self = { x: 0, y: 0, stamina_5s_remaining_milli: 10000 };
         const adapter = createBrowserlessActionAdapter({
           now: () => t,
@@ -25392,7 +25443,7 @@ async function runSelfTest() {
         let t = 1000;
         const commands = [];
         const timers = [];
-        const target = { type: 'enemy', userId: 8, x: 1000, y: 0, active: false };
+        const target = realtimePassiveAfk({ type: 'enemy', userId: 8, user_id: 8, x: 1000, y: 0, active: false });
         const self = { x: 0, y: 0 };
         const adapter = createBrowserlessActionAdapter({
           now: () => t,
@@ -25472,6 +25523,8 @@ async function runSelfTest() {
         let t = 1000;
         const commands = [];
         const timers = [];
+        const self = { x: 0, y: 0, stamina_5s_remaining_milli: 10000 };
+        const target = realtimePassiveAfk({ type: 'enemy', userId: 8, user_id: 8, x: 1000, y: 0, active: false });
         const adapter = createBrowserlessActionAdapter({
           now: () => t,
           commandIntervalMs: 1,
@@ -25493,19 +25546,19 @@ async function runSelfTest() {
           }
         });
         const action = adapter.applyDecision({
-          realtime: { self: { x: 0, y: 0 }, tick: 1 }
+          realtime: { self, entities: [target], tick: 1 }
         }, {
           kind: 'profit-candidate',
           band: 'profit',
           action: {
             kind: 'attack',
             band: 'profit',
-            target: { type: 'enemy', userId: 8, x: 1000, y: 0, active: false }
+            target
           }
         });
         adapter.observeState({
           realtime: {
-            self: { x: 0, y: 0 },
+            self,
             tick: 2,
             entities: [
               { user_id: 8, x: 1000, y: 0, current_join_mode: 'Active' }
@@ -25566,8 +25619,14 @@ async function runSelfTest() {
             sendShoot: (targetX, targetY, startX, startY) => commands.push(`shoot ${targetX} ${targetY} ${startX} ${startY}`)
           }
         });
+        const actionSelf = decision.input.self;
+        const actionTarget = realtimePassiveAfk({
+          ...decision.action.opportunisticShot,
+          user_id: decision.action.opportunisticShot.userId,
+          max_hp: 100
+        });
         const action = adapter.applyDecision({
-          realtime: { self: { x: 0, y: 0 }, tick: 70 }
+          realtime: { self: actionSelf, entities: [actionSelf, actionTarget], bullets: [], tick: 70 }
         }, decision);
         const state = adapter.getState();
         return [
@@ -25653,8 +25712,14 @@ async function runSelfTest() {
             sendShoot: (targetX, targetY, startX, startY) => commands.push(`shoot ${targetX} ${targetY} ${startX} ${startY}`)
           }
         });
+        const actionSelf = decision.input.self;
+        const actionTarget = realtimePassiveAfk({
+          ...decision.action.target,
+          user_id: decision.action.target.userId,
+          max_hp: 100
+        });
         const action = adapter.applyDecision({
-          realtime: { self: { x: 0, y: 0 }, tick: 70 }
+          realtime: { self: actionSelf, entities: [actionSelf, actionTarget], bullets: [], tick: 70 }
         }, decision);
         return [
           decision.kind,
@@ -25692,7 +25757,15 @@ async function runSelfTest() {
             sendShoot: (targetX, targetY, startX, startY) => commands.push(`shoot ${targetX} ${targetY} ${startX} ${startY}`)
           }
         });
-        const target = { type: 'enemy', userId: 8, x: 1000, y: 0, active: false, reason: 'opportunistic-afk-drop-shot' };
+        const target = realtimePassiveAfk({
+          type: 'enemy',
+          userId: 8,
+          user_id: 8,
+          x: 1000,
+          y: 0,
+          active: false,
+          reason: 'opportunistic-afk-drop-shot'
+        });
         const self = { x: 0, y: 0, stamina_5s_remaining_milli: 10000 };
         const action = adapter.applyDecision({
           realtime: { self, entities: [target], tick: 70 },

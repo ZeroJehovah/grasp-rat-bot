@@ -22,6 +22,7 @@ const {
   opportunityValueScoreCore,
   uniqueVisibleRouteCoinsCore
 } = require('../../strategy/opportunity-candidates');
+const { estimateEightWayRouteCore } = require('../../strategy/eight-way-route-eta');
 const {
   chooseStableOpportunityCore,
   rememberOpportunityChoiceCore
@@ -171,7 +172,6 @@ const DEFAULT_LOW_HP_RECOVERY_THREAT_HP = BROWSER_RUNTIME_DEFAULTS.combatLowHpLe
 const DEFAULT_LOW_HP_RECOVERY_THREAT_LOW_HP_ANCHOR = 20;
 const DEFAULT_LOW_HP_RECOVERY_THREAT_HIGH_HP_RADIUS = 15000;
 const DEFAULT_STAMINA_BUDGET_RELOGIN_DELAY_MS = BROWSER_RUNTIME_DEFAULTS.staminaBudgetReloginDelayMs;
-const DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM = BROWSER_RUNTIME_DEFAULTS.afkAttackCommitRangeCm;
 const DEFAULT_AFK_COMBAT_MOVEMENT_STAMINA_PER_SHOT_MS = 425;
 const DEFAULT_AFK_DISPLAY_INACTIVE_MS = 60000;
 const EASY_KILL_CANDIDATE_DIAGNOSTIC_LIMIT = 8;
@@ -180,9 +180,11 @@ const EASY_KILL_SEEK_RANGE_CM_BY_SCORE = Object.freeze({
   2: null,
   3: null
 });
-const DEFAULT_INVULNERABLE_PROFIT_APPROACH_DISTANCE_CM = 5000;
+const DEFAULT_INVULNERABLE_PROFIT_APPROACH_DISTANCE_CM = BROWSER_RUNTIME_DEFAULTS.invulnerableProfitApproachDistanceCm ?? 1000;
 const DEFAULT_INVULNERABLE_ACTIVE_PROFIT_APPROACH_DISTANCE_CM = 15000;
 const DEFAULT_INVULNERABLE_PROFIT_MOVE_SPEED_CM_PER_SEC = 1000;
+const INVULNERABLE_PROFIT_COMMITMENT_RANK = 30;
+const DEFAULT_INVULNERABLE_PROFIT_MISSING_HOLD_MS = 1800;
 const DEFAULT_DANGEROUS_TARGET_COOLDOWN_MS = BROWSER_RUNTIME_DEFAULTS.browserlessDangerousTargetCooldownMs ?? 900000;
 const DEFAULT_EASY_KILL_APPROACH_WINDOW_MS = BROWSER_RUNTIME_DEFAULTS.browserlessEasyKillApproachWindowMs ?? 8000;
 const DEFAULT_EASY_KILL_APPROACH_MIN_CLOSING_CM = BROWSER_RUNTIME_DEFAULTS.browserlessEasyKillApproachMinClosingCm ?? 1000;
@@ -2269,6 +2271,10 @@ function summarizeTarget(target) {
     easyKillProfitTarget: Boolean(target.easyKillProfitTarget),
     easyKillInvulnerableApproachEligible: Boolean(target.easyKillInvulnerableApproachEligible),
     invulnerableApproachDistanceCm: numberOrNull(target.invulnerableApproachDistanceCm),
+    invulnerableApproachWindowOpen: Boolean(target.invulnerableApproachWindowOpen),
+    invulnerableApproachEstimate: target.invulnerableApproachEstimate
+      ? cloneJson(target.invulnerableApproachEstimate)
+      : null,
     safetyMemoryOnly: Boolean(target.safetyMemoryOnly),
     safetyMemory: target.safetyMemory ? cloneJson(target.safetyMemory) : null,
     profitMetadataAuthority: target.profitMetadataAuthority || '',
@@ -3069,25 +3075,52 @@ function invulnerableRemainingMsFromTicksOrFlag(target, options = {}) {
   return isInvulnerableEntity(target) ? -1 : null;
 }
 
-function invulnerableProfitTargetReadyOnApproach(target, options = {}) {
-  if (!target?.invulnerable) return true;
-  const remainingMs = invulnerableRemainingMs(target, options);
-  if (!(remainingMs > 0)) return false;
-  const distance = Number(target.distance ?? Infinity);
-  if (!Number.isFinite(distance)) return false;
+function invulnerableProfitApproachEstimate(target, options = {}) {
   const approachDistance = Math.max(0, Number(
     options.invulnerableProfitApproachDistanceCm
-      ?? options.afkAttackCommitRangeCm
-      ?? options.afkAttackCommitRange
-      ?? options.browserlessAfkAttackCommitRangeCm
+      ?? BROWSER_RUNTIME_DEFAULTS.invulnerableProfitApproachDistanceCm
       ?? DEFAULT_INVULNERABLE_PROFIT_APPROACH_DISTANCE_CM
   ));
-  const moveSpeed = Math.max(1, Number(
-    options.invulnerableProfitMoveSpeedCmPerSec
-      ?? DEFAULT_INVULNERABLE_PROFIT_MOVE_SPEED_CM_PER_SEC
+  const route = estimateEightWayRouteCore(
+    { x: options.self?.x, y: options.self?.y, distance: target?.distance },
+    { x: target?.x, y: target?.y },
+    {
+      arrivalRadiusCm: approachDistance,
+      distanceCm: target?.distance,
+      axisSpeedCmPerSec: options.invulnerableProfitAxisSpeedCmPerSec
+        ?? BROWSER_RUNTIME_DEFAULTS.invulnerableProfitAxisSpeedCmPerSec
+        ?? 950,
+      diagonalSpeedCmPerSec: options.invulnerableProfitDiagonalSpeedCmPerSec
+        ?? BROWSER_RUNTIME_DEFAULTS.invulnerableProfitDiagonalSpeedCmPerSec
+        ?? 940,
+      segmentOverheadMs: options.invulnerableProfitRouteSegmentOverheadMs
+        ?? BROWSER_RUNTIME_DEFAULTS.invulnerableProfitRouteSegmentOverheadMs
+        ?? 120
+    }
+  );
+  const slackMs = Math.max(0, Number(
+    options.invulnerableProfitApproachSlackMs
+      ?? BROWSER_RUNTIME_DEFAULTS.invulnerableProfitApproachSlackMs
+      ?? 10000
   ));
-  const travelMs = Math.max(0, distance - approachDistance) * 1000 / moveSpeed;
-  return travelMs > 0 && remainingMs <= travelMs;
+  const remainingMs = invulnerableRemainingMs(target, options);
+  return {
+    approachDistanceCm: approachDistance,
+    route,
+    routeEtaMs: route.etaMs,
+    slackMs,
+    remainingMs,
+    coinGraceMs: route.etaMs === null || route.etaMs === undefined || !(remainingMs > 0)
+      ? null
+      : Math.min(slackMs, Math.max(0, remainingMs - route.etaMs)),
+    ready: route.ok === true && remainingMs > 0
+      && (route.etaMs === 0 || remainingMs <= route.etaMs + slackMs)
+  };
+}
+
+function invulnerableProfitTargetReadyOnApproach(target, options = {}) {
+  if (!target?.invulnerable) return true;
+  return invulnerableProfitApproachEstimate(target, options).ready;
 }
 
 function invulnerableActiveProfitTargetReadyOnApproach(target, options = {}) {
@@ -3454,9 +3487,17 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     ...firingThreats.filter(threat => !avoidanceThreats.includes(threat))
   ].filter(threat => snapshotFallbackThreatBlocks(threat, self, options));
   const afkObservationTargetsRaw = visibleTargets.filter(entity => {
+    if (entity.invulnerable) {
+      const approachEstimate = invulnerableProfitApproachEstimate(entity, { ...options, self });
+      entity.invulnerableApproachEstimate = approachEstimate;
+      entity.invulnerableApproachWindowOpen = approachEstimate.ready;
+    } else {
+      entity.invulnerableApproachEstimate = null;
+      entity.invulnerableApproachWindowOpen = false;
+    }
     if (entity.whitelisted || entity.active || entity.moving || entity.firing || entity.alive === false) return false;
     if (economicProfitPursuitSuppressionRecordById(stateful, targetIdentity(entity), nowMs)) return false;
-    if (entity.invulnerable && !invulnerableProfitTargetReadyOnApproach(entity, options)) return false;
+    if (entity.invulnerable && !invulnerableProfitTargetReadyOnApproach(entity, { ...options, self })) return false;
     return attackWorthTakingCore(self, entity, {
       attackMinDrop: options.attackMinDrop ?? DEFAULT_ATTACK_MIN_DROP,
       attackMinAfkDrop: options.attackMinAfkDrop ?? DEFAULT_ATTACK_MIN_AFK_DROP,
@@ -3656,6 +3697,10 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
     ?? previousActionTarget?.id;
   if (previousActionTargetId !== null && previousActionTargetId !== undefined && previousActionTargetId !== '') {
     priorityUserIds.add(String(previousActionTargetId));
+  }
+  const committedProfitTargetId = stateful?.invulnerableProfitApproach?.targetId;
+  if (committedProfitTargetId !== null && committedProfitTargetId !== undefined && committedProfitTargetId !== '') {
+    priorityUserIds.add(String(committedProfitTargetId));
   }
   for (const bullet of Array.isArray(realtime.bullets) ? realtime.bullets : []) {
     const ownerId = bulletOwnerId(bullet);
@@ -5697,6 +5742,8 @@ function opportunityNearbyPriorityDistance(options = {}) {
 
 function browserlessOpportunityPriorityTier(item, options = {}) {
   if (String(item?.type || '') === 'remote-player-navigation') return 1;
+  if (String(item?.type || '') === 'enemy'
+    && item?.sourceTarget?.invulnerableApproachWindowOpen === true) return 3;
   const base = opportunityPriorityTierCore(item, {
     visibleDistance: opportunityVisibleDistance(options),
     nearbyPriorityDistance: opportunityNearbyPriorityDistance(options)
@@ -5724,6 +5771,256 @@ function prioritizeBrowserlessOpportunities(opportunities, options = {}) {
     ...item,
     priorityTier: browserlessOpportunityPriorityTier(item, options)
   }));
+}
+
+function invulnerableProfitCommitmentTarget(input, commitment) {
+  const targetId = String(commitment?.targetId || '');
+  if (!targetId) return null;
+  return (input?.visibleTargets || []).find(target => targetIdentity(target) === targetId) || null;
+}
+
+function invulnerableProfitCommitmentCoin(input, commitment, options = {}) {
+  const key = String(commitment?.graceCoinKey || '');
+  if (!key) return null;
+  const maxDistance = Math.max(0, Number(options.invulnerableProfitGraceCoinMaxDistanceCm ?? 1200));
+  return (input?.realtimeObservedCoins || [])
+    .filter(coin => coin?.snapshotOnly !== true && Number(coin?.amount || 0) === 1)
+    .find(coin => coinDecisionKey(coin) === key
+      && Number.isFinite(Number(coin?.distance))
+      && Number(coin.distance) <= maxDistance) || null;
+}
+
+function clearInvulnerableProfitCommitment(stateful = {}, reason = '', nowMs = Date.now(), target = null) {
+  const current = stateful.invulnerableProfitApproach || null;
+  if (!current) return null;
+  const released = {
+    ...cloneJson(current),
+    releasedAt: nowMs,
+    releaseReason: String(reason || 'released'),
+    lastTarget: target ? summarizeTarget(target) : cloneJson(current.lastTarget || null)
+  };
+  stateful.invulnerableProfitApproachLastRelease = released;
+  stateful.invulnerableProfitApproach = null;
+  const targetId = String(current.targetId || '');
+  if (targetId && opportunityChoiceTargetId(stateful.opportunityChoice || stateful.currentOpportunity) === targetId) {
+    stateful.opportunityChoice = null;
+    stateful.currentOpportunity = null;
+    stateful.opportunitySwitchLock = null;
+    stateful.switchLock = null;
+  }
+  return released;
+}
+
+function invulnerableProfitCommitmentInvalidReason(input, commitment, target, stateful = {}, options = {}) {
+  const nowMs = Number(input?.nowMs || Date.now());
+  if (!target) {
+    const holdMs = Math.max(0, Number(options.invulnerableProfitMissingHoldMs
+      ?? DEFAULT_INVULNERABLE_PROFIT_MISSING_HOLD_MS));
+    return nowMs - Number(commitment?.lastRealtimeVisibleAt || commitment?.openedAt || 0) > holdMs
+      ? 'target-missing-timeout'
+      : '';
+  }
+  const hp = numberOrNull(target.hp);
+  if (target.alive === false || (hp !== null && hp <= 0)) return 'target-dead';
+  if (target.whitelisted || target.profitProtected || target.creatorProtected) return 'target-protected';
+  if (target.active || target.joinModeActive || target.moving || target.firing || target.recentlyActive) return 'target-became-active';
+  if (dangerousTargetCooldownRecordById(stateful, commitment.targetId, nowMs)) return 'target-dangerous';
+  if (economicProfitPursuitSuppressionRecordById(stateful, commitment.targetId, nowMs)) return 'target-suppressed';
+  return '';
+}
+
+function reconcileInvulnerableProfitCommitment(input, stateful = {}, options = {}) {
+  const commitment = stateful.invulnerableProfitApproach || null;
+  if (!commitment) return { commitment: null, target: null, coin: null, release: null };
+  const nowMs = Number(input?.nowMs || Date.now());
+  const target = invulnerableProfitCommitmentTarget(input, commitment);
+  const invalidReason = invulnerableProfitCommitmentInvalidReason(input, commitment, target, stateful, options);
+  if (invalidReason) {
+    return {
+      commitment: null,
+      target,
+      coin: null,
+      release: clearInvulnerableProfitCommitment(stateful, invalidReason, nowMs, target)
+    };
+  }
+  if (!target) {
+    commitment.phase = 'temporarily-preempted';
+    commitment.lastUpdatedAt = nowMs;
+    return { commitment, target: null, coin: null, release: null };
+  }
+  const estimate = invulnerableProfitApproachEstimate(target, { ...options, self: input.self });
+  commitment.lastRealtimeVisibleAt = nowMs;
+  commitment.lastUpdatedAt = nowMs;
+  commitment.lastTarget = summarizeTarget(target);
+  commitment.routeEtaMs = numberOrNull(estimate.routeEtaMs);
+  commitment.remainingInvulnerabilityMs = numberOrNull(estimate.remainingMs);
+  commitment.approachDistanceCm = Number(estimate.approachDistanceCm || commitment.approachDistanceCm || 1000);
+  if (target.invulnerable) {
+    const latestDeadlineAt = nowMs + Math.max(0, Number(estimate.coinGraceMs || 0));
+    if (Number(commitment.departureDeadlineAt) > 0) {
+      commitment.departureDeadlineAt = Math.min(Number(commitment.departureDeadlineAt), latestDeadlineAt);
+    } else {
+      commitment.departureDeadlineAt = latestDeadlineAt;
+    }
+    const graceCoin = invulnerableProfitCommitmentCoin(input, commitment, options);
+    const withinGrace = graceCoin && nowMs < Number(commitment.departureDeadlineAt || 0);
+    commitment.phase = withinGrace ? 'coin-grace' : 'invulnerable-approach';
+    if (!withinGrace) commitment.graceCoinKey = '';
+    return { commitment, target, coin: withinGrace ? graceCoin : null, release: null };
+  }
+  commitment.phase = 'vulnerable-attack';
+  commitment.graceCoinKey = '';
+  return { commitment, target, coin: null, release: null };
+}
+
+function buildInvulnerableProfitCommitmentAction(input, stateful = {}, options = {}) {
+  const reconciled = reconcileInvulnerableProfitCommitment(input, stateful, options);
+  const commitment = reconciled.commitment;
+  if (!commitment) return { action: null, ...reconciled };
+  if (!reconciled.target) {
+    const target = cloneJson(commitment.lastTarget || null);
+    if (target) target.invulnerableProfitCommitment = true;
+    return {
+      action: {
+        kind: 'wait',
+        band: 'profit',
+        reason: 'invulnerable-profit-commitment-realtime-hold',
+        target,
+        stopMotion: true,
+        reward: Number(commitment.reward || 0),
+        expectedReward: Number(commitment.expectedReward || commitment.reward || 0),
+        staminaCost: 0,
+        invulnerableProfitCommitment: cloneJson(commitment)
+      },
+      ...reconciled
+    };
+  }
+  if (reconciled.coin) {
+    return {
+      action: {
+        kind: Number(reconciled.coin.distance || Infinity) <= Number(options.coinMaxDistance ?? BROWSER_RUNTIME_DEFAULTS.coinMaxDistance)
+          ? 'coin'
+          : 'seek-coin',
+        band: 'profit',
+        reason: 'invulnerable-target-existing-foot-coin-grace',
+        target: summarizeCoin(reconciled.coin),
+        reward: 1,
+        staminaCost: opportunityCoinStaminaCost(reconciled.coin, options),
+        invulnerableProfitCommitment: cloneJson(commitment)
+      },
+      ...reconciled
+    };
+  }
+  const target = summarizeTarget(reconciled.target);
+  target.invulnerableProfitCommitment = true;
+  return {
+    action: {
+      kind: reconciled.target.invulnerable ? 'seek-enemy' : 'attack',
+      band: 'profit',
+      reason: reconciled.target.invulnerable
+        ? 'invulnerable-profit-commitment-approach'
+        : 'invulnerable-profit-commitment-attack',
+      target,
+      reward: Number(commitment.reward || entityDropValue(reconciled.target)),
+      expectedReward: Number(commitment.expectedReward || commitment.reward || entityDropValue(reconciled.target)),
+      staminaCost: opportunityEnemyStaminaCost(reconciled.target, options),
+      invulnerableProfitCommitment: cloneJson(commitment)
+    },
+    ...reconciled
+  };
+}
+
+function currentStartedInvulnerableGraceCoin(input, stateful = {}, options = {}) {
+  const previous = stateful.lastDecisionAction || null;
+  if (!previous?.target || !['coin', 'seek-coin', 'profit-candidate'].includes(String(previous.kind || ''))) return null;
+  const previousKey = coinDecisionKey(previous.target);
+  if (!previousKey) return null;
+  const maxDistance = Math.max(0, Number(options.invulnerableProfitGraceCoinMaxDistanceCm ?? 1200));
+  return (input?.realtimeObservedCoins || [])
+    .filter(coin => coin?.snapshotOnly !== true && Number(coin?.amount || 0) === 1)
+    .find(coin => coinDecisionKey(coin) === previousKey
+      && Number.isFinite(Number(coin?.distance))
+      && Number(coin.distance) <= maxDistance) || null;
+}
+
+function establishInvulnerableProfitCommitment(action, opportunity, input, stateful = {}, options = {}) {
+  if (stateful.invulnerableProfitApproach || !action || String(action.band || '') !== 'profit') return null;
+  const actionTarget = action.target || null;
+  const directTargetId = targetIdentity(actionTarget);
+  const chosenWindowTarget = opportunity?.choice?.type === 'enemy'
+    && opportunity.choice?.sourceTarget?.invulnerableApproachWindowOpen === true
+    ? opportunity.choice.sourceTarget
+    : null;
+  const graceCoin = currentStartedInvulnerableGraceCoin(input, stateful, options);
+  const selectedGraceCoin = graceCoin
+    && ['coin', 'seek-coin', 'profit-candidate'].includes(String(action.kind || ''))
+    && coinDecisionKey(actionTarget) === coinDecisionKey(graceCoin);
+  const selectedTarget = directTargetId && actionTarget?.invulnerableApproachWindowOpen === true
+    ? actionTarget
+    : (selectedGraceCoin ? chosenWindowTarget : null);
+  const targetId = targetIdentity(selectedTarget);
+  if (!targetId || selectedTarget?.invulnerable !== true || selectedTarget?.invulnerableApproachWindowOpen !== true) return null;
+  const visible = (input?.visibleTargets || []).find(item => targetIdentity(item) === targetId) || null;
+  if (!visible || visible.invulnerable !== true || visible.active || visible.moving || visible.firing || visible.whitelisted) return null;
+  const estimate = visible.invulnerableApproachEstimate
+    || invulnerableProfitApproachEstimate(visible, { ...options, self: input.self });
+  if (!estimate?.ready) return null;
+  const nowMs = Number(input?.nowMs || Date.now());
+  const graceMs = graceCoin ? Math.max(0, Number(estimate.coinGraceMs || 0)) : 0;
+  const choice = (opportunity?.opportunities || []).find(item => (
+    String(item?.type || '') === 'enemy' && String(item.id ?? '') === targetId
+  )) || opportunity?.choice || null;
+  const commitment = {
+    targetId,
+    targetName: String(visible.name || ''),
+    openedAt: nowMs,
+    lastUpdatedAt: nowMs,
+    lastRealtimeVisibleAt: nowMs,
+    phase: graceCoin && graceMs > 0 ? 'coin-grace' : 'invulnerable-approach',
+    graceCoinKey: graceCoin && graceMs > 0 ? coinDecisionKey(graceCoin) : '',
+    coinGraceStartedAt: graceCoin && graceMs > 0 ? nowMs : null,
+    departureDeadlineAt: graceMs > 0 ? nowMs + graceMs : nowMs,
+    routeEtaMs: numberOrNull(estimate.routeEtaMs),
+    remainingInvulnerabilityMs: numberOrNull(estimate.remainingMs),
+    approachDistanceCm: Number(estimate.approachDistanceCm || 1000),
+    reward: numberOrNull(choice?.reward ?? action.reward ?? entityDropValue(visible)),
+    expectedReward: numberOrNull(choice?.expectedReward ?? action.expectedReward ?? entityDropValue(visible)),
+    lastTarget: summarizeTarget(visible)
+  };
+  stateful.invulnerableProfitApproach = commitment;
+  stateful.profitMission = null;
+  stateful.opportunityChoice = null;
+  stateful.currentOpportunity = null;
+  stateful.opportunitySwitchLock = null;
+  stateful.switchLock = null;
+  const arbitration = ensureFinalActionArbitrationState(stateful);
+  arbitration.lastAction = null;
+  arbitration.lastFocus = null;
+  arbitration.lastSelectedAt = 0;
+  arbitration.profitDropout = null;
+  return commitment;
+}
+
+function upgradeInvulnerableWindowActionForGrace(action, opportunity, input, stateful = {}, options = {}) {
+  if (!action || stateful.invulnerableProfitApproach) return action;
+  const windowTarget = opportunity?.choice?.type === 'enemy'
+    && opportunity.choice?.sourceTarget?.invulnerableApproachWindowOpen === true
+    ? opportunity.choice.sourceTarget
+    : null;
+  if (!windowTarget) return action;
+  const graceCoin = currentStartedInvulnerableGraceCoin(input, stateful, options);
+  if (!graceCoin) return action;
+  const estimate = windowTarget.invulnerableApproachEstimate
+    || invulnerableProfitApproachEstimate(windowTarget, { ...options, self: input.self });
+  if (!(Number(estimate?.coinGraceMs || 0) > 0)) return action;
+  const actionCoinKey = coinDecisionKey(action.target);
+  if (!['coin', 'seek-coin', 'profit-candidate'].includes(String(action.kind || ''))
+    || actionCoinKey !== coinDecisionKey(graceCoin)) return action;
+  return {
+    ...action,
+    commitmentRank: INVULNERABLE_PROFIT_COMMITMENT_RANK,
+    invulnerableWindowGraceTargetId: targetIdentity(windowTarget)
+  };
 }
 
 function nearestProfitCoinWithin(self, coins, activeThreats, maxDistance, options = {}) {
@@ -6917,6 +7214,9 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     };
   }
   const includeAfkProfitTargets = options.includeAfkProfitTargets !== false;
+  if (stateful.invulnerableProfitApproach) {
+    reconcileInvulnerableProfitCommitment(input, stateful, options);
+  }
   const explorationConfig = reconcileControlledExplorationSessions(input, stateful, options);
   const coinMaxDistance = Math.max(0, Number(options.coinMaxDistance || BROWSER_RUNTIME_DEFAULTS.coinMaxDistance));
   const globalCoinMaxDistance = Math.max(0, Number(options.globalCoinMaxDistance || DEFAULT_GLOBAL_COIN_MAX_DISTANCE));
@@ -6924,11 +7224,16 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
   const routeSelectionOptions = { ...options, profitThresholdContext: thresholdContext };
   clearDangerousOpportunityState(stateful, input.nowMs);
   const fieldMigrationCoin = pickFieldMigrationCoin(input, opportunityThreats, thresholdContext, options);
-  const coinGroups = input.profitCoins.length
+  const activeCommitment = stateful.invulnerableProfitApproach || null;
+  const allowedCommitmentCoinKey = String(activeCommitment?.graceCoinKey || '');
+  const opportunityProfitCoins = activeCommitment
+    ? input.profitCoins.filter(coin => allowedCommitmentCoinKey && coinDecisionKey(coin) === allowedCommitmentCoinKey)
+    : input.profitCoins;
+  const coinGroups = opportunityProfitCoins.length
     ? [
-        { coins: input.profitCoins, maxDistance: coinMaxDistance },
-        { coins: input.profitCoins, maxDistance: globalCoinMaxDistance },
-        ...(fieldMigrationCoin ? [{ coins: [fieldMigrationCoin], maxDistance: Math.max(0, Number(options.fieldMigrationMaxDistance ?? BROWSER_RUNTIME_DEFAULTS.fieldMigrationMaxDistance)) }] : [])
+        { coins: opportunityProfitCoins, maxDistance: coinMaxDistance },
+        { coins: opportunityProfitCoins, maxDistance: globalCoinMaxDistance },
+        ...(!activeCommitment && fieldMigrationCoin ? [{ coins: [fieldMigrationCoin], maxDistance: Math.max(0, Number(options.fieldMigrationMaxDistance ?? BROWSER_RUNTIME_DEFAULTS.fieldMigrationMaxDistance)) }] : [])
       ]
     : [];
   const visibleRouteCoins = uniqueVisibleRouteCoinsCore(coinGroups, {
@@ -6944,16 +7249,20 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
         sameCoinRadiusCm: options.singleCoinBaitSameCoinRadiusCm ?? BROWSER_RUNTIME_DEFAULTS.singleCoinBaitSameCoinRadiusCm
       }))
     : visibleRouteCoins;
+  const invulnerableCommitment = activeCommitment;
+  const commitmentRouteCoins = invulnerableCommitment
+    ? routeCoins.filter(coin => coinDecisionKey(coin) === String(invulnerableCommitment.graceCoinKey || ''))
+    : routeCoins;
   const coinRouteBaitExclusion = activeSingleCoinBait ? {
     baitId: coinRouteKey(activeSingleCoinBait),
     inputCount: visibleRouteCoins.length,
     candidateCount: routeCoins.length,
     excludedCount: visibleRouteCoins.length - routeCoins.length
   } : null;
-  const routeCoin = input.self && routeCoins.length
+  const routeCoin = input.self && commitmentRouteCoins.length
     ? pickCoinRouteOpportunityCore(
         input.self,
-        routeCoins,
+        commitmentRouteCoins,
         opportunityThreats,
         coinRouteCoreOptions(input, stateful, routeSelectionOptions)
       )
@@ -7020,11 +7329,12 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     nowMs: input.nowMs
   };
   const remoteProfit = remoteProfitCandidateInput(input, options);
-  opportunityOptions.remotePlayerCandidates = remoteProfit.candidates;
+  opportunityOptions.remotePlayerCandidates = invulnerableCommitment ? [] : remoteProfit.candidates;
   opportunityOptions.remotePlayerGeneration = remoteProfit.generation;
   opportunityOptions.remotePlayerSnapshotAt = remoteProfit.snapshotAt;
   const afkOpportunityTargets = includeAfkProfitTargets
     ? input.afkTargets
+      .filter(target => !invulnerableCommitment || targetIdentity(target) === String(invulnerableCommitment.targetId || ''))
       .filter(target => !targetDangerousCooldownRecord(stateful, target, input.nowMs))
       .filter(target => !afkOpportunityBlockedByStaminaCooldown(target, opportunityOptions))
       .filter(target => targetSafeFromOpportunityThreats(target, opportunityThreats, options))
@@ -7347,7 +7657,12 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     opportunityOptions
   );
   const chosen = choice.chosen || null;
-  updateProfitMissionFromOpportunity(stateful, chosen, input, options);
+  if (chosen?.type === 'enemy' && chosen.sourceTarget?.invulnerableApproachWindowOpen === true) {
+    chosen.reason = 'invulnerable-high-drop-approach-window';
+    chosen.actionKind = 'seek-enemy';
+  }
+  if (!stateful.invulnerableProfitApproach) updateProfitMissionFromOpportunity(stateful, chosen, input, options);
+  else stateful.profitMission = null;
   if (missingEnemyHold?.releaseReason) {
     missingEnemyHold.replacementCandidate = chosen ? {
       type: String(chosen.type || ''),
@@ -8062,11 +8377,9 @@ function summarizeOpportunisticShotTarget(target, options = {}) {
 function pickOpportunisticShotTarget(input, stateful = {}, options = {}) {
   if (!input?.self) return null;
   const attackRange = Math.max(0, Number(options.attackRange ?? options.combatAttackRange ?? DEFAULT_ATTACK_RANGE));
-  const commitRange = Math.max(0, Number(options.afkAttackCommitRangeCm
-    ?? options.afkAttackCommitRange
-    ?? options.browserlessAfkAttackCommitRangeCm
-    ?? DEFAULT_AFK_ATTACK_COMMIT_RANGE_CM));
-  const maxShotRange = commitRange > 0 ? Math.min(attackRange, commitRange) : attackRange;
+  const maxShotRange = Math.min(attackRange, Math.max(0, Number(
+    options.afkAttackFireMaxRangeCm ?? BROWSER_RUNTIME_DEFAULTS.afkAttackFireMaxRangeCm ?? attackRange
+  )));
   return (input.afkTargets || [])
     .filter(target => !targetDangerousCooldownRecord(stateful, target, input.nowMs))
     .filter(target => target.alive !== false && !target.invulnerable && !target.active && !target.firing)
@@ -8130,6 +8443,7 @@ function opportunisticShotBeatsAction(action, shot, opportunity = null, options 
 
 function attachOpportunisticShotDecision(action, input, stateful = {}, options = {}, opportunity = null) {
   if (!action || isRecoveringSelf(input?.self)) return action;
+  if (stateful.invulnerableProfitApproach) return action;
   if (action.opportunisticShot || action.combat) return action;
   if (action.kind !== 'coin' && action.kind !== 'seek-coin') return action;
   const shot = pickOpportunisticShotTarget(input, stateful, options);
@@ -8142,6 +8456,7 @@ function attachOpportunisticShotDecision(action, input, stateful = {}, options =
 
 function buildOpportunisticShotWaitDecision(input, stateful = {}, options = {}) {
   if (!input?.self || isRecoveringSelf(input.self)) return null;
+  if (stateful.invulnerableProfitApproach) return null;
   const shot = pickOpportunisticShotTarget(input, stateful, options);
   if (!shot) return null;
   const target = summarizeOpportunisticShotTarget(shot, options);
@@ -11784,6 +12099,20 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     profitThresholdContext,
     includeAfkProfitTargets: nonCombatProfit ? false : options.includeAfkProfitTargets
   });
+  const invulnerableCommitmentDecision = buildInvulnerableProfitCommitmentAction(input, stateful, options);
+  let invulnerableCommitmentAction = invulnerableCommitmentDecision.action;
+  if (invulnerableCommitmentAction) {
+    const commitmentTargetId = targetIdentity(invulnerableCommitmentAction.target);
+    const commitmentChoice = (opportunity.opportunities || []).find(item => (
+      String(item?.type || '') === 'enemy' && String(item.id ?? '') === commitmentTargetId
+    )) || null;
+    if (commitmentChoice) {
+      opportunity.choice = commitmentChoice;
+      opportunity.action = invulnerableCommitmentAction;
+      opportunity.opportunityChoice = commitmentChoice;
+      opportunity.switchLock = null;
+    }
+  }
   const easyKillPreferredTargetId = easyKillPreferredTargetIdFromOpportunity(opportunity, stateful);
   const previousCombatTarget = cloneJson(stateful.combatTarget || null);
   const previousCombatMetrics = cloneJson(stateful.combatMetrics || null);
@@ -12196,6 +12525,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       && !injuredCautionFootCoinAction
       && !safetyAction
       && !dailyFinalCoinAction
+      && !invulnerableCommitmentAction
   );
   const singleCoinBait = buildSingleCoinBaitDecision(
     input,
@@ -12283,6 +12613,11 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       ),
       candidate(postAttackDropCoinAction, 80, 'post-attack-drop-coin', false, { commitmentRank: 20 }),
       candidate(postAttackDropWaitAction, 90, 'post-attack-drop-wait', false, { commitmentRank: 20 }),
+      candidate(invulnerableCommitmentAction, 95, 'invulnerable-profit-target-commitment', false, {
+        commitmentRank: INVULNERABLE_PROFIT_COMMITMENT_RANK,
+        roiScore: invulnerableCommitmentAction?.expectedReward,
+        staminaCost: invulnerableCommitmentAction?.staminaCost
+      }),
       candidate(staminaBudgetExitAction, 100, 'stamina-budget-exit', true, { riskScore: 100 }),
       candidate(selectedRecoveryFootCoinAction, 110, 'recovery-foot-coin', true),
       candidate(selectedRecoveryAction, 120, 'ordinary-recovery', true),
@@ -12421,6 +12756,35 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     band = action.band || band || 'wait';
     reason = action.reason || reason || 'no-profitable-candidate';
   }
+  action = upgradeInvulnerableWindowActionForGrace(action, opportunity, input, stateful, options);
+  const establishedInvulnerableCommitment = establishInvulnerableProfitCommitment(
+    action,
+    opportunity,
+    input,
+    stateful,
+    options
+  );
+  if (establishedInvulnerableCommitment) {
+    const establishedDecision = buildInvulnerableProfitCommitmentAction(input, stateful, options);
+    if (establishedDecision.action) {
+      invulnerableCommitmentAction = establishedDecision.action;
+      action = {
+        ...establishedDecision.action,
+        finalCandidate: buildFinalActionCandidate(establishedDecision.action, {
+          nowMs: input.nowMs,
+          order: 95,
+          switchReason: 'invulnerable-profit-target-commitment',
+          validUntil: input.nowMs + Math.max(250, Number(options.decisionIntervalMs || 1000)),
+          commitmentRank: INVULNERABLE_PROFIT_COMMITMENT_RANK,
+          roiScore: establishedDecision.action.expectedReward,
+          staminaCost: establishedDecision.action.staminaCost
+        }).action.finalCandidate
+      };
+      kind = action.kind;
+      band = action.band;
+      reason = action.reason;
+    }
+  }
   const ignoredActionCoinId = action?.ignoredCoin?.id || '';
   const rememberedOpportunityKey = coinDecisionKey(opportunity.opportunityChoice?.sourceCoin || opportunity.opportunityChoice);
   const selectedProfitTargetId = action?.finalCandidate?.priorityBand === 'profit'
@@ -12489,6 +12853,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     },
     profit: {
       mission: cloneJson(stateful.profitMission || null),
+      invulnerableCommitment: cloneJson(stateful.invulnerableProfitApproach || null),
+      invulnerableCommitmentRelease: cloneJson(invulnerableCommitmentDecision.release || null),
       best: summarizeOpportunity(
         action?.finalCandidate?.switchReason === 'best-eligible-profit'
           ? (outputOpportunityChoice || opportunity.choice)
@@ -12541,6 +12907,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       opportunityChoice: outputOpportunityChoice,
       switchLock: outputSwitchLock,
       profitMission: cloneJson(stateful.profitMission || null),
+      invulnerableProfitApproach: cloneJson(stateful.invulnerableProfitApproach || null),
       singleCoinBait: cloneJson(stateful.singleCoinBait || null),
       outsideCenterIdle: cloneJson(stateful.outsideCenterIdle || null),
       recoveryContactGuard: cloneJson(stateful.recoveryContactGuard || null)
@@ -12788,6 +13155,9 @@ function createBrowserlessDecisionAdapter(options = {}) {
       if (Object.prototype.hasOwnProperty.call(plannerState, 'profitMission')) {
         decisionState.profitMission = cloneJson(plannerState.profitMission || null);
       }
+      if (Object.prototype.hasOwnProperty.call(plannerState, 'invulnerableProfitApproach')) {
+        decisionState.invulnerableProfitApproach = cloneJson(plannerState.invulnerableProfitApproach || null);
+      }
       const proposedChoice = plannerState.opportunityChoice ?? null;
       const currentCombatTargetId = targetIdForAttackHistory(decisionState.combatTarget);
       const proposedTargetId = opportunityChoiceTargetId(proposedChoice);
@@ -12864,6 +13234,7 @@ function createBrowserlessDecisionAdapter(options = {}) {
         finalActionPreemption: decisionState.finalActionPreemption || null,
         lastDecisionAction: decisionState.lastDecisionAction || null,
         profitMission: decisionState.profitMission || null,
+        invulnerableProfitApproach: decisionState.invulnerableProfitApproach || null,
         recoveryContactGuard: decisionState.recoveryContactGuard || null,
         attackHistory: decisionState.attackHistory || [],
         postKillSettlements: decisionState.postKillSettlements || {},
