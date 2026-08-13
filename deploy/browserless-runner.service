@@ -7,9 +7,10 @@ After=network-online.target
 [Service]
 Type=simple
 Nice=-10
-WorkingDirectory=/opt/grasp-rat-bot
+WorkingDirectory=/opt/grasp-rat-browserless/current
 EnvironmentFile=/etc/grasp-rat/browserless-runner.env
-ExecStart=/usr/bin/env node scripts/browserless-runner.js
+EnvironmentFile=/opt/grasp-rat-browserless/current/release.env
+ExecStart=/usr/bin/node browserless-runner.cjs
 Restart=on-failure
 RestartSec=10
 KillSignal=SIGINT
@@ -18,6 +19,8 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=read-only
+ReadOnlyPaths=/opt/grasp-rat-browserless
+InaccessiblePaths=/home/ubuntu/grasp-rat-bot/src
 ReadWritePaths=/var/lib/grasp-rat-browserless /var/log/grasp-rat-browserless
 
 [Install]

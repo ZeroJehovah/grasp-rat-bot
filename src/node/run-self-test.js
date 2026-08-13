@@ -266,6 +266,13 @@ const {
   auditDeployment: auditBrowserlessDeployment
 } = require('../../scripts/browserless-deployment-audit');
 const {
+  calculateArtifactDigest: calculateBrowserlessReleaseDigest,
+  verifyRelease: verifyBrowserlessRelease
+} = require('../../scripts/verify-browserless-release');
+const {
+  verifyRunnerStart: verifyBrowserlessRunnerStart
+} = require('../../scripts/verify-browserless-runner-start');
+const {
   buildAcceptanceReport: buildBrowserlessAcceptanceReport,
   parseArgs: parseBrowserlessAcceptanceReportArgs
 } = require('../../scripts/browserless-acceptance-report');
@@ -29926,13 +29933,22 @@ async function runSelfTest() {
       got: (() => {
         const unit = fs.readFileSync(path.join(__dirname, '../../deploy/browserless-runner.service'), 'utf8');
         const env = fs.readFileSync(path.join(__dirname, '../../deploy/browserless-runner.env.example'), 'utf8');
-        const installer = fs.readFileSync(path.join(__dirname, '../../scripts/install-browserless-runner-service.sh'), 'utf8');
+        const serviceInstaller = fs.readFileSync(path.join(__dirname, '../../scripts/install-browserless-runner-service.sh'), 'utf8');
+        const releaseInstaller = fs.readFileSync(path.join(__dirname, '../../scripts/install-browserless-release.sh'), 'utf8');
+        const releaseActivator = fs.readFileSync(path.join(__dirname, '../../scripts/activate-browserless-release.sh'), 'utf8');
+        const releaseBuilder = fs.readFileSync(path.join(__dirname, '../../scripts/build-browserless-release.js'), 'utf8');
+        const releaseVerifier = fs.readFileSync(path.join(__dirname, '../../scripts/verify-browserless-release.js'), 'utf8');
+        const releaseDeployer = fs.readFileSync(path.join(__dirname, '../../scripts/deploy-browserless-release.sh'), 'utf8');
         return [
           unit.includes('Description=Grasp Rat Browserless Runner'),
           unit.includes('EnvironmentFile=/etc/grasp-rat/browserless-runner.env'),
-          unit.includes('ExecStart=/usr/bin/env node scripts/browserless-runner.js'),
+          unit.includes('EnvironmentFile=/opt/grasp-rat-browserless/current/release.env'),
+          unit.includes('WorkingDirectory=/opt/grasp-rat-browserless/current'),
+          unit.includes('ExecStart=/usr/bin/node browserless-runner.cjs'),
           unit.includes('Nice=-10'),
           unit.includes('TimeoutStopSec=infinity'),
+          unit.includes('ReadOnlyPaths=/opt/grasp-rat-browserless'),
+          unit.includes('InaccessiblePaths=/home/ubuntu/grasp-rat-bot/src'),
           unit.includes('ReadWritePaths=/var/lib/grasp-rat-browserless /var/log/grasp-rat-browserless'),
           env.includes('GRASP_RAT_BROWSERLESS_DATA_DIR=/var/lib/grasp-rat-browserless'),
           env.includes('GRASP_RAT_BROWSERLESS_LOG_DIR=/var/log/grasp-rat-browserless'),
@@ -29967,41 +29983,224 @@ async function runSelfTest() {
           env.includes('GRASP_RAT_BROWSERLESS_COMBAT_EFFICIENCY_SAMPLE_GAP_CAP_MS=250'),
           env.includes('GRASP_RAT_BROWSERLESS_WS_TRACE_ENABLED=false'),
           env.includes('GRASP_RAT_BROWSERLESS_SOURCE_IP_INTERFACE=enp0s6'),
-          installer.includes('grasp-rat-browserless-runner'),
-          installer.includes('DATA_DIR="/var/lib/grasp-rat-browserless"'),
-          installer.includes('LOG_DIR="/var/log/grasp-rat-browserless"'),
-          installer.includes('install -d -m 0750 "$DATA_DIR"'),
-          installer.includes('install -d -m 0750 "$LOG_DIR"'),
-          installer.includes('[ ! -d "$APP_DIR/.git" ]'),
-          installer.includes('systemctl daemon-reload')
+          serviceInstaller.includes('grasp-rat-browserless-runner'),
+          serviceInstaller.includes('DATA_DIR="/var/lib/grasp-rat-browserless"'),
+          serviceInstaller.includes('LOG_DIR="/var/log/grasp-rat-browserless"'),
+          serviceInstaller.includes('install -d -m 0750 "$DATA_DIR"'),
+          serviceInstaller.includes('install -d -m 0750 "$LOG_DIR"'),
+          serviceInstaller.includes('[ ! -d "$APP_DIR/.git" ]'),
+          serviceInstaller.includes('verify-browserless-release.js'),
+          serviceInstaller.includes('systemctl daemon-reload'),
+          releaseBuilder.includes("'git', ['archive'"),
+          releaseBuilder.includes("source: 'git-object-archive'"),
+          releaseBuilder.includes("'browserless-runner.cjs'"),
+          releaseBuilder.includes("'benchmark-browserless-hot-path.cjs'"),
+          releaseBuilder.includes("'decision-worker-thread.js'"),
+          releaseBuilder.includes('browserlessReleaseBuildDependencies'),
+          releaseVerifier.includes('artifact digest mismatch'),
+          releaseVerifier.includes('release symlink is forbidden'),
+          releaseInstaller.includes('chown -R root:root'),
+          releaseInstaller.includes('find "$STAGING" -type d -exec chmod 0555'),
+          releaseInstaller.includes('find "$STAGING" -type f -exec chmod 0444'),
+          releaseActivator.includes('atomic_link current'),
+          releaseActivator.includes('atomic_link previous'),
+          releaseActivator.includes('--rollback'),
+          releaseDeployer.includes('origin/main'),
+          releaseDeployer.includes('Release tooling differs from the exact target revision'),
+          releaseDeployer.includes('--realtime-entities 128'),
+          releaseDeployer.includes('--canary-duration-ms 5000'),
+          releaseDeployer.includes('--fail-on-budget'),
+          releaseDeployer.includes('verify-browserless-runner-start.js'),
+          releaseDeployer.includes('attempting immutable rollback')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: Array(72).fill('true').join('|')
+    },
+    {
+      name: 'browserless immutable release verifier rejects manifest and file tampering',
+      got: withTempDirForTest(async dir => {
+        const releaseDir = path.join(dir, 'cccccccccccc-dddddddddddd');
+        fs.mkdirSync(releaseDir, { recursive: true });
+        fs.writeFileSync(path.join(releaseDir, 'payload.txt'), 'immutable\n');
+        const stat = fs.statSync(path.join(releaseDir, 'payload.txt'));
+        const sourceRevision = 'c'.repeat(40);
+        const manifest = {
+          schemaVersion: 2,
+          kind: 'grasp-rat-browserless-release',
+          sourceRevision,
+          runtimeRevision: sourceRevision.slice(0, 12),
+          builtAt: '2026-08-14T00:00:00.000Z',
+          runtime: {
+            node: process.version,
+            nodeModulesAbi: process.versions.modules,
+            platform: process.platform,
+            arch: process.arch
+          },
+          build: { source: 'git-object-archive' },
+          entries: {},
+          files: {
+            'payload.txt': {
+              sha256: require('crypto').createHash('sha256').update('immutable\n').digest('hex'),
+              bytes: stat.size,
+              mode: stat.mode & 0o777
+            }
+          }
+        };
+        manifest.artifactDigest = calculateBrowserlessReleaseDigest(manifest);
+        manifest.releaseId = `${manifest.runtimeRevision}-${manifest.artifactDigest.slice(0, 12)}`;
+        const exactDir = path.join(dir, manifest.releaseId);
+        fs.renameSync(releaseDir, exactDir);
+        fs.writeFileSync(path.join(exactDir, 'release-manifest.json'), JSON.stringify(manifest));
+        const requiredFiles = [
+          'browserless-runner.cjs',
+          'benchmark-browserless-hot-path.cjs',
+          'decision-worker-thread.js',
+          'realtime-control-worker-thread.js',
+          'background-io-worker.js',
+          'leave-supervisor-worker.js',
+          'remote-profit-worker-thread.js',
+          'web-panel.js',
+          'dist/target-whitelist.json',
+          'release.env',
+          'verify-release.cjs'
+        ];
+        for (const relative of requiredFiles) {
+          const file = path.join(exactDir, relative);
+          fs.mkdirSync(path.dirname(file), { recursive: true });
+          fs.writeFileSync(file, `${relative}\n`);
+          const fileStat = fs.statSync(file);
+          manifest.files[relative] = {
+            sha256: require('crypto').createHash('sha256').update(`${relative}\n`).digest('hex'),
+            bytes: fileStat.size,
+            mode: fileStat.mode & 0o777
+          };
+        }
+        manifest.artifactDigest = calculateBrowserlessReleaseDigest(manifest);
+        manifest.releaseId = `${manifest.runtimeRevision}-${manifest.artifactDigest.slice(0, 12)}`;
+        const finalDir = path.join(dir, manifest.releaseId);
+        fs.renameSync(exactDir, finalDir);
+        fs.writeFileSync(path.join(finalDir, 'release-manifest.json'), JSON.stringify(manifest));
+        const verified = verifyBrowserlessRelease(finalDir, {
+          requireDirectoryId: true,
+          requireRuntimeCompatible: true
+        });
+        fs.appendFileSync(path.join(finalDir, 'payload.txt'), 'tampered\n');
+        let fileTamperRejected = false;
+        try {
+          verifyBrowserlessRelease(finalDir, { requireDirectoryId: true });
+        } catch (error) {
+          fileTamperRejected = /digest mismatch|size mismatch/.test(error.message);
+        }
+        fs.writeFileSync(path.join(finalDir, 'payload.txt'), 'immutable\n');
+        const changed = JSON.parse(fs.readFileSync(path.join(finalDir, 'release-manifest.json'), 'utf8'));
+        changed.builtAt = '2026-08-15T00:00:00.000Z';
+        fs.writeFileSync(path.join(finalDir, 'release-manifest.json'), JSON.stringify(changed));
+        let manifestTamperRejected = false;
+        try {
+          verifyBrowserlessRelease(finalDir, { requireDirectoryId: true });
+        } catch (error) {
+          manifestTamperRejected = /artifact digest mismatch/.test(error.message);
+        }
+        return [verified.ok, verified.releaseId === manifest.releaseId, fileTamperRejected, manifestTamperRejected].join('|');
+      }),
+      want: 'true|true|true|true'
+    },
+    {
+      name: 'browserless runner-start verifier requires a post-restart matching revision',
+      got: withTempDirForTest(async dir => {
+        const dayDir = path.join(dir, '2026-08-14');
+        fs.mkdirSync(dayDir, { recursive: true });
+        const logFile = path.join(dayDir, 'runner.jsonl');
+        fs.writeFileSync(logFile, [
+          JSON.stringify({ at: '2026-08-13T19:59:59.000Z', type: 'runner-start', detail: { runtimeRevision: 'aaaaaaaaaaaa' } }),
+          JSON.stringify({ at: '2026-08-13T20:00:01.000Z', type: 'runner-start', detail: { runtimeRevision: 'bbbbbbbbbbbb', runtimeRevisionResolution: { source: 'environment' } } }),
+          ''
+        ].join('\n'));
+        const verified = verifyBrowserlessRunnerStart({
+          logDir: dir,
+          after: '2026-08-13T20:00:00.000Z',
+          revision: 'b'.repeat(40),
+          maxTailBytes: 1024 * 1024
+        });
+        let staleRejected = false;
+        let mismatchRejected = false;
+        try {
+          verifyBrowserlessRunnerStart({
+            logDir: dir,
+            after: '2026-08-13T20:00:02.000Z',
+            revision: 'b'.repeat(12),
+            maxTailBytes: 1024 * 1024
+          });
+        } catch (error) {
+          staleRejected = /no runner-start/.test(error.message);
+        }
+        try {
+          verifyBrowserlessRunnerStart({
+            logDir: dir,
+            after: '2026-08-13T20:00:00.000Z',
+            revision: 'c'.repeat(12),
+            maxTailBytes: 1024 * 1024
+          });
+        } catch (error) {
+          mismatchRejected = /revision mismatch/.test(error.message);
+        }
+        return [verified.ok, verified.runnerStart.runtimeRevision, staleRejected, mismatchRejected].join('|');
+      }),
+      want: 'true|bbbbbbbbbbbb|true|true'
     },
     {
       name: 'browserless deployment audit checks installed service evidence',
       got: withTempDirForTest(async dir => {
         const appDir = path.join(dir, 'app');
-        const scriptsDir = path.join(appDir, 'scripts');
+        const releaseRoot = path.join(dir, 'immutable');
+        const releasesDir = path.join(releaseRoot, 'releases');
         const dataDir = path.join(dir, 'data');
         const logDir = path.join(dir, 'logs');
-        fs.mkdirSync(scriptsDir, { recursive: true });
+        const sourceRevision = 'a'.repeat(40);
+        const runtimeRevision = sourceRevision.slice(0, 12);
+        const artifactDigest = 'b'.repeat(64);
+        const releaseId = `${runtimeRevision}-${artifactDigest.slice(0, 12)}`;
+        const releaseDir = path.join(releasesDir, releaseId);
+        const currentLink = path.join(releaseRoot, 'current');
         fs.mkdirSync(path.join(appDir, '.git'), { recursive: true });
-        fs.mkdirSync(path.join(appDir, 'src', 'node', 'browserless'), { recursive: true });
+        fs.mkdirSync(releaseDir, { recursive: true });
         fs.mkdirSync(dataDir, { recursive: true });
         fs.mkdirSync(logDir, { recursive: true });
-        fs.writeFileSync(path.join(scriptsDir, 'browserless-runner.js'), '');
-        fs.writeFileSync(path.join(appDir, 'src', 'node', 'browserless', 'source-ip-preflight.js'), '');
+        fs.symlinkSync(`releases/${releaseId}`, currentLink);
+        fs.writeFileSync(path.join(releaseDir, 'release-manifest.json'), JSON.stringify({
+          schemaVersion: 2,
+          kind: 'grasp-rat-browserless-release',
+          releaseId,
+          sourceRevision,
+          runtimeRevision,
+          artifactDigest,
+          runtime: {
+            node: process.version,
+            nodeModulesAbi: process.versions.modules,
+            platform: process.platform,
+            arch: process.arch
+          },
+          files: {}
+        }));
+        fs.writeFileSync(path.join(releaseDir, 'release.env'), [
+          `GRASP_RAT_BROWSERLESS_REVISION=${runtimeRevision}`,
+          'GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_FILE=dist/target-whitelist.json',
+          `GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_URL=https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/${sourceRevision}/dist/target-whitelist.json`,
+          ''
+        ].join('\n'));
         const unitPath = path.join(dir, 'grasp-rat-browserless-runner.service');
         const envPath = path.join(dir, 'browserless-runner.env');
         fs.writeFileSync(unitPath, [
           '[Service]',
-          `WorkingDirectory=${appDir}`,
+          `WorkingDirectory=${currentLink}`,
           `EnvironmentFile=${envPath}`,
-          'ExecStart=/usr/bin/env node scripts/browserless-runner.js',
+          `EnvironmentFile=${path.join(currentLink, 'release.env')}`,
+          'ExecStart=/usr/bin/node browserless-runner.cjs',
           'Nice=-10',
           'Restart=on-failure',
           'TimeoutStopSec=infinity',
+          `ReadOnlyPaths=${releaseRoot}`,
+          `InaccessiblePaths=${appDir}`,
           `ReadWritePaths=${dataDir} ${logDir}`,
           ''
         ].join('\n'));
@@ -30020,9 +30219,14 @@ async function runSelfTest() {
             if (command === 'readlink') {
               return overrides.processCwdResult || {
                 status: 0,
-                stdout: `${overrides.processCwd || appDir}\n`,
+                stdout: `${overrides.processCwd || releaseDir}\n`,
                 stderr: ''
               };
+            }
+            if (command === 'nsenter') {
+              return overrides.sourceReadable
+                ? { status: 1, stdout: '', stderr: '' }
+                : { status: 0, stdout: '', stderr: '' };
             }
             if (args[0] === 'is-enabled') {
               return { status: 0, stdout: 'enabled\n', stderr: '' };
@@ -30036,7 +30240,9 @@ async function runSelfTest() {
                 ExecMainStartTimestamp: 'Tue 2026-08-11 22:59:17 CST',
                 ExecMainStartTimestampMonotonic: '444499993206',
                 ExecMainPID: '4242',
-                WorkingDirectory: appDir,
+                WorkingDirectory: currentLink,
+                Nice: '-10',
+                NRestarts: '0',
                 ActiveState: 'active',
                 SubState: 'running',
                 ...(overrides.showValues || {})
@@ -30049,6 +30255,23 @@ async function runSelfTest() {
             }
             return { status: 1, stdout: '', stderr: `unexpected command: ${command} ${args.join(' ')}` };
           },
+          readProcFile: file => {
+            if (file.endsWith('/cmdline')) {
+              return Buffer.from(overrides.commandLine || '/usr/bin/node\0browserless-runner.cjs\0');
+            }
+            if (file.endsWith('/environ')) {
+              return Buffer.from(overrides.processEnv || `GRASP_RAT_BROWSERLESS_REVISION=${runtimeRevision}\0`);
+            }
+            throw new Error(`unexpected proc file: ${file}`);
+          },
+          verifyRelease: root => ({
+            ok: root === releaseDir,
+            releaseId,
+            sourceRevision,
+            runtimeRevision,
+            artifactDigest,
+            fileCount: 0
+          }),
           networkInterfaces: () => ({
             enp0s6: [
               { family: 'IPv4', address: '10.0.0.18' },
@@ -30058,10 +30281,14 @@ async function runSelfTest() {
           })
         });
         const auditDeps = auditDepsFor();
-        const ok = auditBrowserlessDeployment({
+        const commonOptions = {
           unitPath,
           envPath,
+          releaseRoot,
           sourceDir: appDir
+        };
+        const ok = auditBrowserlessDeployment({
+          ...commonOptions
         }, auditDeps);
         fs.writeFileSync(envPath, [
           `GRASP_RAT_BROWSERLESS_DATA_DIR=${dataDir}`,
@@ -30088,67 +30315,55 @@ async function runSelfTest() {
           }
         });
         const live = auditBrowserlessDeployment({
-          unitPath,
-          envPath,
+          ...commonOptions,
           envMode: 'live',
-          sourceDir: appDir,
           skipSystemctl: true
         }, auditDeps);
         const aggregate = auditBrowserlessDeployment({
-          unitPath,
-          envPath,
+          ...commonOptions,
           envMode: 'any',
-          sourceDir: appDir,
           skipSystemctl: true
         }, auditDeps);
         const conflictEnvPath = path.join(dir, 'conflict.env');
         fs.writeFileSync(conflictEnvPath, fs.readFileSync(envPath, 'utf8').replace('GRASP_RAT_BROWSERLESS_CONTROL_MODE=non-combat-profit', 'GRASP_RAT_BROWSERLESS_CONTROL_MODE=combat-live'));
         const conflict = auditBrowserlessDeployment({
-          unitPath,
+          ...commonOptions,
           envPath: conflictEnvPath,
           envMode: 'live',
-          sourceDir: appDir,
           skipSystemctl: true
         }, auditDeps);
         const staleDailyDelayEnvPath = path.join(dir, 'stale-daily-delay.env');
         fs.writeFileSync(staleDailyDelayEnvPath, fs.readFileSync(envPath, 'utf8')
           .replace('GRASP_RAT_BROWSERLESS_DAILY_FIRST_LOGIN_DELAY_MS=30000', 'GRASP_RAT_BROWSERLESS_DAILY_FIRST_LOGIN_DELAY_MS=120000'));
         const staleDailyDelay = auditBrowserlessDeployment({
-          unitPath,
+          ...commonOptions,
           envPath: staleDailyDelayEnvPath,
           envMode: 'live',
-          sourceDir: appDir,
           skipSystemctl: true
         }, auditDeps);
         const missingLoginPointEnvPath = path.join(dir, 'missing-login-point.env');
         fs.writeFileSync(missingLoginPointEnvPath, fs.readFileSync(envPath, 'utf8')
           .replace(`GRASP_RAT_BROWSERLESS_DATA_DIR=${dataDir}`, `GRASP_RAT_BROWSERLESS_DATA_DIR=${path.join(dir, 'missing-data')}`));
         const missingLoginPoint = auditBrowserlessDeployment({
-          unitPath,
+          ...commonOptions,
           envPath: missingLoginPointEnvPath,
           envMode: 'live',
-          sourceDir: appDir,
           skipSystemctl: true
         }, auditDeps);
         const placeholderEnvPath = path.join(dir, 'placeholder.env');
         fs.writeFileSync(placeholderEnvPath, fs.readFileSync(envPath, 'utf8').replace('local-secret-token', 'replace-with-a-long-random-token'));
         const placeholder = auditBrowserlessDeployment({
-          unitPath,
+          ...commonOptions,
           envPath: placeholderEnvPath,
-          sourceDir: appDir,
           skipSystemctl: true
         }, auditDeps);
         const wrongProcessCwd = auditBrowserlessDeployment({
-          unitPath,
-          envPath,
+          ...commonOptions,
           envMode: 'live',
-          sourceDir: appDir
         }, auditDepsFor({ processCwd: path.join(dir, 'wrong-app') }));
         const unreadableProcessCwd = auditBrowserlessDeployment({
-          unitPath,
-          envPath,
+          ...commonOptions,
           envMode: 'live',
-          sourceDir: appDir
         }, auditDepsFor({
           processCwdResult: {
             status: 1,
@@ -30156,24 +30371,26 @@ async function runSelfTest() {
             stderr: 'Permission denied\n'
           }
         }));
+        const wrongRuntimeRevision = auditBrowserlessDeployment({
+          ...commonOptions,
+          envMode: 'live'
+        }, auditDepsFor({ processEnv: 'GRASP_RAT_BROWSERLESS_REVISION=cccccccccccc\0' }));
+        const sourceReadable = auditBrowserlessDeployment({
+          ...commonOptions,
+          envMode: 'live'
+        }, auditDepsFor({ sourceReadable: true }));
         const missingMainPid = auditBrowserlessDeployment({
-          unitPath,
-          envPath,
+          ...commonOptions,
           envMode: 'live',
-          sourceDir: appDir
         }, auditDepsFor({ showValues: { ExecMainPID: '0' } }));
         const wrongLoadedWorkingDirectory = auditBrowserlessDeployment({
-          unitPath,
-          envPath,
+          ...commonOptions,
           envMode: 'live',
-          sourceDir: appDir
         }, auditDepsFor({ showValues: { WorkingDirectory: path.join(dir, 'stale-app') } }));
         fs.rmSync(path.join(appDir, '.git'), { recursive: true });
         fs.writeFileSync(path.join(appDir, '.git'), 'gitdir: /tmp/linked-worktree\n');
         const linkedWorktree = auditBrowserlessDeployment({
-          unitPath,
-          envPath,
-          sourceDir: appDir,
+          ...commonOptions,
           skipSystemctl: true
         }, auditDeps);
         return [
@@ -30196,16 +30413,20 @@ async function runSelfTest() {
           wrongProcessCwd.failed.some(item => item.key === 'process-working-directory'),
           unreadableProcessCwd.ok,
           unreadableProcessCwd.failed.some(item => item.key === 'process-working-directory' && item.evidence.includes('Permission denied')),
+          wrongRuntimeRevision.ok,
+          wrongRuntimeRevision.failed.some(item => item.key === 'process-runtime-revision'),
+          sourceReadable.ok,
+          sourceReadable.failed.some(item => item.key === 'process-source-inaccessible'),
           missingMainPid.ok,
           missingMainPid.failed.some(item => item.key === 'systemctl-main-pid'),
           missingMainPid.failed.some(item => item.key === 'process-working-directory'),
           wrongLoadedWorkingDirectory.ok,
           wrongLoadedWorkingDirectory.failed.some(item => item.key === 'systemctl-loaded-working-directory'),
           linkedWorktree.ok,
-          linkedWorktree.failed.some(item => item.key === 'source-main-workspace')
+          linkedWorktree.failed.some(item => item.key === 'source-primary-checkout')
         ].join('|');
       }),
-      want: 'true|0|true|0|true|0|false|true|false|true|false|true|false|true|true|false|true|false|true|false|true|true|false|true|true|false|true|false|true'
+      want: 'true|0|true|0|true|0|false|true|false|true|false|true|false|true|true|false|true|false|true|false|true|false|true|false|true|true|false|true|true|false|true|false|true'
     },
     {
       name: 'browserless acceptance report aggregates deployment canary and stop audits',

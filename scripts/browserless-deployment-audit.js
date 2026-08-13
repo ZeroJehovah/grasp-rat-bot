@@ -11,13 +11,15 @@ const {
   sessionFromAnyState
 } = require('../src/node/browserless/state-file');
 const { DEFAULTS: BROWSERLESS_CONFIG_DEFAULTS } = require('../src/node/browserless/config');
+const { verifyRelease } = require('./verify-browserless-release');
 
 const DEFAULT_SERVICE_NAME = 'grasp-rat-browserless-runner';
 const DEFAULT_UNIT_PATH = `/etc/systemd/system/${DEFAULT_SERVICE_NAME}.service`;
 const DEFAULT_ENV_PATH = '/etc/grasp-rat/browserless-runner.env';
 const DEFAULT_DATA_DIR = '/var/lib/grasp-rat-browserless';
 const DEFAULT_LOG_DIR = '/var/log/grasp-rat-browserless';
-const DEFAULT_SOURCE_DIR = path.resolve(__dirname, '..');
+const DEFAULT_RELEASE_ROOT = '/opt/grasp-rat-browserless';
+const DEFAULT_SOURCE_DIR = '/home/ubuntu/grasp-rat-bot/src';
 const VALID_ENV_MODES = new Set(['safe', 'live', 'any']);
 const VALID_CONTROL_MODES = new Set(['read-only', 'movement-only', 'non-combat-profit', 'profit-live', 'combat-dry-run', 'combat-live']);
 const VALID_CANARY_PROFILES = new Set(['read-only', 'movement-only', 'profit', 'combat-dry-run', 'combat-live']);
@@ -36,6 +38,9 @@ function parseArgs(argv) {
     envPath: DEFAULT_ENV_PATH,
     dataDir: '',
     logDir: '',
+    releaseRoot: DEFAULT_RELEASE_ROOT,
+    sourceDir: DEFAULT_SOURCE_DIR,
+    expectedRevision: '',
     envMode: 'safe',
     skipSystemctl: false,
     json: false,
@@ -49,6 +54,9 @@ function parseArgs(argv) {
     else if (arg === '--env') out.envPath = argv[++i] || out.envPath;
     else if (arg === '--data-dir') out.dataDir = argv[++i] || out.dataDir;
     else if (arg === '--log-dir') out.logDir = argv[++i] || out.logDir;
+    else if (arg === '--release-root') out.releaseRoot = argv[++i] || out.releaseRoot;
+    else if (arg === '--source-dir') out.sourceDir = argv[++i] || out.sourceDir;
+    else if (arg === '--expected-revision') out.expectedRevision = argv[++i] || '';
     else if (arg === '--env-mode') out.envMode = argv[++i] || out.envMode;
     else if (arg === '--skip-systemctl') out.skipSystemctl = true;
     else if (arg === '--json') out.json = true;
@@ -62,15 +70,22 @@ function parseArgs(argv) {
 function readText(file) {
   try {
     return { ok: true, text: fs.readFileSync(file, 'utf8'), error: '' };
-  } catch (err) {
-    return { ok: false, text: '', error: err?.message || String(err) };
+  } catch (error) {
+    return { ok: false, text: '', error: error?.message || String(error) };
   }
 }
 
-function unitValue(unitText, key) {
+function unitValues(unitText, key) {
   const escaped = String(key).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = new RegExp(`^${escaped}=(.*)$`, 'm').exec(unitText || '');
-  return match ? match[1].trim() : '';
+  return Array.from(String(unitText || '').matchAll(new RegExp(`^${escaped}=(.*)$`, 'gm')), match => match[1].trim());
+}
+
+function unitValue(unitText, key) {
+  return unitValues(unitText, key)[0] || '';
+}
+
+function normalizeEnvironmentFile(value) {
+  return String(value || '').replace(/^-/, '').trim();
 }
 
 function parseEnvText(text) {
@@ -83,6 +98,10 @@ function parseEnvText(text) {
     env[line.slice(0, index).trim()] = line.slice(index + 1).trim();
   }
   return env;
+}
+
+function parseNullEnv(buffer) {
+  return parseEnvText(Buffer.from(buffer || '').toString('utf8').replace(/\0/g, '\n'));
 }
 
 function parseSystemctlShow(text) {
@@ -109,12 +128,7 @@ function commandRunner(command, args, options = {}) {
 }
 
 function addCheck(checks, key, ok, evidence, detail = {}) {
-  checks.push({
-    key,
-    ok: Boolean(ok),
-    evidence,
-    detail
-  });
+  checks.push({ key, ok: Boolean(ok), evidence, detail });
 }
 
 function accessOk(dir) {
@@ -123,14 +137,22 @@ function accessOk(dir) {
     if (!stat.isDirectory()) return { ok: false, reason: 'not-directory' };
     fs.accessSync(dir, fs.constants.R_OK | fs.constants.W_OK);
     return { ok: true, reason: '' };
-  } catch (err) {
-    return { ok: false, reason: err?.message || String(err) };
+  } catch (error) {
+    return { ok: false, reason: error?.message || String(error) };
   }
 }
 
 function directoryOk(dir) {
   try {
     return fs.statSync(dir).isDirectory();
+  } catch (_) {
+    return false;
+  }
+}
+
+function symlinkOk(file) {
+  try {
+    return fs.lstatSync(file).isSymbolicLink();
   } catch (_) {
     return false;
   }
@@ -170,20 +192,13 @@ function addEnvChecks(checks, env, envMode, persistedState = {}) {
 
   addCheck(checks, 'env-mode', VALID_ENV_MODES.has(envMode), `envMode=${envMode}`);
   if (!VALID_ENV_MODES.has(envMode)) return;
-
   addCheck(checks, 'env-source-ip-interface', sourceIpInterface === 'enp0s6', `GRASP_RAT_BROWSERLESS_SOURCE_IP_INTERFACE=${sourceIpInterface}`);
-  addCheck(
-    checks,
-    'env-source-ip-static-pool-removed',
-    !legacySourceIpPool,
-    `GRASP_RAT_BROWSERLESS_SOURCE_IPS=${legacySourceIpPool ? '[legacy pool still configured]' : 'absent'}`
-  );
+  addCheck(checks, 'env-source-ip-static-pool-removed', !legacySourceIpPool, `GRASP_RAT_BROWSERLESS_SOURCE_IPS=${legacySourceIpPool ? '[legacy pool still configured]' : 'absent'}`);
   addCheck(
     checks,
     'env-daily-first-login-delay',
     !configuredDailyFirstLoginDelayMs
-      || (isNumber(configuredDailyFirstLoginDelayMs)
-        && Number(configuredDailyFirstLoginDelayMs) === expectedDailyFirstLoginDelayMs),
+      || (isNumber(configuredDailyFirstLoginDelayMs) && Number(configuredDailyFirstLoginDelayMs) === expectedDailyFirstLoginDelayMs),
     `GRASP_RAT_BROWSERLESS_DAILY_FIRST_LOGIN_DELAY_MS=${configuredDailyFirstLoginDelayMs || `[default ${expectedDailyFirstLoginDelayMs}]`}, expected=${expectedDailyFirstLoginDelayMs}`
   );
 
@@ -213,15 +228,36 @@ function addEnvChecks(checks, env, envMode, persistedState = {}) {
   addCheck(checks, 'env-profile-control-consistency', profileControlConsistent, `profile=${profile || 'missing'}, control=${control || 'missing'}, expectedControl=${expectedControl || 'missing'}`);
 }
 
+function resolveCurrentRelease(releaseRoot) {
+  const currentLink = path.join(releaseRoot, 'current');
+  if (!symlinkOk(currentLink)) return { ok: false, currentLink, currentReleaseDir: '', error: 'current is not a symlink' };
+  try {
+    const currentReleaseDir = fs.realpathSync(currentLink);
+    const releasesDir = path.join(releaseRoot, 'releases');
+    const directChild = path.dirname(currentReleaseDir) === releasesDir;
+    return {
+      ok: directChild && directoryOk(currentReleaseDir),
+      currentLink,
+      currentReleaseDir,
+      error: directChild ? (directoryOk(currentReleaseDir) ? '' : 'current release is not a directory') : 'current target is outside releases'
+    };
+  } catch (error) {
+    return { ok: false, currentLink, currentReleaseDir: '', error: error?.message || String(error) };
+  }
+}
+
 function auditDeployment(options = {}, deps = {}) {
   const serviceName = options.serviceName || DEFAULT_SERVICE_NAME;
   const unitPath = path.resolve(String(options.unitPath || DEFAULT_UNIT_PATH));
   const envPath = path.resolve(String(options.envPath || DEFAULT_ENV_PATH));
+  const releaseRoot = path.resolve(String(options.releaseRoot || DEFAULT_RELEASE_ROOT));
+  const sourceDir = path.resolve(String(options.sourceDir || DEFAULT_SOURCE_DIR));
+  const expectedRevision = String(options.expectedRevision || '').trim().toLowerCase();
   const envMode = String(options.envMode || 'safe').trim() || 'safe';
   const runCommand = deps.runCommand || commandRunner;
-  const networkInterfaces = typeof deps.networkInterfaces === 'function'
-    ? deps.networkInterfaces
-    : os.networkInterfaces;
+  const networkInterfaces = typeof deps.networkInterfaces === 'function' ? deps.networkInterfaces : os.networkInterfaces;
+  const releaseVerifier = deps.verifyRelease || verifyRelease;
+  const readProcFile = deps.readProcFile || (file => fs.readFileSync(file));
   const checks = [];
 
   const unit = readText(unitPath);
@@ -229,26 +265,77 @@ function auditDeployment(options = {}, deps = {}) {
   const envFile = readText(envPath);
   addCheck(checks, 'env-file', envFile.ok, envFile.ok ? envPath : envFile.error);
 
-  const env = parseEnvText(envFile.text);
+  const current = resolveCurrentRelease(releaseRoot);
+  addCheck(checks, 'release-current-symlink', current.ok, current.ok ? `${current.currentLink} -> ${current.currentReleaseDir}` : `${current.currentLink}: ${current.error}`);
+  let releaseReport = null;
+  if (current.ok) {
+    try {
+      releaseReport = releaseVerifier(current.currentReleaseDir, {
+        requireReadOnly: true,
+        requireRootOwned: true,
+        requireDirectoryId: true,
+        requireRuntimeCompatible: true
+      });
+      addCheck(checks, 'release-integrity', Boolean(releaseReport?.ok), releaseReport?.ok ? `${releaseReport.releaseId}, digest=${releaseReport.artifactDigest}` : 'release verifier returned an incomplete result');
+    } catch (error) {
+      addCheck(checks, 'release-integrity', false, error?.message || String(error));
+    }
+  } else {
+    addCheck(checks, 'release-integrity', false, 'not checked because current release is unresolved');
+  }
+
+  const manifestFile = current.currentReleaseDir ? path.join(current.currentReleaseDir, 'release-manifest.json') : '';
+  const manifestRead = manifestFile ? readText(manifestFile) : { ok: false, text: '', error: 'release unresolved' };
+  let manifest = {};
+  try {
+    manifest = manifestRead.ok ? JSON.parse(manifestRead.text) : {};
+  } catch (error) {
+    addCheck(checks, 'release-manifest-readable', false, error?.message || String(error));
+  }
+  if (!checks.some(check => check.key === 'release-manifest-readable')) {
+    addCheck(checks, 'release-manifest-readable', manifestRead.ok && Boolean(manifest.releaseId), manifestRead.ok ? `releaseId=${manifest.releaseId || 'missing'}` : manifestRead.error);
+  }
+  addCheck(
+    checks,
+    'release-expected-revision',
+    !expectedRevision || manifest.sourceRevision === expectedRevision || manifest.runtimeRevision === expectedRevision,
+    `expected=${expectedRevision || 'not-set'}, source=${manifest.sourceRevision || 'missing'}, runtime=${manifest.runtimeRevision || 'missing'}`
+  );
+
+  const releaseEnvPath = current.currentReleaseDir ? path.join(current.currentReleaseDir, 'release.env') : '';
+  const releaseEnvRead = releaseEnvPath ? readText(releaseEnvPath) : { ok: false, text: '', error: 'release unresolved' };
+  addCheck(checks, 'release-env-file', releaseEnvRead.ok, releaseEnvRead.ok ? releaseEnvPath : releaseEnvRead.error);
+  const baseEnv = parseEnvText(envFile.text);
+  const releaseEnv = parseEnvText(releaseEnvRead.text);
+  const env = { ...baseEnv, ...releaseEnv };
   const dataDir = path.resolve(String(options.dataDir || env.GRASP_RAT_BROWSERLESS_DATA_DIR || DEFAULT_DATA_DIR));
   const logDir = path.resolve(String(options.logDir || env.GRASP_RAT_BROWSERLESS_LOG_DIR || DEFAULT_LOG_DIR));
-  const sourceDir = path.resolve(String(options.sourceDir || DEFAULT_SOURCE_DIR));
+  addCheck(checks, 'release-env-revision', releaseEnv.GRASP_RAT_BROWSERLESS_REVISION === manifest.runtimeRevision, `release.env=${releaseEnv.GRASP_RAT_BROWSERLESS_REVISION || 'missing'}, manifest=${manifest.runtimeRevision || 'missing'}`);
+  addCheck(checks, 'release-env-whitelist-file', releaseEnv.GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_FILE === 'dist/target-whitelist.json', `value=${releaseEnv.GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_FILE || 'missing'}`);
+  addCheck(
+    checks,
+    'release-env-whitelist-url',
+    Boolean(manifest.sourceRevision) && releaseEnv.GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_URL === `https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/${manifest.sourceRevision}/dist/target-whitelist.json`,
+    `value=${releaseEnv.GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_URL || 'missing'}`
+  );
+
   const workingDirectory = unitValue(unit.text, 'WorkingDirectory');
-  const resolvedWorkingDirectory = workingDirectory ? path.resolve(workingDirectory) : '';
-  const environmentFile = unitValue(unit.text, 'EnvironmentFile');
+  const environmentFiles = unitValues(unit.text, 'EnvironmentFile').map(normalizeEnvironmentFile);
   const execStart = unitValue(unit.text, 'ExecStart');
   const readWritePaths = unitValue(unit.text, 'ReadWritePaths');
-
+  const readOnlyPaths = unitValue(unit.text, 'ReadOnlyPaths');
+  const inaccessiblePaths = unitValue(unit.text, 'InaccessiblePaths');
   addCheck(checks, 'service-name', serviceName === DEFAULT_SERVICE_NAME, `serviceName=${serviceName}`);
-  addCheck(checks, 'source-main-workspace', directoryOk(path.join(sourceDir, '.git')), `sourceDir=${sourceDir}, .git=${directoryOk(path.join(sourceDir, '.git')) ? 'directory' : 'missing-or-nondirectory'}`);
-  addCheck(checks, 'working-directory', resolvedWorkingDirectory === sourceDir, `WorkingDirectory=${workingDirectory || 'missing'}, expected=${sourceDir}`);
-  addCheck(checks, 'runner-entrypoint', Boolean(workingDirectory && fs.existsSync(path.join(workingDirectory, 'scripts', 'browserless-runner.js'))), `entrypoint=${workingDirectory ? path.join(workingDirectory, 'scripts', 'browserless-runner.js') : 'missing'}`);
-  addCheck(checks, 'source-ip-preflight-module', Boolean(workingDirectory && fs.existsSync(path.join(workingDirectory, 'src', 'node', 'browserless', 'source-ip-preflight.js'))), `module=${workingDirectory ? path.join(workingDirectory, 'src', 'node', 'browserless', 'source-ip-preflight.js') : 'missing'}`);
-  addCheck(checks, 'environment-file-reference', environmentFile === envPath, `EnvironmentFile=${environmentFile || 'missing'}`);
-  addCheck(checks, 'exec-start', execStart.includes('node scripts/browserless-runner.js'), `ExecStart=${execStart || 'missing'}`);
+  addCheck(checks, 'source-primary-checkout', directoryOk(path.join(sourceDir, '.git')), `sourceDir=${sourceDir}, .git=${directoryOk(path.join(sourceDir, '.git')) ? 'directory' : 'missing-or-nondirectory'}`);
+  addCheck(checks, 'working-directory', path.resolve(workingDirectory || '/') === path.join(releaseRoot, 'current'), `WorkingDirectory=${workingDirectory || 'missing'}, expected=${path.join(releaseRoot, 'current')}`);
+  addCheck(checks, 'runner-entrypoint', execStart === '/usr/bin/node browserless-runner.cjs', `ExecStart=${execStart || 'missing'}`);
+  addCheck(checks, 'environment-file-reference', environmentFiles.includes(envPath), `EnvironmentFiles=${environmentFiles.join(',') || 'missing'}`);
+  addCheck(checks, 'release-environment-file-reference', environmentFiles.includes(path.join(releaseRoot, 'current', 'release.env')), `EnvironmentFiles=${environmentFiles.join(',') || 'missing'}`);
   addCheck(checks, 'service-nice', unitValue(unit.text, 'Nice') === '-10', `Nice=${unitValue(unit.text, 'Nice') || 'missing'}`);
   addCheck(checks, 'restart-policy', unitValue(unit.text, 'Restart') === 'on-failure', `Restart=${unitValue(unit.text, 'Restart') || 'missing'}`);
   addCheck(checks, 'graceful-stop-timeout', unitValue(unit.text, 'TimeoutStopSec') === 'infinity', `TimeoutStopSec=${unitValue(unit.text, 'TimeoutStopSec') || 'missing'}`);
+  addCheck(checks, 'release-read-only-path', readOnlyPaths.split(/\s+/).includes(releaseRoot), `ReadOnlyPaths=${readOnlyPaths || 'missing'}`);
+  addCheck(checks, 'source-inaccessible-path', inaccessiblePaths.split(/\s+/).includes(sourceDir), `InaccessiblePaths=${inaccessiblePaths || 'missing'}`);
   addCheck(checks, 'read-write-paths', readWritePaths.includes(dataDir) && readWritePaths.includes(logDir), `ReadWritePaths=${readWritePaths || 'missing'}`);
 
   addCheck(checks, 'env-data-dir', env.GRASP_RAT_BROWSERLESS_DATA_DIR === dataDir, `GRASP_RAT_BROWSERLESS_DATA_DIR=${env.GRASP_RAT_BROWSERLESS_DATA_DIR || 'missing'}`);
@@ -263,27 +350,27 @@ function auditDeployment(options = {}, deps = {}) {
     addCheck(checks, 'source-ip-interface-addresses', addresses.length >= 3, `enp0s6 IPv4 count=${addresses.length}`);
   }
   addCheck(checks, 'env-web-token', Boolean(env.GRASP_RAT_BROWSERLESS_WEB_TOKEN && env.GRASP_RAT_BROWSERLESS_WEB_TOKEN !== 'replace-with-a-long-random-token'), 'web token is present and not the example placeholder');
-
   const dataAccess = accessOk(dataDir);
   addCheck(checks, 'data-dir-access', dataAccess.ok, dataAccess.ok ? dataDir : dataAccess.reason);
   const logAccess = accessOk(logDir);
   addCheck(checks, 'log-dir-access', logAccess.ok, logAccess.ok ? logDir : logAccess.reason);
 
-  const systemctl = {
-    skipped: Boolean(options.skipSystemctl),
-    enabled: null,
-    active: null,
-    show: null,
-    processCwd: null
-  };
+  const systemctl = { skipped: Boolean(options.skipSystemctl), enabled: null, active: null, show: null, processCwd: null };
   if (options.skipSystemctl) {
-    addCheck(checks, 'systemctl-enabled', true, 'skipped by --skip-systemctl');
-    addCheck(checks, 'systemctl-active', true, 'skipped by --skip-systemctl');
-    addCheck(checks, 'systemctl-running-state', true, 'skipped by --skip-systemctl');
-    addCheck(checks, 'systemctl-main-start', true, 'skipped by --skip-systemctl');
-    addCheck(checks, 'systemctl-loaded-working-directory', true, 'skipped by --skip-systemctl');
-    addCheck(checks, 'systemctl-main-pid', true, 'skipped by --skip-systemctl');
-    addCheck(checks, 'process-working-directory', true, 'skipped by --skip-systemctl');
+    for (const key of [
+      'systemctl-enabled',
+      'systemctl-active',
+      'systemctl-running-state',
+      'systemctl-main-start',
+      'systemctl-loaded-working-directory',
+      'systemctl-main-pid',
+      'systemctl-loaded-nice',
+      'systemctl-no-restarts',
+      'process-working-directory',
+      'process-command-line',
+      'process-runtime-revision',
+      'process-source-inaccessible'
+    ]) addCheck(checks, key, true, 'skipped by --skip-systemctl');
   } else {
     const enabled = runCommand('systemctl', ['is-enabled', serviceName]);
     systemctl.enabled = enabled;
@@ -291,79 +378,56 @@ function auditDeployment(options = {}, deps = {}) {
     const active = runCommand('systemctl', ['is-active', serviceName]);
     systemctl.active = active;
     addCheck(checks, 'systemctl-active', active.status === 0 && active.stdout.trim() === 'active', `status=${active.status}, stdout=${active.stdout.trim() || ''}, stderr=${active.stderr.trim() || active.error || ''}`);
-
     const show = runCommand('systemctl', [
-      'show',
-      serviceName,
+      'show', serviceName,
       '-p', 'ActiveState',
       '-p', 'SubState',
       '-p', 'Result',
       '-p', 'ExecMainPID',
       '-p', 'ExecMainStartTimestamp',
       '-p', 'ExecMainStartTimestampMonotonic',
-      '-p', 'WorkingDirectory'
+      '-p', 'WorkingDirectory',
+      '-p', 'Nice',
+      '-p', 'NRestarts'
     ]);
     systemctl.show = show;
     const showValues = parseSystemctlShow(show.stdout);
     const showError = show.stderr.trim() || show.error || '';
-    const runningStateOk = show.status === 0
-      && showValues.ActiveState === 'active'
-      && showValues.SubState === 'running'
-      && showValues.Result === 'success';
-    addCheck(
-      checks,
-      'systemctl-running-state',
-      runningStateOk,
-      `status=${show.status}, ActiveState=${showValues.ActiveState || 'missing'}, SubState=${showValues.SubState || 'missing'}, Result=${showValues.Result || 'missing'}, ExecMainStartTimestamp=${showValues.ExecMainStartTimestamp || 'missing'}, stderr=${showError}`
-    );
-
-    const mainStartMonotonicText = String(showValues.ExecMainStartTimestampMonotonic || '').trim();
-    const mainStartMonotonic = /^\d+$/.test(mainStartMonotonicText) ? Number(mainStartMonotonicText) : 0;
-    addCheck(
-      checks,
-      'systemctl-main-start',
-      show.status === 0
-        && Boolean(showValues.ExecMainStartTimestamp)
-        && Number.isSafeInteger(mainStartMonotonic)
-        && mainStartMonotonic > 0,
-      `status=${show.status}, ExecMainStartTimestamp=${showValues.ExecMainStartTimestamp || 'missing'}, ExecMainStartTimestampMonotonic=${mainStartMonotonicText || 'missing'}, stderr=${showError}`
-    );
-
-    const loadedWorkingDirectory = showValues.WorkingDirectory || '';
-    addCheck(
-      checks,
-      'systemctl-loaded-working-directory',
-      show.status === 0 && Boolean(loadedWorkingDirectory) && path.resolve(loadedWorkingDirectory) === sourceDir,
-      `status=${show.status}, WorkingDirectory=${loadedWorkingDirectory || 'missing'}, expected=${sourceDir}, stderr=${showError}`
-    );
-
+    addCheck(checks, 'systemctl-running-state', show.status === 0 && showValues.ActiveState === 'active' && showValues.SubState === 'running' && showValues.Result === 'success', `status=${show.status}, ActiveState=${showValues.ActiveState || 'missing'}, SubState=${showValues.SubState || 'missing'}, Result=${showValues.Result || 'missing'}, stderr=${showError}`);
+    const startMonotonicText = String(showValues.ExecMainStartTimestampMonotonic || '').trim();
+    addCheck(checks, 'systemctl-main-start', show.status === 0 && Boolean(showValues.ExecMainStartTimestamp) && /^\d+$/.test(startMonotonicText) && Number(startMonotonicText) > 0, `ExecMainStartTimestamp=${showValues.ExecMainStartTimestamp || 'missing'}, ExecMainStartTimestampMonotonic=${startMonotonicText || 'missing'}`);
+    addCheck(checks, 'systemctl-loaded-working-directory', show.status === 0 && path.resolve(showValues.WorkingDirectory || '/') === path.join(releaseRoot, 'current'), `WorkingDirectory=${showValues.WorkingDirectory || 'missing'}, expected=${path.join(releaseRoot, 'current')}`);
+    addCheck(checks, 'systemctl-loaded-nice', showValues.Nice === '-10', `Nice=${showValues.Nice || 'missing'}`);
+    addCheck(checks, 'systemctl-no-restarts', showValues.NRestarts === '0', `NRestarts=${showValues.NRestarts || 'missing'}`);
     const mainPidText = String(showValues.ExecMainPID || '').trim();
     const mainPid = /^\d+$/.test(mainPidText) ? Number(mainPidText) : 0;
     const mainPidOk = show.status === 0 && Number.isSafeInteger(mainPid) && mainPid > 0;
-    addCheck(
-      checks,
-      'systemctl-main-pid',
-      mainPidOk,
-      `status=${show.status}, ExecMainPID=${mainPidText || 'missing'}, stderr=${showError}`
-    );
+    addCheck(checks, 'systemctl-main-pid', mainPidOk, `ExecMainPID=${mainPidText || 'missing'}, stderr=${showError}`);
 
     if (mainPidOk) {
       const processCwd = runCommand('readlink', ['-f', `/proc/${mainPid}/cwd`]);
       systemctl.processCwd = processCwd;
-      const actualProcessCwd = processCwd.stdout.trim();
-      addCheck(
-        checks,
-        'process-working-directory',
-        processCwd.status === 0 && Boolean(actualProcessCwd) && path.resolve(actualProcessCwd) === sourceDir,
-        `status=${processCwd.status}, ExecMainPID=${mainPid}, cwd=${actualProcessCwd || 'missing'}, expected=${sourceDir}, stderr=${processCwd.stderr.trim() || processCwd.error || ''}`
-      );
+      const actualCwd = processCwd.stdout.trim();
+      addCheck(checks, 'process-working-directory', processCwd.status === 0 && Boolean(current.currentReleaseDir) && path.resolve(actualCwd || '/') === current.currentReleaseDir, `status=${processCwd.status}, cwd=${actualCwd || 'missing'}, expected=${current.currentReleaseDir || 'unresolved'}, stderr=${processCwd.stderr.trim() || processCwd.error || ''}`);
+
+      try {
+        const commandLine = Buffer.from(readProcFile(`/proc/${mainPid}/cmdline`)).toString('utf8').split('\0').filter(Boolean);
+        addCheck(checks, 'process-command-line', commandLine.length === 2 && commandLine[0] === '/usr/bin/node' && commandLine[1] === 'browserless-runner.cjs', `cmdline=${commandLine.join(' ') || 'missing'}`);
+      } catch (error) {
+        addCheck(checks, 'process-command-line', false, error?.message || String(error));
+      }
+      try {
+        const processEnv = parseNullEnv(readProcFile(`/proc/${mainPid}/environ`));
+        addCheck(checks, 'process-runtime-revision', processEnv.GRASP_RAT_BROWSERLESS_REVISION === manifest.runtimeRevision, `process=${processEnv.GRASP_RAT_BROWSERLESS_REVISION || 'missing'}, manifest=${manifest.runtimeRevision || 'missing'}`);
+      } catch (error) {
+        addCheck(checks, 'process-runtime-revision', false, error?.message || String(error));
+      }
+      const sourceProbe = runCommand('nsenter', ['-t', String(mainPid), '-m', '--', 'test', '!', '-r', path.join(sourceDir, 'scripts', 'browserless-runner.js')]);
+      addCheck(checks, 'process-source-inaccessible', sourceProbe.status === 0, `status=${sourceProbe.status}, sourceEntry=${path.join(sourceDir, 'scripts', 'browserless-runner.js')}, stderr=${sourceProbe.stderr.trim() || sourceProbe.error || ''}`);
     } else {
-      addCheck(
-        checks,
-        'process-working-directory',
-        false,
-        `not checked because ExecMainPID=${mainPidText || 'missing'} is not a positive running process ID`
-      );
+      for (const key of ['process-working-directory', 'process-command-line', 'process-runtime-revision', 'process-source-inaccessible']) {
+        addCheck(checks, key, false, `not checked because ExecMainPID=${mainPidText || 'missing'} is not a positive running process ID`);
+      }
     }
   }
 
@@ -375,6 +439,14 @@ function auditDeployment(options = {}, deps = {}) {
     envPath,
     envMode,
     sourceDir,
+    releaseRoot,
+    currentReleaseDir: current.currentReleaseDir,
+    release: releaseReport || (manifest.releaseId ? {
+      releaseId: manifest.releaseId,
+      sourceRevision: manifest.sourceRevision,
+      runtimeRevision: manifest.runtimeRevision,
+      artifactDigest: manifest.artifactDigest
+    } : null),
     dataDir,
     logDir,
     generatedAt: new Date().toISOString(),
@@ -391,21 +463,31 @@ function formatHuman(report) {
     `Unit: ${report.unitPath}`,
     `Env: ${report.envPath}`,
     `Env mode: ${report.envMode}`,
-    `Source: ${report.sourceDir}`
+    `Release root: ${report.releaseRoot}`,
+    `Current release: ${report.currentReleaseDir || 'unresolved'}`
   ];
-  for (const check of report.checks) {
-    lines.push(`- ${check.ok ? 'ok' : 'missing'} ${check.key}: ${check.evidence}`);
-  }
+  for (const check of report.checks) lines.push(`- ${check.ok ? 'ok' : 'missing'} ${check.key}: ${check.evidence}`);
   return lines.join('\n');
 }
 
 function usage() {
   return [
-    'Usage: node scripts/browserless-deployment-audit.js [--unit <file>] [--env <file>] [--env-mode safe|live|any] [--data-dir <dir>] [--log-dir <dir>] [--skip-systemctl] [--json] [--fail-on-incomplete]',
+    'Usage: node scripts/browserless-deployment-audit.js [options]',
     '',
-    'Run on the VPS after installing and starting grasp-rat-browserless-runner.',
-    'Default --env-mode safe checks dry-run/read-only deployment defaults. Use live before supervised live canaries and any for final aggregate acceptance.',
-    'Use --skip-systemctl only for static file/directory checks.'
+    'Options:',
+    '  --unit <file>               Installed systemd unit.',
+    '  --env <file>                Base environment file.',
+    '  --env-mode safe|live|any    Validate runtime mode.',
+    '  --release-root <dir>        Immutable release root.',
+    '  --source-dir <dir>          Primary source checkout hidden from the service.',
+    '  --expected-revision <rev>   Require the manifest source/runtime revision.',
+    '  --data-dir <dir>            Override data directory.',
+    '  --log-dir <dir>             Override log directory.',
+    '  --skip-systemctl            Skip live systemd/process checks.',
+    '  --json                      Print JSON.',
+    '  --fail-on-incomplete        Exit nonzero when any check fails.',
+    '',
+    'Run as root (normally via sudo -n) for root-ownership and /proc evidence.'
   ].join('\n');
 }
 
@@ -421,17 +503,21 @@ async function main() {
 }
 
 if (require.main === module) {
-  main().catch(err => {
-    console.error(err?.stack || err?.message || String(err));
+  main().catch(error => {
+    console.error(error?.stack || error?.message || String(error));
     process.exit(1);
   });
 }
 
 module.exports = {
+  DEFAULT_RELEASE_ROOT,
   auditDeployment,
   formatHuman,
   parseArgs,
   parseEnvText,
+  parseNullEnv,
   parseSystemctlShow,
-  unitValue
+  resolveCurrentRelease,
+  unitValue,
+  unitValues
 };

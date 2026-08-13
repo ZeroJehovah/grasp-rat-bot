@@ -9,6 +9,8 @@ UNIT_DEST="${UNIT_DEST:-/etc/systemd/system/${SERVICE_NAME}.service}"
 ENV_DEST="${ENV_DEST:-/etc/grasp-rat/browserless-runner.env}"
 DATA_DIR="/var/lib/grasp-rat-browserless"
 LOG_DIR="/var/log/grasp-rat-browserless"
+RELEASE_ROOT="${GRASP_RAT_BROWSERLESS_RELEASE_ROOT:-/opt/grasp-rat-browserless}"
+VERIFY_SCRIPT="${APP_DIR}/scripts/verify-browserless-release.js"
 INSTALL_ENV=0
 RUN_SYSTEMCTL=1
 
@@ -71,6 +73,14 @@ if [ ! -d "$APP_DIR/.git" ]; then
   echo "Refusing non-primary or linked-worktree app directory: $APP_DIR (.git directory required)" >&2
   exit 1
 fi
+if [ ! -f "$VERIFY_SCRIPT" ]; then
+  echo "Missing release verifier: $VERIFY_SCRIPT" >&2
+  exit 1
+fi
+if [ "$RELEASE_ROOT" != "/opt/grasp-rat-browserless" ]; then
+  echo "Service unit requires release root /opt/grasp-rat-browserless: $RELEASE_ROOT" >&2
+  exit 1
+fi
 
 if [ "$(id -u)" -eq 0 ]; then
   SUDO=""
@@ -78,13 +88,18 @@ else
   SUDO="${SUDO-sudo}"
 fi
 
-tmp_unit="$(mktemp)"
-trap 'rm -f "$tmp_unit"' EXIT
-escaped_app_dir="$(printf '%s\n' "$APP_DIR" | sed 's/[\/&]/\\&/g')"
-sed "s/WorkingDirectory=\\/opt\\/grasp-rat-bot/WorkingDirectory=${escaped_app_dir}/" "$UNIT_SOURCE" > "$tmp_unit"
+if [ ! -L "$RELEASE_ROOT/current" ]; then
+  echo "No active immutable browserless release: $RELEASE_ROOT/current" >&2
+  exit 1
+fi
+$SUDO node "$VERIFY_SCRIPT" "$(readlink -f "$RELEASE_ROOT/current")" \
+  --require-read-only \
+  --require-root-owned \
+  --require-directory-id \
+  --require-runtime-compatible >/dev/null
 
 $SUDO install -d -m 0755 "$(dirname "$UNIT_DEST")"
-$SUDO install -m 0644 "$tmp_unit" "$UNIT_DEST"
+$SUDO install -m 0644 "$UNIT_SOURCE" "$UNIT_DEST"
 $SUDO install -d -m 0750 "$DATA_DIR"
 $SUDO install -d -m 0750 "$LOG_DIR"
 
@@ -112,6 +127,9 @@ Environment file:
 Runtime directories:
   $DATA_DIR
   $LOG_DIR
+
+Immutable runtime:
+  $(readlink -f "$RELEASE_ROOT/current")
 
 Next commands:
   sudo systemctl start $SERVICE_NAME

@@ -3,6 +3,9 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
+    "build:browserless-release": "node scripts/build-browserless-release.js",
+    "verify:browserless-release": "node scripts/verify-browserless-release.js",
+    "deploy:browserless-release": "scripts/deploy-browserless-release.sh",
     "build:runtime-helper-entry": "node scripts/build-runtime-helper-entry.js",
     "test:runtime-helper-entry": "node scripts/build-runtime-helper-entry.js --self-test",
     "test:watchdog-runtime": "node scripts/watchdog-heartbeat-runtime-self-test.js",
@@ -16,5 +19,9 @@
   "dependencies": {
     "better-sqlite3": "11.10.0",
     "ws": "^8.21.0"
+  },
+  "browserlessReleaseBuildDependencies": {
+    "undici": "5.26.3",
+    "@fastify/busboy": "2.0.0"
   }
 }
