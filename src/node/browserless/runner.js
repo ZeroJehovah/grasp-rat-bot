@@ -2299,7 +2299,8 @@ async function runBrowserlessRunner(config, deps = {}) {
     requestAuthUrl: deps.requestAuthUrl,
     submitCallbackInput: deps.submitCallbackInput,
     leaveWithVerification: deps.leaveWithVerification,
-    onStatePersisted: invalidateBackgroundStateCache
+    onStatePersisted: invalidateBackgroundStateCache,
+    requestRateStateFile: config.requestRateStateFile || path.join(config.dataDir, 'request-rate-state.json')
   });
   config.sourceIp = sourceIpController.currentSourceIp();
   config.sourceIps = sourceIpController.sourceIps();

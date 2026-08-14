@@ -170,12 +170,31 @@ function createSourceIpController(options = {}) {
   const config = options.config || {};
   const stateFile = options.stateFile || '';
   const now = typeof options.now === 'function' ? options.now : Date.now;
+  const logStore = options.logStore || null;
   const requestRatePolicy = options.requestRatePolicy || createRequestRatePolicy({
     now,
     sleep: options.sleep,
-    minimumIntervalMs: options.requestMinIntervalMs
+    minimumIntervalMs: options.requestMinIntervalMs,
+    persistFile: options.requestRateStateFile || '',
+    onPersistenceEvent: event => {
+      if (!logStore) return;
+      const operation = event?.operation === 'write' ? 'write' : 'load';
+      const type = operation === 'write'
+        ? 'request-rate-state-persist-error'
+        : 'request-rate-state-load';
+      try {
+        logStore.append('runner', type, {
+          operation,
+          status: String(event?.status || 'unknown'),
+          reason: String(event?.reason || ''),
+          lastOrdinaryStartAtMs: Number.isFinite(event?.lastOrdinaryStartAtMs)
+            ? event.lastOrdinaryStartAtMs
+            : null,
+          writeErrorCount: Math.max(0, Number(event?.writeErrorCount || 0))
+        });
+      } catch (_) {}
+    }
   });
-  const logStore = options.logStore || null;
   const onStatePersisted = typeof options.onStatePersisted === 'function'
     ? options.onStatePersisted
     : null;
