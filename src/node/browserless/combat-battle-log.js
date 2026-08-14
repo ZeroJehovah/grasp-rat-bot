@@ -35,9 +35,23 @@ const SHOT_AMENDMENTS_FILE = 'shot-amendments.jsonl';
 const SEGMENT_LIFECYCLE_FILE = 'segment-lifecycle.jsonl';
 const MAX_ORIGIN_RESOLUTION_CANDIDATES = 4;
 const MAX_INDEX_LINE_BYTES = 8192;
-const BATTLE_INDEX_FORMAT_VERSION = 2;
+const BATTLE_INDEX_FORMAT_VERSION = 3;
 const MAX_TRACKED_ENGAGEMENT_SEGMENTS = 256;
 const MAX_TRAJECTORY_COVERAGE_SHOT_EVENTS = 128;
+const MAX_EVASIVE_AIM_SHOT_EVENTS = 128;
+const EVASIVE_AIM_STRATEGY_KEYS = Object.freeze([
+  'gaussian-linear',
+  'similar-history-knn',
+  'hard-fusion',
+  'fusion-linear-alternating',
+  'restricted-router-tree'
+]);
+const EVASIVE_AIM_TRIGGER_REASON_KEYS = Object.freeze([
+  'half-efficiency-window-hit-shortfall',
+  'strict-evasive-zero-hit-zigzag-strafe',
+  'strict-evasive-zero-hit-retreat-kite',
+  'other'
+]);
 
 function normalizeExecutionClass(value) {
   const normalized = String(value || '').trim().toLowerCase();
@@ -708,6 +722,110 @@ function mergeTrajectoryCoverageShotObservations(target, source) {
   return ledger;
 }
 
+function createEvasiveAimShotObservations(acceptedShotFloor = 0) {
+  return {
+    acceptedShotFloor: Math.max(0, Number(acceptedShotFloor || 0)),
+    events: new Map(),
+    appliedAcceptedShots: 0,
+    appliedConfirmedHits: 0,
+    strategyStats: Object.fromEntries(EVASIVE_AIM_STRATEGY_KEYS.map(strategy => [strategy, {
+      acceptedShots: 0,
+      confirmedHits: 0
+    }])),
+    triggerReasonCounts: boundedCounter(EVASIVE_AIM_TRIGGER_REASON_KEYS),
+    modelVersions: new Set()
+  };
+}
+
+function normalizeEvasiveAimTriggerReason(value) {
+  const reason = String(value || '');
+  return EVASIVE_AIM_TRIGGER_REASON_KEYS.includes(reason) ? reason : 'other';
+}
+
+function addEvasiveAimShotObservation(observed, event = {}, options = {}) {
+  const value = event && typeof event === 'object' ? event : {};
+  if (value.evasiveAimApplied !== true && value.applied !== true) return false;
+  const strategy = String(value.evasiveAimStrategy || value.strategy || '');
+  if (!EVASIVE_AIM_STRATEGY_KEYS.includes(strategy)) return false;
+  const id = trajectoryCoverageEventId(value);
+  if (!id) return false;
+  const ordinal = finiteAttributionNumber(value.acceptedShotOrdinal);
+  const floor = Math.max(0, Number(options.acceptedShotFloor ?? observed.acceptedShotFloor ?? 0));
+  if (ordinal !== null && ordinal <= floor) return false;
+  let row = observed.events.get(id);
+  if (!row) {
+    if (observed.events.size >= MAX_EVASIVE_AIM_SHOT_EVENTS) {
+      const oldest = observed.events.keys().next().value;
+      if (oldest) observed.events.delete(oldest);
+    }
+    row = {
+      id,
+      strategy,
+      triggerReason: normalizeEvasiveAimTriggerReason(value.evasiveAimTriggerReason || value.triggerReason),
+      modelVersion: String(value.evasiveAimModelVersion || value.modelVersion || '').slice(0, 64),
+      confirmedHit: false
+    };
+    observed.events.set(id, row);
+    observed.appliedAcceptedShots += 1;
+    observed.strategyStats[strategy].acceptedShots += 1;
+    observed.triggerReasonCounts[row.triggerReason] += 1;
+    if (row.modelVersion && observed.modelVersions.size < 4) observed.modelVersions.add(row.modelVersion);
+  }
+  if (!row.confirmedHit && value.confirmedHit === true) {
+    row.confirmedHit = true;
+    observed.appliedConfirmedHits += 1;
+    observed.strategyStats[row.strategy].confirmedHits += 1;
+  }
+  return true;
+}
+
+function observeEvasiveAimShots(observed, metrics = {}) {
+  const entries = Array.isArray(metrics?.evasiveAimShotAttribution)
+    ? metrics.evasiveAimShotAttribution
+    : [];
+  for (const entry of entries) addEvasiveAimShotObservation(observed, entry);
+  return observed;
+}
+
+function summarizeEvasiveAimShots(observed) {
+  const value = observed || createEvasiveAimShotObservations();
+  const appliedAcceptedShots = Math.max(0, Number(value.appliedAcceptedShots || 0));
+  const appliedConfirmedHits = Math.max(0, Number(value.appliedConfirmedHits || 0));
+  if (!appliedAcceptedShots) return {};
+  const strategyStats = [];
+  for (const strategy of EVASIVE_AIM_STRATEGY_KEYS) {
+    const stats = value.strategyStats?.[strategy] || {};
+    const acceptedShots = Math.max(0, Number(stats.acceptedShots || 0));
+    const confirmedHits = Math.max(0, Number(stats.confirmedHits || 0));
+    if (!acceptedShots) continue;
+    strategyStats.push({ strategy, acceptedShots, confirmedHits });
+  }
+  const triggerReasons = Object.entries(value.triggerReasonCounts || {})
+    .filter(([, count]) => Number(count || 0) > 0)
+    .map(([reason]) => reason);
+  const modelVersions = Array.from(value.modelVersions || []).slice(0, 4);
+  const singleStrategy = strategyStats.length === 1 ? strategyStats[0] : null;
+  return {
+    // Version 3 compact tuple:
+    // [strategy, acceptedShots, confirmedHits, hitRatePercent, triggerReason]
+    evasiveAim: singleStrategy
+      ? [
+          singleStrategy.strategy,
+          appliedAcceptedShots,
+          appliedConfirmedHits,
+          Number((appliedConfirmedHits / appliedAcceptedShots * 100).toFixed(1)),
+          triggerReasons.length === 1 ? triggerReasons[0] : triggerReasons
+        ]
+      : [
+          strategyStats.map(item => [item.strategy, item.acceptedShots, item.confirmedHits]),
+          appliedAcceptedShots,
+          appliedConfirmedHits,
+          Number((appliedConfirmedHits / appliedAcceptedShots * 100).toFixed(1)),
+          triggerReasons
+        ]
+  };
+}
+
 function createBattleObservations(options = {}) {
   return {
     targetActiveObserved: false,
@@ -720,6 +838,7 @@ function createBattleObservations(options = {}) {
     trajectoryCoverageAppliedFrames: 0,
     trajectoryCoverageReasonCounts: boundedCounter(TRAJECTORY_COVERAGE_REASON_KEYS),
     trajectoryCoverageShots: createTrajectoryCoverageShotObservations(options.acceptedShotFloor),
+    evasiveAimShots: createEvasiveAimShotObservations(options.acceptedShotFloor),
     hpLossAttribution: createHpLossAttributionObservations()
   };
 }
@@ -934,6 +1053,7 @@ function observeBattleDetail(observations, detail, atMs = null) {
     next.trajectoryCoverageReasonCounts[normalizeTrajectoryCoverageReason(trajectoryCoverage.reason)] += 1;
   }
   observeTrajectoryCoverageShots(next.trajectoryCoverageShots, metrics);
+  observeEvasiveAimShots(next.evasiveAimShots, metrics);
   observeHpLossAttribution(next.hpLossAttribution, metrics.combatHpLossAttribution, frame, targetId, atMs);
   return next;
 }
@@ -951,7 +1071,8 @@ function summarizeBattleObservations(observations) {
     trajectoryCoverageAppliedFrames: Number(observed.trajectoryCoverageAppliedFrames || 0),
     trajectoryCoverageReasonCounts: { ...observed.trajectoryCoverageReasonCounts },
     ...summarizeHpLossAttribution(observed.hpLossAttribution),
-    ...summarizeTrajectoryCoverageShots(observed.trajectoryCoverageShots, 'segment')
+    ...summarizeTrajectoryCoverageShots(observed.trajectoryCoverageShots, 'segment'),
+    ...summarizeEvasiveAimShots(observed.evasiveAimShots)
   };
 }
 
@@ -1521,6 +1642,19 @@ function createCombatBattleLog(options = {}) {
       skipReason: String(detail?.skipReason || ''),
       outcome: String(detail?.outcome || ''),
       observedTick: numberOrNull(detail?.observedTick),
+      evasiveAimModelVersion: String(detail?.evasiveAimModelVersion || '').slice(0, 64),
+      evasiveAimStrategy: String(detail?.evasiveAimStrategy || '').slice(0, 64),
+      evasiveAimTriggerReason: String(detail?.evasiveAimTriggerReason || '').slice(0, 96),
+      evasiveAimApplied: detail?.evasiveAimApplied === true,
+      evasiveAimOffsetDeg: numberOrNull(detail?.evasiveAimOffsetDeg),
+      evasiveAimBaselineAngleDeg: numberOrNull(detail?.evasiveAimBaselineAngleDeg),
+      evasiveAimBaselineAimX: numberOrNull(detail?.evasiveAimBaselineAimX),
+      evasiveAimBaselineAimY: numberOrNull(detail?.evasiveAimBaselineAimY),
+      evasiveAimLinearAngleDeg: numberOrNull(detail?.evasiveAimLinearAngleDeg),
+      evasiveAimKnnAngleDeg: numberOrNull(detail?.evasiveAimKnnAngleDeg),
+      evasiveAimFusionAngleDeg: numberOrNull(detail?.evasiveAimFusionAngleDeg),
+      evasiveAimRouterAngleDeg: numberOrNull(detail?.evasiveAimRouterAngleDeg),
+      evasiveAimDisagreementDeg: numberOrNull(detail?.evasiveAimDisagreementDeg),
       runId: String(detail?.runId || ''),
       runtimeRevision: String(detail?.runtimeRevision || '')
     };
@@ -1905,6 +2039,15 @@ function runCombatBattleLogSelfTest() {
         variant: 'immediate',
         selectionMode: 'weighted-primary',
         confirmedHit: false
+      }],
+      evasiveAimShotAttribution: [{
+        bulletId: 'evasive-3',
+        acceptedShotOrdinal: 3,
+        evasiveAimApplied: true,
+        modelVersion: 'evasive-aim-2026-08-14-v1',
+        strategy: 'hard-fusion',
+        triggerReason: 'strict-evasive-zero-hit-zigzag-strafe',
+        confirmedHit: false
       }]
     }, {
       ...physicalEntities(100, 100, 100),
@@ -1959,6 +2102,15 @@ function runCombatBattleLogSelfTest() {
         hypothesis: 'stop',
         variant: 'immediate',
         selectionMode: 'weighted-primary',
+        confirmedHit: true
+      }],
+      evasiveAimShotAttribution: [{
+        bulletId: 'evasive-3',
+        acceptedShotOrdinal: 3,
+        evasiveAimApplied: true,
+        modelVersion: 'evasive-aim-2026-08-14-v1',
+        strategy: 'hard-fusion',
+        triggerReason: 'strict-evasive-zero-hit-zigzag-strafe',
         confirmedHit: true
       }]
     }, {
@@ -2115,6 +2267,11 @@ function runCombatBattleLogSelfTest() {
       && first.segmentTrajectoryCoverageHitAttribution.confirmedByAcceptedShotMetadata === 1
       && first.engagementCumulativeTrajectoryCoverageAppliedAcceptedShots === 1
       && first.engagementCumulativeTrajectoryCoverageAppliedConfirmedHits === 1);
+    assert('index summary keeps bounded five-strategy evasive aim attribution', first.evasiveAim?.[0] === 'hard-fusion'
+      && first.evasiveAim?.[1] === 1
+      && first.evasiveAim?.[2] === 1
+      && first.evasiveAim?.[3] === 100
+      && first.evasiveAim?.[4] === 'strict-evasive-zero-hit-zigzag-strafe');
     assert('index summary preserves exit and death tail', first.exitTriggerHp === 79
       && first.finalObservedHp === 0
       && first.postTriggerDamage === 79
@@ -2123,7 +2280,8 @@ function runCombatBattleLogSelfTest() {
       && first.terminalOutcome === 'death-observed'
       && first.exitTail?.tailFrames === 5
       && first.exitTail?.terminalOutcome === 'death-observed');
-    assert('index summary remains below eight KiB', Buffer.byteLength(JSON.stringify(first), 'utf8') <= MAX_INDEX_LINE_BYTES);
+    const firstIndexBytes = Buffer.byteLength(JSON.stringify(first), 'utf8');
+    assert(`index summary remains below eight KiB (${firstIndexBytes} bytes)`, firstIndexBytes <= MAX_INDEX_LINE_BYTES);
     const second = JSON.parse(indexLines[1]);
     assert('battle observation sets are isolated across targets', second.targetId === '200'
       && second.opponentUniqueBulletCount === 1 && second.opponentShotEventCount === 1);

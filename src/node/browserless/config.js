@@ -112,6 +112,8 @@ const DEFAULTS = {
   combatResponsePolicyShadowConfirmTicks: 6,
   combatResponsePolicyShadowMinimumHoldMs: 500,
   combatTrajectoryCoverageMode: 'live-single',
+  combatEvasiveAimEnabled: true,
+  combatEvasiveAimEarlyDetectionEnabled: true,
   wsTraceEnabled: false,
   wsTracePayload: true,
   wsTraceMaxPayloadChars: 0,
@@ -319,6 +321,14 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     combatTrajectoryCoverageMode: trajectoryCoverageMode(
       env.GRASP_RAT_BROWSERLESS_COMBAT_TRAJECTORY_COVERAGE_MODE,
       DEFAULTS.combatTrajectoryCoverageMode
+    ),
+    combatEvasiveAimEnabled: boolEnv(
+      env.GRASP_RAT_BROWSERLESS_COMBAT_EVASIVE_AIM_ENABLED,
+      DEFAULTS.combatEvasiveAimEnabled
+    ),
+    combatEvasiveAimEarlyDetectionEnabled: boolEnv(
+      env.GRASP_RAT_BROWSERLESS_COMBAT_EVASIVE_AIM_EARLY_DETECTION_ENABLED,
+      DEFAULTS.combatEvasiveAimEarlyDetectionEnabled
     ),
     wsTraceEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_WS_TRACE_ENABLED ?? env.GRASP_RAT_BROWSERLESS_WS_TRACE, DEFAULTS.wsTraceEnabled),
     wsTracePayload: boolEnv(env.GRASP_RAT_BROWSERLESS_WS_TRACE_PAYLOAD, DEFAULTS.wsTracePayload),
@@ -585,6 +595,14 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.combatResponsePolicyShadowMinimumHoldMs = numberEnv(argv[++i], config.combatResponsePolicyShadowMinimumHoldMs);
     } else if (arg === '--combat-trajectory-coverage-mode') {
       config.combatTrajectoryCoverageMode = trajectoryCoverageMode(argv[++i], config.combatTrajectoryCoverageMode);
+    } else if (arg === '--combat-evasive-aim') {
+      config.combatEvasiveAimEnabled = true;
+    } else if (arg === '--no-combat-evasive-aim') {
+      config.combatEvasiveAimEnabled = false;
+    } else if (arg === '--combat-evasive-aim-early-detection') {
+      config.combatEvasiveAimEarlyDetectionEnabled = true;
+    } else if (arg === '--no-combat-evasive-aim-early-detection') {
+      config.combatEvasiveAimEarlyDetectionEnabled = false;
     } else if (arg === '--ws-trace') {
       config.wsTraceEnabled = true;
     } else if (arg === '--no-ws-trace') {
@@ -734,6 +752,8 @@ function usage() {
     '  --combat-response-policy-shadow-confirm-ticks <n>  Candidate confirmations for shadow policy latch. Default: 6',
     '  --combat-response-policy-shadow-minimum-hold-ms <ms>  Minimum shadow policy hold. Default: 500',
     '  --combat-trajectory-coverage-mode <mode>  Multi-trajectory aim mode: off|shadow|live-single|live-volley. Default: live-single',
+    '  --[no-]combat-evasive-aim  Enable the five-strategy evasive-opponent aim experiment. Default: enabled',
+    '  --[no-]combat-evasive-aim-early-detection  Allow strict zero-hit evasive behavior to switch before the half-window fallback. Default: enabled',
     '  --no-combat-robust-dodge  Disable robust Dodge schedule/trajectory uncertainty for rollback',
     '  --no-combat-distance-aware-dodge  Disable distance-aware Dodge rollout for rollback',
     '  --no-combat-close-band-reserve  Disable the two-shot close-band reserve for rollback',

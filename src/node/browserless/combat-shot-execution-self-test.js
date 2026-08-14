@@ -67,7 +67,7 @@ function combatDecision(generation, mode, cadence = 160, advisoryCadence = 1000,
       target,
       self: { userId: 1, x: 0, y: 0 },
       movement: { dx: 0, dy: 0, reason: 'combat-hold' },
-      aim: { x: target.x, y: target.y, mode: 'intercept' },
+      aim: { x: target.x, y: target.y, mode: 'intercept', ...overrides.aim },
       timing: { observedTick: overrides.tick ?? 1 },
       tick: overrides.tick ?? 1,
       shooting,
@@ -102,7 +102,20 @@ function runCombatShotExecutionSelfTest() {
     controlGeneration: controlA,
     engagementGeneration: 'engagement-a',
     segmentGeneration: 'segment-a',
-    observedTick: 10
+    observedTick: 10,
+    evasiveAimModelVersion: 'evasive-aim-2026-08-14-v1',
+    evasiveAimStrategy: 'hard-fusion',
+    evasiveAimTriggerReason: 'strict-evasive-zero-hit-zigzag-strafe',
+    evasiveAimApplied: true,
+    evasiveAimOffsetDeg: 1.25,
+    evasiveAimBaselineAngleDeg: 12,
+    evasiveAimBaselineAimX: 90,
+    evasiveAimBaselineAimY: 0,
+    evasiveAimLinearAngleDeg: 0.5,
+    evasiveAimKnnAngleDeg: 1.5,
+    evasiveAimFusionAngleDeg: 1.25,
+    evasiveAimRouterAngleDeg: -0.25,
+    evasiveAimDisagreementDeg: 1
   });
   store.ingestFrame(shotAck('bullet-a', 100, 0, 11), { receivedAtMs: nowMs + 20 });
   let command = store.getCommandState(nowMs + 20).shooting;
@@ -116,7 +129,14 @@ function runCombatShotExecutionSelfTest() {
     && command.confirmedShots[0].engagementGeneration === 'engagement-a'
     && command.confirmedShots[0].segmentGeneration === 'segment-a'
     && requestA.ownership?.segmentGeneration === 'segment-a'
-    && command.confirmedShots[0].requestSequence === requestA.requestSequence);
+    && command.confirmedShots[0].requestSequence === requestA.requestSequence
+    && command.confirmedShots[0].evasiveAimStrategy === 'hard-fusion'
+    && command.confirmedShots[0].evasiveAimBaselineAngleDeg === 12
+    && command.confirmedShots[0].evasiveAimLinearAngleDeg === 0.5
+    && command.confirmedShots[0].evasiveAimKnnAngleDeg === 1.5
+    && command.confirmedShots[0].evasiveAimFusionAngleDeg === 1.25
+    && command.confirmedShots[0].evasiveAimRouterAngleDeg === -0.25
+    && command.confirmedShots[0].evasiveAimDisagreementDeg === 1);
   const acceptedExecution = ackExecutionEvents.find(event => event.type === 'shoot-ack-accepted');
   check('accepted ACK listener carries bounded replay geometry without expanding cached execution state',
     acceptedExecution?.requestSequence === requestA.requestSequence
@@ -134,6 +154,9 @@ function runCombatShotExecutionSelfTest() {
       && acceptedExecution.ack.expire_tick === 61
       && acceptedExecution.ack.observedTick === 10
       && acceptedExecution.ack.executionDelayTicks === 1
+      && acceptedExecution.evasiveAimStrategy === 'hard-fusion'
+      && acceptedExecution.evasiveAimBaselineAimX === 90
+      && acceptedExecution.evasiveAimRouterAngleDeg === -0.25
       && !Object.prototype.hasOwnProperty.call(command.executionEvents.at(-1), 'ack'));
 
   store.ingestFrame(shotAck('bullet-a', 100, 0, 11), { receivedAtMs: nowMs + 30 });
@@ -261,14 +284,36 @@ function runCombatShotExecutionSelfTest() {
         confirmedShots: [
           { targetId: 8, bullet_id: 'old-generation', confirmationSequence: 501, controlGeneration: controlD, engagementGeneration: generationA3 },
           { targetId: 8, bullet_id: 'before-cursor', confirmationSequence: 500, controlGeneration: controlD, engagementGeneration: ownedGeneration },
-          { targetId: 8, bullet_id: 'owned', confirmationSequence: 501, controlGeneration: controlD, engagementGeneration: ownedGeneration }
+          {
+            targetId: 8,
+            bullet_id: 'owned',
+            confirmationSequence: 501,
+            controlGeneration: controlD,
+            engagementGeneration: ownedGeneration,
+            evasiveAimModelVersion: 'evasive-aim-2026-08-14-v1',
+            evasiveAimStrategy: 'similar-history-knn',
+            evasiveAimTriggerReason: 'half-efficiency-window-hit-shortfall',
+            evasiveAimApplied: true,
+            evasiveAimOffsetDeg: -1.5,
+            evasiveAimBaselineAngleDeg: 8,
+            evasiveAimBaselineAimX: 1000,
+            evasiveAimBaselineAimY: 0,
+            evasiveAimLinearAngleDeg: 0.25,
+            evasiveAimKnnAngleDeg: -1.5,
+            evasiveAimFusionAngleDeg: -1,
+            evasiveAimRouterAngleDeg: 0,
+            evasiveAimDisagreementDeg: 1.75
+          }
         ]
       }
     }
   }, combatTarget(8), {}, { nowMs });
   check('generation, cursor, and 256-id eviction cannot transfer an old ACK', added === 1
     && stateful.combatMetrics.acceptedShots === 1
-    && stateful.combatMetrics.acceptedShots <= stateful.combatMetrics.requestedShots);
+    && stateful.combatMetrics.acceptedShots <= stateful.combatMetrics.requestedShots
+    && stateful.combatLearning.recentShots[0].evasiveAimStrategy === 'similar-history-knn'
+    && stateful.combatLearning.recentShots[0].evasiveAimBaselineAngleDeg === 8
+    && stateful.combatLearning.recentShots[0].evasiveAimDisagreementDeg === 1.75);
 
   let actionNow = 5000;
   let wireDispatches = 0;
@@ -307,7 +352,24 @@ function runCombatShotExecutionSelfTest() {
     actionNow += index === 0 ? 0 : 160;
     const decision = combatDecision('execution-generation', modes[index], 160, 1000, {
       controlGeneration: actionControl,
-      tick: index + 1
+      tick: index + 1,
+      aim: index === 0 ? {
+        evasiveAim: {
+          modelVersion: 'evasive-aim-2026-08-14-v1',
+          strategy: 'gaussian-linear',
+          triggerReason: 'half-efficiency-window-hit-shortfall',
+          applied: true,
+          offsetDeg: 0.75,
+          baselineAngleDeg: 0,
+          baselineAimX: 1000,
+          baselineAimY: 0,
+          linearAngleDeg: 0.75,
+          knnAngleDeg: -0.5,
+          fusionAngleDeg: 0.25,
+          routerAngleDeg: 0,
+          disagreementDeg: 1.25
+        }
+      } : undefined
     });
     const result = adapter.applyDecision(stateSnapshot, decision);
     check(`advisory mode ${modes[index]} keeps base execution cadence`, result.shoot?.skipped === false
@@ -323,7 +385,9 @@ function runCombatShotExecutionSelfTest() {
     && actionStore.getCommandState(actionNow).shooting.pendingShots.every(request => (
       request.executionClass === 'combat'
         && request.segmentGeneration === 'segment:execution-current'
-    )));
+    ))
+    && executionEvents.find(event => event.type === 'shoot-dispatch' && event.evasiveAimApplied === true)?.evasiveAimLinearAngleDeg === 0.75
+    && actionStore.getCommandState(actionNow).shooting.pendingShots.find(request => request.evasiveAimApplied === true)?.evasiveAimDisagreementDeg === 1.25);
 
   actionNow += 50;
   const throttled = adapter.applyDecision(stateSnapshot, combatDecision(

@@ -97,6 +97,13 @@ const {
 const {
   dynamicWhitelistDistanceGuardBlocksCombatCore
 } = require('../../strategy/dynamic-whitelist-safety');
+const {
+  applyEvasiveAimStrategyCore,
+  createEvasiveAimModel,
+  predictEvasiveAimAngles,
+  updateEvasiveAimExperimentCore
+} = require('../../strategy/evasive-aim-experiment');
+const EVASIVE_AIM_MODEL = createEvasiveAimModel(require('../../strategy/evasive-aim-model.json'));
 
 const DEFAULT_STAMINA_FULL_RATIO = 0.98;
 const DEFAULT_COMBAT_TARGET_FRAME_GAP_HOLD_MS = 250;
@@ -500,7 +507,20 @@ function recordCombatShotLearning(stateful, target, combat = {}, options = {}) {
     coverageSelectedTrajectory: String(options.coverageSelectedTrajectory || ''),
     coverageVariant: String(options.coverageVariant || ''),
     coverageSelectionMode: String(options.coverageSelectionMode || ''),
-    coverageRouteSelectionMode: String(options.coverageRouteSelectionMode || '')
+    coverageRouteSelectionMode: String(options.coverageRouteSelectionMode || ''),
+    evasiveAimModelVersion: String(options.evasiveAimModelVersion || combat.aim?.evasiveAim?.modelVersion || ''),
+    evasiveAimStrategy: String(options.evasiveAimStrategy || combat.aim?.evasiveAim?.strategy || ''),
+    evasiveAimTriggerReason: String(options.evasiveAimTriggerReason || combat.aim?.evasiveAim?.triggerReason || ''),
+    evasiveAimApplied: (options.evasiveAimApplied ?? combat.aim?.evasiveAim?.applied) === true,
+    evasiveAimOffsetDeg: numberOrNull(options.evasiveAimOffsetDeg ?? combat.aim?.evasiveAim?.offsetDeg),
+    evasiveAimBaselineAngleDeg: numberOrNull(options.evasiveAimBaselineAngleDeg ?? combat.aim?.evasiveAim?.baselineAngleDeg),
+    evasiveAimBaselineAimX: numberOrNull(options.evasiveAimBaselineAimX ?? combat.aim?.evasiveAim?.baselineAimX),
+    evasiveAimBaselineAimY: numberOrNull(options.evasiveAimBaselineAimY ?? combat.aim?.evasiveAim?.baselineAimY),
+    evasiveAimLinearAngleDeg: numberOrNull(options.evasiveAimLinearAngleDeg ?? combat.aim?.evasiveAim?.linearAngleDeg),
+    evasiveAimKnnAngleDeg: numberOrNull(options.evasiveAimKnnAngleDeg ?? combat.aim?.evasiveAim?.knnAngleDeg),
+    evasiveAimFusionAngleDeg: numberOrNull(options.evasiveAimFusionAngleDeg ?? combat.aim?.evasiveAim?.fusionAngleDeg),
+    evasiveAimRouterAngleDeg: numberOrNull(options.evasiveAimRouterAngleDeg ?? combat.aim?.evasiveAim?.routerAngleDeg),
+    evasiveAimDisagreementDeg: numberOrNull(options.evasiveAimDisagreementDeg ?? combat.aim?.evasiveAim?.disagreementDeg)
   });
   learning.recentShots = learning.recentShots.filter(item => nowMs - Number(item.at || 0) <= 30000).slice(-80);
   const behaviorMap = ensureOpponentBehaviorMap(stateful);
@@ -668,7 +688,37 @@ function compactCoverageShotAttribution(stateful, targetId, limit = 64) {
     variant: String(shot.coverageVariant || ''),
     selectionMode: String(shot.coverageSelectionMode || ''),
     routeSelectionMode: String(shot.coverageRouteSelectionMode || ''),
-    confirmedHit: shot.credited === true
+    confirmedHit: shot.credited === true,
+    evasiveAimModelVersion: String(shot.evasiveAimModelVersion || ''),
+    evasiveAimStrategy: String(shot.evasiveAimStrategy || ''),
+    evasiveAimTriggerReason: String(shot.evasiveAimTriggerReason || ''),
+    evasiveAimApplied: shot.evasiveAimApplied === true,
+    evasiveAimOffsetDeg: numberOrNull(shot.evasiveAimOffsetDeg)
+  }));
+}
+
+function compactEvasiveAimShotAttribution(stateful, targetId, limit = 64) {
+  const shots = ensureCombatLearningState(stateful).recentShots
+    .filter(item => String(item.targetId) === String(targetId))
+    .filter(item => item.evasiveAimApplied === true && item.evasiveAimStrategy)
+    .slice(-Math.max(1, Math.round(Number(limit || 64))));
+  return shots.map(shot => ({
+    bulletId: String(shot.bulletId || ''),
+    acceptedShotOrdinal: numberOrNull(shot.acceptedShotOrdinal),
+    acceptedAtMs: numberOrNull(shot.at),
+    modelVersion: String(shot.evasiveAimModelVersion || ''),
+    strategy: String(shot.evasiveAimStrategy || ''),
+    triggerReason: String(shot.evasiveAimTriggerReason || ''),
+    confirmedHit: shot.credited === true,
+    offsetDeg: numberOrNull(shot.evasiveAimOffsetDeg),
+    baselineAngleDeg: numberOrNull(shot.evasiveAimBaselineAngleDeg),
+    baselineAimX: numberOrNull(shot.evasiveAimBaselineAimX),
+    baselineAimY: numberOrNull(shot.evasiveAimBaselineAimY),
+    linearAngleDeg: numberOrNull(shot.evasiveAimLinearAngleDeg),
+    knnAngleDeg: numberOrNull(shot.evasiveAimKnnAngleDeg),
+    fusionAngleDeg: numberOrNull(shot.evasiveAimFusionAngleDeg),
+    routerAngleDeg: numberOrNull(shot.evasiveAimRouterAngleDeg),
+    disagreementDeg: numberOrNull(shot.evasiveAimDisagreementDeg)
   }));
 }
 
@@ -722,7 +772,20 @@ function syncConfirmedCombatShots(stateful, state = {}, target = null, combat = 
       coverageSelectedTrajectory: shot.coverageSelectedTrajectory,
       coverageVariant: shot.coverageVariant,
       coverageSelectionMode: shot.coverageSelectionMode,
-      coverageRouteSelectionMode: shot.coverageRouteSelectionMode
+      coverageRouteSelectionMode: shot.coverageRouteSelectionMode,
+      evasiveAimModelVersion: shot.evasiveAimModelVersion,
+      evasiveAimStrategy: shot.evasiveAimStrategy,
+      evasiveAimTriggerReason: shot.evasiveAimTriggerReason,
+      evasiveAimApplied: shot.evasiveAimApplied,
+      evasiveAimOffsetDeg: shot.evasiveAimOffsetDeg,
+      evasiveAimBaselineAngleDeg: shot.evasiveAimBaselineAngleDeg,
+      evasiveAimBaselineAimX: shot.evasiveAimBaselineAimX,
+      evasiveAimBaselineAimY: shot.evasiveAimBaselineAimY,
+      evasiveAimLinearAngleDeg: shot.evasiveAimLinearAngleDeg,
+      evasiveAimKnnAngleDeg: shot.evasiveAimKnnAngleDeg,
+      evasiveAimFusionAngleDeg: shot.evasiveAimFusionAngleDeg,
+      evasiveAimRouterAngleDeg: shot.evasiveAimRouterAngleDeg,
+      evasiveAimDisagreementDeg: shot.evasiveAimDisagreementDeg
     });
   }
   learning.acceptedBulletIds = Array.from(seen).slice(-256);
@@ -2092,6 +2155,80 @@ function estimateAim(self, target, options = {}) {
   const creationAimPoint = creationOracle.interceptPoint || (intercept
     ? { x: intercept.x, y: intercept.y }
     : null);
+  let evasiveAim = null;
+  const evasiveExperiment = combatTargetState?.evasiveAimExperiment || null;
+  if (creationOracle.reachable === true
+    && creationAimPoint
+    && evasiveExperiment?.active === true) {
+    const evasivePredictions = predictEvasiveAimAngles(EVASIVE_AIM_MODEL, {
+      motionSamples: samples,
+      observedTick: options.observedTick,
+      executionDelayTicks: observationToExecutionTicks,
+      flightTicks,
+      targetVelocity: { vx, vy },
+      shooterVelocity: { vx: shooterVx, vy: shooterVy },
+      predictedShooterOrigin: creationOracle.predictedShooterOrigin || fallbackPredictedShooterOrigin,
+      predictedTargetAtCreation: creationOracle.predictedTargetAtCreation || fallbackPredictedTargetAtCreation
+    });
+    const candidate = applyEvasiveAimStrategyCore({ x, y }, evasiveExperiment, evasivePredictions, {
+      baselineAim: creationAimPoint,
+      predictedShooterOrigin: creationOracle.predictedShooterOrigin || fallbackPredictedShooterOrigin,
+      predictedTargetAtCreation: creationOracle.predictedTargetAtCreation || fallbackPredictedTargetAtCreation,
+      acceptedShots: options.actualShots
+    }, {
+      maximumCreationDistanceCm: EVASIVE_AIM_MODEL.training.maximumCreationDistanceCm
+    });
+    if (candidate.applied === true) {
+      x = Number(candidate.x);
+      y = Number(candidate.y);
+      routeCoverage = null;
+      motionProbe = {
+        hypothesis: `evasive-aim:${candidate.strategy}`,
+        evasiveAim: true
+      };
+    }
+    evasiveAim = {
+      active: true,
+      applied: candidate.applied === true,
+      reason: candidate.reason,
+      modelVersion: evasiveExperiment.modelVersion,
+      strategy: evasiveExperiment.strategy,
+      triggerReason: evasiveExperiment.triggerReason,
+      triggeredAt: evasiveExperiment.triggeredAt,
+      offsetDeg: numberOrNull(candidate.offsetDeg),
+      baselineAngleDeg: numberOrNull(candidate.baselineAngleDeg),
+      baselineAimX: numberOrNull(candidate.baselineAimX),
+      baselineAimY: numberOrNull(candidate.baselineAimY),
+      creationDistanceCm: numberOrNull(candidate.creationDistanceCm),
+      linearAngleDeg: numberOrNull(candidate.linearAngleDeg ?? evasivePredictions.linearAngleDeg),
+      knnAngleDeg: numberOrNull(candidate.knnAngleDeg ?? evasivePredictions.knnAngleDeg),
+      fusionAngleDeg: numberOrNull(candidate.fusionAngleDeg ?? evasivePredictions.fusionAngleDeg),
+      routerAngleDeg: numberOrNull(candidate.routerAngleDeg ?? evasivePredictions.routerAngleDeg),
+      disagreementDeg: numberOrNull(candidate.disagreementDeg ?? evasivePredictions.disagreementDeg),
+      predictionsReady: evasivePredictions.ok === true
+    };
+  } else if (evasiveExperiment) {
+    evasiveAim = {
+      active: evasiveExperiment.active === true,
+      applied: false,
+      reason: evasiveExperiment.active === true ? 'creation-intercept-unavailable' : 'experiment-inactive',
+      modelVersion: evasiveExperiment.modelVersion,
+      strategy: evasiveExperiment.strategy,
+      triggerReason: evasiveExperiment.triggerReason,
+      triggeredAt: evasiveExperiment.triggeredAt,
+      offsetDeg: null,
+      baselineAngleDeg: null,
+      baselineAimX: null,
+      baselineAimY: null,
+      creationDistanceCm: null,
+      linearAngleDeg: null,
+      knnAngleDeg: null,
+      fusionAngleDeg: null,
+      routerAngleDeg: null,
+      disagreementDeg: null,
+      predictionsReady: false
+    };
+  }
   const hasTrajectoryCandidates = Boolean(routeCoverage?.candidates?.length);
   let trajectoryAimProof = trajectoryAware
     ? evaluateRealtimeTrajectoryAim({
@@ -2121,7 +2258,10 @@ function estimateAim(self, target, options = {}) {
       };
   let trajectoryAimFallback = false;
   let trajectoryAimFallbackReason = '';
-  if (trajectoryAware && creationAimPoint && (!hasTrajectoryCandidates || trajectoryAimProof.valid !== true)) {
+  if (!evasiveAim?.applied
+    && trajectoryAware
+    && creationAimPoint
+    && (!hasTrajectoryCandidates || trajectoryAimProof.valid !== true)) {
     const changedAim = Math.hypot(
       Number(x) - Number(creationAimPoint.x),
       Number(y) - Number(creationAimPoint.y)
@@ -2236,6 +2376,7 @@ function estimateAim(self, target, options = {}) {
     trajectoryAimFallback,
     trajectoryAimFallbackReason,
     arrivalOccupancy,
+    evasiveAim,
     ackShooterOrigin: options.latestConfirmedShot?.ackShooterOrigin || null,
     shooterOriginErrorCm: numberOrNull(options.latestConfirmedShot?.shooterOriginErrorCm),
     shooterOriginErrorSummary: options.shooterOriginErrorSummary || null,
@@ -3569,6 +3710,7 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     motionSamples,
     opponentBehaviorState,
     fireRiskClassification,
+    evasiveAimExperiment: continuesActiveGeneration ? previous.evasiveAimExperiment || null : null,
     probeState: same ? previous.probeState || null : null,
     closeBandReserve: same ? previous.closeBandReserve || null : null,
     ballisticClose: continuesActiveGeneration ? previous.ballisticClose || null : null,
@@ -4227,6 +4369,40 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       stateful.combatEngagements[String(combatPhaseOwner.id)] = combatPhaseOwner;
     }
   }
+  if (combatTargetState && target && combatPhase) {
+    const experiment = updateEvasiveAimExperimentCore(
+      combatTargetState.evasiveAimExperiment || null,
+      {
+        targetId: combatTargetId(target),
+        engagementGeneration: stateful?.combatMetrics?.engagementGeneration,
+        startedAt: stateful?.combatMetrics?.startedAt ?? combatTargetState.firstSeenAt,
+        startedTick: stateful?.combatMetrics?.startedTick ?? combatTargetState.firstSeenTick,
+        nowMs: options.nowMs,
+        evaluationWindowMs: combatPhase.evaluationWindowMs,
+        referenceDamageHp: combatPhase.attackEfficiency?.referenceDamageHp,
+        expectedDamagePerHitHp: combatPhase.attackEfficiency?.expectedDamagePerShot,
+        acceptedShots: stateful?.combatMetrics?.acceptedShots,
+        confirmedHits: stateful?.combatMetrics?.confirmedHits,
+        behavior: combatTargetState.opponentBehaviorState
+      },
+      {
+        enabled: options.combatEvasiveAimEnabled !== false,
+        earlyDetectionEnabled: options.combatEvasiveAimEarlyDetectionEnabled !== false,
+        minimumEarlyAcceptedShots: 20,
+        behaviorDetection: {
+          minimumConfidence: 0.7,
+          minimumSampleCount: 8,
+          minimumDurationMs: 2500,
+          minimumTransitions: 4,
+          minimumConditionalSamples: 8
+        }
+      }
+    );
+    combatTargetState.evasiveAimExperiment = experiment;
+    if (stateful?.combatEngagements && combatTargetState.id !== null && combatTargetState.id !== undefined) {
+      stateful.combatEngagements[String(combatTargetState.id)] = combatTargetState;
+    }
+  }
   const metricsMatchTarget = Boolean(
     target
       && stateful?.combatMetrics?.targetId !== null
@@ -4489,6 +4665,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       noDamageLevel: aim.noDamageLevel,
       motionProbe: aim.motionProbe,
       trajectoryCoverage: aim.trajectoryCoverage,
+      evasiveAim: aim.evasiveAim,
       opponentBehavior: aim.opponentBehavior,
       at: Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now()
     };
@@ -5118,6 +5295,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     } : null,
     movement,
     aim: aim.ok ? aim : null,
+    evasiveAimExperiment: combatTargetState?.evasiveAimExperiment || null,
     behavior: behaviorState ? {
       mode: behaviorState.mode,
       confidence: behaviorState.confidence,
@@ -5184,6 +5362,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       trajectoryCoverage: aim.trajectoryCoverage || null,
       expectedHitProbability,
       selectedRouteProbability,
+      evasiveAim: aim.evasiveAim || null,
       recentAcceptedHitRate: recentHitSummary.hitRate,
       recentAcceptedShotCount: recentHitSummary.shotCount,
       noProgressAcceptedShots,
@@ -5237,6 +5416,11 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
         combatTargetId(target),
         64
       );
+      const evasiveAimShotAttribution = compactEvasiveAimShotAttribution(
+        stateful,
+        combatTargetId(target),
+        64
+      );
       return {
         ...metrics,
         actualShots,
@@ -5248,6 +5432,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
           ? Number((confirmedHits / acceptedShots * 100).toFixed(1))
           : null,
         coverageShotAttribution,
+        evasiveAimShotAttribution,
         firstDamageDelayMs: Number(stateful.combatMetrics.firstDamageAt || 0) > 0
           ? Math.max(0, Number(stateful.combatMetrics.firstDamageAt) - Number(stateful.combatMetrics.startedAt || 0))
           : null

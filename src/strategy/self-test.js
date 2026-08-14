@@ -160,6 +160,16 @@ const {
   pickPostAttackDropWaitTargetCore
 } = require('./post-attack-drop');
 const {
+  EVASIVE_AIM_STRATEGIES,
+  applyEvasiveAimStrategyCore,
+  buildKnnFeatures,
+  createEvasiveAimModel,
+  highConfidenceEvasiveBehaviorCore,
+  predictEvasiveAimAngles,
+  updateEvasiveAimExperimentCore
+} = require('./evasive-aim-experiment');
+const EVASIVE_AIM_TEST_MODEL = createEvasiveAimModel(require('./evasive-aim-model.json'));
+const {
   updatePostKillSettlementCore,
   updatePostKillSettlementsCore,
   postKillEvidenceKey
@@ -7173,6 +7183,211 @@ function runStrategyModuleSelfTests() {
       && incomparableThreatMetrics.significant === false
       && incomparableThreatMetrics.timeToImpactAdvantageMs === null
       && incomparableThreatMetrics.distanceAdvantageCm === null
+  });
+
+  const evasiveBehavior = {
+    mode: 'zigzag-strafe',
+    confidence: 0.82,
+    metrics: {
+      sampleCount: 14,
+      durationMs: 3200,
+      movementTransitions: { transitionCount: 7, conditionalSampleCount: 10 }
+    }
+  };
+  const ordinaryTurn = {
+    mode: 'zigzag-strafe',
+    confidence: 0.82,
+    metrics: {
+      sampleCount: 5,
+      durationMs: 700,
+      movementTransitions: { transitionCount: 2, conditionalSampleCount: 1 }
+    }
+  };
+  const earlyExperiment = updateEvasiveAimExperimentCore(null, {
+    targetId: 'target-a',
+    engagementGeneration: 'engagement-a',
+    startedAt: 1000,
+    startedTick: 10,
+    nowMs: 4200,
+    evaluationWindowMs: 28800,
+    acceptedShots: 20,
+    confirmedHits: 0,
+    behavior: evasiveBehavior
+  }, { randomUnit: 0.42 });
+  const lockedExperiment = updateEvasiveAimExperimentCore(earlyExperiment, {
+    targetId: 'target-a',
+    engagementGeneration: 'engagement-a',
+    startedAt: 1000,
+    startedTick: 10,
+    nowMs: 9000,
+    evaluationWindowMs: 28800,
+    acceptedShots: 31,
+    confirmedHits: 3,
+    behavior: ordinaryTurn
+  }, { randomUnit: 0.99 });
+  const nextEngagementExperiment = updateEvasiveAimExperimentCore(earlyExperiment, {
+    targetId: 'target-a',
+    engagementGeneration: 'engagement-a-reconnected',
+    startedAt: 9000,
+    startedTick: 200,
+    nowMs: 9200,
+    evaluationWindowMs: 28800,
+    acceptedShots: 0,
+    confirmedHits: 0,
+    behavior: ordinaryTurn
+  }, { randomUnit: 0.99 });
+  const halfWindowPass = updateEvasiveAimExperimentCore(null, {
+    targetId: 'target-b',
+    engagementGeneration: 'engagement-b',
+    startedAt: 1000,
+    startedTick: 20,
+    nowMs: 15400,
+    evaluationWindowMs: 28800,
+    acceptedShots: 20,
+    confirmedHits: 2,
+    behavior: ordinaryTurn
+  }, { randomUnit: 0.01 });
+  const halfWindowFail = updateEvasiveAimExperimentCore(null, {
+    targetId: 'target-c',
+    engagementGeneration: 'engagement-c',
+    startedAt: 1000,
+    startedTick: 30,
+    nowMs: 15400,
+    evaluationWindowMs: 28800,
+    acceptedShots: 20,
+    confirmedHits: 1,
+    behavior: ordinaryTurn
+  }, { randomUnit: 0.99 });
+  results.push({
+    name: 'evasive-aim-experiment-detects-only-sustained-evasion-and-locks-one-random-strategy',
+    passed: highConfidenceEvasiveBehaviorCore(evasiveBehavior).eligible === true
+      && highConfidenceEvasiveBehaviorCore(ordinaryTurn).eligible === false
+      && earlyExperiment.active === true
+      && earlyExperiment.strategy === EVASIVE_AIM_STRATEGIES[2]
+      && earlyExperiment.triggerReason === 'strict-evasive-zero-hit-zigzag-strafe'
+      && earlyExperiment.acceptedShotsAtTrigger === 20
+      && lockedExperiment.strategy === earlyExperiment.strategy
+      && lockedExperiment.triggeredAt === earlyExperiment.triggeredAt
+      && nextEngagementExperiment.active === false
+      && nextEngagementExperiment.strategy === ''
+      && nextEngagementExperiment.engagementGeneration === 'engagement-a-reconnected'
+      && halfWindowPass.active === false
+      && halfWindowPass.halfWindowEvaluated === true
+      && halfWindowPass.requiredConfirmedHits === 2
+      && halfWindowFail.active === true
+      && halfWindowFail.strategy === EVASIVE_AIM_STRATEGIES[4]
+      && halfWindowFail.triggerReason === 'half-efficiency-window-hit-shortfall'
+  });
+
+  const earlyDetectionDisabled = updateEvasiveAimExperimentCore(null, {
+    targetId: 'target-d',
+    engagementGeneration: 'engagement-d',
+    startedAt: 1000,
+    nowMs: 4200,
+    evaluationWindowMs: 28800,
+    acceptedShots: 20,
+    confirmedHits: 0,
+    behavior: evasiveBehavior
+  }, { earlyDetectionEnabled: false, randomUnit: 0.2 });
+  const disabledExperiment = updateEvasiveAimExperimentCore(earlyExperiment, {
+    targetId: 'target-a',
+    engagementGeneration: 'engagement-a',
+    startedAt: 1000,
+    nowMs: 5000,
+    evaluationWindowMs: 28800,
+    acceptedShots: 21,
+    confirmedHits: 0,
+    behavior: evasiveBehavior
+  }, { enabled: false, randomUnit: 0.8 });
+  results.push({
+    name: 'evasive-aim-rollbacks-disable-early-detection-or-the-whole-experiment',
+    passed: earlyDetectionDisabled.active === false
+      && earlyDetectionDisabled.earlyDetectionEnabled === false
+      && disabledExperiment.enabled === false
+      && disabledExperiment.active === false
+      && disabledExperiment.strategy === ''
+  });
+
+  const modelMotionSamples = [];
+  for (let tick = 70; tick <= 100; tick += 1) {
+    const phase = Math.floor((tick - 70) / 4) % 4;
+    const directions = [[50, 0], [0, 50], [-50, 0], [0, -50]];
+    const [vx, vy] = directions[phase];
+    modelMotionSamples.push({
+      tick,
+      at: tick * 50,
+      x: 4000 + (tick - 70) * vx,
+      y: 1200 + (tick - 70) * vy,
+      vx,
+      vy,
+      selfX: 0,
+      selfY: 0,
+      selfVx: 0,
+      selfVy: 0
+    });
+  }
+  const modelPredictions = predictEvasiveAimAngles(EVASIVE_AIM_TEST_MODEL, {
+    motionSamples: modelMotionSamples,
+    observedTick: 100,
+    executionDelayTicks: 5,
+    flightTicks: 9,
+    targetVelocity: { vx: 0, vy: -50 },
+    shooterVelocity: { vx: 0, vy: 0 },
+    predictedShooterOrigin: { x: 0, y: 0 },
+    predictedTargetAtCreation: { x: 4000, y: 950 }
+  });
+  const interpolatedKnnFeatures = buildKnnFeatures({
+    motionSamples: [
+      { tick: 98, x: 3900, y: 900, vx: 50, vy: 0 },
+      { tick: 100, x: 4000, y: 1000, vx: 0, vy: 50 }
+    ],
+    observedTick: 100,
+    flightTicks: 9,
+    predictedShooterOrigin: { x: 0, y: 0 },
+    predictedTargetAtCreation: { x: 4000, y: 1000 }
+  });
+  const appliedAngles = EVASIVE_AIM_STRATEGIES.map((strategy, index) => applyEvasiveAimStrategyCore(
+    { x: 4500, y: 950 },
+    {
+      active: true,
+      strategy,
+      triggerReason: 'test',
+      modelVersion: EVASIVE_AIM_TEST_MODEL.modelVersion,
+      acceptedShotsAtTrigger: index === 3 ? 7 : 0
+    },
+    modelPredictions,
+    {
+      baselineAim: { x: 4500, y: 950 },
+      predictedShooterOrigin: { x: 0, y: 0 },
+      predictedTargetAtCreation: { x: 4000, y: 950 },
+      acceptedShots: index === 3 ? 7 : 0
+    }
+  ));
+  const outsideTrainingRange = applyEvasiveAimStrategyCore(
+    { x: 6500, y: 0 },
+    { active: true, strategy: 'gaussian-linear' },
+    modelPredictions,
+    {
+      baselineAim: { x: 6500, y: 0 },
+      predictedShooterOrigin: { x: 0, y: 0 },
+      predictedTargetAtCreation: { x: 6000, y: 0 },
+      acceptedShots: 0
+    }
+  );
+  results.push({
+    name: 'evasive-aim-five-models-produce-bounded-offsets-and-fall-back-outside-training-range',
+    passed: modelPredictions.ok === true
+      && appliedAngles.every(item => item.applied === true && Math.abs(item.offsetDeg) <= 8)
+      && appliedAngles[0].offsetDeg === modelPredictions.linearAngleDeg
+      && appliedAngles[1].offsetDeg === modelPredictions.knnAngleDeg
+      && appliedAngles[2].offsetDeg === modelPredictions.fusionAngleDeg
+      && appliedAngles[3].offsetDeg === modelPredictions.fusionAngleDeg
+      && appliedAngles[4].offsetDeg === modelPredictions.routerAngleDeg
+      && interpolatedKnnFeatures.length === 10
+      && Math.abs(interpolatedKnnFeatures[2] - interpolatedKnnFeatures[4]) < 1e-9
+      && Math.abs(interpolatedKnnFeatures[3] - interpolatedKnnFeatures[5]) < 1e-9
+      && outsideTrainingRange.applied === false
+      && outsideTrainingRange.reason === 'outside-trained-distance'
   });
 
   // Test opportunity constants validation

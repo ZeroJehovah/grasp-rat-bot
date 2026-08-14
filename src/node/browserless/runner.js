@@ -244,6 +244,8 @@ function publicConfig(config) {
     combatResponsePolicyShadowConfirmTicks: Number(config.combatResponsePolicyShadowConfirmTicks || 0),
     combatResponsePolicyShadowMinimumHoldMs: Number(config.combatResponsePolicyShadowMinimumHoldMs || 0),
     combatTrajectoryCoverageMode: String(config.combatTrajectoryCoverageMode || 'live-single'),
+    combatEvasiveAimEnabled: config.combatEvasiveAimEnabled !== false,
+    combatEvasiveAimEarlyDetectionEnabled: config.combatEvasiveAimEarlyDetectionEnabled !== false,
     wsTraceEnabled: Boolean(config.wsTraceEnabled),
     wsTracePayload: Boolean(config.wsTracePayload),
     wsTraceMaxPayloadChars: Number(config.wsTraceMaxPayloadChars || 0),

@@ -695,7 +695,20 @@ function createBrowserlessStateStore(options = {}) {
       lastDispatchAt: optionalNumericOrNull(event.lastDispatchAt),
       skipReason: String(event.skipReason || ''),
       outcome: String(event.outcome || ''),
-      observedTick: optionalNumericOrNull(event.observedTick)
+      observedTick: optionalNumericOrNull(event.observedTick),
+      evasiveAimModelVersion: String(event.evasiveAimModelVersion || ''),
+      evasiveAimStrategy: String(event.evasiveAimStrategy || ''),
+      evasiveAimTriggerReason: String(event.evasiveAimTriggerReason || ''),
+      evasiveAimApplied: event.evasiveAimApplied === true,
+      evasiveAimOffsetDeg: optionalNumericOrNull(event.evasiveAimOffsetDeg),
+      evasiveAimBaselineAngleDeg: optionalNumericOrNull(event.evasiveAimBaselineAngleDeg),
+      evasiveAimBaselineAimX: optionalNumericOrNull(event.evasiveAimBaselineAimX),
+      evasiveAimBaselineAimY: optionalNumericOrNull(event.evasiveAimBaselineAimY),
+      evasiveAimLinearAngleDeg: optionalNumericOrNull(event.evasiveAimLinearAngleDeg),
+      evasiveAimKnnAngleDeg: optionalNumericOrNull(event.evasiveAimKnnAngleDeg),
+      evasiveAimFusionAngleDeg: optionalNumericOrNull(event.evasiveAimFusionAngleDeg),
+      evasiveAimRouterAngleDeg: optionalNumericOrNull(event.evasiveAimRouterAngleDeg),
+      evasiveAimDisagreementDeg: optionalNumericOrNull(event.evasiveAimDisagreementDeg)
     };
     state.command.shootExecutionEvents.push(entry);
     if (state.command.shootExecutionEvents.length > 128) {
@@ -1140,7 +1153,20 @@ function createBrowserlessStateStore(options = {}) {
         },
         ownership: confirmed.ownership,
         outcome: pending.source === 'expired' ? 'late-ack' : 'accepted',
-        observedTick: meta.tick
+        observedTick: meta.tick,
+        evasiveAimModelVersion: confirmed.evasiveAimModelVersion,
+        evasiveAimStrategy: confirmed.evasiveAimStrategy,
+        evasiveAimTriggerReason: confirmed.evasiveAimTriggerReason,
+        evasiveAimApplied: confirmed.evasiveAimApplied,
+        evasiveAimOffsetDeg: confirmed.evasiveAimOffsetDeg,
+        evasiveAimBaselineAngleDeg: confirmed.evasiveAimBaselineAngleDeg,
+        evasiveAimBaselineAimX: confirmed.evasiveAimBaselineAimX,
+        evasiveAimBaselineAimY: confirmed.evasiveAimBaselineAimY,
+        evasiveAimLinearAngleDeg: confirmed.evasiveAimLinearAngleDeg,
+        evasiveAimKnnAngleDeg: confirmed.evasiveAimKnnAngleDeg,
+        evasiveAimFusionAngleDeg: confirmed.evasiveAimFusionAngleDeg,
+        evasiveAimRouterAngleDeg: confirmed.evasiveAimRouterAngleDeg,
+        evasiveAimDisagreementDeg: confirmed.evasiveAimDisagreementDeg
       }, {
         listenerAck: shootAckReplayGeometry(confirmed)
       });
@@ -1241,7 +1267,20 @@ function createBrowserlessStateStore(options = {}) {
       coverageExpectedMissImprovementCm: numericOrNull(request.coverageExpectedMissImprovementCm),
       coverageImprovementQualified: request.coverageImprovementQualified === true,
       coverageSelectionMode: String(request.coverageSelectionMode || ''),
-      coverageRouteSelectionMode: String(request.coverageRouteSelectionMode || '')
+      coverageRouteSelectionMode: String(request.coverageRouteSelectionMode || ''),
+      evasiveAimModelVersion: String(request.evasiveAimModelVersion || ''),
+      evasiveAimStrategy: String(request.evasiveAimStrategy || ''),
+      evasiveAimTriggerReason: String(request.evasiveAimTriggerReason || ''),
+      evasiveAimApplied: request.evasiveAimApplied === true,
+      evasiveAimOffsetDeg: numericOrNull(request.evasiveAimOffsetDeg),
+      evasiveAimBaselineAngleDeg: numericOrNull(request.evasiveAimBaselineAngleDeg),
+      evasiveAimBaselineAimX: numericOrNull(request.evasiveAimBaselineAimX),
+      evasiveAimBaselineAimY: numericOrNull(request.evasiveAimBaselineAimY),
+      evasiveAimLinearAngleDeg: numericOrNull(request.evasiveAimLinearAngleDeg),
+      evasiveAimKnnAngleDeg: numericOrNull(request.evasiveAimKnnAngleDeg),
+      evasiveAimFusionAngleDeg: numericOrNull(request.evasiveAimFusionAngleDeg),
+      evasiveAimRouterAngleDeg: numericOrNull(request.evasiveAimRouterAngleDeg),
+      evasiveAimDisagreementDeg: numericOrNull(request.evasiveAimDisagreementDeg)
     };
     state.command.requestedShots += 1;
     state.command.pendingShots.push(shot);

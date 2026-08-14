@@ -572,6 +572,19 @@ function summarizeCommand(command) {
     baseCadenceMs: command.baseCadenceMs ?? null,
     executionCadenceMs: command.executionCadenceMs ?? command.cadenceMs ?? null,
     advisoryCadenceMs: command.advisoryCadenceMs ?? null,
+    evasiveAimModelVersion: command.evasiveAimModelVersion || '',
+    evasiveAimStrategy: command.evasiveAimStrategy || '',
+    evasiveAimTriggerReason: command.evasiveAimTriggerReason || '',
+    evasiveAimApplied: command.evasiveAimApplied === true,
+    evasiveAimOffsetDeg: command.evasiveAimOffsetDeg ?? null,
+    evasiveAimBaselineAngleDeg: command.evasiveAimBaselineAngleDeg ?? null,
+    evasiveAimBaselineAimX: command.evasiveAimBaselineAimX ?? null,
+    evasiveAimBaselineAimY: command.evasiveAimBaselineAimY ?? null,
+    evasiveAimLinearAngleDeg: command.evasiveAimLinearAngleDeg ?? null,
+    evasiveAimKnnAngleDeg: command.evasiveAimKnnAngleDeg ?? null,
+    evasiveAimFusionAngleDeg: command.evasiveAimFusionAngleDeg ?? null,
+    evasiveAimRouterAngleDeg: command.evasiveAimRouterAngleDeg ?? null,
+    evasiveAimDisagreementDeg: command.evasiveAimDisagreementDeg ?? null,
     directionGeneration: command.directionGeneration ?? null,
     ownership: command.ownership || null,
     movementTelemetry: command.movementTelemetry || null,
@@ -718,7 +731,20 @@ function createBrowserlessActionAdapter(options = {}) {
       observedTick: optionalNumber(event.observedTick),
       advisoryReasons: Array.isArray(event.advisoryReasons)
         ? event.advisoryReasons.map(String).filter(Boolean).slice(0, 8)
-        : []
+        : [],
+      evasiveAimModelVersion: String(event.evasiveAimModelVersion || ''),
+      evasiveAimStrategy: String(event.evasiveAimStrategy || ''),
+      evasiveAimTriggerReason: String(event.evasiveAimTriggerReason || ''),
+      evasiveAimApplied: event.evasiveAimApplied === true,
+      evasiveAimOffsetDeg: optionalNumber(event.evasiveAimOffsetDeg),
+      evasiveAimBaselineAngleDeg: optionalNumber(event.evasiveAimBaselineAngleDeg),
+      evasiveAimBaselineAimX: optionalNumber(event.evasiveAimBaselineAimX),
+      evasiveAimBaselineAimY: optionalNumber(event.evasiveAimBaselineAimY),
+      evasiveAimLinearAngleDeg: optionalNumber(event.evasiveAimLinearAngleDeg),
+      evasiveAimKnnAngleDeg: optionalNumber(event.evasiveAimKnnAngleDeg),
+      evasiveAimFusionAngleDeg: optionalNumber(event.evasiveAimFusionAngleDeg),
+      evasiveAimRouterAngleDeg: optionalNumber(event.evasiveAimRouterAngleDeg),
+      evasiveAimDisagreementDeg: optionalNumber(event.evasiveAimDisagreementDeg)
     };
     if (!onShootExecution) return entry;
     try {
@@ -2725,7 +2751,20 @@ function createBrowserlessActionAdapter(options = {}) {
       coverageRouteSelectionMode: String(
         shotMeta.coverageRouteSelectionMode
           ?? (combatShot ? (routeSelectionMode === 'legacy-fixed' ? 'legacy-fixed' : 'weighted') : '')
-      )
+      ),
+      evasiveAimModelVersion: String(shotMeta.evasiveAimModelVersion ?? combatAim?.evasiveAim?.modelVersion ?? ''),
+      evasiveAimStrategy: String(shotMeta.evasiveAimStrategy ?? combatAim?.evasiveAim?.strategy ?? ''),
+      evasiveAimTriggerReason: String(shotMeta.evasiveAimTriggerReason ?? combatAim?.evasiveAim?.triggerReason ?? ''),
+      evasiveAimApplied: (shotMeta.evasiveAimApplied ?? combatAim?.evasiveAim?.applied) === true,
+      evasiveAimOffsetDeg: numberOrNull(shotMeta.evasiveAimOffsetDeg ?? combatAim?.evasiveAim?.offsetDeg),
+      evasiveAimBaselineAngleDeg: numberOrNull(shotMeta.evasiveAimBaselineAngleDeg ?? combatAim?.evasiveAim?.baselineAngleDeg),
+      evasiveAimBaselineAimX: numberOrNull(shotMeta.evasiveAimBaselineAimX ?? combatAim?.evasiveAim?.baselineAimX),
+      evasiveAimBaselineAimY: numberOrNull(shotMeta.evasiveAimBaselineAimY ?? combatAim?.evasiveAim?.baselineAimY),
+      evasiveAimLinearAngleDeg: numberOrNull(shotMeta.evasiveAimLinearAngleDeg ?? combatAim?.evasiveAim?.linearAngleDeg),
+      evasiveAimKnnAngleDeg: numberOrNull(shotMeta.evasiveAimKnnAngleDeg ?? combatAim?.evasiveAim?.knnAngleDeg),
+      evasiveAimFusionAngleDeg: numberOrNull(shotMeta.evasiveAimFusionAngleDeg ?? combatAim?.evasiveAim?.fusionAngleDeg),
+      evasiveAimRouterAngleDeg: numberOrNull(shotMeta.evasiveAimRouterAngleDeg ?? combatAim?.evasiveAim?.routerAngleDeg),
+      evasiveAimDisagreementDeg: numberOrNull(shotMeta.evasiveAimDisagreementDeg ?? combatAim?.evasiveAim?.disagreementDeg)
     };
     nextCommandId += 1;
     state.sentCount += 1;
@@ -2787,7 +2826,20 @@ function createBrowserlessActionAdapter(options = {}) {
           coverageExpectedMissImprovementCm: command.coverageExpectedMissImprovementCm,
           coverageImprovementQualified: command.coverageImprovementQualified,
           coverageSelectionMode: command.coverageSelectionMode,
-          coverageRouteSelectionMode: command.coverageRouteSelectionMode
+          coverageRouteSelectionMode: command.coverageRouteSelectionMode,
+          evasiveAimModelVersion: command.evasiveAimModelVersion,
+          evasiveAimStrategy: command.evasiveAimStrategy,
+          evasiveAimTriggerReason: command.evasiveAimTriggerReason,
+          evasiveAimApplied: command.evasiveAimApplied,
+          evasiveAimOffsetDeg: command.evasiveAimOffsetDeg,
+          evasiveAimBaselineAngleDeg: command.evasiveAimBaselineAngleDeg,
+          evasiveAimBaselineAimX: command.evasiveAimBaselineAimX,
+          evasiveAimBaselineAimY: command.evasiveAimBaselineAimY,
+          evasiveAimLinearAngleDeg: command.evasiveAimLinearAngleDeg,
+          evasiveAimKnnAngleDeg: command.evasiveAimKnnAngleDeg,
+          evasiveAimFusionAngleDeg: command.evasiveAimFusionAngleDeg,
+          evasiveAimRouterAngleDeg: command.evasiveAimRouterAngleDeg,
+          evasiveAimDisagreementDeg: command.evasiveAimDisagreementDeg
         });
         if (telemetry && typeof telemetry === 'object') {
           command.requestId = telemetry.requestId ?? command.requestId;
@@ -2814,6 +2866,19 @@ function createBrowserlessActionAdapter(options = {}) {
       wireTarget: command.wireTarget,
       executionCadenceMs: intervalMs,
       lastDispatchAt: command.sentAtMs,
+      evasiveAimModelVersion: command.evasiveAimModelVersion,
+      evasiveAimStrategy: command.evasiveAimStrategy,
+      evasiveAimTriggerReason: command.evasiveAimTriggerReason,
+      evasiveAimApplied: command.evasiveAimApplied,
+      evasiveAimOffsetDeg: command.evasiveAimOffsetDeg,
+      evasiveAimBaselineAngleDeg: command.evasiveAimBaselineAngleDeg,
+      evasiveAimBaselineAimX: command.evasiveAimBaselineAimX,
+      evasiveAimBaselineAimY: command.evasiveAimBaselineAimY,
+      evasiveAimLinearAngleDeg: command.evasiveAimLinearAngleDeg,
+      evasiveAimKnnAngleDeg: command.evasiveAimKnnAngleDeg,
+      evasiveAimFusionAngleDeg: command.evasiveAimFusionAngleDeg,
+      evasiveAimRouterAngleDeg: command.evasiveAimRouterAngleDeg,
+      evasiveAimDisagreementDeg: command.evasiveAimDisagreementDeg,
       outcome: 'transport-accepted'
     });
     return { ok: true, skipped: false, command: summarizeCommand(command), cadenceMs: intervalMs, execution };
