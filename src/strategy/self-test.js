@@ -53,7 +53,11 @@ const {
   safeRetreatInterceptCandidateCore,
   selectCombatMovementArbitrationCore
 } = require('./combat-movement');
-const { selectProfitEscortDirectionCore } = require('./profit-escort');
+const {
+  profitEscortContinuityMatchesCore,
+  selectProfitEscortDirectionCore,
+  updateProfitEscortContinuityCore
+} = require('./profit-escort');
 const { runCombatHpLossAttributionSelfTest } = require('./combat-hp-loss-attribution');
 const { recordActionSwitchDiagnosticsCore } = require('./action-switch-diagnostics');
 const { attackWorthTakingCore } = require('./attack-worth');
@@ -2859,6 +2863,150 @@ function runStrategyModuleSelfTests() {
       && escortBlockedByBullet.source === 'emergency-dodge'
       && escortBlockedByBullet.dx === 0
       && escortBlockedByBullet.dy === 1
+  });
+
+  const escortMission = {
+    active: true,
+    key: 'enemy:42',
+    missionKey: 'enemy:42',
+    type: 'enemy',
+    targetId: '42',
+    navigationTarget: { userId: 42, x: 90000, y: 0 },
+    expiresAt: 5000
+  };
+  const enteredEscortContinuity = updateProfitEscortContinuityCore(null, {
+    nowMs: 1000,
+    mission: escortMission,
+    combatTargetId: '8',
+    engagementGeneration: 'engagement:1',
+    controlGeneration: 'control:1',
+    combatTargetVisible: true,
+    entryEligible: true,
+    entryEvidence: { targetFiring: true },
+    missionProgress: { netProgressCm: 0 }
+  }, { maximumMs: 3000 });
+  const maintainedEscortContinuity = updateProfitEscortContinuityCore(enteredEscortContinuity.state, {
+    nowMs: 1200,
+    mission: escortMission,
+    combatTargetId: '8',
+    engagementGeneration: 'engagement:1',
+    controlGeneration: 'control:1',
+    combatTargetVisible: true,
+    entryEligible: false,
+    missionProgress: { netProgressCm: 250 }
+  }, { maximumMs: 3000 });
+  results.push({
+    name: 'profit-escort-continuity-enters-on-evidence-and-maintains-the-same-bounded-engagement',
+    passed: enteredEscortContinuity.entered === true
+      && enteredEscortContinuity.state?.missionKey === 'enemy:42'
+      && enteredEscortContinuity.state?.combatTargetId === '8'
+      && enteredEscortContinuity.state?.engagementGeneration === 'engagement:1'
+      && enteredEscortContinuity.state?.expiresAt === 4000
+      && maintainedEscortContinuity.entered === false
+      && maintainedEscortContinuity.maintained === true
+      && maintainedEscortContinuity.state?.enteredAt === 1000
+      && maintainedEscortContinuity.state?.entryEvidence?.targetFiring === true
+      && maintainedEscortContinuity.state?.missionProgress?.netProgressCm === 250
+      && profitEscortContinuityMatchesCore(maintainedEscortContinuity.state, {
+        nowMs: 1200,
+        mission: escortMission,
+        combatTargetId: '8',
+        engagementGeneration: 'engagement:1',
+        controlGeneration: 'control:1'
+      })
+      && !profitEscortContinuityMatchesCore(maintainedEscortContinuity.state, {
+        nowMs: 1200,
+        mission: escortMission,
+        combatTargetId: '8',
+        engagementGeneration: 'engagement:2',
+        controlGeneration: 'control:1'
+      })
+  });
+
+  const reboundEscortContinuity = updateProfitEscortContinuityCore(maintainedEscortContinuity.state, {
+    nowMs: 1300,
+    mission: {
+      ...escortMission,
+      key: 'enemy:77',
+      missionKey: 'enemy:77',
+      targetId: '77',
+      navigationTarget: { userId: 77, x: 70000, y: 0 }
+    },
+    combatTargetId: '8',
+    engagementGeneration: 'engagement:1',
+    controlGeneration: 'control:1',
+    combatTargetVisible: true,
+    entryEligible: true,
+    entryReason: 'same-engagement-mission-rebind'
+  }, { maximumMs: 3000 });
+  results.push({
+    name: 'profit-escort-continuity-rebinds-a-regularly-selected-mission-without-changing-engagement',
+    passed: reboundEscortContinuity.release?.releaseReason === 'profit-mission-replaced'
+      && reboundEscortContinuity.entered === true
+      && reboundEscortContinuity.state?.missionKey === 'enemy:77'
+      && reboundEscortContinuity.state?.missionTargetId === '77'
+      && reboundEscortContinuity.state?.combatTargetId === '8'
+      && reboundEscortContinuity.state?.engagementGeneration === 'engagement:1'
+      && reboundEscortContinuity.state?.entryReason === 'same-engagement-mission-rebind'
+  });
+
+  const escortReleaseCases = [
+    {
+      name: 'engagement-generation',
+      input: { engagementGeneration: 'engagement:2' },
+      reason: 'combat-engagement-generation-changed'
+    },
+    {
+      name: 'control-generation',
+      input: { controlGeneration: 'control:2' },
+      reason: 'combat-control-generation-changed'
+    },
+    {
+      name: 'mission-expiry',
+      nowMs: 5000,
+      reason: 'profit-mission-expired'
+    },
+    {
+      name: 'realtime-stale',
+      input: { releaseReason: 'realtime-state-stale' },
+      reason: 'realtime-state-stale'
+    }
+  ];
+  const escortReleaseResults = escortReleaseCases.map(testCase => updateProfitEscortContinuityCore(
+    maintainedEscortContinuity.state,
+    {
+      nowMs: testCase.nowMs ?? 1400,
+      mission: escortMission,
+      combatTargetId: '8',
+      engagementGeneration: 'engagement:1',
+      controlGeneration: 'control:1',
+      combatTargetVisible: true,
+      entryEligible: false,
+      ...testCase.input
+    },
+    { maximumMs: 3000 }
+  ));
+  const missingGenerationEntry = updateProfitEscortContinuityCore(null, {
+    nowMs: 1000,
+    mission: escortMission,
+    combatTargetId: '8',
+    entryEligible: true
+  });
+  const sameTargetEntry = updateProfitEscortContinuityCore(null, {
+    nowMs: 1000,
+    mission: escortMission,
+    combatTargetId: '42',
+    engagementGeneration: 'engagement:1',
+    entryEligible: true
+  });
+  results.push({
+    name: 'profit-escort-continuity-releases-on-expiry-generation-and-stale-boundaries',
+    passed: escortReleaseResults.every((result, index) => (
+      result.state === null
+        && result.release?.releaseReason === escortReleaseCases[index].reason
+    ))
+      && missingGenerationEntry.state === null
+      && sameTargetEntry.state === null
   });
 
   const pressureAttackPaused = determineCombatFireState(

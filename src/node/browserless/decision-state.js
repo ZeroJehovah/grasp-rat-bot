@@ -74,6 +74,10 @@ function redactBoundedValue(value, depth = 0) {
 }
 
 function createInitialDecisionState(options = {}) {
+  const legacyInvulnerableProfitApproach = options.invulnerableProfitApproach || null;
+  const legacyMigrationAt = Number.isFinite(Number(options.nowMs))
+    ? Number(options.nowMs)
+    : (typeof options.now === 'function' ? Number(options.now()) : Date.now());
   return {
     lastTarget: cloneJson(options.lastTarget || null),
     lastTargetAt: options.lastTargetAt || '',
@@ -81,6 +85,15 @@ function createInitialDecisionState(options = {}) {
     opportunityChoice: cloneJson(options.opportunityChoice || options.currentOpportunity || null),
     opportunitySwitchLock: cloneJson(options.opportunitySwitchLock || options.switchLock || null),
     profitMission: cloneJson(options.profitMission || null),
+    profitEscortContinuity: cloneJson(options.profitEscortContinuity || null),
+    profitEscortContinuityLastRelease: cloneJson(options.profitEscortContinuityLastRelease || null),
+    legacyStateMigration: cloneJson(options.legacyStateMigration || (legacyInvulnerableProfitApproach ? {
+      type: 'invulnerable-profit-approach',
+      cleared: true,
+      clearedAt: Number.isFinite(legacyMigrationAt) ? legacyMigrationAt : Date.now(),
+      reason: 'legacy-state-cleared',
+      targetId: String(legacyInvulnerableProfitApproach.targetId || '')
+    } : null)),
     coinProgress: asRecord(options.coinProgress),
     coinAttempts: asRecord(options.coinAttempts),
     coinFailures: asRecord(options.coinFailures),
@@ -96,8 +109,6 @@ function createInitialDecisionState(options = {}) {
     singleCoinBait: cloneJson(options.singleCoinBait || null),
     outsideCenterIdle: cloneJson(options.outsideCenterIdle || null),
     opportunityAfkStamina: asRecord(options.opportunityAfkStamina),
-    invulnerableProfitApproach: cloneJson(options.invulnerableProfitApproach || null),
-    invulnerableProfitApproachLastRelease: cloneJson(options.invulnerableProfitApproachLastRelease || null),
     explorationCandidates: asRecord(options.explorationCandidates),
     explorationSessions: asRecord(options.explorationSessions),
     explorationTerminations: asRecord(options.explorationTerminations),
@@ -189,8 +200,9 @@ function summarizeBrowserlessDecisionState(state, options = {}) {
       choice: redactBoundedValue(state.opportunityChoice || state.currentOpportunity || null),
       switchLock: redactBoundedValue(state.opportunitySwitchLock || state.switchLock || null),
       profitMission: redactBoundedValue(state.profitMission || null),
-      invulnerableProfitApproach: redactBoundedValue(state.invulnerableProfitApproach || null),
-      invulnerableProfitApproachLastRelease: redactBoundedValue(state.invulnerableProfitApproachLastRelease || null)
+      profitEscortContinuity: redactBoundedValue(state.profitEscortContinuity || null),
+      profitEscortContinuityLastRelease: redactBoundedValue(state.profitEscortContinuityLastRelease || null),
+      legacyStateMigration: redactBoundedValue(state.legacyStateMigration || null)
     },
     coin: {
       progressCount: Object.keys(coinProgress).length,

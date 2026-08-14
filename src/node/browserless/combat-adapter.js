@@ -29,7 +29,11 @@ const {
   stabilizeCombatMovementDirectionCore,
   shouldBackAwayFromTarget
 } = require('../../strategy/combat-movement');
-const { selectProfitEscortDirectionCore } = require('../../strategy/profit-escort');
+const {
+  profitEscortContinuityMatchesCore,
+  updateProfitEscortContinuityCore,
+  selectProfitEscortDirectionCore
+} = require('../../strategy/profit-escort');
 const {
   checkLowConfidenceThrottle,
   classifyFireRiskCore,
@@ -2575,6 +2579,137 @@ function buildCombatExitEvaluation(self, target, combatTargetState = {}, options
   };
 }
 
+function profitEscortEntryEvidence(target, combatTargetState, bullets = [], nowMs = Date.now()) {
+  const currentTargetId = String(combatTargetId(target) || '');
+  const recentMotionSamples = (Array.isArray(combatTargetState?.motionSamples)
+    ? combatTargetState.motionSamples
+    : [])
+    .filter(sample => nowMs - Number(sample?.at || 0) <= 2500);
+  const firstMotionSample = recentMotionSamples[0] || null;
+  const lastMotionSample = recentMotionSamples.at(-1) || null;
+  const closingPressure = Boolean(
+    firstMotionSample
+      && lastMotionSample
+      && Number(firstMotionSample.distance) - Number(lastMotionSample.distance) >= 200
+  );
+  const realTargetBulletPressure = (bullets || []).some(bullet => (
+    bullet?.synthetic !== true
+      && String(bullet?.ownerId ?? bullet?.owner_id ?? '') === currentTargetId
+  ));
+  const recentTargetThreat = Number(combatTargetState?.lastThreatAt || 0) > 0
+    && nowMs - Number(combatTargetState.lastThreatAt) <= 2500;
+  const eligible = Boolean(
+    target?.combatIntent === 'defensive'
+      || target?.combatIntent === 'whitelist-proximity'
+      || target?.firing
+      || realTargetBulletPressure
+      || (target?.dynamicWhitelistMember && (closingPressure || recentTargetThreat))
+  );
+  return {
+    eligible,
+    targetCombatIntent: String(target?.combatIntent || ''),
+    originIntent: String(combatTargetState?.originIntent || ''),
+    dynamicWhitelistMember: Boolean(target?.dynamicWhitelistMember),
+    targetFiring: Boolean(target?.firing),
+    realTargetBulletPressure,
+    closingPressure,
+    recentTargetThreat,
+    targetDistanceCm: Number.isFinite(Number(target?.distance)) ? Math.round(Number(target.distance)) : null
+  };
+}
+
+function profitEscortMissionProgress(mission = {}) {
+  return {
+    currentDistanceCm: numberOrNull(mission.currentDistanceCm),
+    previousDistanceCm: numberOrNull(mission.previousDistanceCm),
+    netProgressCm: numberOrNull(mission.netProgressCm),
+    lastForwardProgressAt: numberOrNull(mission.lastForwardProgressAt)
+  };
+}
+
+function reconcileBrowserlessProfitEscortContinuity(
+  stateful,
+  self,
+  target,
+  realtime,
+  bullets = [],
+  options = {},
+  explicitReleaseReason = ''
+) {
+  if (!stateful || typeof stateful !== 'object') {
+    return { state: null, release: null, evidence: null, entered: false, maintained: false };
+  }
+  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const mission = options.profitMission || stateful.profitMission || null;
+  const combatTargetState = target ? stateful.combatTarget || null : null;
+  const combatTargetIdValue = target ? String(combatTargetId(target) || '') : '';
+  const engagementGeneration = target
+    ? String(stateful.combatMetrics?.engagementGeneration || '')
+    : '';
+  const controlGeneration = target
+    ? String(stateful.combatMetrics?.controlGeneration || '')
+    : '';
+  const evidence = target
+    ? profitEscortEntryEvidence(target, combatTargetState, bullets, nowMs)
+    : null;
+  const missionTarget = mission?.navigationTarget || mission?.target || mission;
+  const missionTargetId = String(
+    mission?.targetId
+      ?? mission?.subjectId
+      ?? missionTarget?.userId
+      ?? missionTarget?.user_id
+      ?? missionTarget?.id
+      ?? ''
+  );
+  const missionPointValid = [self?.x, self?.y, missionTarget?.x, missionTarget?.y]
+    .every(value => Number.isFinite(Number(value)));
+  const previous = stateful.profitEscortContinuity || null;
+  const priorEngagementMatches = profitEscortContinuityMatchesCore(previous, {
+    nowMs,
+    mission: previous?.missionKey === String(mission?.key || mission?.missionKey || '') ? mission : null,
+    combatTargetId: combatTargetIdValue,
+    engagementGeneration,
+    controlGeneration
+  });
+  const frameAgeMs = Number(realtime?.frameAgeMs);
+  const staleMs = Math.max(1000, Number(
+    options.profitEscortRealtimeStaleMs
+      ?? options.staleSelfMs
+      ?? 3000
+  ));
+  let releaseReason = String(explicitReleaseReason || '');
+  if (!releaseReason && target) {
+    if (Number.isFinite(frameAgeMs) && frameAgeMs > staleMs) releaseReason = 'realtime-state-stale';
+    else if (target.alive === false || Number(target.hp) <= 0) releaseReason = 'combat-target-completed';
+    else if (combatTargetState?.escapeDecision?.confirmed === true) releaseReason = 'combat-target-escape-confirmed';
+  }
+  const entryEligible = !releaseReason
+    && mission?.active !== false
+    && missionTargetId
+    && combatTargetIdValue
+    && missionTargetId !== combatTargetIdValue
+    && missionPointValid
+    && Boolean(evidence?.eligible || priorEngagementMatches);
+  const updated = updateProfitEscortContinuityCore(previous, {
+    nowMs,
+    mission,
+    combatTargetId: combatTargetIdValue,
+    engagementGeneration,
+    controlGeneration,
+    combatTargetVisible: Boolean(target),
+    entryEligible,
+    entryReason: evidence?.eligible ? 'realtime-defensive-evidence' : 'same-engagement-mission-rebind',
+    entryEvidence: evidence,
+    missionProgress: profitEscortMissionProgress(mission || {}),
+    releaseReason
+  }, {
+    maximumMs: options.profitEscortContinuityMaxMs ?? options.profitMissionTtlMs ?? 180000
+  });
+  stateful.profitEscortContinuity = updated.state || null;
+  if (updated.release) stateful.profitEscortContinuityLastRelease = updated.release;
+  return { ...updated, evidence };
+}
+
 function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   if (!self || !target) return { dx: 0, dy: 0, reason: 'missing-target', spacing: null, dodge: null, modifiers: [] };
   const combatTargetState = options.combatTargetState || null;
@@ -2918,32 +3053,21 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       && currentTargetId
       && missionTargetId !== currentTargetId
   );
-  const recentMotionSamples = (Array.isArray(combatTargetState?.motionSamples)
-    ? combatTargetState.motionSamples
-    : [])
-    .filter(sample => Number(options.nowMs || Date.now()) - Number(sample?.at || 0) <= 2500);
-  const firstMotionSample = recentMotionSamples[0] || null;
-  const lastMotionSample = recentMotionSamples.at(-1) || null;
-  const closingPressure = Boolean(
-    firstMotionSample
-      && lastMotionSample
-      && Number(firstMotionSample.distance) - Number(lastMotionSample.distance) >= 200
+  const escortEvidence = profitEscortEntryEvidence(
+    target,
+    combatTargetState,
+    bullets,
+    Number(options.nowMs || Date.now())
   );
-  const realTargetBulletPressure = (bullets || []).some(bullet => (
-    bullet?.synthetic !== true
-      && String(bullet?.ownerId ?? bullet?.owner_id ?? '') === currentTargetId
-  ));
-  const recentTargetThreat = Number(combatTargetState?.lastThreatAt || 0) > 0
-    && Number(options.nowMs || Date.now()) - Number(combatTargetState.lastThreatAt) <= 2500;
-  const defensiveEscortEvidence = Boolean(
-    target.combatIntent === 'defensive'
-      || target.combatIntent === 'whitelist-proximity'
-      || target.firing
-      || realTargetBulletPressure
-      || String(combatTargetState?.originIntent || '') === 'defensive'
-      || String(combatTargetState?.originIntent || '') === 'whitelist-proximity'
-      || (target.dynamicWhitelistMember && (closingPressure || recentTargetThreat))
-  );
+  const escortContinuity = options.profitEscortContinuity || null;
+  const continuityMatches = profitEscortContinuityMatchesCore(escortContinuity, {
+    nowMs: options.nowMs,
+    mission: profitMission,
+    combatTargetId: currentTargetId,
+    engagementGeneration: options.engagementGeneration,
+    controlGeneration: options.controlGeneration
+  });
+  const defensiveEscortEvidence = Boolean(escortEvidence.eligible || continuityMatches);
   const profitEscort = missionIsDifferentTarget && defensiveEscortEvidence
     ? selectProfitEscortDirectionCore({
         active: profitMission.active !== false,
@@ -2965,15 +3089,22 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     profitEscort.navigationAuthority = String(
       missionTarget?.authority || profitMission.navigationAuthority || 'navigation'
     );
-    profitEscort.evidence = {
-      targetCombatIntent: String(target.combatIntent || ''),
-      dynamicWhitelistMember: Boolean(target.dynamicWhitelistMember),
-      targetFiring: Boolean(target.firing),
-      realTargetBulletPressure,
-      closingPressure,
-      recentTargetThreat,
-      targetDistanceCm: Number.isFinite(Number(target.distance)) ? Math.round(Number(target.distance)) : null
-    };
+    profitEscort.latched = continuityMatches;
+    profitEscort.maintained = continuityMatches && !escortEvidence.eligible;
+    profitEscort.enteredAt = continuityMatches ? Number(escortContinuity.enteredAt || 0) : null;
+    profitEscort.engagementGeneration = continuityMatches
+      ? String(escortContinuity.engagementGeneration || '')
+      : String(options.engagementGeneration || '');
+    profitEscort.entryReason = continuityMatches ? String(escortContinuity.entryReason || '') : '';
+    profitEscort.entryEvidence = continuityMatches
+      ? cloneJson(escortContinuity.entryEvidence || null)
+      : cloneJson(escortEvidence);
+    profitEscort.evidence = escortEvidence;
+    profitEscort.missionStateProgress = continuityMatches
+      ? cloneJson(escortContinuity.missionProgress || null)
+      : profitEscortMissionProgress(profitMission);
+    profitEscort.overrideReason = ballisticCloseActive ? 'ballistic-close' : '';
+    profitEscort.releaseReason = '';
   }
   const escortDirection = profitEscort?.active && !ballisticCloseActive
     ? profitEscort.direction
@@ -3227,6 +3358,18 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   );
   if (safeRetreatInterceptApplied) {
     movement.modifiers = Array.from(new Set([...(movement.modifiers || []), 'safe-retreat-intercept']));
+  }
+  if (profitEscort?.active) {
+    if (movement.modifiers.includes('profit-escort')) profitEscort.overrideReason = '';
+    else if (movement.modifiers.includes('dodge')) {
+      profitEscort.overrideReason = contactEntryDodge ? 'contact-entry-dodge' : 'emergency-dodge';
+    } else if (movementArbitration?.source === 'pending-safe-hold') {
+      profitEscort.overrideReason = 'pending-safe-hold';
+    } else if (movementArbitration?.source === 'current-safe-hold') {
+      profitEscort.overrideReason = 'current-safe-hold';
+    } else if (ballisticCloseActive) profitEscort.overrideReason = 'ballistic-close';
+    else if (closePressureTooClose) profitEscort.overrideReason = 'close-pressure-separation';
+    else profitEscort.overrideReason = reason || 'combat-spacing-override';
   }
   return {
     dx: Number(movement.dx || 0),
@@ -4203,6 +4346,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   const target = normalTarget || (contactApplies
     ? { ...contactTarget, combatIntent: 'defensive', contactEntryOnly: true }
     : null);
+  let profitEscortContinuityUpdate = null;
   const targetFrameGapState = !target
     && currentTargetId
     && !currentVisibleTarget
@@ -4246,6 +4390,29 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     movementExecutionTiming: state?.command?.movement?.timing || options.movementExecutionTiming,
     reason: liveCombatEnabled ? 'combat-live-realtime' : (options.controlMode === 'combat-dry-run' ? 'combat-dry-run-realtime' : 'realtime-visible-threat')
   }, mergedOptions => rememberBrowserlessCombatEngagement(stateful, self, target, mergedOptions));
+  if (!contactEntryOnly && target) {
+    profitEscortContinuityUpdate = reconcileBrowserlessProfitEscortContinuity(
+      stateful,
+      self,
+      target,
+      realtime,
+      bullets,
+      options
+    );
+  } else {
+    const continuityReleaseReason = targetFrameGapReset
+      ? 'combat-engagement-frame-gap-expired'
+      : (!target && !targetFrameGapHold && !contactEntryOnly ? 'combat-target-released' : '');
+    profitEscortContinuityUpdate = reconcileBrowserlessProfitEscortContinuity(
+      stateful,
+      self,
+      null,
+      realtime,
+      bullets,
+      options,
+      continuityReleaseReason
+    );
+  }
   if (!contactEntryOnly) syncCombatShotExecutionEvents(stateful, state, target);
   if (!contactEntryOnly) syncConfirmedCombatShots(stateful, state, target, {
     behavior: stateful?.opponentBehaviorStates?.[String(combatTargetId(target) || '')] || null
@@ -4679,12 +4846,26 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     realtimeStateObservedAtMs: realtime.receivedAtMs,
     combatDistanceAwareDodgeEnabled: options.combatDistanceAwareDodgeEnabled === true,
     profitMission: options.profitMission || stateful?.profitMission || null,
+    profitEscortContinuity: stateful?.profitEscortContinuity || null,
+    profitEscortContinuityLastRelease: stateful?.profitEscortContinuityLastRelease || null,
     distanceAwareDodgeState: stateful?.distanceAwareDodgeState || null,
     engagementId: stateful?.combatMetrics?.engagementId || '',
+    engagementGeneration: stateful?.combatMetrics?.engagementGeneration || '',
+    controlGeneration: stateful?.combatMetrics?.controlGeneration || '',
     currentTick: realtime.tick,
     bullets,
     contactEntryGuard: contactApplies ? contactEntryGuard : null
   }, mergedOptions => buildCombatMovementPlan(self, target, bullets, mergedOptions));
+  if (stateful?.profitEscortContinuity?.active === true && movement?.profitEscort?.latched === true) {
+    stateful.profitEscortContinuity = {
+      ...stateful.profitEscortContinuity,
+      lastUpdatedAt: Number(options.nowMs || Date.now()),
+      overrideReason: String(movement.profitEscort.overrideReason || ''),
+      missionProgress: profitEscortMissionProgress(stateful.profitMission || {})
+    };
+    movement.profitEscort.continuityExpiresAt = Number(stateful.profitEscortContinuity.expiresAt || 0);
+    movement.profitEscort.lastSeenAt = Number(stateful.profitEscortContinuity.lastSeenAt || 0);
+  }
   if (stateful?.combatTarget) {
     stateful.combatTarget.ballisticClose = movement?.ballisticClose?.state || null;
     if (stateful.combatEngagements && stateful.combatTarget.id !== null && stateful.combatTarget.id !== undefined) {
@@ -5276,6 +5457,13 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       ...contactEntryGuard,
       target: contactEntryGuard.target ? summarizeCombatTarget(contactEntryGuard.target) : null,
       movementOnly: contactEntryOnly
+    },
+    profitEscortContinuity: {
+      active: cloneJson(stateful?.profitEscortContinuity || null),
+      lastRelease: cloneJson(stateful?.profitEscortContinuityLastRelease || null),
+      entered: Boolean(profitEscortContinuityUpdate?.entered),
+      maintained: Boolean(profitEscortContinuityUpdate?.maintained),
+      entryEvidence: cloneJson(profitEscortContinuityUpdate?.evidence || null)
     },
     targetFrameGapReset,
     targetFrameGapHold,

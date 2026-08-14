@@ -3314,14 +3314,12 @@ function createBrowserlessActionAdapter(options = {}) {
   function applyProfitEnemyDecision(stateSnapshot, self, target, decision) {
     clearNearCoinContinuation('profit-enemy-action');
     const rawRealtimeTarget = findRealtimeEntity(stateSnapshot, targetRepeatKey(target));
-    const committedRealtimeRequired = target?.invulnerableProfitCommitment === true
-      || decision?.action?.invulnerableProfitCommitment;
-    if (committedRealtimeRequired && !rawRealtimeTarget) {
-      const stopped = stop('profit-committed-target-missing-realtime');
+    if (!rawRealtimeTarget && target?.cachedNavigationOnly !== true) {
+      const stopped = stop('profit-target-missing-realtime');
       return {
         ok: stopped.ok,
         kind: 'stop',
-        reason: 'profit-committed-target-missing-realtime',
+        reason: 'profit-target-missing-realtime',
         command: stopped.command || null,
         skipped: Boolean(stopped.skipped),
         target,

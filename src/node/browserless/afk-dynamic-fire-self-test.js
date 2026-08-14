@@ -8,10 +8,9 @@ function action(target) {
     action: {
       kind: 'attack',
       band: 'profit',
-      reason: 'invulnerable-profit-commitment-attack',
+      reason: 'best-opportunity-enemy',
       target: {
         type: 'enemy',
-        invulnerableProfitCommitment: true,
         ...target
       }
     }
@@ -126,7 +125,7 @@ function runAfkDynamicFireSelfTest() {
       bullets: []
     }
   }, action({ userId: 41, x: 900, y: 0, hp: 3 }));
-  assert.strictEqual(missing.reason, 'profit-committed-target-missing-realtime');
+  assert.strictEqual(missing.reason, 'profit-target-missing-realtime');
   assert.strictEqual(shots.length, 1);
 
   let evidenceNow = 1000;

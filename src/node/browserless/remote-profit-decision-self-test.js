@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('assert');
+const { createBrowserlessActionAdapter } = require('./action-adapter');
 const {
   buildBrowserlessStrategyInput,
   createBrowserlessDecisionAdapter
@@ -398,7 +399,494 @@ function assertSelfKillReleasesSupersededMission() {
   assert.strictEqual(adapter.getState().profitMission?.selectedAt, 6000);
 }
 
+function ordinaryProfitTarget(userId, x, drop, overrides = {}) {
+  return {
+    entity_id: 1000 + userId,
+    user_id: userId,
+    name: `profit-target-${userId}`,
+    x,
+    y: 0,
+    vx: 0,
+    vy: 0,
+    hp: 100,
+    max_hp: 100,
+    drop,
+    current_join_mode: 'AFK',
+    active: false,
+    stamina_5s_remaining_milli: 1000000,
+    stamina_5s_limit_milli: 1000000,
+    stamina_1h_remaining_milli: 10000000,
+    stamina_1h_limit_milli: 10000000,
+    stamina_1d_remaining_milli: 20000000,
+    stamina_1d_limit_milli: 20000000,
+    ...overrides
+  };
+}
+
+function escortCombatTarget(overrides = {}) {
+  return {
+    entity_id: 1008,
+    user_id: 8,
+    name: 'realtime-attacker',
+    x: 8000,
+    y: 3000,
+    vx: 0,
+    vy: 0,
+    hp: 100,
+    max_hp: 100,
+    drop: 1,
+    current_join_mode: 'Active',
+    active: true,
+    firing: false,
+    stamina_5s_remaining_milli: 1000000,
+    stamina_5s_limit_milli: 1000000,
+    stamina_1h_remaining_milli: 10000000,
+    stamina_1h_limit_milli: 10000000,
+    stamina_1d_remaining_milli: 20000000,
+    stamina_1d_limit_milli: 20000000,
+    ...overrides
+  };
+}
+
+function escortState(self, entities, tick, options = {}) {
+  return {
+    userId: 7,
+    realtime: {
+      tick,
+      frameAgeMs: Number(options.frameAgeMs || 0),
+      receivedAtMs: Number(options.receivedAtMs || tick * 50),
+      self,
+      entities: [self, ...entities],
+      bullets: options.bullets || [],
+      coinDrops: [],
+      coinDropsObserved: true
+    },
+    fallback: {
+      tick,
+      frameAgeMs: 0,
+      entities: [],
+      coinDrops: [],
+      messages: []
+    },
+    command: {
+      shooting: {
+        pendingShots: [],
+        expiredShots: [],
+        controlGeneration: options.controlGeneration || 'escort-control'
+      },
+      movement: { pendingVelocityCommands: [] }
+    }
+  };
+}
+
+function profitCandidate(decision, userId) {
+  return (decision.profit?.candidates || []).find(candidate => (
+    String(candidate.id) === String(userId)
+  )) || null;
+}
+
+function assertOrdinaryProfitEscortContinuity() {
+  const adapter = createBrowserlessDecisionAdapter({
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    dynamicProfitThresholdEnabled: false,
+    singleCoinBaitEnabled: false,
+    finalActionArbitrationHoldMs: 0,
+    opportunitySwitchConfirmFrames: 2,
+    opportunitySwitchMargin: 0,
+    opportunitySwitchRelativeMargin: 0,
+    enemyMissingHoldMs: 1800,
+    combatTargetFrameGapHoldMs: 250
+  });
+  const decisionOptions = {
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    opportunitySwitchConfirmFrames: 2,
+    enemyMissingHoldMs: 1800,
+    combatTargetFrameGapHoldMs: 250
+  };
+  const lowProfit = ordinaryProfitTarget(42, 21000, 15);
+  const selected = decide(
+    adapter,
+    escortState(fullStaminaSelf(), [lowProfit], 1),
+    1000,
+    null,
+    decisionOptions
+  );
+  assert.strictEqual(selected.action?.kind, 'seek-enemy');
+  assert.strictEqual(selected.action?.target?.userId, 42);
+  assert.strictEqual(selected.profit?.mission?.highValue, false);
+  assert.strictEqual(selected.action?.finalCandidate?.commitmentRank, 0);
+  const lowVisibleCandidate = profitCandidate(selected, 42);
+  assert(lowVisibleCandidate);
+
+  const entryThreat = escortCombatTarget({ firing: true });
+  const entered = decide(
+    adapter,
+    escortState(fullStaminaSelf(), [lowProfit, entryThreat], 2),
+    1100,
+    null,
+    decisionOptions
+  );
+  const enteredContinuity = entered.combat?.profitEscortContinuity?.active;
+  assert.strictEqual(entered.action?.kind, 'combat-live');
+  assert.strictEqual(entered.combat?.target?.userId, 8);
+  assert.strictEqual(entered.combat?.profitEscortContinuity?.entered, true);
+  assert.strictEqual(enteredContinuity?.missionKey, 'enemy:42');
+  assert.strictEqual(enteredContinuity?.combatTargetId, '8');
+  assert(enteredContinuity?.engagementGeneration);
+  assert.strictEqual(enteredContinuity?.entryEvidence?.targetFiring, true);
+  assert.strictEqual(entered.combat?.movement?.profitEscort?.latched, true);
+  assert(Number(entered.combat?.movement?.profitEscort?.missionProgress) > 0);
+  assert.strictEqual(entered.combat?.movement?.profitEscort?.overrideReason, 'contact-entry-dodge');
+
+  const maintained = decide(
+    adapter,
+    escortState(
+      fullStaminaSelf({ x: 100 }),
+      [escortCombatTarget({ x: 7800, firing: false })],
+      3
+    ),
+    1700,
+    null,
+    decisionOptions
+  );
+  assert.strictEqual(maintained.action?.kind, 'combat-live');
+  assert.strictEqual(maintained.combat?.target?.combatIntent, 'engaged');
+  assert.strictEqual(maintained.combat?.profitEscortContinuity?.maintained, true);
+  assert.strictEqual(
+    maintained.combat?.profitEscortContinuity?.active?.engagementGeneration,
+    enteredContinuity.engagementGeneration
+  );
+  assert.strictEqual(maintained.combat?.movement?.profitEscort?.latched, true);
+  assert.strictEqual(maintained.combat?.movement?.profitEscort?.maintained, true);
+  assert.strictEqual(maintained.combat?.movement?.profitEscort?.evidence?.targetFiring, false);
+  assert.strictEqual(maintained.combat?.movement?.profitEscort?.evidence?.realTargetBulletPressure, false);
+  assert.strictEqual(maintained.combat?.movement?.profitEscort?.overrideReason, '');
+  assert(Number(maintained.combat?.movement?.profitEscort?.missionProgress) > 0);
+  assert(Number(maintained.profit?.mission?.netProgressCm) > 0);
+
+  const heldPastOrdinaryGap = decide(
+    adapter,
+    escortState(
+      fullStaminaSelf({ x: 500 }),
+      [escortCombatTarget({ x: 7400, firing: false })],
+      4
+    ),
+    3100,
+    null,
+    decisionOptions
+  );
+  assert.strictEqual(heldPastOrdinaryGap.action?.kind, 'combat-live');
+  assert.strictEqual(heldPastOrdinaryGap.profit?.mission?.targetId, '42');
+  assert.strictEqual(heldPastOrdinaryGap.profit?.mission?.highValue, false);
+  assert(Number(heldPastOrdinaryGap.profit?.missingEnemyHold?.ageMs) > 1800);
+  assert.strictEqual(heldPastOrdinaryGap.profit?.missingEnemyHold?.continuityHold, true);
+  assert.strictEqual(heldPastOrdinaryGap.profit?.missingEnemyHold?.releaseReason, '');
+  assert.strictEqual(heldPastOrdinaryGap.combat?.movement?.profitEscort?.maintained, true);
+
+  const highProfit = ordinaryProfitTarget(77, 30000, 77);
+  const switchPending = decide(
+    adapter,
+    escortState(
+      fullStaminaSelf({ x: 600 }),
+      [highProfit, escortCombatTarget({ x: 7300, firing: false })],
+      5
+    ),
+    3200,
+    null,
+    decisionOptions
+  );
+  assert.strictEqual(switchPending.profit?.mission?.targetId, '42');
+  assert.strictEqual(switchPending.profit?.switch?.bestRejectedReason, 'confirmation');
+  assert.strictEqual(switchPending.profit?.switch?.confirmationFrames, 1);
+  assert.strictEqual(switchPending.profit?.switch?.confirmationRequired, 2);
+
+  const switched = decide(
+    adapter,
+    escortState(
+      fullStaminaSelf({ x: 700 }),
+      [highProfit, escortCombatTarget({ x: 7200, firing: false })],
+      6
+    ),
+    3300,
+    null,
+    decisionOptions
+  );
+  const switchedHighCandidate = profitCandidate(switched, 77);
+  const switchedLowCandidate = profitCandidate(switched, 42);
+  assert.strictEqual(switched.action?.kind, 'combat-live');
+  assert.strictEqual(switched.profit?.mission?.targetId, '77');
+  assert.strictEqual(switched.profit?.mission?.highValue, false);
+  assert.strictEqual(switched.profit?.switch?.confirmationFrames, 2);
+  assert.strictEqual(switched.profit?.profitEscortContinuityRelease?.releaseReason, 'profit-mission-replaced');
+  assert.strictEqual(switched.profit?.profitEscortContinuity?.missionKey, 'enemy:77');
+  assert.strictEqual(switched.profit?.profitEscortContinuity?.entryReason, 'same-engagement-mission-rebind');
+  assert.strictEqual(
+    switched.profit?.profitEscortContinuity?.engagementGeneration,
+    enteredContinuity.engagementGeneration
+  );
+  assert.strictEqual(switched.combat?.movement?.profitEscort?.latched, true);
+  assert.strictEqual(switched.combat?.movement?.profitEscort?.maintained, true);
+  assert(switchedHighCandidate);
+  assert(switchedLowCandidate);
+  assert.strictEqual(switchedHighCandidate.priorityTier, lowVisibleCandidate.priorityTier);
+  assert(Number(switchedHighCandidate.score) > Number(switchedLowCandidate.score));
+
+  const baselineAdapter = createBrowserlessDecisionAdapter({
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    dynamicProfitThresholdEnabled: false,
+    singleCoinBaitEnabled: false,
+    finalActionArbitrationHoldMs: 0,
+    opportunitySwitchConfirmFrames: 2,
+    opportunitySwitchMargin: 0,
+    opportunitySwitchRelativeMargin: 0
+  });
+  const highBaseline = decide(
+    baselineAdapter,
+    escortState(fullStaminaSelf({ x: 700 }), [highProfit], 6),
+    3300,
+    null,
+    decisionOptions
+  );
+  const baselineHighCandidate = profitCandidate(highBaseline, 77);
+  assert(baselineHighCandidate);
+  assert.strictEqual(switchedHighCandidate.priorityTier, baselineHighCandidate.priorityTier);
+  assert.strictEqual(switchedHighCandidate.score, baselineHighCandidate.score);
+  assert.strictEqual(switchedHighCandidate.staminaCost, baselineHighCandidate.staminaCost);
+  assert.strictEqual(
+    switchedHighCandidate.effectiveProfitReward?.netROI,
+    baselineHighCandidate.effectiveProfitReward?.netROI
+  );
+
+  const cachedState = escortState(fullStaminaSelf({ x: 800 }), [], 7);
+  const cachedNavigation = decide(
+    adapter,
+    cachedState,
+    3400,
+    null,
+    decisionOptions
+  );
+  assert.strictEqual(cachedNavigation.action?.kind, 'seek-enemy');
+  assert.strictEqual(cachedNavigation.action?.target?.userId, 77);
+  assert.strictEqual(cachedNavigation.action?.target?.cachedNavigationOnly, true);
+  assert.strictEqual(cachedNavigation.action?.finalCandidate?.priorityBand, 'profit');
+  assert.strictEqual(cachedNavigation.action?.finalCandidate?.commitmentRank, 0);
+  assert.strictEqual(cachedNavigation.combat?.target, null);
+  assert.strictEqual(cachedNavigation.combat?.aim, null);
+  assert.strictEqual(cachedNavigation.action?.opportunisticShot, undefined);
+  const velocities = [];
+  const shots = [];
+  const actionAdapter = createBrowserlessActionAdapter({
+    userId: 7,
+    commandIntervalMs: 0,
+    shootRepeatEnabled: false,
+    transport: {
+      sendVelocity(dx, dy) {
+        velocities.push({ dx, dy });
+        return { ok: true };
+      },
+      sendShoot(x, y) {
+        shots.push({ x, y });
+        return { ok: true };
+      }
+    }
+  });
+  const cachedApplied = actionAdapter.applyDecision(cachedState, cachedNavigation);
+  assert.strictEqual(cachedApplied.kind, 'velocity');
+  assert.strictEqual(cachedApplied.reason, 'missing-realtime-enemy-hold');
+  assert.strictEqual(cachedApplied.cachedNavigationOnly, true);
+  assert.strictEqual(velocities.length, 1);
+  assert.strictEqual(shots.length, 0);
+
+  const released = decide(
+    adapter,
+    escortState(fullStaminaSelf({ x: 900 }), [], 8),
+    3601,
+    null,
+    decisionOptions
+  );
+  assert.strictEqual(released.combat?.targetFrameGapReset?.reason, 'combat-target-frame-gap-reset');
+  assert.strictEqual(
+    released.profit?.profitEscortContinuityRelease?.releaseReason,
+    'combat-engagement-frame-gap-expired'
+  );
+  assert.strictEqual(released.profit?.profitEscortContinuity, null);
+
+  const cleared = decide(
+    adapter,
+    escortState(fullStaminaSelf({ x: 1000 }), [], 9),
+    5201,
+    null,
+    decisionOptions
+  );
+  assert.strictEqual(cleared.profit?.mission, null);
+  assert.strictEqual(cleared.profit?.missingEnemyHold?.releaseReason, 'missing-hold-expired');
+  assert.notStrictEqual(cleared.action?.target?.userId, 8);
+  assert.notStrictEqual(cleared.action?.target?.userId, 77);
+
+  const unaffordableAdapter = createBrowserlessDecisionAdapter({
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    dynamicProfitThresholdEnabled: false,
+    singleCoinBaitEnabled: false,
+    finalActionArbitrationHoldMs: 0,
+    opportunitySwitchConfirmFrames: 1,
+    opportunitySwitchMargin: 0,
+    opportunitySwitchRelativeMargin: 0,
+    enemyMissingHoldMs: 1800
+  });
+  const immediateSwitchOptions = {
+    ...decisionOptions,
+    opportunitySwitchConfirmFrames: 1
+  };
+  decide(
+    unaffordableAdapter,
+    escortState(fullStaminaSelf(), [lowProfit], 1),
+    1000,
+    null,
+    immediateSwitchOptions
+  );
+  decide(
+    unaffordableAdapter,
+    escortState(fullStaminaSelf(), [lowProfit, entryThreat], 2),
+    1100,
+    null,
+    immediateSwitchOptions
+  );
+  const exhaustedSelf = fullStaminaSelf({
+    x: 100,
+    stamina_5s_remaining_milli: 0,
+    stamina_1h_remaining_milli: 0,
+    stamina_1d_remaining_milli: 0
+  });
+  const unaffordable = decide(
+    unaffordableAdapter,
+    escortState(exhaustedSelf, [escortCombatTarget({ firing: false })], 3),
+    3100,
+    null,
+    immediateSwitchOptions
+  );
+  assert.strictEqual(unaffordable.action?.reason, 'stamina-exhausted-leave');
+  assert.strictEqual(unaffordable.profit?.mission, null);
+  assert.strictEqual(unaffordable.profit?.profitEscortContinuity, null);
+  assert.strictEqual(unaffordable.profit?.missingEnemyHold?.releaseReason, 'held-stamina-unaffordable');
+  assert.strictEqual(
+    unaffordable.profit?.profitEscortContinuityRelease?.releaseReason,
+    'escort-held-stamina-unaffordable'
+  );
+
+  const staleRealtimeAdapter = createBrowserlessDecisionAdapter({
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    dynamicProfitThresholdEnabled: false,
+    singleCoinBaitEnabled: false,
+    finalActionArbitrationHoldMs: 0,
+    opportunitySwitchConfirmFrames: 1,
+    opportunitySwitchMargin: 0,
+    opportunitySwitchRelativeMargin: 0,
+    profitEscortRealtimeStaleMs: 3000
+  });
+  decide(
+    staleRealtimeAdapter,
+    escortState(fullStaminaSelf(), [lowProfit], 1),
+    1000,
+    null,
+    immediateSwitchOptions
+  );
+  decide(
+    staleRealtimeAdapter,
+    escortState(fullStaminaSelf(), [lowProfit, entryThreat], 2),
+    1100,
+    null,
+    immediateSwitchOptions
+  );
+  const staleRealtime = decide(
+    staleRealtimeAdapter,
+    escortState(
+      fullStaminaSelf({ x: 100 }),
+      [lowProfit, escortCombatTarget({ firing: false })],
+      3,
+      { frameAgeMs: 4001 }
+    ),
+    1200,
+    null,
+    { ...immediateSwitchOptions, profitEscortRealtimeStaleMs: 3000 }
+  );
+  assert.strictEqual(staleRealtime.action?.kind, 'combat-live');
+  assert.strictEqual(staleRealtime.profit?.profitEscortContinuity, null);
+  assert.strictEqual(
+    staleRealtime.profit?.profitEscortContinuityRelease?.releaseReason,
+    'realtime-state-stale'
+  );
+
+  const plannerSyncAdapter = createBrowserlessDecisionAdapter({ userId: 7 });
+  plannerSyncAdapter.patchState({
+    profitEscortContinuity: null,
+    profitEscortContinuityLastRelease: {
+      active: false,
+      missionKey: 'enemy:42',
+      combatTargetId: '8',
+      engagementGeneration: 'escort-control:8:1:2',
+      lastUpdatedAt: 2900,
+      releasedAt: 3000,
+      releaseReason: 'combat-engagement-frame-gap-expired'
+    }
+  });
+  plannerSyncAdapter.syncPlannerDecision({
+    stateful: {
+      profitEscortContinuity: {
+        active: true,
+        missionKey: 'enemy:42',
+        combatTargetId: '8',
+        engagementGeneration: 'escort-control:8:1:2',
+        lastUpdatedAt: 2000,
+        expiresAt: 10000
+      },
+      profitEscortContinuityLastRelease: null,
+      opportunityChoice: null,
+      switchLock: null
+    }
+  });
+  assert.strictEqual(plannerSyncAdapter.getState().profitEscortContinuity, null);
+  assert.strictEqual(
+    plannerSyncAdapter.getState().profitEscortContinuityLastRelease?.releasedAt,
+    3000
+  );
+  plannerSyncAdapter.syncPlannerDecision({
+    stateful: {
+      profitEscortContinuity: {
+        active: true,
+        missionKey: 'enemy:77',
+        combatTargetId: '8',
+        engagementGeneration: 'escort-control:8:1:2',
+        lastUpdatedAt: 3100,
+        expiresAt: 10000
+      },
+      profitEscortContinuityLastRelease: {
+        active: false,
+        missionKey: 'enemy:42',
+        releasedAt: 3100,
+        releaseReason: 'profit-mission-replaced'
+      },
+      opportunityChoice: null,
+      switchLock: null
+    }
+  });
+  assert.strictEqual(plannerSyncAdapter.getState().profitEscortContinuity?.missionKey, 'enemy:77');
+  assert.strictEqual(
+    plannerSyncAdapter.getState().profitEscortContinuityLastRelease?.releaseReason,
+    'profit-mission-replaced'
+  );
+}
+
 function runRemoteProfitDecisionSelfTest() {
+  assertOrdinaryProfitEscortContinuity();
   const adapter = createBrowserlessDecisionAdapter({
     userId: 7,
     controlMode: 'non-combat-profit',
@@ -950,7 +1438,7 @@ function runRemoteProfitDecisionSelfTest() {
   assert.strictEqual(stale.input?.loot?.reason, 'snapshot-stale');
   assert.strictEqual(staleAdapter.getState().realtimeLootIntent, null);
 
-  return { ok: true, cases: 47 };
+  return { ok: true, cases: 62 };
 }
 
 if (require.main === module) {

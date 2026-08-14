@@ -8781,7 +8781,7 @@ async function runSelfTest() {
           decision.action.target?.invulnerableRemainingMs
         ].join('|');
       })(),
-      want: '120000|35000|seek-enemy|seek-enemy|2634|35000'
+      want: '120000|35000|profit-candidate|seek-enemy|2634|35000'
     },
     {
       name: 'browserless raw camel invulnerability countdown converts once for target and nearby panel',
@@ -9668,7 +9668,7 @@ async function runSelfTest() {
           alreadyClose.profit.best === null
         ].join('|');
       })(),
-      want: 'seek-enemy|seek-enemy|8|true|5833|seek-enemy|false|wait|true'
+      want: 'profit-candidate|seek-enemy|8|true|5833|profit-candidate|false|wait|true'
     },
     {
       name: 'browserless just-seen out-of-range full-stamina AFK target is selectable',
@@ -13410,8 +13410,13 @@ async function runSelfTest() {
             sendShoot: () => approachCommands.push('shoot')
           }
         });
+        const approachSelf = { user_id: 7, x: 0, y: 0 };
         const approach = approachAdapter.applyDecision({
-          realtime: { self: { user_id: 7, x: 0, y: 0 }, tick: 1 }
+          realtime: {
+            self: approachSelf,
+            entities: [approachSelf, { user_id: 8, x: 6000, y: 0, hp: 80, invulnerable: true }],
+            tick: 1
+          }
         }, {
           kind: 'profit-candidate',
           band: 'profit',
@@ -13431,8 +13436,13 @@ async function runSelfTest() {
             sendShoot: () => waitCommands.push('shoot')
           }
         });
+        const waitSelf = { user_id: 7, x: 0, y: 0 };
         const wait = waitAdapter.applyDecision({
-          realtime: { self: { user_id: 7, x: 0, y: 0 }, tick: 2 }
+          realtime: {
+            self: waitSelf,
+            entities: [waitSelf, { user_id: 8, x: 5000, y: 0, hp: 80, invulnerable: true }],
+            tick: 2
+          }
         }, {
           kind: 'profit-candidate',
           band: 'profit',
@@ -18816,9 +18826,31 @@ async function runSelfTest() {
           combatPassiveRunnerConfirmMs: 2500,
           profitMission: {
             active: true,
+            key: 'enemy:9',
+            missionKey: 'enemy:9',
+            type: 'enemy',
             targetId: '9',
-            navigationTarget: { userId: '9', x: 0, y: 10000 }
-          }
+            navigationTarget: { userId: '9', x: 0, y: 10000 },
+            expiresAt: 10000
+          },
+          profitEscortContinuity: {
+            active: true,
+            missionKey: 'enemy:9',
+            missionType: 'enemy',
+            missionTargetId: '9',
+            combatTargetId: '8',
+            engagementGeneration: 'engagement:1',
+            controlGeneration: 'control:1',
+            enteredAt: 4000,
+            lastUpdatedAt: 4900,
+            lastSeenAt: 4900,
+            expiresAt: 10000,
+            entryReason: 'realtime-defensive-evidence',
+            entryEvidence: { targetFiring: true },
+            releaseReason: ''
+          },
+          engagementGeneration: 'engagement:1',
+          controlGeneration: 'control:1'
         };
         const active = buildCombatMovementPlan(self, target, [], options);
         const stopped = buildCombatMovementPlan(self, {
@@ -23924,8 +23956,13 @@ async function runSelfTest() {
             sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`)
           }
         });
+        const self = { user_id: 7, x: 0, y: 0 };
         const action = adapter.applyDecision({
-          realtime: { self: { x: 0, y: 0 }, tick: 1 }
+          realtime: {
+            self,
+            entities: [self, { user_id: 8, x: 50000, y: 0, hp: 80 }],
+            tick: 1
+          }
         }, {
           kind: 'profit-candidate',
           band: 'profit',
@@ -45588,8 +45625,13 @@ async function runSelfTest() {
 	            sendShoot: () => commands.push('shoot')
 	          }
 	        });
-	        const result = adapter.applyDecision({
-	          realtime: { self: { user_id: 7, x: 0, y: 0 }, tick: 1 }
+		        const self = { user_id: 7, x: 0, y: 0 };
+		        const result = adapter.applyDecision({
+		          realtime: {
+		            self,
+		            entities: [self, { user_id: 8, x: 30000, y: 0, hp: 80, current_join_mode: 'Active' }],
+		            tick: 1
+		          }
 	        }, {
 	          kind: 'profit-candidate',
 	          band: 'profit',
@@ -45617,8 +45659,20 @@ async function runSelfTest() {
 	            sendShoot: () => commands.push('shoot')
 	          }
 	        });
-	        const result = adapter.applyDecision({
-	          realtime: { self: { user_id: 7, x: 0, y: 0 }, tick: 1 }
+		        const self = { user_id: 7, x: 0, y: 0 };
+		        const result = adapter.applyDecision({
+		          realtime: {
+		            self,
+		            entities: [self, {
+		              user_id: 8,
+		              x: 30000,
+		              y: 0,
+		              hp: 80,
+		              current_join_mode: 'Active',
+		              invulnerable: true
+		            }],
+		            tick: 1
+		          }
 	        }, {
 	          kind: 'profit-candidate',
 	          band: 'profit',
