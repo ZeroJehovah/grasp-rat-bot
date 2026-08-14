@@ -1266,6 +1266,7 @@ function persistedReconnectDelayPlan(state, config = {}, nowMs = Date.now()) {
 }
 
 function loginPointSafetyRequiredFromConfig(config = {}) {
+  if (config.snapshotEdgeEnabled === true) return 1;
   const required = Number(config.loginPointSafetySuccessRequired || 3);
   return Number.isFinite(required) && required > 0 ? Math.max(1, Math.round(required)) : 3;
 }
@@ -3149,7 +3150,7 @@ async function runBrowserlessRunner(config, deps = {}) {
             snapshotRequest: snapshotRequestScheduler.request,
             onSnapshotPayload: observePreparedSnapshotPayload,
             onSnapshotSafety: recordSnapshotSafetyProgress,
-            onSnapshotEdge: progress => logStore.append('runner', `snapshot-edge-${progress.type || 'progress'}`, progress),
+            onSnapshotEdge: recordSnapshotEdgeProgress,
             easyKillPlayerTracker,
             damagePlayerTracker
           }
@@ -3411,6 +3412,25 @@ async function runBrowserlessRunner(config, deps = {}) {
         tick: summary.tick ?? null
       });
     }
+  };
+
+  const recordSnapshotEdgeProgress = progress => {
+    if (!progress || typeof progress !== 'object') return;
+    logStore.append('runner', `snapshot-edge-${progress.type || 'progress'}`, progress);
+    const nextCheckAtMs = Number(progress.nextCheckAtMs);
+    const nextSnapshotCheckAt = Number.isFinite(nextCheckAtMs) && nextCheckAtMs > now()
+      ? new Date(nextCheckAtMs).toISOString()
+      : '';
+    const currentState = liveState || readBrowserlessStateFile(stateFile);
+    const currentAction = currentState?.runner?.currentAction || {};
+    patchLiveState({
+      runner: {
+        currentAction: {
+          ...currentAction,
+          nextSnapshotCheckAt
+        }
+      }
+    }, { updatedAt: new Date(now()).toISOString() });
   };
 
   const onTransportOpen = (transport, detail = {}) => {
@@ -4425,7 +4445,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         onRemoteProfitDecision: decision => remoteProfitWorker?.observeDecision?.(decision),
         onRemoteProfitRealtime: entities => remoteProfitWorker?.observeRealtimeEntities?.(entities),
         onRemoteProfitWhitelist: ids => { remoteProfitStaticWhitelistIds = ids.slice(0, 128); },
-        onSnapshotEdge: progress => logStore.append('runner', `snapshot-edge-${progress.type || 'progress'}`, progress),
+        onSnapshotEdge: recordSnapshotEdgeProgress,
         fetchWithTimeout: sourceIpController.fetchWithTimeout,
         snapshotRequest: snapshotRequestScheduler.request,
         openBrowserlessWs: sourceIpController.openBrowserlessWs,
@@ -7638,14 +7658,19 @@ async function runBrowserlessRunnerSelfTest() {
         }
       }
     }, { nowMs: Date.parse('2026-07-27T08:30:30.000Z') });
+    const panelSnapshotEdgePending = pendingLoginPointSafetyPatch({
+      snapshotEdgeEnabled: true,
+      loginPointSafetySuccessRequired: 3
+    });
     const panelSnapshotWaitCompact = buildCompactBrowserlessStatus({
       session: { userId: 7, sessionToken: 'panel-self-test-token' },
       runner: {
         running: true,
         currentAction: {
-          kind: 'loop-wait',
-          reason: 'next-login-point-pending-snapshot-safety',
-          nextRunAt: ''
+          kind: 'source-ip-preflight',
+          reason: 'source-ip-snapshot-safety-wait',
+          nextRunAt: '',
+          nextSnapshotCheckAt: '2026-07-27T08:26:10.000Z'
         }
       },
       network: {
@@ -8127,17 +8152,17 @@ async function runBrowserlessRunnerSelfTest() {
           && pageHtml.includes('id="lastExitPanel"')
           && pageHtml.includes("return '等待重登冷却时间'")
           && pageHtml.includes("return { state: 'cooldown', cooldown: true, text: '重登冷却中，冷却结束后再检查' }")
-          && pageHtml.includes("return withCooldown({ state: 'pending', afterOffline: true, text: '离线后等待检查 ' + loginPointProgressText(status, false) });")
+          && pageHtml.includes("return withCooldown({ state: 'pending', afterOffline: true, text: '离线后等待快照检查' });")
           && pageHtml.includes('function loginPointSafetyCheckInFlight(status)')
           && pageHtml.includes("text: display.text + '（重登冷却中）'")
           && pageHtml.includes("if (phase === 'snapshot-wait') return '正在等待新的登录点快照';")
           && pageHtml.includes("if (loginPointSafetyCheckInFlight(status)) return '正在检查登录点安全';")
-          && pageHtml.includes("checking: true, text: '不安全（正在复查 ' + progress + '）'")
+          && pageHtml.includes("checking: true, text: '上次检查不安全，正在检查新快照'")
           && pageHtml.includes('if (!loginDisplay.afterOffline && !loginDisplay.cooldown)')
           && pageHtml.includes("return '等待登录点快照安全检查'")
           && pageHtml.includes("if (reason === 'login-point-safe-connecting') return '登录点已安全，正在连接游戏'")
-          && pageHtml.includes("text: '上次检查安全，正在复查 ' + loginPointProgressText(status, false)")
-          && pageHtml.includes("text: '不安全（正在复查 ' + loginPointProgressText(status, false) + '）'")
+          && pageHtml.includes("text: '上次检查安全，等待新快照'")
+          && pageHtml.includes("text: '上次检查不安全，等待新快照'")
           && pageHtml.includes("if (display.reviewing) return classAttrs('warn');")
           && pageHtml.includes("loginDisplay.reviewing ? '上次检查时间' : '检查时间'")
           && pageHtml.includes("if (online && !liveCombat) addRow(rowsOut, '原因', actionReasonDisplay(status), true)")
@@ -8145,7 +8170,15 @@ async function runBrowserlessRunnerSelfTest() {
           && pageHtml.includes("'活动 ' + bool(target.active)")
           && !pageHtml.includes("'危险 ' + bool(target.active)")
           && pageHtml.includes('const exit = status.game?.inGame')
-          && pageHtml.includes("if (!online && offlineStats.nextReconnectAt)")
+          && pageHtml.includes("addRow(rowsOut, '下次快照检查', fullStamp(scheduledSnapshotCheckAt))")
+          && pageHtml.includes("addRow(rowsOut, '检查倒计时', countdownUntil(scheduledSnapshotCheckAt)")
+          && pageHtml.includes("addRow(rowsOut, '冷却剩余', countdownUntil(cooldownAt)")
+          && pageHtml.includes('Date.parse(reconnectAt) <= Date.now()')
+          && !pageHtml.includes("addRow(rowsOut, '预检进度'")
+          && !pageHtml.includes("addRow(rowsOut, '当前测试 IP'")
+          && !pageHtml.includes("addRow(rowsOut, '下次重连'")
+          && !pageHtml.includes("addRow(rowsOut, '剩余时间'")
+          && !pageHtml.includes('loginPointProgressText')
           && !pageHtml.includes("addRow(rowsOut, '原因', online ? actionReasonDisplay(status) : reasonText(reason), true)")
           && pageHtml.includes("translated === '正在退出游戏' ? '已退出游戏' : translated")
           && pageHtml.includes('防守交战持续无进展，撤退后仍无法脱离，主动退出')
@@ -8186,10 +8219,12 @@ async function runBrowserlessRunnerSelfTest() {
           && panelPreLoginCompact.action.reason === 'next-login-point-pending-snapshot-safety'
           && panelCooldownUnsafeCompact.stats.offline.reconnectRemainingMs === 30000
           && panelCooldownUnsafeCompact.loginPointSafety.reason === 'damage-actor-near-login-point'
+          && panelSnapshotEdgePending.detail.required === 1
           && panelSnapshotWaitCompact.stats.offline.nextReconnectAt === ''
           && panelSnapshotWaitCompact.stats.offline.scheduledReconnectAt === ''
           && panelSnapshotWaitCompact.stats.offline.reconnectRemainingMs === null
-          && panelSnapshotWaitCompact.action.reason === 'next-login-point-pending-snapshot-safety'
+          && panelSnapshotWaitCompact.action.reason === 'source-ip-snapshot-safety-wait'
+          && panelSnapshotWaitCompact.action.nextSnapshotCheckAt === '2026-07-27T08:26:10.000Z'
           && panelUnsafeRecheckCompact.loginPointSafety.detail.previousCheck?.ok === false
           && panelUnsafeRecheckCompact.loginPointSafety.detail.previousCheck?.reason === 'damage-actor-near-login-point'
           && panelUnsafeRecheckCompact.loginPointSafety.detail.previousCheck?.checkedAt === '2026-07-27T08:22:21.694Z'

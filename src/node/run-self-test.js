@@ -29956,7 +29956,7 @@ async function runSelfTest() {
           env.includes('GRASP_RAT_BROWSERLESS_DRY_RUN=true'),
           env.includes('GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_URL='),
           env.includes('GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_FILE='),
-          env.includes('GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_SUCCESS_REQUIRED=3'),
+          env.includes('GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_SUCCESS_REQUIRED=1'),
           env.includes('GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_PROBE_INTERVAL_MS=30000'),
           env.includes('GRASP_RAT_BROWSERLESS_DAILY_FIRST_LOGIN_DELAY_MS=30000'),
           env.includes('GRASP_RAT_BROWSERLESS_FRAME_GAP_ALERT_MS=2000'),
@@ -35770,7 +35770,7 @@ async function runSelfTest() {
           panelHtml.includes("if (reason === 'remote-snapshot-profit-target') return '远程快照收益目标';")
         ].join('|');
       })(),
-      want: '2026.08.12.1|活动玩家|挂机玩家|正在靠近高Drop活动玩家|HTTP全局快照|WS状态帧|WS最后位置|true|true|true|true'
+      want: '2026.08.14.1|活动玩家|挂机玩家|正在靠近高Drop活动玩家|HTTP全局快照|WS状态帧|WS最后位置|true|true|true|true'
     },
     {
       name: 'browserless web panel colors each transport metric value by severity',
@@ -35796,7 +35796,7 @@ async function runSelfTest() {
           panelHtml.includes('.transport-metric.muted,.transport-metric.muted .metric-value{color:var(--muted)}')
         ].join('|');
       })(),
-      want: '2026.08.12.1|ok|warn|bad|ok|warn|bad|ok|warn|bad|muted|true|true|true|true|true|true'
+      want: '2026.08.14.1|ok|warn|bad|ok|warn|bad|ok|warn|bad|muted|true|true|true|true|true|true'
     },
     {
       name: 'browserless web panel animates keyed map markers between status refreshes',
@@ -35834,7 +35834,7 @@ async function runSelfTest() {
           /function stopAutoRefresh\(\)\s*\{\s*cancelMapMarkerAnimation\(true\);/.test(panelScript)
         ].join('|');
       })(),
-      want: '2026.08.12.1|coin:0|player:alice||0|0.875|1|97.5|195.0|110|220|true|true|true|true|true|true|true|true|true|true|true'
+      want: '2026.08.14.1|coin:0|player:alice||0|0.875|1|97.5|195.0|110|220|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless status server adds dynamic whitelist players by name',
@@ -37287,9 +37287,9 @@ async function runSelfTest() {
           panelScript.includes("evidence.push('快照为 Active')"),
           panelScript.includes("evidence.push('近期有活动')"),
           panelScript.includes("evidence.push('无敌还剩 ' + invulnerableText"),
-          panelScript.includes("'安全 ' + loginPointProgressText(status, true)"),
-          panelScript.includes("text: '上次检查安全，正在复查 ' + loginPointProgressText(status, false)"),
-          panelScript.includes("text: '不安全（正在复查 ' + loginPointProgressText(status, false) + '）'"),
+          panelScript.includes("return withCooldown({ state: 'safe', text: '安全' });"),
+          panelScript.includes("text: '上次检查安全，正在检查新快照'"),
+          panelScript.includes("text: '上次检查不安全，正在检查新快照'"),
           panelScript.includes('loginPointDisplay(status).reviewing && previousCheck?.ok === false'),
           panelScript.includes("if (display.reviewing) return classAttrs('warn');"),
           panelScript.includes("const pendingSafeReason = /snapshot-safety-streak-pending/i.test(detailReason)"),
@@ -37359,7 +37359,7 @@ async function runSelfTest() {
           !panelScript.includes("setRichText('roleTitleMeta', [{ text: '已离线', className: 'muted' }], 'muted');")
         ].join('|');
       })(),
-      want: '2026.08.11.1|true|true|true|true|true|true'
+      want: '2026.08.14.1|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',

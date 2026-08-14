@@ -3712,11 +3712,13 @@ async function runReadOnlyCanary(config, options = {}) {
     });
   } else try {
     if (options.bypassPreLoginSafetyReason) {
-      const required = Math.max(1, Math.round(Number(
-        config.loginPointSafetySuccessRequired
-          ?? runtimeDefaults.loginPointSafetySuccessRequired
-          ?? 3
-      ) || 3));
+      const required = config.snapshotEdgeEnabled === true
+        ? 1
+        : Math.max(1, Math.round(Number(
+          config.loginPointSafetySuccessRequired
+            ?? runtimeDefaults.loginPointSafetySuccessRequired
+            ?? 3
+        ) || 3));
       result.snapshotSafety = {
         ok: true,
         reason: String(options.bypassPreLoginSafetyReason),

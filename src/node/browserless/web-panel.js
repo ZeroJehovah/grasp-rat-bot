@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.12.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.14.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -888,17 +888,6 @@ function renderBrowserlessWebPanel() {
       if (phase === 'error') return '出口预检异常，禁止登录';
       return phase || '--';
     };
-    const sourceIpPreflightProgressText = network => {
-      const preflight = network?.sourceIpPreflight || {};
-      const tested = number(preflight.testedCount);
-      const discovered = number(preflight.discoveredCount);
-      const available = number(preflight.availableCount);
-      const required = number(preflight.requiredCount) || 3;
-      const risk = number(preflight.riskCount);
-      const progress = tested === null || discovered === null ? '--' : Math.round(tested) + '/' + Math.round(discovered);
-      return progress + '，可用 ' + (available === null ? '--' : Math.round(available)) + '/' + Math.round(required)
-        + '，风控 ' + (risk === null ? '--' : Math.round(risk));
-    };
     const sourceIpPreflightLastResultText = network => {
       const preflight = network?.sourceIpPreflight || {};
       const status = number(preflight.lastStatus);
@@ -1727,23 +1716,6 @@ function renderBrowserlessWebPanel() {
       if ((kind === 'attack' || kind === 'combat-live') && status.combat?.target) return status.combat.target;
       return null;
     }
-    function loginPointRequired(status) {
-      const detail = status.loginPointSafety?.detail || {};
-      const required = number(detail.required ?? status.loginPointSafety?.required);
-      return required !== null && required > 0 ? Math.max(1, Math.round(required)) : 3;
-    }
-    function loginPointProgressText(status, safeLike = false) {
-      const detail = status.loginPointSafety?.detail || {};
-      const required = loginPointRequired(status);
-      const rawStreak = number(detail.streak ?? status.loginPointSafety?.streak);
-      let streak = rawStreak === null
-        ? (status.loginPointSafety?.ok ? required : (safeLike ? 1 : 0))
-        : Math.round(rawStreak);
-      if (status.loginPointSafety?.ok) streak = Math.max(streak, required);
-      if (safeLike && streak <= 0) streak = 1;
-      streak = Math.min(required, Math.max(0, streak));
-      return String(streak) + '/' + String(required);
-    }
     function loginPointSafetyCheckInFlight(status) {
       const action = status.action || status.decision || {};
       const kind = String(action.kind || '');
@@ -1751,14 +1723,45 @@ function renderBrowserlessWebPanel() {
       const nextRunAt = String(action.nextRunAt || '');
       const preflightPhase = String(status.network?.sourceIpPreflight?.phase || '');
       if (kind === 'snapshot-wait') return true;
+      if (preflightPhase === 'snapshot-wait') return true;
       if (nextRunAt) return false;
-      return /pending-snapshot-safety/i.test(reason)
-        || (kind === 'loop-wait' && preflightPhase === 'snapshot-wait');
+      return /pending-snapshot-safety/i.test(reason);
+    }
+    function offlineCooldownAt(status) {
+      const offline = status.stats?.offline || {};
+      const reconnectAt = String(offline.nextReconnectAt || '');
+      const remainingMs = number(offline.reconnectRemainingMs);
+      if (!reconnectAt
+        || Date.parse(reconnectAt) <= Date.now()
+        || remainingMs === null
+        || remainingMs <= 1000) return '';
+      const action = status.action || status.decision || {};
+      const blockerReason = String(offline.blocker?.reason || '');
+      const reasonText = [action.reason, blockerReason].filter(Boolean).join(' ');
+      const actualCooldown = action.explicitDelay === true
+        || action.kind === 'source-ip-preflight-cooldown'
+        || Boolean(offline.blocker)
+        || /login-interval|daily-first-login-delay|stamina-(?:budget|exhausted)|source-ip-preflight-insufficient/i.test(reasonText);
+      return actualCooldown ? reconnectAt : '';
+    }
+    function nextSnapshotCheckAt(status) {
+      if (status.game?.inGame) return '';
+      const action = status.action || status.decision || {};
+      const scheduled = String(action.nextSnapshotCheckAt || '');
+      if (scheduled && Date.parse(scheduled) > Date.now()) return scheduled;
+      const nextRunAt = String(action.nextRunAt || '');
+      const reasonText = [action.reason, status.loginPointSafety?.reason].filter(Boolean).join(' ');
+      if (!offlineCooldownAt(status)
+        && nextRunAt
+        && Date.parse(nextRunAt) > Date.now()
+        && /pending-snapshot-safety|snapshot-safety-retry|snapshot-edge/i.test(reasonText)) {
+        return nextRunAt;
+      }
+      return '';
     }
     function loginPointDisplay(status) {
       if (status.game?.inGame) return { state: 'none', text: '--' };
-      const reconnectRemainingMs = number(status.stats?.offline?.reconnectRemainingMs);
-      const cooldownActive = reconnectRemainingMs !== null && reconnectRemainingMs > 1000;
+      const cooldownActive = Boolean(offlineCooldownAt(status));
       const detail = status.loginPointSafety?.detail || {};
       const reason = String(status.loginPointSafety?.reason || '');
       const detailReason = String(detail.reason || '');
@@ -1791,20 +1794,19 @@ function renderBrowserlessWebPanel() {
       if (checkInFlight) {
         const currentCheckOk = status.loginPointSafety?.ok ?? detail.ok;
         const previousCheck = detail.previousCheck || null;
-        const progress = loginPointProgressText(status, false);
         if (completedResult && currentCheckOk === false) {
-          return { state: 'unsafe', reviewing: true, checking: true, text: '不安全（正在复查 ' + progress + '）' };
+          return { state: 'unsafe', reviewing: true, checking: true, text: '上次检查不安全，正在检查新快照' };
         }
         if (completedResult && currentCheckOk === true) {
-          return { state: 'safe', reviewing: true, checking: true, text: '上次检查安全，正在复查 ' + progress };
+          return { state: 'safe', reviewing: true, checking: true, text: '上次检查安全，正在检查新快照' };
         }
         if (previousCheck?.ok === false) {
-          return { state: 'unsafe', reviewing: true, checking: true, text: '不安全（正在复查 ' + progress + '）' };
+          return { state: 'unsafe', reviewing: true, checking: true, text: '上次检查不安全，正在检查新快照' };
         }
         if (previousCheck?.ok === true) {
-          return { state: 'safe', reviewing: true, checking: true, text: '上次检查安全，正在复查 ' + progress };
+          return { state: 'safe', reviewing: true, checking: true, text: '上次检查安全，正在检查新快照' };
         }
-        return { state: 'pending', checking: true, text: '正在检查登录点安全 ' + progress };
+        return { state: 'pending', checking: true, text: '正在检查登录点安全' };
       }
       const pendingSafeReason = /snapshot-safety-streak-pending/i.test(detailReason)
         && /^safe$/i.test(originalReason);
@@ -1816,22 +1818,22 @@ function renderBrowserlessWebPanel() {
           || (streak !== null && streak > 0 && /pending|streak/i.test(reasonText))
       );
       if (safeLike) {
-        return withCooldown({ state: 'safe', text: '安全 ' + loginPointProgressText(status, true) });
+        return withCooldown({ state: 'safe', text: '安全' });
       }
       if (/pending-snapshot-safety/i.test(reasonText)) {
         const offline = status.stats?.offline || {};
         const afterOffline = Boolean(offline.lastExitAt || offline.lastExitReason || status.recentExit);
         if (afterOffline) {
-          return withCooldown({ state: 'pending', afterOffline: true, text: '离线后等待检查 ' + loginPointProgressText(status, false) });
+          return withCooldown({ state: 'pending', afterOffline: true, text: '离线后等待快照检查' });
         }
         const previousCheck = detail.previousCheck || null;
         if (previousCheck?.ok === true) {
-          return withCooldown({ state: 'safe', reviewing: true, text: '上次检查安全，正在复查 ' + loginPointProgressText(status, false) });
+          return withCooldown({ state: 'safe', reviewing: true, text: '上次检查安全，等待新快照' });
         }
         if (previousCheck?.ok === false) {
-          return withCooldown({ state: 'unsafe', reviewing: true, text: '不安全（正在复查 ' + loginPointProgressText(status, false) + '）' });
+          return withCooldown({ state: 'unsafe', reviewing: true, text: '上次检查不安全，等待新快照' });
         }
-        return withCooldown({ state: 'pending', text: '待检查 ' + loginPointProgressText(status, false) });
+        return withCooldown({ state: 'pending', text: '等待快照检查' });
       }
       return withCooldown({ state: 'unsafe', text: '不安全' });
     }
@@ -3068,7 +3070,6 @@ function renderBrowserlessWebPanel() {
       const currentReason = action.reason || decision.reason || '';
       const target = activeTarget(status);
       const currentSession = status.stats?.currentSession || {};
-      const offlineStats = status.stats?.offline || {};
       const { online, realtimeOnline } = panelSessionFlags(status);
       const reason = currentReason;
       const loginDisplay = online ? { state: 'none', text: '--' } : loginPointDisplay(status);
@@ -3078,16 +3079,15 @@ function renderBrowserlessWebPanel() {
       addRow(rowsOut, '状态', online ? actionTitleText(status) : offlineActionTitleText(status), true);
       const preflight = status.network?.sourceIpPreflight || null;
       const preflightPhase = String(preflight?.phase || '');
-      if (!online && preflight && ['testing', 'retry-wait', 'deferred', 'insufficient', 'ready', 'login-attempt', 'login-failed', 'snapshot-wait'].includes(preflightPhase)) {
+      if (!online && preflight && ['testing', 'retry-wait', 'deferred', 'insufficient', 'ready', 'login-attempt', 'login-failed'].includes(preflightPhase)) {
         addRow(rowsOut, '出口预检', sourceIpPreflightPhaseText(status.network), true,
           preflightPhase === 'insufficient' ? classAttrs('bad') : classAttrs('info'));
-        addRow(rowsOut, '预检进度', sourceIpPreflightProgressText(status.network));
-        addRow(rowsOut, '当前测试 IP', preflight.currentIp || '--');
-        addRow(rowsOut, '最近响应', sourceIpPreflightLastResultText(status.network));
-        const preflightRetryAt = preflightPhase === 'insufficient'
-          ? status.stats?.offline?.nextReconnectAt
-          : preflight.nextRetryAt;
-        addRow(rowsOut, preflightPhase === 'insufficient' ? '冷却结束' : '下次重试', countdownUntil(preflightRetryAt), false, { countdownAt: preflightRetryAt });
+        if (['retry-wait', 'insufficient', 'login-failed'].includes(preflightPhase)) {
+          addRow(rowsOut, '最近响应', sourceIpPreflightLastResultText(status.network));
+        }
+        if (preflightPhase === 'retry-wait') {
+          addRow(rowsOut, '下次重试', countdownUntil(preflight.nextRetryAt), false, { countdownAt: preflight.nextRetryAt });
+        }
         if (preflightPhase === 'deferred') {
           addRow(rowsOut, '延期说明', sourceIpDeferredDetailText(status), true, classAttrs('warn'));
         }
@@ -3160,9 +3160,14 @@ function renderBrowserlessWebPanel() {
         }
       }
 
-      if (!online && offlineStats.nextReconnectAt) {
-        addRow(rowsOut, '下次重连', fullStamp(offlineStats.nextReconnectAt));
-        addRow(rowsOut, '剩余时间', countdownUntil(offlineStats.nextReconnectAt), false, { countdownAt: offlineStats.nextReconnectAt });
+      const scheduledSnapshotCheckAt = nextSnapshotCheckAt(status);
+      const cooldownAt = offlineCooldownAt(status);
+      if (!online && scheduledSnapshotCheckAt) {
+        addRow(rowsOut, '下次快照检查', fullStamp(scheduledSnapshotCheckAt));
+        addRow(rowsOut, '检查倒计时', countdownUntil(scheduledSnapshotCheckAt), false, { countdownAt: scheduledSnapshotCheckAt });
+      } else if (!online && cooldownAt) {
+        addRow(rowsOut, '冷却结束', fullStamp(cooldownAt));
+        addRow(rowsOut, '冷却剩余', countdownUntil(cooldownAt), false, { countdownAt: cooldownAt });
       }
 
       return rowsOut;

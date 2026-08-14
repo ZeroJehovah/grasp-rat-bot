@@ -49,6 +49,12 @@ async function waitForSnapshotEdge(options = {}) {
   let requestCount = 0;
   let consecutiveErrors = 0;
   let baseline = null;
+  const nextCheckAtMs = () => {
+    const current = now();
+    return current - startedAtMs + intervalMs <= maxWaitMs
+      ? current + intervalMs
+      : null;
+  };
 
   while (now() - startedAtMs <= maxWaitMs) {
     if (requestCount > 0) {
@@ -66,7 +72,8 @@ async function waitForSnapshotEdge(options = {}) {
         requestCount,
         consecutiveErrors,
         error: error?.message || String(error),
-        waitMs: now() - startedAtMs
+        waitMs: now() - startedAtMs,
+        nextCheckAtMs: consecutiveErrors < maxErrors ? nextCheckAtMs() : null
       });
       if (consecutiveErrors >= maxErrors) {
         return {
@@ -91,7 +98,8 @@ async function waitForSnapshotEdge(options = {}) {
         consecutiveErrors,
         status: fetched?.status ?? null,
         reason: !version ? 'invalid-snapshot-version' : 'snapshot-http-error',
-        waitMs: now() - startedAtMs
+        waitMs: now() - startedAtMs,
+        nextCheckAtMs: consecutiveErrors < maxErrors ? nextCheckAtMs() : null
       });
       if (consecutiveErrors >= maxErrors) {
         return {
@@ -112,7 +120,8 @@ async function waitForSnapshotEdge(options = {}) {
         type: 'baseline',
         requestCount,
         version,
-        waitMs: now() - startedAtMs
+        waitMs: now() - startedAtMs,
+        nextCheckAtMs: nextCheckAtMs()
       });
       continue;
     }
@@ -122,7 +131,8 @@ async function waitForSnapshotEdge(options = {}) {
       requestCount,
       baseline: baseline.version,
       version,
-      waitMs: now() - startedAtMs
+      waitMs: now() - startedAtMs,
+      nextCheckAtMs: advanced ? null : nextCheckAtMs()
     });
     if (advanced) {
       return {
@@ -161,6 +171,7 @@ async function runSnapshotEdgeSelfTest() {
   let nowMs = Date.UTC(2026, 6, 16, 12, 0, 0);
   const ticks = [100, 100, 120];
   let index = 0;
+  const progress = [];
   const result = await waitForSnapshotEdge({
     now: () => nowMs,
     sleep: async ms => { nowMs += ms; },
@@ -170,7 +181,8 @@ async function runSnapshotEdgeSelfTest() {
       ok: true,
       payload: { tick: ticks[index++] },
       observedAtMs: nowMs
-    })
+    }),
+    onProgress: detail => progress.push(detail)
   });
   let timeoutNowMs = Date.UTC(2026, 6, 16, 12, 0, 0);
   const timeout = await waitForSnapshotEdge({
@@ -198,6 +210,12 @@ async function runSnapshotEdgeSelfTest() {
       && result.ok
       && result.requestCount === 3
       && result.detected?.version?.tick === 120
+      && progress[0]?.type === 'baseline'
+      && progress[0]?.nextCheckAtMs === Date.UTC(2026, 6, 16, 12, 0, 30)
+      && progress[1]?.type === 'probe'
+      && progress[1]?.nextCheckAtMs === Date.UTC(2026, 6, 16, 12, 1, 0)
+      && progress[2]?.type === 'detected'
+      && progress[2]?.nextCheckAtMs === null
       && timeout.reason === 'snapshot-edge-timeout'
       && timeout.requestCount === 3
       && timeout.waitMs === 60000
@@ -206,6 +224,7 @@ async function runSnapshotEdgeSelfTest() {
     sameDay,
     midnight,
     stale,
+    progress,
     result,
     timeout,
     errors

@@ -814,6 +814,7 @@ function browserlessSnapshotSafetyCheckInFlight(action = {}) {
   const reason = String(action?.reason || '');
   const nextRunAt = String(action?.nextRunAt || '');
   if (kind === 'snapshot-wait') return true;
+  if (/source-ip-.*snapshot-safety-wait/i.test(reason)) return true;
   if (nextRunAt) return false;
   return /pending-snapshot-safety/i.test(reason)
     || (kind === 'loop-wait' && /snapshot-safety/i.test(reason));
@@ -1894,6 +1895,8 @@ function compactAction(action) {
     reason: compactString(action.reason, 120),
     delayMs: compactNumber(action.delayMs),
     nextRunAt: compactString(action.nextRunAt, 48),
+    nextSnapshotCheckAt: compactString(action.nextSnapshotCheckAt, 48),
+    explicitDelay: compactBoolean(action.explicitDelay),
     target: compactTarget(action.target),
     blockedAction: action.blockedAction && typeof action.blockedAction === 'object'
       ? {
