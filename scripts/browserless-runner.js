@@ -265,9 +265,13 @@ async function main() {
   }
   if (config.selfTest) {
     const result = await runBrowserlessRunnerSelfTest();
-    console.log(JSON.stringify(result, null, 2));
-    if (!result.ok) process.exitCode = 1;
-    return;
+    await new Promise((resolve, reject) => {
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`, error => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
+    process.exit(result.ok ? 0 : 1);
   }
   let activeBackgroundIo = null;
   let activeLiveStateProvider = null;
