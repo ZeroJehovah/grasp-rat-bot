@@ -2819,19 +2819,31 @@ function compactExit(event) {
   const reappearanceKillConfirmation = priorKillMatchesTarget ? priorKillConfirmation : killConfirmation;
   const terminalConfirmedKill = confirmedKill && !targetReappearedAfterKill;
   const battleMetrics = metricsAssociated ? metrics : {};
+  const injuryEpisodeStartedAtMs = compactNumber(injury.episodeStartedAt);
+  const injuryStartHp = compactNumber(injury.startHp);
+  const injuryEndHp = compactNumber(injury.currentHp);
+  const injuryTotalHpDrop = compactNumber(injury.totalHpDrop);
+  const hasInjuryEpisode = injuryEpisodeStartedAtMs !== null
+    && injuryStartHp !== null
+    && injuryEndHp !== null
+    && injuryTotalHpDrop !== null;
   const metricStartedAtMs = compactNumber(battleMetrics.startedAt);
   const combatStartedAtMs = (metricsAssociated || explicitBattleReason || explicitCombatExit)
     ? parseTimeMs(combat.startedAt)
     : 0;
   const startedAtMs = metricStartedAtMs !== null && metricStartedAtMs > 0
     ? metricStartedAtMs
-    : (combatStartedAtMs > 0 ? combatStartedAtMs : null);
+    : (combatStartedAtMs > 0
+        ? combatStartedAtMs
+        : (explicitBattleReason && hasInjuryEpisode ? injuryEpisodeStartedAtMs : null));
   const endedAtMs = (terminalConfirmedKill ? confirmedKillAtMs : 0)
     || compactNumber(battleMetrics.lastObservedAt)
     || eventAtMs;
   const durationMs = ((metricsAssociated || explicitBattleReason || explicitCombatExit) ? compactNumber(combat.durationMs) : null)
     ?? (startedAtMs !== null && endedAtMs > 0 ? Math.max(0, endedAtMs - startedAtMs) : null);
-  const selfDamage = metricsAssociated ? compactNumber(battleMetrics.selfDamage) : null;
+  const selfDamage = metricsAssociated
+    ? compactNumber(battleMetrics.selfDamage)
+    : (explicitBattleReason && hasInjuryEpisode ? injuryTotalHpDrop : null);
   const rawTargetDamage = metricsAssociated ? compactNumber(battleMetrics.targetDamage) : null;
   const selfHealing = metricsAssociated ? compactNumber(battleMetrics.selfHealing) : null;
   const rawTargetHealing = metricsAssociated ? compactNumber(battleMetrics.targetHealing) : null;
@@ -2839,13 +2851,13 @@ function compactExit(event) {
     ? (compactNumber(battleMetrics.lastSelfHp)
       ?? compactNumber(combatExit.selfHp)
       ?? compactNumber(sourceSelf?.hp))
-    : null;
+    : (explicitBattleReason && hasInjuryEpisode ? injuryEndHp : null);
   const selfHpStart = metricsAssociated
     ? (compactNumber(battleMetrics.initialSelfHp)
       ?? (selfHpEnd !== null && selfDamage !== null
         ? selfHpEnd + selfDamage - (selfHealing ?? 0)
         : null))
-    : null;
+    : (explicitBattleReason && hasInjuryEpisode ? injuryStartHp : null);
   const targetHpEnd = metricsAssociated
     ? (terminalConfirmedKill
       ? 0
@@ -2979,9 +2991,13 @@ function compactExit(event) {
       : null,
     injury: Object.keys(injury).length
       ? {
+          episodeStartedAt: compactNumber(injury.episodeStartedAt),
+          startHp: compactNumber(injury.startHp),
           previousHp: compactNumber(injury.previousHp),
           currentHp: compactNumber(injury.currentHp),
-          hpDrop: compactNumber(injury.hpDrop)
+          hpDrop: compactNumber(injury.hpDrop),
+          totalHpDrop: compactNumber(injury.totalHpDrop),
+          hitCount: compactNumber(injury.hitCount)
         }
       : null,
     leaveConfirmation: Object.keys(leaveConfirmation).length

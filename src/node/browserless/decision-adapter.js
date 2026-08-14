@@ -8846,12 +8846,38 @@ function rememberBrowserlessInjury(input, stateful, options = {}) {
     if (Number.isFinite(previousHp) && hpDrop >= minDrop) {
       const pressure = pickBrowserlessInjuryPressure(input, stateful, options);
       const hitAttribution = attributeBrowserlessHpDropToBullet(input, stateful, hpDrop, nowMs, options);
+      const priorInjury = stateful.browserlessInjury && typeof stateful.browserlessInjury === 'object'
+        ? stateful.browserlessInjury
+        : null;
+      const priorAt = numberOrNull(priorInjury?.at);
+      const priorCurrentHp = numberOrNull(priorInjury?.currentHp);
+      const priorTargetKey = String(priorInjury?.targetKey || '');
+      const pressureTargetKey = targetKey(pressure.target);
+      const samePressureActor = !priorTargetKey || !pressureTargetKey || priorTargetKey === pressureTargetKey;
+      const continuesEpisode = Boolean(
+        priorInjury
+          && priorAt !== null
+          && nowMs >= priorAt
+          && nowMs - priorAt <= recentMs
+          && priorCurrentHp !== null
+          && Math.abs(priorCurrentHp - previousHp) < 0.01
+          && samePressureActor
+      );
+      const episodeStartHp = continuesEpisode
+        ? (numberOrNull(priorInjury.startHp) ?? numberOrNull(priorInjury.previousHp) ?? previousHp)
+        : previousHp;
       stateful.browserlessInjury = {
         at: nowMs,
+        episodeStartedAt: continuesEpisode
+          ? (numberOrNull(priorInjury.episodeStartedAt) ?? priorAt)
+          : nowMs,
+        startHp: episodeStartHp,
         previousHp,
         currentHp: hp,
         hpDrop: Math.round(hpDrop * 10) / 10,
-        targetKey: targetKey(pressure.target),
+        totalHpDrop: Math.round(Math.max(0, episodeStartHp - hp) * 10) / 10,
+        hitCount: continuesEpisode ? Math.max(1, Number(priorInjury.hitCount || 1) + 1) : 1,
+        targetKey: pressureTargetKey,
         target: summarizeTarget(pressure.target),
         targetSource: pressure.targetSource,
         attributable: pressure.attributable,
@@ -9060,9 +9086,13 @@ function buildBrowserlessInjuryHpExitDecision(input, stateful, combat, options =
       engagedTargets: engagedTargetHpEvidence.targets
     },
     injury: {
+      episodeStartedAt: numberOrNull(injury.episodeStartedAt),
+      startHp: numberOrNull(injury.startHp) ?? numberOrNull(injury.previousHp),
       previousHp: numberOrNull(injury.previousHp),
       currentHp: hpValue(input.self),
       hpDrop: numberOrNull(injury.hpDrop),
+      totalHpDrop: numberOrNull(injury.totalHpDrop) ?? numberOrNull(injury.hpDrop),
+      hitCount: numberOrNull(injury.hitCount),
       ageMs: Math.max(0, Math.round(nowMs - Number(injury.at || nowMs))),
       hasIncoming: Boolean(injury.hasIncoming || currentPressure.hasIncoming),
       unknownIncoming: Boolean(injury.unknownIncoming || currentPressure.unknownIncoming),

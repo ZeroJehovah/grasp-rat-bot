@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.14.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.14.2';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -1216,9 +1216,14 @@ function renderBrowserlessWebPanel() {
     }
     function recentInjuryHpText(status) {
       const injury = status.recentExit?.injury || {};
+      const startHp = number(injury.startHp);
       const previousHp = number(injury.previousHp);
       const currentHp = number(injury.currentHp);
       if (previousHp === null || currentHp === null) return '';
+      const totalHpDrop = number(injury.totalHpDrop);
+      if (startHp !== null && totalHpDrop !== null) {
+        return '我方 ' + startHp + ' → ' + currentHp + ' / 累计承伤 ' + totalHpDrop;
+      }
       const hpDrop = number(injury.hpDrop);
       return '我方 ' + previousHp + ' → ' + currentHp
         + (hpDrop === null ? '' : ' / 本次承伤 ' + hpDrop);
@@ -3200,7 +3205,12 @@ function renderBrowserlessWebPanel() {
         addRow(rowsOut, '退出威胁', targetLabel(exitThreat), true);
       }
       const injuryHpText = recentInjuryHpText(status);
-      if (!staminaExhausted && injuryHpText) addRow(rowsOut, '退出判定受击', injuryHpText);
+      const battleHasSelfOverview = number(battle?.selfHpStart) !== null
+        && number(battle?.selfHpEnd) !== null
+        && number(battle?.selfDamage) !== null;
+      if (!staminaExhausted && injuryHpText && !battleHasSelfOverview) {
+        addRow(rowsOut, '退出判定受击', injuryHpText);
+      }
       const exitHpText = combatExitHpText(status);
       if (!staminaExhausted && exitHpText && exitHpText !== '--') {
         addRow(rowsOut, hpTriggeredExit(status, reason) ? '退出触发血量' : '退出时血量', exitHpText);

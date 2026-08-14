@@ -5446,6 +5446,41 @@ async function runSelfTest() {
     }
   }
 
+  const caseProgressEnabled = process.env.GRASP_RAT_SELF_TEST_PROGRESS === '1';
+  const caseNameFilter = String(process.env.GRASP_RAT_SELF_TEST_FILTER || '').trim().toLowerCase();
+  const configuredCaseTimeoutMs = Number(process.env.GRASP_RAT_SELF_TEST_CASE_TIMEOUT_MS);
+  const caseTimeoutMs = Number.isFinite(configuredCaseTimeoutMs) && configuredCaseTimeoutMs > 0
+    ? Math.round(configuredCaseTimeoutMs)
+    : 30000;
+
+  async function resolveCaseValue(item, index, total) {
+    const deferred = typeof item.got === 'function';
+    const startedAt = Date.now();
+    if (caseProgressEnabled && deferred) {
+      console.error(`[self-test] ${index + 1}/${total} start ${item.name}`);
+    }
+    const value = deferred ? item.got() : item.got;
+    if (!value || typeof value.then !== 'function') return value;
+
+    let timeout = null;
+    try {
+      const result = await Promise.race([
+        value,
+        new Promise((_, reject) => {
+          timeout = setTimeout(() => {
+            reject(new Error(`self-test case timed out after ${caseTimeoutMs}ms: ${item.name}`));
+          }, caseTimeoutMs);
+        })
+      ]);
+      if (caseProgressEnabled && deferred && Date.now() - startedAt >= 100) {
+        console.error(`[self-test] ${index + 1}/${total} done ${Date.now() - startedAt}ms ${item.name}`);
+      }
+      return result;
+    } finally {
+      if (timeout !== null) clearTimeout(timeout);
+    }
+  }
+
   const cases = [
     {
       name: 'main-thread release budget gates CPU work and keeps wall spikes diagnostic',
@@ -5864,7 +5899,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless pending exit self-present run is exit-only until leave confirmation',
-      got: (async () => {
+      got: () => (async () => {
         let t = Date.parse('2026-07-20T06:05:00.000Z');
         let receiveFrame = null;
         let recoverySnapshotConfig = null;
@@ -5932,12 +5967,11 @@ async function runSelfTest() {
       want: 'exit-recovery|true|exit-recovery|true|0|0|false|false|1|0|self-present-recovered|confirmed-absent|true|200'
     },
     {
-      name: 'browserless pending exit confirmation aborts websocket handshake before active join',
-      got: (async () => {
+      name: 'browserless pending exit recovery suppresses websocket handshake before active join',
+      got: () => (async () => {
         let t = Date.parse('2026-07-30T04:02:46.820Z');
-        let resolveLeave = null;
+        let connectAttemptCount = 0;
         let activeJoinCount = 0;
-        let connectCancelled = false;
         const logs = [];
         const pendingExit = pendingExitFromCanary(null, {
           runId: 'incident-prior-exit',
@@ -5970,26 +6004,16 @@ async function runSelfTest() {
             bypassedPreLoginSafety: true,
             response: { summary: { selfPresent: true, freshness: { ok: true }, self: { hp: 25 } } }
           }),
-          leaveWithVerification: async () => new Promise(resolve => { resolveLeave = resolve; }),
-          openBrowserlessWs: options => new Promise((resolve, reject) => {
-            const activeJoin = setImmediate(() => {
-              activeJoinCount += 1;
-              options.onOpen?.({ runtime: 'fake' });
-              resolve({ isOpen: () => true, close: () => {}, sendVelocity: () => {}, sendShoot: () => {} });
-            });
-            options.signal.addEventListener('abort', () => {
-              connectCancelled = true;
-              clearImmediate(activeJoin);
-              const error = new Error('websocket connect aborted: leave-confirmed');
-              error.name = 'AbortError';
-              error.code = 'websocket-connect-aborted';
-              reject(error);
-            }, { once: true });
-            resolveLeave({
-              ok: true,
-              attempts: [{ stage: 'initial', ok: true, status: 200, summary: { leaveConfirmed: true } }]
-            });
-          })
+          leaveWithVerification: async () => ({
+            ok: true,
+            attempts: [{ stage: 'initial', ok: true, status: 200, summary: { leaveConfirmed: true } }]
+          }),
+          openBrowserlessWs: async options => {
+            connectAttemptCount += 1;
+            activeJoinCount += 1;
+            options.onOpen?.({ runtime: 'fake' });
+            return { isOpen: () => true, close: () => {}, sendVelocity: () => {}, sendShoot: () => {} };
+          }
         });
         const confirmed = result.recovery.exitOutcomes.find(item => item.outcome === 'confirmed-absent');
         const close = result.safety.exit?.confirmedControlClose || {};
@@ -5997,43 +6021,30 @@ async function runSelfTest() {
           result.ok,
           result.error,
           result.leave?.ok,
-          connectCancelled,
+          connectAttemptCount,
           activeJoinCount,
           close.transportClose?.reason,
           close.pendingConnectCancel?.attempted,
-          close.pendingConnectCancel?.aborted,
+          close.pendingConnectCancel?.reason,
           result.safety.transportLifecycle.phase,
           result.decisions.evaluatedCount,
           result.actions.sentCount,
           logs.some(item => item.type === 'canary-ws-open'),
-          logs.some(item => item.type === 'canary-ws-connect-cancelled-after-leave'),
+          logs.some(item => item.type === 'canary-ws-connect-suppressed-after-leave'),
           confirmed?.reloginAllowed
         ].join('|');
       })(),
-      want: 'false|combat-hp-disadvantage-leave|true|true|0|missing-transport|true|true|cancelled|0|0|false|true|true'
+      want: 'false|combat-hp-disadvantage-leave|true|0|0|missing-transport|false|not-pending|suppressed-for-exit-recovery|0|0|false|true|true'
     },
     {
       name: 'browserless leave confirmation closes an already active transport without pending-connect cancellation',
-      got: (async () => {
+      got: () => (async () => {
         let t = Date.parse('2026-07-30T04:10:00.000Z');
-        let resolveLeave = null;
-        let leaveResolved = false;
+        let stopRequested = false;
         let transportOpen = true;
         let transportCloseCount = 0;
         const logs = [];
-        const pendingExit = pendingExitFromCanary(null, {
-          runId: 'active-transport-prior-exit',
-          startedAt: new Date(t - 1000).toISOString(),
-          error: 'leave not confirmed',
-          safety: { event: { reason: 'frame-gap', shouldLeave: true, at: new Date(t - 900).toISOString() } },
-          leave: { ok: false, error: 'HTTP 502', attempts: [{ status: 502 }] }
-        }, t);
-        const frame = encodeGrzFrameForTest({
-          type: 'pos',
-          tick: 100,
-          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 85, max_hp: 100 }],
-          bullets: []
-        });
+        const safetyController = createBrowserlessSafetyController({ now: () => t });
         const result = await runReadOnlyCanary({
           gameOrigin: 'https://self-test.invalid',
           userId: 7,
@@ -6046,18 +6057,14 @@ async function runSelfTest() {
           frameGapAlertMs: 5000
         }, {
           now: () => t,
+          safetyController,
           sleep: async ms => {
             t += Number(ms || 0);
-            if (!leaveResolved && resolveLeave) {
-              leaveResolved = true;
-              resolveLeave({
-                ok: true,
-                attempts: [{ stage: 'initial', ok: true, status: 200, summary: { leaveConfirmed: true } }]
-              });
-              await Promise.resolve();
+            if (!stopRequested) {
+              stopRequested = true;
+              safetyController.requestStop('explicit-stop', { source: 'active-transport-self-test' });
             }
           },
-          persistedState: { runner: { pendingExit } },
           logStore: {
             append: (stream, type, detail) => logs.push({ stream, type, detail }),
             flush: async () => {}
@@ -6069,10 +6076,12 @@ async function runSelfTest() {
             bypassedPreLoginSafety: true,
             response: { summary: { selfPresent: true, freshness: { ok: true } } }
           }),
-          leaveWithVerification: async () => new Promise(resolve => { resolveLeave = resolve; }),
+          leaveWithVerification: async () => ({
+            ok: true,
+            attempts: [{ stage: 'initial', ok: true, status: 200, summary: { leaveConfirmed: true } }]
+          }),
           openBrowserlessWs: async options => {
             options.onOpen?.({ runtime: 'fake' });
-            options.onMessage(frame);
             return {
               isOpen: () => transportOpen,
               close: () => {
@@ -6103,20 +6112,19 @@ async function runSelfTest() {
     },
     {
       name: 'browserless stale websocket open after leave is blocked and independently reasserted',
-      got: (async () => {
+      got: () => (async () => {
         let t = Date.parse('2026-07-30T04:20:00.000Z');
-        let resolveFirstLeave = null;
         let leaveCalls = 0;
         let activeJoinCount = 0;
         let transportCloseCount = 0;
         const logs = [];
-        const pendingExit = pendingExitFromCanary(null, {
-          runId: 'stale-open-prior-exit',
-          startedAt: new Date(t - 1000).toISOString(),
-          error: 'leave not confirmed',
-          safety: { event: { reason: 'frame-gap', shouldLeave: true, at: new Date(t - 900).toISOString() } },
-          leave: { ok: false, error: 'HTTP 502', attempts: [{ status: 502 }] }
-        }, t);
+        const safetyController = createBrowserlessSafetyController({ now: () => t });
+        const frame = encodeGrzFrameForTest({
+          type: 'pos',
+          tick: 100,
+          entities: [{ entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 85, max_hp: 100 }],
+          bullets: []
+        });
         const result = await runReadOnlyCanary({
           gameOrigin: 'https://self-test.invalid',
           userId: 7,
@@ -6129,7 +6137,7 @@ async function runSelfTest() {
         }, {
           now: () => t,
           sleep: async ms => { t += Number(ms || 0); },
-          persistedState: { runner: { pendingExit } },
+          safetyController,
           logStore: {
             append: (stream, type, detail) => logs.push({ stream, type, detail }),
             flush: async () => {}
@@ -6143,7 +6151,18 @@ async function runSelfTest() {
           }),
           leaveWithVerification: async () => {
             leaveCalls += 1;
-            if (leaveCalls === 1) return new Promise(resolve => { resolveFirstLeave = resolve; });
+            if (leaveCalls === 1) {
+              return {
+                ok: true,
+                attempts: [{
+                  stage: 'initial',
+                  ok: true,
+                  status: 200,
+                  response: { active_join_count: 4, active_join_ticks: [100, 200] },
+                  summary: { leaveConfirmed: true }
+                }]
+              };
+            }
             return {
               ok: true,
               attempts: [{
@@ -6156,16 +6175,8 @@ async function runSelfTest() {
             };
           },
           openBrowserlessWs: async options => {
-            resolveFirstLeave({
-              ok: true,
-              attempts: [{
-                stage: 'initial',
-                ok: true,
-                status: 200,
-                response: { active_join_count: 4, active_join_ticks: [100, 200] },
-                summary: { leaveConfirmed: true }
-              }]
-            });
+            safetyController.requestStop('explicit-stop', { source: 'pending-connect-self-test' });
+            options.onMessage(frame, { coalescedDispatch: true });
             if (!options.signal.aborted) {
               await new Promise(resolve => options.signal.addEventListener('abort', resolve, { once: true }));
             }
@@ -6200,11 +6211,11 @@ async function runSelfTest() {
           reassertedOutcome?.reloginAllowed
         ].join('|');
       })(),
-      want: 'false|frame-gap|true|2|1|1|blocked-after-open|true|true|true|true|201|true|false|0|0|true'
+      want: 'false|explicit-stop|true|2|1|1|blocked-after-open|true|true|true|true|201|true|false|1|0|true'
     },
     {
       name: 'browserless pending exit websocket failure remains exit-only and immediately retryable',
-      got: (async () => {
+      got: () => (async () => {
         const t = Date.parse('2026-07-20T06:10:00.000Z');
         const pendingExit = pendingExitFromCanary(null, {
           runId: 'prior-failed-exit-ws',
@@ -6239,7 +6250,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless stale pending-exit snapshot retries the same audit chain',
-      got: (async () => {
+      got: () => (async () => {
         let t = Date.parse('2026-07-20T06:15:00.000Z');
         let wsOpened = false;
         const pendingExit = pendingExitFromCanary(null, {
@@ -6293,7 +6304,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless expired pending exit records timeout and renews a protected leave chain',
-      got: (async () => {
+      got: () => (async () => {
         let t = Date.parse('2026-07-20T06:20:00.000Z');
         let wsOpened = false;
         const oldPending = pendingExitFromCanary(null, {
@@ -6459,7 +6470,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless session client parses callback meta refresh login',
-      got: (async () => {
+      got: () => (async () => {
         const origin = 'https://grasp-rat-game.h-e.top';
         const result = await submitGameCallbackUrl(`${origin}/auth/linuxdo/callback?code=secret-code`, {
           gameOrigin: origin,
@@ -6501,7 +6512,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless leave client summarizes confirmed leave response',
-      got: (async () => {
+      got: () => (async () => {
         const result = await browserlessLeaveOnce({
           gameOrigin: 'https://grasp-rat-game.h-e.top',
           userId: 7,
@@ -6538,7 +6549,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless leave client retries until verified leave',
-      got: (async () => {
+      got: () => (async () => {
         let calls = 0;
         const result = await browserlessLeaveWithVerification({
           retryMax: 2,
@@ -6561,7 +6572,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless leave client honors retryable response delay',
-      got: (async () => {
+      got: () => (async () => {
         let calls = 0;
         const sleeps = [];
         const direct = browserlessRetryDelayMsForLeaveAttempt({
@@ -6595,7 +6606,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless leave client retries unconfirmed responses after short default delay',
-      got: (async () => {
+      got: () => (async () => {
         let calls = 0;
         const sleeps = [];
         const result = await browserlessLeaveWithVerification({
@@ -6614,7 +6625,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless leave client creates the initial request before yielding the safety callback stack',
-      got: (async () => {
+      got: () => (async () => {
         let requested = false;
         const pending = browserlessLeaveWithVerification({
           retryMax: 0,
@@ -6636,7 +6647,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless leave client hedges a pending initial request without losing its result',
-      got: (async () => {
+      got: () => (async () => {
         let resolveInitial = null;
         const started = [];
         const result = await browserlessLeaveWithVerification({
@@ -6676,7 +6687,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless leave supervisor keeps hedge wall clock independent from main event loop',
-      got: (async () => {
+      got: () => (async () => {
         let requestCount = 0;
         const server = http.createServer((_request, response) => {
           requestCount += 1;
@@ -6906,7 +6917,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless source-ip HTTP client reuses a keep-alive socket normally',
-      got: (async () => {
+      got: () => (async () => {
         const server = http.createServer((request, response) => {
           response.statusCode = 200;
           response.setHeader('content-type', 'application/json');
@@ -6947,7 +6958,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless fetch timeout aborts stalled requests',
-      got: (async () => {
+      got: () => (async () => {
         try {
           await browserlessFetchWithTimeout('https://example.test/stall', {
             timeoutMs: 1,
@@ -7121,7 +7132,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless prelogin safety consumes the persisted daily damage tracker ids',
-      got: (async () => {
+      got: () => (async () => {
         const nowMs = Date.parse('2026-07-14T01:00:00.000Z');
         const result = await runPreLoginSnapshotSafety({
           gameOrigin: 'https://example.test',
@@ -7159,7 +7170,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless prelogin safety wires easy-kill trust ahead of damage actors',
-      got: (async () => {
+      got: () => (async () => {
         const nowMs = Date.parse('2026-07-14T01:00:00.000Z');
         const config = {
           gameOrigin: 'https://example.test',
@@ -7219,7 +7230,8 @@ async function runSelfTest() {
     },
     {
       name: 'browserless prelogin safety requires three strictly increasing snapshot ticks',
-      got: (async () => {
+      got: () => (async () => {
+        let nowMs = Date.parse('2026-08-01T00:00:00.000Z');
         const config = {
           gameOrigin: 'https://example.test',
           snapshotPath: '/snapshot',
@@ -7233,6 +7245,8 @@ async function runSelfTest() {
         const run = async (ticks, dangerousAt = -1) => {
           let index = 0;
           return runPreLoginSnapshotSafety(config, state, {
+            now: () => nowMs,
+            sleep: async ms => { nowMs += Number(ms || 0); },
             fetchWithTimeout: async () => {
               const current = index++;
               return fakeResponseForTest({
@@ -7280,7 +7294,8 @@ async function runSelfTest() {
     },
     {
       name: 'browserless prelogin safety bounds request exceptions and clears progress',
-      got: (async () => {
+      got: () => (async () => {
+        let nowMs = Date.parse('2026-08-01T01:00:00.000Z');
         let calls = 0;
         const result = await runPreLoginSnapshotSafety({
           gameOrigin: 'https://example.test',
@@ -7293,6 +7308,8 @@ async function runSelfTest() {
         }, {
           loginPointSafety: { point: { x: 0, y: 0, hp: 79, source: 'test' } }
         }, {
+          now: () => nowMs,
+          sleep: async ms => { nowMs += Number(ms || 0); },
           fetchWithTimeout: async () => {
             calls += 1;
             if (calls === 2) throw new Error('probe transport failed');
@@ -7308,7 +7325,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless snapshot edge reuses the first newer response for one safety evaluation',
-      got: (async () => {
+      got: () => (async () => {
         let nowMs = Date.parse('2026-07-16T01:00:00.000Z');
         let calls = 0;
         const ticks = [100, 100, 101];
@@ -7356,7 +7373,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless snapshot edge publishes unsafe checks and retains the single-blocker hold',
-      got: (async () => {
+      got: () => (async () => {
         let nowMs = Date.parse('2026-08-02T02:30:00.000Z');
         let tick = 100;
         let calls = 0;
@@ -7444,7 +7461,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless snapshot edge publishes its terminal timeout result once',
-      got: (async () => {
+      got: () => (async () => {
         let nowMs = Date.parse('2026-08-02T02:30:00.000Z');
         let calls = 0;
         const published = [];
@@ -7485,7 +7502,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless snapshot edge treats newer self presence as immediate recovery evidence',
-      got: (async () => {
+      got: () => (async () => {
         let nowMs = Date.parse('2026-07-16T01:00:00.000Z');
         let calls = 0;
         const result = await runPreLoginSnapshotSafety({
@@ -7531,7 +7548,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless confirmed leave quarantines cached self and requires a newer tick',
-      got: (async () => {
+      got: () => (async () => {
         const baseMs = Date.parse('2026-07-14T01:00:00.000Z');
         const config = {
           gameOrigin: 'https://example.test',
@@ -7585,7 +7602,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless confirmed leave accepts the next UTC+8 day tick reset',
-      got: (async () => {
+      got: () => (async () => {
         const confirmedAtMs = Date.parse('2026-07-16T15:59:00.000Z');
         const observedAtMs = Date.parse('2026-07-16T16:01:00.000Z');
         const result = await runPreLoginSnapshotSafety({
@@ -7643,7 +7660,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless http fetch binds local source IP through dispatcher',
-      got: (async () => {
+      got: () => (async () => {
         let sawDispatcher = false;
         const response = await browserlessFetchWithTimeout('https://grasp-rat-game.h-e.top/', {
           localAddress: '10.0.0.101',
@@ -7659,7 +7676,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless websocket transport opens dispatches and sends narrow commands',
-      got: (async () => {
+      got: () => (async () => {
         const fake = createFakeWebSocketRuntimeForTest();
         const events = [];
         const messages = [];
@@ -7697,7 +7714,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless websocket transport times out unopened sockets',
-      got: (async () => {
+      got: () => (async () => {
         const fake = createFakeWebSocketRuntimeForTest();
         try {
           await openBrowserlessWs({
@@ -7720,7 +7737,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless websocket transport rejects an already aborted connect without creating a socket',
-      got: (async () => {
+      got: () => (async () => {
         const fake = createFakeWebSocketRuntimeForTest();
         const controller = new AbortController();
         controller.abort('leave-confirmed');
@@ -7747,7 +7764,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless websocket transport aborts a pending socket and blocks a late open event',
-      got: (async () => {
+      got: () => (async () => {
         const fake = createFakeWebSocketRuntimeForTest();
         const controller = new AbortController();
         let openEvents = 0;
@@ -7799,7 +7816,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless websocket transport reports unexpected response details',
-      got: (async () => {
+      got: () => (async () => {
         const fake = createFakeWebSocketRuntimeForTest();
         const openPromise = openBrowserlessWs({
           runtime: fake.runtime,
@@ -14031,7 +14048,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless restart drain interrupts offline loop wait',
-      got: (async () => {
+      got: () => (async () => {
         const coordinator = createRestartDrainCoordinator({ now: () => 1000 });
         const waiting = coordinator.wait(30000, () => new Promise(() => {}));
         coordinator.requestDrain('restart-drain', { commitmentKey: '' });
@@ -21420,6 +21437,98 @@ async function runSelfTest() {
       want: 'safety-exit|combat-hp-disadvantage-leave|far-pressure|100|recent-realtime-combat-metrics|recent-combat-metrics|false'
     },
     {
+      name: 'browserless injury episode preserves the full hp-loss burst that triggers exit',
+      got: (() => {
+        const stateful = {};
+        const stateAt = (hp, tick) => {
+          const self = {
+            entity_id: 1,
+            user_id: 7,
+            name: 'self',
+            x: 0,
+            y: 0,
+            hp,
+            max_hp: 100,
+            stamina_5s_remaining_milli: 10000
+          };
+          return {
+            userId: 7,
+            realtime: {
+              tick,
+              frameAgeMs: 0,
+              self,
+              entities: [
+                self,
+                {
+                  entity_id: 2,
+                  user_id: 8,
+                  name: 'Lin2101',
+                  x: 20000,
+                  y: 0,
+                  hp: 100,
+                  current_join_mode: 'Active',
+                  firing: true,
+                  drop: 3
+                }
+              ],
+              bullets: [{
+                bullet_id: `lin-${tick}`,
+                owner_user_id: 8,
+                start_x: 20000,
+                start_y: 0,
+                target_x: 0,
+                target_y: 0,
+                created_tick: tick - 1,
+                expire_tick: tick + 30,
+                speed_per_tick: 500
+              }],
+              coinDrops: []
+            },
+            fallback: { coinDrops: [] }
+          };
+        };
+        const options = {
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          combatAttackRange: 11000,
+          combatCriticalHp: 20,
+          combatHighHpDisadvantageGap: 20,
+          dynamicProfitThresholdEnabled: false
+        };
+        const hpSequence = [100, 97, 94, 91, 88, 85, 82, 79];
+        let decision = null;
+        hpSequence.forEach((hp, index) => {
+          decision = buildBrowserlessDecision(
+            stateAt(hp, 100 + index * 2),
+            stateful,
+            { ...options, nowMs: 1000 + index * 100 }
+          );
+        });
+
+        const healedStateful = {};
+        buildBrowserlessDecision(stateAt(100, 200), healedStateful, { ...options, nowMs: 2000 });
+        buildBrowserlessDecision(stateAt(97, 202), healedStateful, { ...options, nowMs: 2100 });
+        buildBrowserlessDecision(stateAt(98, 204), healedStateful, { ...options, nowMs: 2200 });
+        buildBrowserlessDecision(stateAt(95, 206), healedStateful, { ...options, nowMs: 2300 });
+
+        return [
+          decision.kind,
+          decision.reason,
+          decision.action.injury?.episodeStartedAt,
+          decision.action.injury?.startHp,
+          decision.action.injury?.previousHp,
+          decision.action.injury?.currentHp,
+          decision.action.injury?.hpDrop,
+          decision.action.injury?.totalHpDrop,
+          decision.action.injury?.hitCount,
+          healedStateful.browserlessInjury?.startHp,
+          healedStateful.browserlessInjury?.totalHpDrop,
+          healedStateful.browserlessInjury?.hitCount
+        ].join('|');
+      })(),
+      want: 'safety-exit|combat-hp-disadvantage-leave|1100|100|82|79|3|21|7|98|3|1'
+    },
+    {
       name: 'browserless recent injury fallback still exits on clear hp gap',
       got: (() => {
         const stateful = {
@@ -22596,7 +22705,7 @@ async function runSelfTest() {
     },
     {
       name: 'movement latency replay reports local stages and logged rollout reduction',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const battleFile = path.join(dir, 'battle.jsonl');
         const runnerFile = path.join(dir, 'runner.jsonl');
         const wsFile = path.join(dir, 'ws.jsonl');
@@ -26235,7 +26344,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless canary clears pre-open transport errors and ignores stale generations after open',
-      got: (async () => {
+      got: () => (async () => {
         let t = Date.UTC(2026, 6, 19, 6, 0, 0);
         let wsOptions = null;
         let sentFrame = false;
@@ -26315,7 +26424,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless hp disadvantage starts leave pending immediately',
-      got: (async () => {
+      got: () => (async () => {
         let t = Date.UTC(2026, 6, 16, 0, 23, 0);
         let wsOptions = null;
         let resolveLeave = null;
@@ -26393,7 +26502,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless read-only canary runs snapshot ws frames and verified leave',
-      got: (async () => {
+      got: () => (async () => {
         let t = Date.UTC(2026, 6, 8, 1, 0, 0);
         let commandCount = 0;
         let frameGapClearCount = 0;
@@ -26489,7 +26598,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless no-self grace starts at ws open after slow snapshot safety',
-      got: (async () => {
+      got: () => (async () => {
         let t = Date.UTC(2026, 6, 8, 1, 0, 0);
         let safetyTick = 18;
         const snapshotFrame = encodeGrzFrameForTest({
@@ -26559,7 +26668,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless canary verifies leave after ws connect timeout',
-      got: (async () => {
+      got: () => (async () => {
         let leaveCalls = 0;
         const result = await runReadOnlyCanary({
           gameOrigin: 'https://grasp-rat-game.h-e.top',
@@ -26609,7 +26718,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless canary verifies leave after self-present ws 403',
-      got: (async () => {
+      got: () => (async () => {
         let leaveCalls = 0;
         const result = await runReadOnlyCanary({
           gameOrigin: 'https://grasp-rat-game.h-e.top',
@@ -26667,7 +26776,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless canary does not call leave for login Challenge without in-game evidence',
-      got: (async () => {
+      got: () => (async () => {
         let leaveCalls = 0;
         const result = await runReadOnlyCanary({
           gameOrigin: 'https://grasp-rat-game.h-e.top',
@@ -26713,7 +26822,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless canary opens ws when snapshot self is already present near active login point',
-      got: (async () => {
+      got: () => (async () => {
         let t = Date.UTC(2026, 6, 8, 1, 0, 0);
         let opened = false;
         const posFrame = encodeGrzFrameForTest({
@@ -26793,7 +26902,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless movement-only canary sends velocity without shooting',
-      got: (async () => {
+      got: () => (async () => {
         let t = Date.UTC(2026, 6, 8, 1, 0, 0);
         let wsOptions = null;
         let sleepCount = 0;
@@ -26875,7 +26984,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless profit-live canary flees before profit action under threat',
-      got: (async () => {
+      got: () => (async () => {
         let t = Date.UTC(2026, 6, 8, 1, 0, 0);
         let wsOptions = null;
         const commands = [];
@@ -26946,7 +27055,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless realtime worker noop does not block profit planner',
-      got: (async () => {
+      got: () => (async () => {
         let t = Date.UTC(2026, 6, 8, 1, 0, 0);
         let wsOptions = null;
         let realtimeEvaluations = 0;
@@ -27044,7 +27153,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless combat-live canary sends guarded shoot only when enabled',
-      got: (async () => {
+      got: () => (async () => {
         let t = Date.UTC(2026, 6, 8, 1, 0, 0);
         let wsOptions = null;
         let sleepCount = 0;
@@ -27134,7 +27243,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless read-only canary blocks before ws without login point',
-      got: (async () => {
+      got: () => (async () => {
         let opened = false;
         let fetched = false;
         const result = await runReadOnlyCanary({
@@ -27176,7 +27285,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless read-only canary reconnects when snapshot already has self without login point',
-      got: (async () => {
+      got: () => (async () => {
         let t = Date.UTC(2026, 6, 8, 1, 0, 0);
         let opened = false;
         const posFrame = encodeGrzFrameForTest({
@@ -27234,7 +27343,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless read-only canary requires three safe login point checks before ws',
-      got: (async () => {
+      got: () => (async () => {
         let t = Date.UTC(2026, 6, 8, 1, 0, 0);
         let fetchCount = 0;
         let sleepMs = 0;
@@ -27312,7 +27421,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless read-only canary does not fail safety after deadline',
-      got: (async () => {
+      got: () => (async () => {
         let t = Date.UTC(2026, 6, 8, 1, 0, 0);
         let deadlineMs = 0;
         let wsOptions = null;
@@ -27605,7 +27714,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless safety exit preserves control until verified leave callback',
-      got: (async () => {
+      got: () => (async () => {
         const sent = [];
         const confirmed = [];
         const result = await executeSafetyExit({
@@ -28384,7 +28493,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless decision worker keeps full planning off the caller thread',
-      got: (async () => {
+      got: () => (async () => {
         const self = {
           entity_id: 1,
           user_id: 7,
@@ -28453,7 +28562,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless realtime patch does not reset worker-owned post-attack settlement',
-      got: (async () => {
+      got: () => (async () => {
         const options = {
           ...buildBrowserlessRuntimeDefaults({}),
           userId: 7,
@@ -28539,7 +28648,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless realtime patch preserves worker-owned outside-center idle timer',
-      got: (async () => {
+      got: () => (async () => {
         const options = {
           ...buildBrowserlessRuntimeDefaults({}),
           userId: 7,
@@ -28600,7 +28709,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless local log store appends redacted UTC+8 day files',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         let current = Date.parse('2026-07-07T15:59:59.999Z');
         const store = createLocalLogStore({ logDir: dir, now: () => current });
         const first = store.append('runner', 'session-start', {
@@ -28634,7 +28743,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless background IO flushes redacted logs and atomic JSON',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const backgroundIo = createBrowserlessBackgroundIo();
         try {
           const store = createLocalLogStore({
@@ -28764,7 +28873,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless background IO continues after one operation failure',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const errors = [];
         const backgroundIo = createBrowserlessBackgroundIo({
           onError: error => errors.push(error?.message || String(error))
@@ -29038,7 +29147,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless log retention keeps today and yesterday by UTC+8 day',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         for (const day of ['2026-07-04', '2026-07-05', '2026-07-06', '2026-07-07', '2026-07-08']) {
           fs.mkdirSync(path.join(dir, day), { recursive: true });
           fs.writeFileSync(path.join(dir, day, 'runner.jsonl'), '');
@@ -29070,7 +29179,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless scheduled log retention cleans while process remains alive',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         for (const day of ['2026-07-06', '2026-07-07', '2026-07-08', '2026-07-09']) {
           fs.mkdirSync(path.join(dir, day), { recursive: true });
           fs.writeFileSync(path.join(dir, day, 'runner.jsonl'), '');
@@ -29109,7 +29218,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless log summary counts streams and writes summary file',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const store = createLocalLogStore({
           logDir: dir,
           now: () => Date.UTC(2026, 6, 8, 1, 0, 0)
@@ -29149,7 +29258,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless log reader preserves utf8 and parse diagnostics across tiny chunks',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const file = path.join(dir, 'chunked.jsonl');
         fs.writeFileSync(file, [
           JSON.stringify({ at: '2026-07-14T00:00:00Z', type: '消息', detail: { text: '跨块读取' } }),
@@ -29171,7 +29280,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless action parity audit normalizes known decision cases',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const dayDir = path.join(dir, '2026-07-08');
         fs.mkdirSync(dayDir, { recursive: true });
         const write = (stream, entry) => {
@@ -29276,7 +29385,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless canary audit validates finish and forced stop evidence',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const dayDir = path.join(dir, '2026-07-08');
         fs.mkdirSync(dayDir, { recursive: true });
         const write = (stream, entry) => {
@@ -29583,7 +29692,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless canary parity audit summarizes exceptions and drift',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const write = (day, stream, entry) => {
           const dayDir = path.join(dir, day);
           fs.mkdirSync(dayDir, { recursive: true });
@@ -29718,7 +29827,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless target whitelist loads local fallback and remote override',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const file = path.join(dir, 'target-whitelist.json');
         fs.writeFileSync(file, JSON.stringify({ userIds: [77], names: ['Local Protected'] }));
         const whitelist = createBrowserlessTargetWhitelist({
@@ -30022,7 +30131,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless immutable release verifier rejects manifest and file tampering',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const releaseDir = path.join(dir, 'cccccccccccc-dddddddddddd');
         fs.mkdirSync(releaseDir, { recursive: true });
         fs.writeFileSync(path.join(releaseDir, 'payload.txt'), 'immutable\n');
@@ -30111,7 +30220,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless runner-start verifier requires a post-restart matching revision',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const dayDir = path.join(dir, '2026-08-14');
         fs.mkdirSync(dayDir, { recursive: true });
         const logFile = path.join(dayDir, 'runner.jsonl');
@@ -30154,7 +30263,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless deployment audit checks installed service evidence',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const appDir = path.join(dir, 'app');
         const releaseRoot = path.join(dir, 'immutable');
         const releasesDir = path.join(releaseRoot, 'releases');
@@ -30434,7 +30543,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless acceptance report aggregates deployment canary and stop audits',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const dayDir = path.join(dir, 'logs', '2026-07-08');
         fs.mkdirSync(dayDir, { recursive: true });
         const write = (stream, entry) => {
@@ -30884,7 +30993,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless source IP controller keeps persisted selection',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const stateFile = path.join(dir, 'state.json');
         updateBrowserlessStateFile(stateFile, {
           network: {
@@ -30912,7 +31021,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless source IP controller leaves empty config unbound',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const controller = createSourceIpController({
           config: {
             gameOrigin: 'https://grasp-rat-game.h-e.top',
@@ -30931,7 +31040,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless source IP controller returns 403 without probing or switching',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const stateFile = path.join(dir, 'state.json');
         const calls = [];
         const controller = createSourceIpController({
@@ -30964,7 +31073,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless source IP controller keeps IP after a 403',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const stateFile = path.join(dir, 'state.json');
         const controller = createSourceIpController({
           config: {
@@ -30993,7 +31102,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless source IP controller uses one source IP for ws 403',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const stateFile = path.join(dir, 'state.json');
         const opened = [];
         const businessErrors = [];
@@ -31036,7 +31145,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless source IP controller stops websocket Challenge without probing',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const stateFile = path.join(dir, 'state.json');
         const opened = [];
         const probes = [];
@@ -31085,7 +31194,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless source IP controller keeps non-403 websocket error local',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const stateFile = path.join(dir, 'state.json');
         const opened = [];
         const probes = [];
@@ -31126,7 +31235,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless source IP controller does not retry ws 403 on another IP',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const stateFile = path.join(dir, 'state.json');
         const opened = [];
         const businessErrors = [];
@@ -31183,7 +31292,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless source IP controller stops websocket retries when connect is aborted',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const stateFile = path.join(dir, 'state.json');
         const attempted = [];
         const businessErrors = [];
@@ -31229,7 +31338,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless source IP controller keeps the configured IP across retries',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const stateFile = path.join(dir, 'state.json');
         const opened = [];
         const controller = createSourceIpController({
@@ -31258,7 +31367,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless source IP controller reports one final websocket error per attempt',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const stateFile = path.join(dir, 'state.json');
         const opened = [];
         const businessErrors = [];
@@ -31316,7 +31425,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless hedged leave 403 does not trigger source IP switching',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const stateFile = path.join(dir, 'state.json');
         let requestCount = 0;
         let probeCount = 0;
@@ -31377,7 +31486,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless leave switches IP after a full current-IP failure and confirms on the next IP',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const stateFile = path.join(dir, 'state.json');
         const requests = [];
         const switches = [];
@@ -31427,7 +31536,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless leave caps source IP switching at two attempts',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const stateFile = path.join(dir, 'state.json');
         const requests = [];
         const switches = [];
@@ -31475,7 +31584,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless preflight lifecycle ignores the legacy pool and bounds verified leave to three IPs',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const stateFile = path.join(dir, 'state.json');
         const requests = [];
         updateBrowserlessStateFile(stateFile, {
@@ -31805,7 +31914,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless runner preserves one online session across movement stall reconnect',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const enteredAtMs = Date.parse('2026-07-14T16:17:52.114Z');
         let t = enteredAtMs + 10000;
         let calls = 0;
@@ -32015,7 +32124,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless runner resumes persisted reconnect wait after restart',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         let t = Date.parse('2026-07-11T03:45:54.610Z');
         let calls = 0;
         let sleptMs = 0;
@@ -32117,7 +32226,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless runner preserves online session across persisted movement stall wait',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const enteredAtMs = Date.parse('2026-07-14T16:18:00.000Z');
         let t = enteredAtMs + 2500;
         let calls = 0;
@@ -32221,7 +32330,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless runner migrates restart drain overlay back to explicit stamina deadline',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         let t = Date.parse('2026-07-12T15:59:10.000Z');
         let precheckCalls = 0;
         let canaryOptions = null;
@@ -32329,7 +32438,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless restart drain interrupts an in-process explicit stamina wait',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const initialTime = Date.parse('2026-07-12T15:59:10.000Z');
         let t = initialTime;
         let lifecycleControl = null;
@@ -32414,7 +32523,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless runner prepares login point safety during reconnect wait',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         let t = Date.parse('2026-07-12T17:00:00.000Z');
         let canaryCalls = 0;
         let precheckCalls = 0;
@@ -32494,7 +32603,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless runner immediately checks a new snapshot after confirmed leave',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         let t = Date.parse('2026-07-12T17:00:00.000Z');
         let canaryCalls = 0;
         let precheckCalls = 0;
@@ -32608,7 +32717,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless runner does not resume from stale self after confirmed leave',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         let t = Date.parse('2026-07-12T17:00:00.000Z');
         let canaryCalls = 0;
         let precheckCalls = 0;
@@ -32705,8 +32814,8 @@ async function runSelfTest() {
     },
     {
       name: 'browserless runner does not probe self during persisted explicit stamina cooldown',
-      got: withTempDirForTest(async dir => {
-        const t = Date.parse('2026-07-11T03:45:54.610Z');
+      got: () => withTempDirForTest(async dir => {
+        let t = Date.parse('2026-07-11T03:45:54.610Z');
         let calls = 0;
         let precheckCalls = 0;
         let sleptMs = 0;
@@ -32749,6 +32858,7 @@ async function runSelfTest() {
           disableSourceIpPreflight: true,
           sleep: async ms => {
             sleptMs += ms;
+            t += Number(ms || 0);
           },
           runPreLoginSnapshotSafety: async () => {
             precheckCalls += 1;
@@ -32796,8 +32906,8 @@ async function runSelfTest() {
     },
     {
       name: 'browserless runner replaces persisted ordinary confirmed-leave wait with snapshot edge',
-      got: withTempDirForTest(async dir => {
-        const t = Date.parse('2026-07-11T03:45:54.610Z');
+      got: () => withTempDirForTest(async dir => {
+        let t = Date.parse('2026-07-11T03:45:54.610Z');
         let calls = 0;
         let precheckCalls = 0;
         let sleptMs = 0;
@@ -32846,6 +32956,7 @@ async function runSelfTest() {
           disableSourceIpPreflight: true,
           sleep: async ms => {
             sleptMs += ms;
+            t += Number(ms || 0);
           },
           runPreLoginSnapshotSafety: async () => {
             precheckCalls += 1;
@@ -32876,7 +32987,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless runner best-effort shutdown leave hydrates persisted session',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const config = parseBrowserlessRunnerArgs(['--live', '--data-dir', dir], {});
         updateBrowserlessStateFile(config.stateFile, {
           session: {
@@ -33023,7 +33134,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless runner dry-run and fake read-only path write redacted logs',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const dryConfig = parseBrowserlessRunnerArgs(['--once', '--dry-run', '--data-dir', dir], {});
         const dryRun = await runBrowserlessRunner(dryConfig, {
           now: () => Date.UTC(2026, 6, 8, 1, 0, 0)
@@ -33105,7 +33216,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless runner catches canary throw and waits for explicit stop',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         let t = Date.UTC(2026, 6, 8, 1, 1, 0);
         let calls = 0;
         let sleeps = 0;
@@ -33158,7 +33269,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless runner returns explicit stop reason from canary event',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const config = parseBrowserlessRunnerArgs([
           '--live',
           '--data-dir',
@@ -33200,7 +33311,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless runner startup clears stale login point safety progress',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const config = parseBrowserlessRunnerArgs([
           '--once',
           '--live',
@@ -33263,7 +33374,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless runner imports legacy state and hydrates live config',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const legacyPath = path.join(dir, 'legacy-state.json');
         const browserlessPath = path.join(dir, 'state.json');
         fs.writeFileSync(legacyPath, JSON.stringify({
@@ -33327,7 +33438,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless high drop tracker keeps first max and latest values for the UTC+8 day',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         let t = Date.UTC(2026, 6, 14, 1, 0, 0);
         const file = path.join(dir, 'high-drop-players.json');
         const tracker = createHighDropPlayerTracker({ file, now: () => t });
@@ -33406,7 +33517,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless snapshot gap poller waits three minutes after any observed snapshot',
-      got: (async () => {
+      got: () => (async () => {
         let t = 10000;
         let scheduled = null;
         let fetchCount = 0;
@@ -33441,7 +33552,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless snapshot gap poller keeps global HTTP refresh due after local WS snapshots',
-      got: (async () => {
+      got: () => (async () => {
         let t = 10000;
         let scheduled = null;
         let fetchCount = 0;
@@ -33494,7 +33605,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless state file public status redacts session token',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const config = parseBrowserlessRunnerArgs(['--data-dir', dir, '--web-token', 'web-secret'], {});
         const file = stateFilePath(config);
         updateBrowserlessStateFile(file, {
@@ -33524,7 +33635,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless compact status keeps panel fields and omits large diagnostics',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const config = parseBrowserlessRunnerArgs(['--data-dir', dir, '--web-token', 'web-secret'], {});
         const file = stateFilePath(config);
         const largePayload = 'x'.repeat(20000);
@@ -33834,7 +33945,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless state replaces completed run and probe snapshots instead of retaining stale safety fields',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const config = parseBrowserlessRunnerArgs(['--data-dir', dir], {});
         const file = stateFilePath(config);
         updateBrowserlessStateFile(file, {
@@ -34276,7 +34387,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless compact status exposes session offline and today stats',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const config = parseBrowserlessRunnerArgs(['--data-dir', dir], {});
         const startedAt = Date.parse('2026-07-10T00:00:00.000Z');
         const updatedAt = Date.parse('2026-07-10T00:01:05.000Z');
@@ -35293,7 +35404,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless persisted last known survives missing realtime self and blocked restart',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const config = parseBrowserlessRunnerArgs(['--data-dir', dir], {});
         const file = stateFilePath(config);
         updateBrowserlessStateFile(file, decisionStatePatch({
@@ -35416,7 +35527,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless state file replaces current action snapshots',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const config = parseBrowserlessRunnerArgs(['--data-dir', dir], {});
         const file = stateFilePath(config);
         updateBrowserlessStateFile(file, {
@@ -35522,7 +35633,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless state file removes retired network probe and source-ip switching fields',
-      got: withTempDirForTest(async dir => {
+      got: () => withTempDirForTest(async dir => {
         const config = parseBrowserlessRunnerArgs(['--data-dir', dir], {});
         const file = stateFilePath(config);
         fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -35596,7 +35707,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless status server gates status and redacts payload',
-      got: (async () => {
+      got: () => (async () => {
         let stopCalled = 0;
         const handle = await startStatusServer({
           host: '127.0.0.1',
@@ -35770,7 +35881,7 @@ async function runSelfTest() {
           panelHtml.includes("if (reason === 'remote-snapshot-profit-target') return '远程快照收益目标';")
         ].join('|');
       })(),
-      want: '2026.08.14.1|活动玩家|挂机玩家|正在靠近高Drop活动玩家|HTTP全局快照|WS状态帧|WS最后位置|true|true|true|true'
+      want: '2026.08.14.2|活动玩家|挂机玩家|正在靠近高Drop活动玩家|HTTP全局快照|WS状态帧|WS最后位置|true|true|true|true'
     },
     {
       name: 'browserless web panel colors each transport metric value by severity',
@@ -35796,7 +35907,7 @@ async function runSelfTest() {
           panelHtml.includes('.transport-metric.muted,.transport-metric.muted .metric-value{color:var(--muted)}')
         ].join('|');
       })(),
-      want: '2026.08.14.1|ok|warn|bad|ok|warn|bad|ok|warn|bad|muted|true|true|true|true|true|true'
+      want: '2026.08.14.2|ok|warn|bad|ok|warn|bad|ok|warn|bad|muted|true|true|true|true|true|true'
     },
     {
       name: 'browserless web panel animates keyed map markers between status refreshes',
@@ -35834,11 +35945,11 @@ async function runSelfTest() {
           /function stopAutoRefresh\(\)\s*\{\s*cancelMapMarkerAnimation\(true\);/.test(panelScript)
         ].join('|');
       })(),
-      want: '2026.08.14.1|coin:0|player:alice||0|0.875|1|97.5|195.0|110|220|true|true|true|true|true|true|true|true|true|true|true'
+      want: '2026.08.14.2|coin:0|player:alice||0|0.875|1|97.5|195.0|110|220|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless status server adds dynamic whitelist players by name',
-      got: (async () => {
+      got: () => (async () => {
         const names = [];
         const handle = await startStatusServer({
           host: '127.0.0.1',
@@ -35865,7 +35976,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless status server accepts async pre-rendered full and compact JSON text',
-      got: (async () => {
+      got: () => (async () => {
         let fullCalls = 0;
         let compactCalls = 0;
         const tasks = [];
@@ -36314,7 +36425,9 @@ async function runSelfTest() {
           panelScript.includes("const exitHpText = combatExitHpText(status);"),
           panelScript.includes("if (exitHpText && exitHpText !== '--') addRow(rowsOut, '退出触发血量', exitHpText)"),
           panelScript.includes("if (battleHpText) addRow(rowsOut, battle.targetReappearedAfterKill ? '分段血量' : '战斗起止血量', battleHpText)"),
-          panelScript.includes("if (!staminaExhausted && injuryHpText) addRow(rowsOut, '退出判定受击', injuryHpText)"),
+          panelScript.includes("return '我方 ' + startHp + ' → ' + currentHp + ' / 累计承伤 ' + totalHpDrop"),
+          panelScript.includes('const battleHasSelfOverview = number(battle?.selfHpStart) !== null'),
+          panelScript.includes("if (!staminaExhausted && injuryHpText && !battleHasSelfOverview)"),
           panelScript.includes("if (confirmedHpText) addRow(rowsOut, '离场确认血量', confirmedHpText)"),
           panelScript.includes("return '与 ' + name + ' 交战后受伤'"),
           panelScript.includes("addRow(rowsOut, '交战对手', targetLabel(battle.target), true)"),
@@ -36458,7 +36571,7 @@ async function runSelfTest() {
       want: 'Beicho|1789|Beicho|167|100|97|79|73|41|30|2|94|97'
     },
     {
-      name: 'browserless compact injury exit separates trigger jump from battle hp and confirmed leave hp',
+      name: 'browserless compact injury exit projects the full injury episode as battle hp',
       got: (() => {
         const status = buildCompactBrowserlessStatus({
           recentExits: [{
@@ -36477,7 +36590,15 @@ async function runSelfTest() {
               decision: {
                 self: { userId: 28886, name: 'self', hp: 80, maxHp: 100 },
                 target: { userId: 36440, name: 'huaming song', hp: 100 },
-                injury: { previousHp: 86, currentHp: 80, hpDrop: 6 },
+                injury: {
+                  episodeStartedAt: Date.parse('2026-07-17T01:22:33.551Z'),
+                  startHp: 100,
+                  previousHp: 86,
+                  currentHp: 80,
+                  hpDrop: 6,
+                  totalHpDrop: 20,
+                  hitCount: 7
+                },
                 combat: {
                   exit: { selfHp: 80, targetHp: 100, hpGap: 20, threshold: 20 }
                 }
@@ -36487,9 +36608,12 @@ async function runSelfTest() {
         }, parseBrowserlessRunnerArgs([], {}));
         return [
           status.recentExit.selfHp,
+          status.recentExit.injury.startHp,
           status.recentExit.injury.previousHp,
           status.recentExit.injury.currentHp,
           status.recentExit.injury.hpDrop,
+          status.recentExit.injury.totalHpDrop,
+          status.recentExit.injury.hitCount,
           status.recentExit.leaveConfirmation.selfHp,
           status.recentExit.leaveConfirmation.hpLossAfterTrigger,
           status.recentExit.battle.selfHpStart ?? 'unknown',
@@ -36497,7 +36621,7 @@ async function runSelfTest() {
           status.recentExit.battle.selfDamage ?? 'unknown'
         ].join('|');
       })(),
-      want: '80|86|80|6|77|3|unknown|unknown|unknown'
+      want: '80|100|86|80|6|20|7|77|3|100|80|20'
     },
     {
       name: 'browserless web panel explains combat movement failure and low-hp recovery threat exits',
@@ -36822,7 +36946,7 @@ async function runSelfTest() {
             < panelScript.indexOf("if (/combat/i.test(text)) return '正在处理打架';")
         ].join('|');
       })(),
-      want: '2026.08.07.1|true|true|true'
+      want: '2026.08.14.2|true|true|true'
     },
     {
       name: 'browserless restart drain wait explains planned service restart',
@@ -37359,11 +37483,11 @@ async function runSelfTest() {
           !panelScript.includes("setRichText('roleTitleMeta', [{ text: '已离线', className: 'muted' }], 'muted');")
         ].join('|');
       })(),
-      want: '2026.08.14.1|true|true|true|true|true|true'
+      want: '2026.08.14.2|true|true|true|true|true|true'
     },
     {
       name: 'browserless runner self-test passes',
-      got: (async () => {
+      got: () => (async () => {
         const result = await runBrowserlessRunnerSelfTest();
         return result.ok;
       })(),
@@ -37401,7 +37525,7 @@ async function runSelfTest() {
     },
     {
       name: 'browserless settlement recovery deadline starts one protected verified leave',
-      got: (async () => {
+      got: () => (async () => {
         const atMs = Date.parse('2026-08-01T00:00:10.000Z');
         const result = await runReadOnlyCanary({
           gameOrigin: 'https://example.test',
@@ -42126,7 +42250,7 @@ async function runSelfTest() {
     },
     {
       name: 'snapshot no-self recovery marker clicks login control once and records login pending',
-      got: (async () => {
+      got: () => (async () => {
         const t = Date.now();
         const data = new Map([
           ['graspRatNoSelfSnapshotRecovery', JSON.stringify({
@@ -42203,7 +42327,7 @@ async function runSelfTest() {
     },
     {
       name: 'snapshot no-self recovery marker waits after recorded login start',
-      got: (async () => {
+      got: () => (async () => {
         const t = Date.now();
         const data = new Map([
           ['graspRatNoSelfSnapshotRecovery', JSON.stringify({
@@ -42284,7 +42408,7 @@ async function runSelfTest() {
     },
     {
       name: 'no-self auto login prefers visible login control over page global',
-      got: (async () => {
+      got: () => (async () => {
         const data = new Map();
         const storage = {
           getItem: key => (data.has(key) ? data.get(key) : null),
@@ -42348,7 +42472,7 @@ async function runSelfTest() {
     },
     {
       name: 'login control without start evidence does not enter bot-login-started grace',
-      got: (async () => {
+      got: () => (async () => {
         const data = new Map();
         const storage = {
           getItem: key => (data.has(key) ? data.get(key) : null),
@@ -42411,7 +42535,7 @@ async function runSelfTest() {
     },
     {
       name: 'known same-day long stamina exhaustion blocks auto login',
-      got: (async () => {
+      got: () => (async () => {
         const t = Date.now();
         const data = new Map();
         const storage = {
@@ -42540,7 +42664,7 @@ async function runSelfTest() {
     },
     {
       name: 'manual force login prefers native login control over raw global',
-      got: (async () => {
+      got: () => (async () => {
         const data = new Map();
         const storage = {
           getItem: key => (data.has(key) ? data.get(key) : null),
@@ -42648,7 +42772,7 @@ async function runSelfTest() {
     },
     {
       name: 'forced stale-session auto login prefers visible login control over page global',
-      got: (async () => {
+      got: () => (async () => {
         const data = new Map();
         const storage = {
           getItem: key => (data.has(key) ? data.get(key) : null),
@@ -42753,7 +42877,7 @@ async function runSelfTest() {
     },
     {
       name: 'no-self leave 403 recovery does not create pending exit retry',
-      got: (async () => {
+      got: () => (async () => {
         const botState = { control: {}, exitAudit: {}, importantLogging: {}, lastLoginAt: 0 };
         let rememberCalls = 0;
         let recoveryCalls = 0;
@@ -43189,7 +43313,7 @@ async function runSelfTest() {
     },
     {
       name: 'pending no-self exit accepts fresh missing snapshot despite stale native session',
-      got: (async () => {
+      got: () => (async () => {
         const data = new Map([
           ['tmpGameSessionToken', 'stale-token'],
           ['tmpGameUserId', '28886'],
@@ -43310,7 +43434,7 @@ async function runSelfTest() {
     },
     {
       name: 'external left user recovery clears stale self entity',
-      got: (async () => {
+      got: () => (async () => {
         const data = new Map([
           ['tmpGameUserId', '28886'],
           ['tmpGameSessionShadow', 'stale-shadow'],
@@ -43446,7 +43570,7 @@ async function runSelfTest() {
     },
     {
       name: 'external left user recovery is idempotent while reload is audit-blocked',
-      got: (async () => {
+      got: () => (async () => {
         const data = new Map([
           ['tmpGameUserId', '28886'],
           ['tmpGameSessionShadow', 'stale-shadow'],
@@ -43581,7 +43705,7 @@ async function runSelfTest() {
     },
     {
       name: 'external left user recovery ignores live current self',
-      got: (async () => {
+      got: () => (async () => {
         const data = new Map([
           ['tmpGameSessionToken', 'live-token'],
           ['tmpGameUserId', '28886']
@@ -45310,7 +45434,7 @@ async function runSelfTest() {
 	    },
 	    {
 	      name: 'browserless worker planner handoff seeds realtime easy-kill control',
-	      got: (async () => {
+	      got: () => (async () => {
 	        const options = {
 	          ...buildBrowserlessRuntimeDefaults({}),
 	          userId: 28886,
@@ -45678,22 +45802,28 @@ async function runSelfTest() {
 		      want: '1.5米|12米|1小时|#42|13'
 		    }
 			  ];
+  const selectedCases = caseNameFilter
+    ? cases.filter(item => String(item.name || '').toLowerCase().includes(caseNameFilter))
+    : cases;
+  if (!selectedCases.length) {
+    throw new Error(`no self-test cases matched filter: ${process.env.GRASP_RAT_SELF_TEST_FILTER}`);
+  }
   const resolvedCases = [];
-  for (const item of cases) {
-    const got = item.got && typeof item.got.then === 'function' ? await item.got : item.got;
+  for (const [index, item] of selectedCases.entries()) {
+    const got = await resolveCaseValue(item, index, selectedCases.length);
     resolvedCases.push({ ...item, got });
   }
   const failed = resolvedCases.filter(item => item.got !== item.want);
   if (failed.length) {
     console.error(JSON.stringify({
       ok: false,
-      cases: cases.length,
-      passed: cases.length - failed.length,
+      cases: selectedCases.length,
+      passed: selectedCases.length - failed.length,
       failed
     }, null, 2));
     process.exit(1);
   }
-  console.log(JSON.stringify({ ok: true, cases: cases.length }, null, 2));
+  console.log(JSON.stringify({ ok: true, cases: selectedCases.length }, null, 2));
 }
 
 if (require.main === module) {
