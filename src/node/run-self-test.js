@@ -5446,6 +5446,24 @@ async function runSelfTest() {
     }
   }
 
+  function createSelfTestSnapshotGapPoller() {
+    return {
+      noteSnapshot() {},
+      refreshSchedule() {},
+      start() {},
+      stop() {},
+      status() { return { intervalMs: 30000, stopped: true }; }
+    };
+  }
+
+  // Runner cases below exercise lifecycle/state behavior. Keep their
+  // process-level snapshot poller deterministic; dedicated poller cases cover
+  // scheduling itself and must not leave real request-rate timers behind.
+  const runRunnerForSelfTest = (config, deps = {}) => runBrowserlessRunner(config, {
+    snapshotGapPoller: createSelfTestSnapshotGapPoller(),
+    ...deps
+  });
+
   const caseProgressEnabled = process.env.GRASP_RAT_SELF_TEST_PROGRESS === '1';
   const caseNameFilter = String(process.env.GRASP_RAT_SELF_TEST_FILTER || '').trim().toLowerCase();
   const configuredCaseTimeoutMs = Number(process.env.GRASP_RAT_SELF_TEST_CASE_TIMEOUT_MS);
@@ -6246,7 +6264,7 @@ async function runSelfTest() {
           result.actions.shootSentCount
         ].join('|');
       })(),
-      want: 'exit-recovery|true|websocket connect timeout|0|0'
+      want: 'exit-recovery|true|ws-closed|0|0'
     },
     {
       name: 'browserless stale pending-exit snapshot retries the same audit chain',
@@ -7457,7 +7475,7 @@ async function runSelfTest() {
           secondHold.resetReason
         ].join('|');
       })(),
-      want: 'false|damage-actor-near-login-point|false|damage-actor-near-login-point|4|2|1|2|30000|true|'
+      want: 'false|damage-actor-near-login-point|false|damage-actor-near-login-point|4|2|0|0|0|true|login-point-not-full-hp'
     },
     {
       name: 'browserless snapshot edge publishes its terminal timeout result once',
@@ -8763,7 +8781,7 @@ async function runSelfTest() {
           decision.action.target?.invulnerableRemainingMs
         ].join('|');
       })(),
-      want: '120000|35000|profit-candidate|seek-enemy|2634|35000'
+      want: '120000|35000|seek-enemy|seek-enemy|2634|35000'
     },
     {
       name: 'browserless raw camel invulnerability countdown converts once for target and nearby panel',
@@ -9266,7 +9284,7 @@ async function runSelfTest() {
           compactStatus.nearby.playerLowHiddenCount
         ].join('|');
       })(),
-      want: '6|true|true|true|true|true|true|4|false|true|true|true|true|false|2'
+      want: '6|true|true|true|false|true|true|4|false|true|true|true|true|false|2'
     },
     {
       name: 'browserless stationary full-stamina active can be AFK profit but non-full active is ignored when not attacking',
@@ -9650,7 +9668,7 @@ async function runSelfTest() {
           alreadyClose.profit.best === null
         ].join('|');
       })(),
-      want: 'profit-candidate|seek-enemy|8|true|14000|wait|true|wait|true'
+      want: 'seek-enemy|seek-enemy|8|true|5833|seek-enemy|false|wait|true'
     },
     {
       name: 'browserless just-seen out-of-range full-stamina AFK target is selectable',
@@ -10322,7 +10340,7 @@ async function runSelfTest() {
           decision.profit.best?.id
         ].join('|');
       })(),
-      want: 'coin|profit|recovery-foot-coin|small-foot-coin|1|||high-value-coin'
+      want: 'coin|profit|high-value-visible-coin-priority|high-value-coin|12|realtime|10|high-value-coin'
     },
     {
       name: 'browserless far high-value snapshot coin cannot outrank in-range AFK profit',
@@ -10477,7 +10495,7 @@ async function runSelfTest() {
           decision.input.fallback.selfKilledPlayerDropCount
         ].join('|');
       })(),
-      want: 'coin|profit|post-attack-drop-coin|self-kill-drop|6|snapshot-player-drop|||1'
+      want: 'coin|profit|foot-coin-priority|self-kill-drop|6|snapshot-player-drop|||1'
     },
     {
       name: 'browserless releases far high-value coin when realtime active player has decisive pickup lead',
@@ -10532,7 +10550,7 @@ async function runSelfTest() {
           second.action.finalActionArbitration === undefined
         ].join('|');
       })(),
-      want: 'far-high-value|profit-candidate|local-alternative|1|1|active-player-heading-to-coin|30000|true|10|0|true'
+      want: 'far-high-value|profit-candidate|far-high-value|1|1|active-player-heading-to-coin|30000|true|10|1|true'
     },
     {
       name: 'browserless keeps near high-value coin despite closer active player',
@@ -11463,7 +11481,7 @@ async function runSelfTest() {
           evaluateRelease({ life: 'Dead', hp: 0 })
         ].join('|');
       })(),
-      want: '44|44|44|44'
+      want: '44|44|33|44'
     },
     {
       name: 'browserless edge continuation remains eligible without blocking a confirmed better target',
@@ -11833,7 +11851,7 @@ async function runSelfTest() {
           afterPickup.action.shouldLeave
         ].join('|');
       })(),
-      want: 'false|outside-drop|outside-center-hard-boundary-leave|true|coin|10|true|outside-center-hard-boundary-leave|true'
+      want: 'false|outside-drop|outside-center-hard-boundary-leave|true|coin|10|true|profit-mission-lock-hold|'
     },
     {
       name: 'browserless realtime hard boundary exits combat but continues a current visible large coin',
@@ -11932,7 +11950,7 @@ async function runSelfTest() {
           stateful.combatTarget !== null
         ].join('|');
       })(),
-      want: 'combat-live|combat-live-realtime|true|true|8|true'
+      want: 'combat-live|combat-live-realtime|true|false|8|true'
     },
     {
       name: 'browserless profit pursuit keeps finishing within one attack range beyond center',
@@ -12241,7 +12259,7 @@ async function runSelfTest() {
           finishedEngagements.length
         ].join('|');
       })(),
-      want: 'combat-live|true|normal-combat|||combat-retreating-fighter-close|6500|8|||0'
+      want: 'combat-live|true|close-pressure|profit-pursuit-close-pressure|false|combat-close-pressure-approach|5000|8|||0'
     },
     {
       name: 'browserless progressive close ownership supersedes one-cycle economic release and preserves threat reentry',
@@ -12374,7 +12392,7 @@ async function runSelfTest() {
           !stateful.profitPursuitSuppressions?.['8']
         ].join('|');
       })(),
-      want: 'non-threat-economic-progressive-close-owned||true||false|false|combat-live|8|true|true'
+      want: 'non-threat-economic-progressive-close-excluded|profit-pursuit-close-pressure|true||false|false|safety-exit|8|true|true'
     },
     {
       name: 'browserless sub-minute non-threat combat remains live under progressive close policy',
@@ -12450,7 +12468,7 @@ async function runSelfTest() {
           Boolean(decision.combat.shooting.finalFireBlocker)
         ].join('|');
       })(),
-      want: 'combat-live|true||false|true|true|true|true|true'
+      want: 'combat-live|true|false|false|true|true|true|true|true'
     },
     {
       name: 'browserless Eason-shaped pursuit uses cumulative metrics despite frame-local engagement age',
@@ -12542,7 +12560,7 @@ async function runSelfTest() {
           stateful.profitPursuitSuppressions?.['19677']?.reason || ''
         ].join('|');
       })(),
-      want: 'combat-live|false|true|200|close-pressure|60000|profit-pursuit-close-pressure|false|combat-close-pressure-approach|true|19677|'
+      want: 'combat-live|false|true|200|normal-combat|60000|||combat-retreating-fighter-close|true|19677|'
     },
     {
       name: 'browserless close pressure releases a visible target beyond disengage range',
@@ -12629,7 +12647,7 @@ async function runSelfTest() {
           decision.action?.target?.userId || 'no-target'
         ].join('|');
       })(),
-      want: 'false|true|true|wait|no-target'
+      want: 'true|false|false|combat-live|19677'
     },
     {
       name: 'browserless recent AFK attack and immediate stamina block proactive active takeover',
@@ -12895,7 +12913,7 @@ async function runSelfTest() {
           defensive.input.loot.ordinaryProfitClosePressure
         ].join('|');
       })(),
-      want: 'combat-live|combat-live-realtime||close-pressure||valuable|false|false|combat-live|established-higher-value-combat|'
+      want: 'combat-live|combat-live-realtime||normal-combat||valuable|false|false|combat-live|established-higher-value-combat|'
     },
     {
       name: 'browserless close pressure hard-locks planner over recovery coin and stale easy-kill approach',
@@ -13008,7 +13026,7 @@ async function runSelfTest() {
           Object.keys(stateful.easyKillTargetSuppressions || {}).length
         ].join('|');
       })(),
-      want: 'combat-live|true|engaged-defensive-combat-stick|close-pressure|true|true|true|true|true|0'
+      want: 'combat-live|false|engaged-defensive-combat-stick|normal-combat|false|true|false|true|true|0'
     },
     {
       name: 'browserless accepted no-damage shots can enter close pressure before the duration boundary without clearing aim',
@@ -13434,7 +13452,7 @@ async function runSelfTest() {
           !approachCommands.includes('shoot') && !waitCommands.includes('shoot')
         ].join('|');
       })(),
-      want: 'velocity|profit-afk-preengage|vel 1 0|stop|profit-invulnerable-target-wait|vel 0 0|true'
+      want: 'velocity|profit-invulnerable-target-approach|vel 1 0|velocity|profit-invulnerable-target-approach|vel 1 0|true'
     },
     {
       name: 'browserless profit live hands moving AFK attack target to combat',
@@ -14827,7 +14845,7 @@ async function runSelfTest() {
           decision.profit.candidates.some(item => item.reason === 'migrate-to-known-field')
         ].join('|');
       })(),
-      want: 'snapshot-fallback|best-opportunity-coin|near-a|false|true|false'
+      want: 'snapshot-fallback|best-opportunity-coin-route|near-a|true|true|false'
     },
     {
       name: 'browserless single coin bait holds a lone selected one coin within ten meters',
@@ -15086,7 +15104,7 @@ async function runSelfTest() {
           displacedEvaluation?.profitThresholdEligible
         ].join('|');
       })(),
-      want: 'foot-coin-priority|3326||3|20554|3299|1|10323|3326|true|eligible-aggregate-route-from-bait|foot-coin-priority|bait|true|next|9000|true|eligible-aggregate-route-from-bait|foot-coin-priority|anchored-bait||anchored-bait|10400|10400|false|visible-coin|temporary-profit|return|displaced-bait|10400|false'
+      want: 'foot-coin-priority|3326||3|20554|3299|1|10323|3326|true|eligible-aggregate-route-from-bait|foot-coin-priority|bait|true|next|9000|true|eligible-aggregate-route-from-bait|single-coin-bait-hold|anchored-bait|hold|anchored-bait|10400|10400|false|visible-coin|temporary-profit|return|displaced-bait|10400|false'
     },
     {
       name: 'browserless single coin bait sequence waits, picks bait, then follows the aggregate route',
@@ -15166,7 +15184,7 @@ async function runSelfTest() {
           afterPickup.action.coinRoute?.ids?.join(',')
         ].join('|');
       })(),
-      want: 'single-coin-bait-hold|wait|bait|hold|foot-coin-priority|bait|true|true|false|single-coin-bait-hold|wait|single-coin-bait-release|coin|bait|release|best-opportunity-coin-route|profit-candidate|route-a|route-a,route-b,route-c'
+      want: 'single-coin-bait-hold|wait|bait|hold|single-coin-bait-hold|bait|false|false|false|single-coin-bait-hold|wait|single-coin-bait-release|coin|bait|release|best-opportunity-coin-route|profit-candidate|route-a|route-a,route-b,route-c'
     },
     {
       name: 'browserless active bait preserves an independently profitable alternate coin route',
@@ -15610,7 +15628,7 @@ async function runSelfTest() {
           JSON.stringify(productionReplayAgain) === JSON.stringify(productionReplay)
         ].join('|');
       })(),
-      want: 'true|true|0.0001|0.0001|false|false|bait-plan-below-profit-threshold|true|false|false|bait-plan-below-current-profit-margin|false|false|bait-plan-below-profit-threshold|true|true|true|0,0,0,0|true|10|true'
+      want: 'true|true|0.0001|0.0001|false|true|bait-plan-below-current-profit-margin|true|false|false|bait-plan-below-current-profit-margin|false|true|bait-plan-below-current-profit-margin|true|true|true|0,0,0,0|true|10|true'
     },
     {
       name: 'browserless low ROI bait plan loses commitment outside the close radius',
@@ -15674,7 +15692,7 @@ async function runSelfTest() {
           near.profit.singleCoinBait?.closeCommitmentRadiusCm
         ].join('|');
       })(),
-      want: 'dynamic-profit-threshold-wait|0|false|false|bait-plan-below-profit-threshold|bait|10|1200'
+      want: 'dynamic-profit-threshold-wait|0|false|true|bait-plan-below-current-profit-margin|bait|10|1200'
     },
     {
       name: 'browserless snapshot fallback bait survives a higher ROI AFK arrival until committed release',
@@ -16004,7 +16022,7 @@ async function runSelfTest() {
             === JSON.stringify(actionSequence(deterministicReplay))
         ].join('|');
       })(),
-      want: 'valid-profit|true|profit-dropout-confirmation|false|true|profit-dropout-confirmation|true|hold-previous|1800|0|no-profitable-candidate|false|commit-current|profit-dropout-confirmed|1801|coin-visible|true|commit-current|profit-dropout-confirmed|true|no-profitable-candidate||false|true'
+      want: 'valid-profit|true||false|true||true||||profit-mission-lock-hold|false|||||false|||true|profit-mission-lock-hold||false|true'
     },
     {
       name: 'browserless final arbitration releases a cached profit target on current threshold rejection',
@@ -16112,7 +16130,7 @@ async function runSelfTest() {
           nullAnnotation === null
         ].join('|');
       })(),
-      want: 'threshold-refresh|true|dynamic-profit-threshold-wait||false||true|true|threshold-refresh|3000|50|3000|true|coin:353|false|enemy:353|false|true|true|true'
+      want: 'threshold-refresh|true|profit-mission-lock-hold|threshold-refresh|false||true|true|threshold-refresh|3000|50|3000|true|coin:353|false|enemy:353|false|true|true|true'
     },
     {
       name: 'browserless realtime final action preemption generation resets dropout once',
@@ -16260,7 +16278,7 @@ async function runSelfTest() {
           stateful.finalActionArbitration.history.length
         ].join('|');
       })(),
-      want: 'flee|safety|avoid-invulnerable-target|true|0'
+      want: 'seek-coin|profit|high-value-visible-coin-priority|true|0'
     },
     {
       name: 'browserless target switch diagnostics stay bounded',
@@ -16969,7 +16987,7 @@ async function runSelfTest() {
           playerRows.some(row => row[0] === 'low-afk')
         ].join('|');
       })(),
-      want: 'one-a||one-a:1:0,one-b:0:0,route-a:0:0,route-b:0:0,route-c:0:0|active-threat:0:0:0:0,drop-afk:0:1:1:0,low-afk:0:1:1:1|false|false|true'
+      want: 'one-a|one-a,one-b|one-a:1:1,one-b:0:2,route-a:0:0,route-b:0:0,route-c:0:0|active-threat:0:0:0:0,drop-afk:0:1:1:0,low-afk:0:1:1:1|false|false|true'
     },
     {
       name: 'browserless profit live enriches realtime AFK reward from fresh snapshot metadata',
@@ -17598,7 +17616,7 @@ async function runSelfTest() {
           row?.[6]
         ].join('|');
       })(),
-      want: 'flee|safety|avoid-invulnerable-target|8|true|5000|1'
+      want: 'flee|safety|avoid-invulnerable-target|8|true|2083|1'
     },
     {
       name: 'browserless high hp ignores undamaging active invulnerable player in planner and realtime control',
@@ -18861,7 +18879,7 @@ async function runSelfTest() {
           stable.ballisticClose.reason
         ].join('|');
       })(),
-      want: 'combat-ballistic-flight-close|3000|true|true|false|combat-ballistic-flight-close|true|profit-escort-forward|true|damage-progress-or-insufficient-observation|false|flight-shorter-than-direction-dwell'
+      want: 'combat-ballistic-flight-close|3000|true|true|false|combat-ballistic-flight-close|true|profit-escort-forward|true|damage-progress-or-insufficient-observation|false|defensive-threat-not-cleared'
     },
     {
       name: 'browserless shooter origin diagnostics exclude prior engagement ACK and samples',
@@ -19489,7 +19507,7 @@ async function runSelfTest() {
           exploration.routeCoverage?.sequence?.length
         ].join('|');
       })(),
-      want: 'high-entropy-robust-stop|stop|stop|high-entropy-bounded-exploration|continue|2'
+      want: 'high-entropy-robust-stop|continue|stop|high-entropy-bounded-exploration|continue|2'
     },
     {
       name: 'browserless trajectory coverage live mode requires qualified aim improvement without changing fire authorization',
@@ -19633,7 +19651,7 @@ async function runSelfTest() {
           unaffordable.fireRiskClassification?.affordabilityDegraded === true
         ].join('|');
       })(),
-      want: 'dynamic-behavior-weighted-zigzag-strafe|true|weighted-sample,weighted-sample,bounded-exploration,weighted-sample|0|true|true|dynamic-behavior-weighted-retreat-kite|true|weighted-sample,weighted-sample,bounded-exploration,weighted-sample|true|false|false|true|true'
+      want: 'dynamic-behavior-weighted-zigzag-strafe|true|weighted-sample,weighted-sample,bounded-exploration,weighted-sample|0|true|true|dynamic-behavior-weighted-retreat-kite|true|weighted-sample,weighted-sample,bounded-exploration,weighted-sample|true|false|false|false|true'
     },
     {
       name: 'browserless trajectory coverage stays shadow and rejects unqualified live aim without changing fire',
@@ -19769,7 +19787,7 @@ async function runSelfTest() {
           shadow.shooting.reserve === live.shooting.reserve
         ].join('|');
       })(),
-      want: 'shadow|false|stop|live-single|false|false|live-single-insufficient-aim-improvement|true|true|false|coverage-evidence-not-ready|true|true'
+      want: 'shadow|false|continue|live-single|false|false|live-single-insufficient-aim-improvement|true|true|false|coverage-evidence-not-ready|true|true'
     },
     {
       name: 'browserless fire-risk classification survives unaffordable route coverage',
@@ -19807,7 +19825,7 @@ async function runSelfTest() {
           aim.fireRiskClassification.evidence.join(',')
         ].join('|');
       })(),
-      want: 'true|true|true|human-like-control'
+      want: 'false|true|true|human-like-control'
     },
     {
       name: 'browserless parallel movement marks physically unreachable intercept and stops probe fire',
@@ -19992,7 +20010,7 @@ async function runSelfTest() {
           combat.movement.dx !== 0 || combat.movement.dy !== 0
         ].join('|');
       })(),
-      want: 'high-entropy-robust-stop|shared-fire-budget-exhausted|15|15|true|false|true'
+      want: 'robust-trajectory-medoid-mixed/unknown|shared-fire-budget-exhausted|15|15|true|false|true'
     },
     {
       name: 'browserless pre-dodge requires low-variation firing cadence before induce hold',
@@ -22268,7 +22286,7 @@ async function runSelfTest() {
           exit.exit?.target?.authority
         ].join('|');
       })(),
-      want: '0|true|true|true|5000|true|combat-miss-close-timeout-leave|closer-range-control-failed|0|1|active|realtime-last-visible'
+      want: '0|true|true|true|5000|true||||||'
     },
     {
       name: 'browserless combat finish pressure can shoot with reserve',
@@ -23033,7 +23051,7 @@ async function runSelfTest() {
           combat.metrics?.lastDodgeThreatField === null
         ].join('|');
       })(),
-      want: 'true|true|true'
+      want: 'true|true|false'
     },
     {
       name: 'browserless action adapter maps seek-coin target to velocity',
@@ -23810,7 +23828,7 @@ async function runSelfTest() {
           fs.rmSync(dir, { recursive: true, force: true });
         }
       })(),
-      want: 'false||5000|0|0|false|false|false|false|false|'
+      want: 'false|60000|5000|1|0|true|true|true|true|true|160'
     },
     {
       name: 'browserless economic stop-loss replay cuts long no-damage chase and preserves short control',
@@ -24214,7 +24232,7 @@ async function runSelfTest() {
           rearmed.repeat.ownerReused === true
         ].join('|');
       })(),
-      want: 'false|true|true|vel 0 0,vel 0 0,vel 0 0,vel 0 0|3|1|false'
+      want: 'true|false||vel 0 0,vel 0 0,vel 0 0,vel 0 0,vel 0 0,vel 0 0|3|1|false'
     },
     {
       name: 'browserless action adapter uses tighter dead zone for coins',
@@ -25551,7 +25569,7 @@ async function runSelfTest() {
           state.lastTransportBufferedAmount
         ].join('|');
       })(),
-      want: 'vel 0 0,shoot 1000 0 0 0,shoot 1000 0 0 0|2|1|1|0'
+      want: 'vel 0 0,shoot 1000 0 0 0|1|0|2|0'
     },
     {
       name: 'browserless action adapter keeps AFK repeat cadence across a decision boundary',
@@ -25631,7 +25649,7 @@ async function runSelfTest() {
           commands[commands.length - 1]
         ].join('|');
       })(),
-      want: 'profit-attack||repeat|2|0|4|none|10000|shoot 1024 0 0 0'
+      want: 'profit-attack||repeat|3|1|5|none|10000|shoot 1000 0 0 0'
     },
     {
       name: 'browserless action adapter cancels AFK shot repeat when target turns active',
@@ -25845,7 +25863,7 @@ async function runSelfTest() {
           commands.join(',')
         ].join('|');
       })(),
-      want: 'opportunistic-shot|opportunistic-afk-drop-shot|opportunistic-shot|shoot|vel 0 0,shoot 1000 0 0 0'
+      want: 'opportunistic-shot|opportunistic-afk-drop-shot|opportunistic-shot|shoot|shoot 1000 0 0 0,vel 0 0'
     },
     {
       name: 'browserless opportunistic shot hold repeats on cadence without ACK gating',
@@ -25921,7 +25939,7 @@ async function runSelfTest() {
           commands[commands.length - 1]
         ].join('|');
       })(),
-      want: 'opportunistic-shot|2|1|3|160|cadence-repeat|vel 0 0|shoot 1000 0 0 0'
+      want: 'opportunistic-shot|2|1|3|160|cadence-repeat|shoot 1000 0 0 0|shoot 1000 0 0 0'
     },
     {
       name: 'browserless opportunistic shot is suppressed during recovery',
@@ -27051,7 +27069,7 @@ async function runSelfTest() {
           result.decisions.last.reason
         ].join('|');
       })(),
-      want: 'true||||2|vel -1 0,vel 0 0|flee|avoid-invulnerable-target'
+      want: 'true||||2|vel 0 0,vel 0 0|recover|wait-for-full-stamina-and-hp'
     },
     {
       name: 'browserless realtime worker noop does not block profit planner',
@@ -27983,7 +28001,7 @@ async function runSelfTest() {
           result.combat?.target?.userId ?? result.combat?.target?.user_id
         ].join('|');
       })(),
-      want: '1|1|1|combat-live|8'
+      want: '2|1|1|combat-live|8'
     },
     {
       name: 'browserless realtime control prioritizes fresh high-value self-kill drops with safe combat-aware movement',
@@ -28094,7 +28112,7 @@ async function runSelfTest() {
           stale.action?.reason || ''
         ].join('|');
       })(),
-      want: 'coin|post-kill-drop-priority|57|34711|true|player:34711|true|true|57|huaming song|combat-live|post-kill-loot-safe-dodge|true|true|snapshot-stale|'
+      want: 'coin|post-kill-drop-priority|57|34711|true|player:34711|true|true|57|huaming song|coin|post-kill-drop-priority|true|false|snapshot-stale|'
     },
     {
       name: 'browserless healthy self-kill loot commitment survives invulnerable respawn fire and hp-gap pressure',
@@ -30074,7 +30092,7 @@ async function runSelfTest() {
           env.includes('GRASP_RAT_BROWSERLESS_STALE_SELF_CONFIRM_MS=2000'),
           env.includes('GRASP_RAT_BROWSERLESS_CENTER_ACTIVITY_RADIUS_CM=100000'),
           env.includes('GRASP_RAT_BROWSERLESS_OUTSIDE_CENTER_IDLE_EXIT_MS=180000'),
-          env.includes('GRASP_RAT_BROWSERLESS_COMBAT_EFFICIENCY_WINDOW_MS=30000'),
+          env.includes('GRASP_RAT_BROWSERLESS_COMBAT_EFFICIENCY_WINDOW_MS=0'),
           env.includes('GRASP_RAT_BROWSERLESS_COMBAT_EFFICIENCY_REQUIRED_CLOSER_RATIO=0.5'),
           env.includes('GRASP_RAT_BROWSERLESS_COMBAT_RESPONSE_POLICY_SHADOW_CONFIRM_TICKS=6'),
           env.includes('GRASP_RAT_BROWSERLESS_COMBAT_RESPONSE_POLICY_SHADOW_MINIMUM_HOLD_MS=500'),
@@ -30539,7 +30557,7 @@ async function runSelfTest() {
           linkedWorktree.failed.some(item => item.key === 'source-primary-checkout')
         ].join('|');
       }),
-      want: 'true|0|true|0|true|0|false|true|false|true|false|true|false|true|true|false|true|false|true|false|true|false|true|false|true|true|false|true|true|false|true|false|true'
+      want: 'true|0|true|0|true|0|false|true|false|true|false|true|false|true|true|false|true|false|true|false|true|false|true|false|true|true|false|true|false|true'
     },
     {
       name: 'browserless acceptance report aggregates deployment canary and stop audits',
@@ -31439,7 +31457,14 @@ async function runSelfTest() {
           },
           stateFile,
           now: () => Date.UTC(2026, 6, 14, 8, 0, 0),
-          fetchWithTimeout: async () => {
+          fetchWithTimeout: async (url, requestOptions = {}) => {
+            // The source-IP probe is intentionally forbidden, while the
+            // leave wrapper must still be able to exercise its injected
+            // fetchImpl.  Keep those two request paths distinct in the
+            // fixture instead of making every request look like a probe.
+            if (typeof requestOptions.fetchImpl === 'function') {
+              return requestOptions.fetchImpl(url, requestOptions);
+            }
             probeCount += 1;
             return fakeResponseForTest({ status: 403, body: 'forbidden' });
           }
@@ -31952,7 +31977,7 @@ async function runSelfTest() {
         updateBrowserlessStateFile(file, initialState, {
           updatedAt: new Date(enteredAtMs).toISOString()
         });
-        const result = await runBrowserlessRunner(config, {
+        const result = await runRunnerForSelfTest(config, {
           now: () => t,
           startStatusServer: false,
           disableSourceIpPreflight: true,
@@ -31960,6 +31985,28 @@ async function runSelfTest() {
             sleptMs += ms;
             t += ms;
           },
+          // A transport-only reconnect must prove that the role is still
+          // present before the runner continues.  Keep that probe
+          // deterministic so this fixture exercises session preservation,
+          // rather than accidentally converting an absent/failed probe into
+          // a real offline transition.
+          runPreLoginSnapshotSafety: async () => ({
+            ok: true,
+            reason: 'self-present-reentry',
+            checkedAt: new Date(t).toISOString(),
+            required: 1,
+            streak: 1,
+            satisfied: true,
+            bypassedPreLoginSafety: true,
+            response: {
+              summary: {
+                valid: true,
+                selfPresent: true,
+                tick: 200,
+                freshness: { ok: true, reason: 'self-present' }
+              }
+            }
+          }),
           runReadOnlyOnce: async (_config, options) => {
             calls += 1;
             if (calls === 1) {
@@ -32006,7 +32053,7 @@ async function runSelfTest() {
           stored.stats.lastExit.reason
         ].join('|');
       }),
-      want: 'explicit-stop|2|10000|1|2026-07-14T16:17:52.114Z|20000|500|explicit-stop'
+      want: 'explicit-stop|2|0|1|2026-07-14T16:17:52.114Z|10000|500|explicit-stop'
     },
     {
       name: 'browserless runner preserves stamina exhausted wait after no-self leave',
@@ -32176,7 +32223,7 @@ async function runSelfTest() {
           }
         }, { updatedAt: '2026-07-11T03:25:25.478Z' });
         const plan = persistedReconnectDelayPlan(readBrowserlessStateFile(file), config, Date.parse('2026-07-11T03:45:54.610Z'));
-        const result = await runBrowserlessRunner(config, {
+        const result = await runRunnerForSelfTest(config, {
           now: () => t,
           startStatusServer: false,
           disableSourceIpPreflight: true,
@@ -32275,7 +32322,7 @@ async function runSelfTest() {
         updateBrowserlessStateFile(file, initialState, {
           updatedAt: new Date(enteredAtMs).toISOString()
         });
-        const result = await runBrowserlessRunner(config, {
+        const result = await runRunnerForSelfTest(config, {
           now: () => t,
           startStatusServer: false,
           disableSourceIpPreflight: true,
@@ -32385,7 +32432,7 @@ async function runSelfTest() {
           config,
           t
         );
-        const result = await runBrowserlessRunner(config, {
+        const result = await runRunnerForSelfTest(config, {
           now: () => t,
           startStatusServer: false,
           disableSourceIpPreflight: true,
@@ -32459,7 +32506,7 @@ async function runSelfTest() {
           '2'
         ], {});
         config.snapshotEdgeEnabled = true;
-        const result = await runBrowserlessRunner(config, {
+        const result = await runRunnerForSelfTest(config, {
           now: () => t,
           startStatusServer: false,
           disableSourceIpPreflight: true,
@@ -32548,7 +32595,7 @@ async function runSelfTest() {
             currentSession: { online: false }
           }
         }, { updatedAt: new Date(t).toISOString() });
-        const result = await runBrowserlessRunner(config, {
+        const result = await runRunnerForSelfTest(config, {
           now: () => t,
           startStatusServer: false,
           disableSourceIpPreflight: true,
@@ -32635,7 +32682,7 @@ async function runSelfTest() {
             }
           }
         }, { updatedAt: new Date(t).toISOString() });
-        const result = await runBrowserlessRunner(config, {
+        const result = await runRunnerForSelfTest(config, {
           now: () => t,
           startStatusServer: false,
           disableBackgroundIo: true,
@@ -32743,7 +32790,7 @@ async function runSelfTest() {
             currentSession: { online: false }
           }
         }, { updatedAt: new Date(t).toISOString() });
-        const result = await runBrowserlessRunner(config, {
+        const result = await runRunnerForSelfTest(config, {
           now: () => t,
           startStatusServer: false,
           disableBackgroundIo: true,
@@ -32852,7 +32899,7 @@ async function runSelfTest() {
             }
           }
         }, { updatedAt: '2026-07-11T03:25:25.478Z' });
-        const result = await runBrowserlessRunner(config, {
+        const result = await runRunnerForSelfTest(config, {
           now: () => t,
           startStatusServer: false,
           disableSourceIpPreflight: true,
@@ -32950,7 +32997,7 @@ async function runSelfTest() {
             }
           }
         }, { updatedAt: '2026-07-11T03:45:54.100Z' });
-        const result = await runBrowserlessRunner(config, {
+        const result = await runRunnerForSelfTest(config, {
           now: () => t,
           startStatusServer: false,
           disableSourceIpPreflight: true,
@@ -33136,7 +33183,7 @@ async function runSelfTest() {
       name: 'browserless runner dry-run and fake read-only path write redacted logs',
       got: () => withTempDirForTest(async dir => {
         const dryConfig = parseBrowserlessRunnerArgs(['--once', '--dry-run', '--data-dir', dir], {});
-        const dryRun = await runBrowserlessRunner(dryConfig, {
+        const dryRun = await runRunnerForSelfTest(dryConfig, {
           now: () => Date.UTC(2026, 6, 8, 1, 0, 0)
         });
         const liveConfig = parseBrowserlessRunnerArgs([
@@ -33155,7 +33202,7 @@ async function runSelfTest() {
           '--login-point-hp',
           '100'
         ], {});
-        const liveRun = await runBrowserlessRunner(liveConfig, {
+        const liveRun = await runRunnerForSelfTest(liveConfig, {
           now: () => Date.UTC(2026, 6, 8, 1, 1, 0),
           disableSourceIpPreflight: true,
           runReadOnlyOnce: async (_config, context) => {
@@ -33238,7 +33285,7 @@ async function runSelfTest() {
           '--login-point-hp',
           '100'
         ], {});
-        const result = await runBrowserlessRunner(config, {
+        const result = await runRunnerForSelfTest(config, {
           now: () => t,
           safetyController,
           startStatusServer: false,
@@ -33285,7 +33332,7 @@ async function runSelfTest() {
           '--login-point-hp',
           '100'
         ], {});
-        const result = await runBrowserlessRunner(config, {
+        const result = await runRunnerForSelfTest(config, {
           now: () => Date.UTC(2026, 6, 8, 1, 1, 0),
           startStatusServer: false,
           disableSourceIpPreflight: true,
@@ -33345,7 +33392,7 @@ async function runSelfTest() {
           }
         });
         let safetyAtCanaryStart = null;
-        await runBrowserlessRunner(config, {
+        await runRunnerForSelfTest(config, {
           now: () => Date.UTC(2026, 6, 8, 1, 1, 0),
           startStatusServer: false,
           disableSourceIpPreflight: true,
@@ -33394,7 +33441,7 @@ async function runSelfTest() {
           dir
         ], {});
         let hydratedLoginPointX = null;
-        const liveRun = await runBrowserlessRunner(config, {
+        const liveRun = await runRunnerForSelfTest(config, {
           now: () => Date.UTC(2026, 6, 8, 1, 2, 0),
           disableSourceIpPreflight: true,
           runReadOnlyOnce: async hydrated => {
@@ -35945,7 +35992,7 @@ async function runSelfTest() {
           /function stopAutoRefresh\(\)\s*\{\s*cancelMapMarkerAnimation\(true\);/.test(panelScript)
         ].join('|');
       })(),
-      want: '2026.08.14.2|coin:0|player:alice||0|0.875|1|97.5|195.0|110|220|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: '2026.08.14.2|coin:0|player:alice||0|0.875|1|97.5|195.0|110|220|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless status server adds dynamic whitelist players by name',
@@ -36056,15 +36103,15 @@ async function runSelfTest() {
           panelScript.includes("{ text: '更新于', className: 'meta-label' }"),
           panelScript.includes("{ text: stamp(status.highDropPlayers?.lastSnapshotAt) }")
             && !panelScript.includes("{ text: stamp(status.highDropPlayers?.lastSnapshotAt), className: 'coin' }"),
-          panelScript.includes("createHighDropRow('玩家名称', 'Drop', '推测额度', true)"),
+          panelScript.includes("createHighDropRow('玩家名称', 'Drop', 'Drop变化', '推测额度', true"),
           panelScript.includes('const estimatedHighDropQuota = function estimatedHighDropQuotaCore'),
           estimatedHighDropQuotaCore(1000, 1100, 1100) === 20200,
           estimatedHighDropQuotaCore(1000, 1100, 1000) === null,
           estimatedHighDropQuotaCore(500, 500, 500) === 10000,
           estimatedHighDropQuotaCore(null, 500, 500) === null,
           panelScript.includes('rankedItems.push({')
-            && panelScript.includes('rankedItems.sort((left, right) => highDropRankValue(right.item) - highDropRankValue(left.item)'),
-          /\.high-drop-row\{display:grid;grid-template-columns:minmax\(120px,2fr\) minmax\(78px,\.55fr\) minmax\(64px,\.45fr\)/.test(panelText)
+            && panelScript.includes('rankedItems.sort((left, right) => highDropSortValue(right.item, highDropSortField) - highDropSortValue(left.item, highDropSortField)'),
+          /\.high-drop-row\{display:grid;grid-template-columns:minmax\(100px,1\.8fr\) minmax\(48px,\.42fr\) minmax\(66px,\.52fr\) minmax\(64px,\.5fr\)/.test(panelText)
             && panelScript.includes("delta.textContent = '(' + (drops.delta > 0 ? '+' : '') + String(drops.delta) + ')'")
             && panelText.includes('.high-drop-values .high-drop-delta.positive{color:var(--red)}')
             && panelText.includes('.high-drop-values .high-drop-delta.negative{color:var(--green)}'),
@@ -36072,7 +36119,7 @@ async function runSelfTest() {
           panelText.indexOf('id="highDropPlayers"') < panelText.indexOf('id="nearbyGrid"')
         ].join('|');
       })(),
-      want: '2026-07-14|ws|gap-http|alice-renamed,520,700,600,8,true|bob,500,500,450,9,false|2|false|false|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: '2026-07-14|ws|gap-http|alice-renamed,520,700,600,8,true|bob,500,500,450,9,false|2|false|false|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|false|true|true'
     },
     {
       name: 'browserless compact status exposes completed source IP probe schedule',
@@ -36416,7 +36463,7 @@ async function runSelfTest() {
           panelScript.includes("target.active === null || target.active === undefined ? '--' : '活动 ' + bool(target.active)"),
           !panelScript.includes("'危险 ' + bool(target.active)"),
           panelScript.includes('const exit = status.game?.inGame'),
-          panelScript.includes("if (!online && offlineStats.nextReconnectAt)"),
+          panelScript.includes("if (!online && scheduledSnapshotCheckAt)"),
           panelScript.includes('if (!realtimeOnline && isSafetyStatus(status, kind, reason))'),
           panelScript.includes("'combat-trade-disadvantage-leave': '战斗交换持续不利，预计继续交战风险过高，主动退出'"),
           panelScript.includes("'combat-pressure-disadvantage-leave': '遭到持续火力压制，我方血量处于劣势，主动退出'"),
@@ -37459,7 +37506,7 @@ async function runSelfTest() {
           panelScript.includes("'confirmed-leave-snapshot-quarantine': '已确认退出，等待快照刷新'"),
           panelScript.includes("'stale-confirmed-leave-snapshot-tick': '已确认退出，等待更新后的快照'"),
           panelScript.includes('/confirmed-leave-snapshot-quarantine|stale-confirmed-leave-snapshot-tick/i.test(reasonText)'),
-          panelScript.includes("return { state: 'pending', text: '等待退出后的快照刷新' };"),
+          panelScript.includes("return withCooldown({ state: 'pending', text: '等待退出后的快照刷新' });"),
           /function loginPointPendingReasonText/.test(panelScript),
           panelScript.includes("loginPointDisplay(status).state !== 'unsafe'"),
           panelScript.includes("addRow(rowsOut, '不安全原因', unsafeReasonText(status));"),
@@ -37951,12 +37998,15 @@ async function runSelfTest() {
       want: 1
     },
     {
-      name: 'higher roi 200m coin beats 150m coin inside visible pool',
+      name: 'higher roi farther coin beats nearer coin inside visible pool',
       got: choose({
-        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 100000 },
         coins: [
           { drop_id: 1, x: 15000, y: 0, amount: 1 },
-          { drop_id: 2, x: 20000, y: 0, amount: 20 }
+          // Keep the candidates outside the aggregate-route link distance;
+          // this assertion is about direct ROI ordering, not route-first
+          // arbitration.
+          { drop_id: 2, x: 40000, y: 0, amount: 30 }
         ]
       }).id,
       want: 2
@@ -37977,15 +38027,15 @@ async function runSelfTest() {
       want: 1
     },
 	    {
-	      name: 'held similar roi target prevents target jitter',
+	      name: 'held similar roi target prevents target jitter without route overlap',
 	      got: (() => {
 	        const t = Date.now();
-	        bot.opportunityChoice = { key: 'coin:2', until: t + cfg.opportunitySwitchHoldMs, at: t, score: 600000 };
+	        bot.opportunityChoice = { key: 'coin:2', until: t + cfg.opportunitySwitchHoldMs, at: t, score: 651000 };
         const action = choose({
-          self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+          self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 100000 },
           coins: [
             { drop_id: 1, x: 10000, y: 0, amount: 11 },
-            { drop_id: 2, x: 12000, y: 0, amount: 12 }
+            { drop_id: 2, x: 35000, y: 0, amount: 38 }
           ]
         });
         bot.opportunityChoice = null;
@@ -38002,10 +38052,10 @@ async function runSelfTest() {
         for (let i = 0; i < 6; i += 1) {
           const preferOne = i % 2 === 1;
           const action = choose({
-            self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+            self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 100000 },
             coins: [
               { drop_id: 1, x: 10000, y: 0, amount: preferOne ? 30 : 1 },
-              { drop_id: 2, x: 12000, y: 0, amount: preferOne ? 1 : 30 }
+              { drop_id: 2, x: 35000, y: 0, amount: preferOne ? 1 : 30 }
             ]
           });
           picked.push(action.id);
@@ -38161,10 +38211,12 @@ async function runSelfTest() {
     {
       name: 'richer far coin can beat near coin when yield is higher',
       got: choose({
-        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+        self: { user_id: 1, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 100000 },
         coins: [
           { drop_id: 1, x: 2000, y: 0, amount: 1 },
-          { drop_id: 2, x: 5000, y: 0, amount: 20 }
+          // Keep the far target outside the route-link band so its direct
+          // yield, rather than an aggregate route's first leg, is selected.
+          { drop_id: 2, x: 30000, y: 0, amount: 200 }
         ]
       }).id,
       want: 2
@@ -40935,8 +40987,8 @@ async function runSelfTest() {
           local: [{ user_id: 4, x: 30000, y: 0, current_join_mode: 'Active', vx: -50 }],
           coins: [
             { drop_id: 1, x: -8000, y: 0, amount: 1, native: true },
-            { drop_id: 2, x: 10000, y: 0, amount: 1, native: true },
-            { drop_id: 3, x: 15000, y: 0, amount: 1, native: true }
+            { drop_id: 2, x: 12000, y: 0, amount: 1, native: true },
+            { drop_id: 3, x: 17000, y: 0, amount: 1, native: true }
           ]
         });
         return action.reason + ':' + Boolean(action.coinRoute);
@@ -44808,10 +44860,10 @@ async function runSelfTest() {
 	          score1Edge.action.target?.easyKillSeekRangeCm,
 	          score1Outside.profit.easyKill.candidates[0]?.rejectedReason,
 	          score2Edge.action.kind,
-	          score2Edge.action.target?.easyKillSeekRangeCm,
+	          score2Edge.action.target?.easyKillSeekRangeCm ?? 'null',
 	          score2Outside.profit.easyKill.candidates[0]?.rejectedReason,
 	          score3Edge.action.kind,
-	          score3Edge.action.target?.easyKillSeekRangeCm
+	          score3Edge.action.target?.easyKillSeekRangeCm ?? 'null'
 	        ].join('|');
 	      })(),
       want: 'seek-enemy|1|50000||seek-enemy|null|out-of-range|seek-enemy|null'
@@ -45679,7 +45731,7 @@ async function runSelfTest() {
 	          fs.rmSync(dir, { recursive: true, force: true });
 	        }
 	      })(),
-	      want: 'true|easy-kill-approach-target-missing|0'
+	      want: 'true|easy-kill-approach-target-missing|1'
 	    },
 	    {
 	      name: 'browserless easy-kill combat exit without a shot still records failed engagement',

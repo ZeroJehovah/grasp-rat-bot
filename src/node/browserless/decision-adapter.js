@@ -292,6 +292,11 @@ function numberOrNull(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function nullableNumberOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
+  return numberOrNull(value);
+}
+
 function coordinateOrNull(value) {
   if (value === null || value === undefined || value === '') return null;
   const number = Number(value);
@@ -2265,7 +2270,7 @@ function summarizeTarget(target) {
     alive: target.alive !== false,
     easyKillKnown: Boolean(target.easyKillKnown),
     easyKillScore: numberOrNull(target.easyKillScore),
-    easyKillSeekRangeCm: numberOrNull(target.easyKillSeekRangeCm),
+    easyKillSeekRangeCm: nullableNumberOrNull(target.easyKillSeekRangeCm),
     easyKillDamagedToday: Boolean(target.easyKillDamagedToday),
     easyKillThreatExempt: Boolean(target.easyKillThreatExempt),
     easyKillProfitTarget: Boolean(target.easyKillProfitTarget),
@@ -2375,6 +2380,8 @@ function easyKillCandidateBaseRejectionReason(target, stateful = {}, input = {},
   if (!Number.isFinite(Number(target?.distance))) return 'distance-unknown';
   if (visibleDistance > 0 && Number(target.distance) > visibleDistance) return 'out-of-range';
   if (target.easyKillKnown === true
+    && target.easyKillSeekRangeCm !== null
+    && target.easyKillSeekRangeCm !== undefined
     && Number.isFinite(Number(target.easyKillSeekRangeCm))
     && Number(target.distance) > Number(target.easyKillSeekRangeCm)) return 'out-of-score-range';
   if (easyKillTargetSuppressed(stateful, target, input.nowMs)) return 'easy-kill-suppressed';

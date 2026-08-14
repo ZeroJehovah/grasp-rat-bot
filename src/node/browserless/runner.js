@@ -2858,7 +2858,13 @@ async function runBrowserlessRunner(config, deps = {}) {
         }, { updatedAt: new Date(now()).toISOString() });
         logStore.append('runner', 'runner-loop-stop', loopPlan);
       }
-      if (resultForStop && loopPlan.reason === 'once') return resultForStop;
+      if (resultForStop && loopPlan.reason === 'once') {
+        // A one-shot run is a terminal runner invocation.  Mark runtime
+        // handles for cleanup before returning so a snapshot poll started by
+        // the final canary cannot leave a real timer/request behind.
+        closeRuntimeHandlesOnReturn = true;
+        return resultForStop;
+      }
       const stopped = {
         ...(resultForStop || {
           ok: false,
@@ -5084,7 +5090,17 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
   };
   const baseDeps = {
     startStatusServer: false,
-    disableBackgroundIo: true
+    disableBackgroundIo: true,
+    // Runner integration cases assert lifecycle ordering, not real snapshot
+    // transport.  Keep the poller deterministic so a successful fixture
+    // cannot leave a 30-second request-rate sleep after --once returns.
+    snapshotGapPoller: {
+      noteSnapshot() {},
+      refreshSchedule() {},
+      start() {},
+      stop() {},
+      status() { return { intervalMs: DEFAULT_SNAPSHOT_GAP_MS, stopped: true }; }
+    }
   };
 
   const immediate = await (async () => {
@@ -5148,8 +5164,9 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
           && loginSuccessLogCount === 1
           && loginSuccessAckCount === 1
           && bypassReason === 'daily-first-login-invulnerability'
-          && snapshotSessionEvents.length === 1
+          && snapshotSessionEvents.length === 2
           && snapshotSessionEvents[0].type === 'start'
+          && snapshotSessionEvents[1].type === 'stop'
           && snapshotSessionEvents[0].detail.immediate === true
           && snapshotSessionEvents[0].detail.snapshotAtMs === 0
           && logSafe
@@ -5225,8 +5242,9 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
       ok: Boolean(
         result.ok
           && bypassReason === ''
-          && snapshotSessionEvents.length === 1
+          && snapshotSessionEvents.length === 2
           && snapshotSessionEvents[0].type === 'start'
+          && snapshotSessionEvents[1].type === 'stop'
           && snapshotSessionEvents[0].detail.immediate === false
           && snapshotSessionEvents[0].detail.snapshotAtMs === snapshotObservedAtMs
           && remotePublications.length === 1
@@ -5284,8 +5302,9 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
           && config.loginPointHp === 100
           && bypassReason === ''
           && observedPreLoginPayloadCount === 0
-          && snapshotSessionEvents.length === 1
+          && snapshotSessionEvents.length === 2
           && snapshotSessionEvents[0].type === 'start'
+          && snapshotSessionEvents[1].type === 'stop'
           && snapshotSessionEvents[0].detail.immediate === true
           && snapshotSessionEvents[0].detail.snapshotAtMs === 0
       ),
