@@ -102,8 +102,12 @@ function createRequestRatePolicy(options = {}) {
   const onPersistenceEvent = typeof options.onPersistenceEvent === 'function'
     ? options.onPersistenceEvent
     : null;
+  const initializedAtMs = finiteNow(now);
   const persistedState = readPersistedOrdinaryStart(persistFile, finiteNow(persistNow));
-  let lastOrdinaryStartAtMs = persistedState.value;
+  // A missing or unreadable boundary cannot prove when the previous process
+  // last issued an ordinary request. Start a conservative interval at process
+  // initialization while keeping lifecycle-exempt requests immediate.
+  let lastOrdinaryStartAtMs = persistedState.value ?? (persistFile ? initializedAtMs : null);
   let lastPersistedStartAtMs = persistedState.status === 'loaded' ? persistedState.value : null;
   let persistenceWriteErrorCount = 0;
   let lastPersistenceWriteError = '';
@@ -307,18 +311,18 @@ async function runRequestRatePolicySelfTest() {
     onPersistenceEvent: event => persistenceEvents.push(event)
   });
   await persistPolicy.run(REQUEST_CLASSES.GAMEPLAY_SNAPSHOT, async permit => {
-    if (permit.startedAtMs !== 0) throw new Error('first persisted start must be immediate');
+    if (permit.startedAtMs !== 30000) throw new Error('missing persistence must enforce a startup boundary');
   });
   const firstPersistedState = JSON.parse(fs.readFileSync(persistFile, 'utf8'));
-  const firstPersistedOk = Number(firstPersistedState.lastOrdinaryStartAtMs) === 0;
-  persistNowMs = 30000;
+  const firstPersistedOk = Number(firstPersistedState.lastOrdinaryStartAtMs) === 30000;
+  persistNowMs = 60000;
   await persistPolicy.run(REQUEST_CLASSES.GAMEPLAY_SNAPSHOT, async permit => {
-    if (permit.startedAtMs !== 30000) throw new Error('second persisted start must honor the 30000ms boundary');
+    if (permit.startedAtMs !== 60000) throw new Error('second persisted start must honor the 30000ms boundary');
   });
   const persistedState = JSON.parse(fs.readFileSync(persistFile, 'utf8'));
-  const persistedOk = Number(persistedState.lastOrdinaryStartAtMs) === 30000;
+  const persistedOk = Number(persistedState.lastOrdinaryStartAtMs) === 60000;
 
-  let restartNowMs = 30001;
+  let restartNowMs = 60001;
   const restartPolicy = createRequestRatePolicy({
     now: () => restartNowMs,
     sleep: async delayMs => { restartNowMs += delayMs; },
@@ -362,7 +366,7 @@ async function runRequestRatePolicySelfTest() {
   await corruptedPolicy.run(REQUEST_CLASSES.GAMEPLAY_SNAPSHOT, async permit => {
     corruptedStart.push(permit.startedAtMs);
   });
-  const corruptedOk = corruptedStart[0] === 0
+  const corruptedOk = corruptedStart[0] === DEFAULT_REQUEST_MIN_INTERVAL_MS
     && corruptedEvents.some(event => event.operation === 'load'
       && event.status === 'invalid'
       && event.reason === 'invalid-json');
@@ -377,9 +381,11 @@ async function runRequestRatePolicySelfTest() {
   const blockedParent = path.join(persistTmpDir, 'blocked-parent');
   fs.writeFileSync(blockedParent, 'not-a-directory');
   const writeFailureEvents = [];
+  let writeFailureNowMs = 0;
   const writeFailurePolicy = createRequestRatePolicy({
-    now: () => 0,
-    persistNow: () => 0,
+    now: () => writeFailureNowMs,
+    sleep: async delayMs => { writeFailureNowMs += delayMs; },
+    persistNow: () => writeFailureNowMs,
     persistFile: path.join(blockedParent, 'request-rate-state.json'),
     onPersistenceEvent: event => writeFailureEvents.push(event)
   });
