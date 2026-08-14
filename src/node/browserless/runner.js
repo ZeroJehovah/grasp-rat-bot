@@ -245,6 +245,7 @@ function publicConfig(config) {
     combatResponsePolicyShadowMinimumHoldMs: Number(config.combatResponsePolicyShadowMinimumHoldMs || 0),
     combatTrajectoryCoverageMode: String(config.combatTrajectoryCoverageMode || 'live-single'),
     combatEvasiveAimEnabled: config.combatEvasiveAimEnabled !== false,
+    combatEvasiveAimTriggerEnabled: config.combatEvasiveAimTriggerEnabled === true,
     combatEvasiveAimEarlyDetectionEnabled: config.combatEvasiveAimEarlyDetectionEnabled !== false,
     wsTraceEnabled: Boolean(config.wsTraceEnabled),
     wsTracePayload: Boolean(config.wsTracePayload),

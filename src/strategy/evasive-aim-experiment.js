@@ -85,6 +85,7 @@ function updateEvasiveAimExperimentCore(previous = null, input = {}, options = {
   const evaluationWindowMs = Math.max(1, finiteNumber(input.evaluationWindowMs));
   const halfWindowAt = startedAt + evaluationWindowMs / 2;
   const enabled = options.enabled !== false;
+  const triggerEnabled = options.triggerEnabled === true;
   const earlyDetectionEnabled = options.earlyDetectionEnabled !== false;
   const acceptedShots = Math.max(0, Math.round(finiteNumber(input.acceptedShots)));
   const confirmedHits = Math.max(0, Math.round(finiteNumber(input.confirmedHits)));
@@ -118,6 +119,7 @@ function updateEvasiveAimExperimentCore(previous = null, input = {}, options = {
     return {
       ...state,
       enabled: false,
+      triggerEnabled,
       earlyDetectionEnabled,
       active: false,
       strategy: '',
@@ -144,17 +146,20 @@ function updateEvasiveAimExperimentCore(previous = null, input = {}, options = {
   }
 
   let triggerReason = '';
-  const earlyDetectionEligible = earlyDetectionEnabled
-    && nowMs < halfWindowAt
-    && acceptedShots >= Math.max(1, finiteNumber(options.minimumEarlyAcceptedShots, 20))
-    && confirmedHits === 0
-    && behaviorDetection.eligible;
-  if (!state.active && earlyDetectionEligible) {
-    triggerReason = `strict-evasive-zero-hit-${behaviorDetection.mode}`;
-  } else if (!state.active
-    && state.halfWindowEvaluated
-    && Number(state.halfWindowConfirmedHits || 0) < requiredConfirmedHits) {
-    triggerReason = 'half-efficiency-window-hit-shortfall';
+  let earlyDetectionEligible = false;
+  if (triggerEnabled) {
+    earlyDetectionEligible = earlyDetectionEnabled
+      && nowMs < halfWindowAt
+      && acceptedShots >= Math.max(1, finiteNumber(options.minimumEarlyAcceptedShots, 20))
+      && confirmedHits === 0
+      && behaviorDetection.eligible;
+    if (!state.active && earlyDetectionEligible) {
+      triggerReason = `strict-evasive-zero-hit-${behaviorDetection.mode}`;
+    } else if (!state.active
+      && state.halfWindowEvaluated
+      && Number(state.halfWindowConfirmedHits || 0) < requiredConfirmedHits) {
+      triggerReason = 'half-efficiency-window-hit-shortfall';
+    }
   }
 
   if (triggerReason) {
@@ -179,6 +184,7 @@ function updateEvasiveAimExperimentCore(previous = null, input = {}, options = {
   return {
     ...state,
     enabled: true,
+    triggerEnabled,
     earlyDetectionEnabled,
     modelVersion: EVASIVE_AIM_MODEL_VERSION,
     targetId,

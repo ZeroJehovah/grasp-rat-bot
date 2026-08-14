@@ -113,6 +113,7 @@ const DEFAULTS = {
   combatResponsePolicyShadowMinimumHoldMs: 500,
   combatTrajectoryCoverageMode: 'live-single',
   combatEvasiveAimEnabled: true,
+  combatEvasiveAimTriggerEnabled: false,
   combatEvasiveAimEarlyDetectionEnabled: true,
   wsTraceEnabled: false,
   wsTracePayload: true,
@@ -325,6 +326,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     combatEvasiveAimEnabled: boolEnv(
       env.GRASP_RAT_BROWSERLESS_COMBAT_EVASIVE_AIM_ENABLED,
       DEFAULTS.combatEvasiveAimEnabled
+    ),
+    combatEvasiveAimTriggerEnabled: boolEnv(
+      env.GRASP_RAT_BROWSERLESS_COMBAT_EVASIVE_AIM_TRIGGER_ENABLED,
+      DEFAULTS.combatEvasiveAimTriggerEnabled
     ),
     combatEvasiveAimEarlyDetectionEnabled: boolEnv(
       env.GRASP_RAT_BROWSERLESS_COMBAT_EVASIVE_AIM_EARLY_DETECTION_ENABLED,
@@ -599,6 +604,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.combatEvasiveAimEnabled = true;
     } else if (arg === '--no-combat-evasive-aim') {
       config.combatEvasiveAimEnabled = false;
+    } else if (arg === '--combat-evasive-aim-trigger') {
+      config.combatEvasiveAimTriggerEnabled = true;
+    } else if (arg === '--no-combat-evasive-aim-trigger') {
+      config.combatEvasiveAimTriggerEnabled = false;
     } else if (arg === '--combat-evasive-aim-early-detection') {
       config.combatEvasiveAimEarlyDetectionEnabled = true;
     } else if (arg === '--no-combat-evasive-aim-early-detection') {
@@ -753,6 +762,7 @@ function usage() {
     '  --combat-response-policy-shadow-minimum-hold-ms <ms>  Minimum shadow policy hold. Default: 500',
     '  --combat-trajectory-coverage-mode <mode>  Multi-trajectory aim mode: off|shadow|live-single|live-volley. Default: live-single',
     '  --[no-]combat-evasive-aim  Enable the five-strategy evasive-opponent aim experiment. Default: enabled',
+    '  --[no-]combat-evasive-aim-trigger  Allow the experiment to trigger (apply offset angles). Default: disabled',
     '  --[no-]combat-evasive-aim-early-detection  Allow strict zero-hit evasive behavior to switch before the half-window fallback. Default: enabled',
     '  --no-combat-robust-dodge  Disable robust Dodge schedule/trajectory uncertainty for rollback',
     '  --no-combat-distance-aware-dodge  Disable distance-aware Dodge rollout for rollback',

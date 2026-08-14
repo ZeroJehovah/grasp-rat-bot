@@ -7213,7 +7213,7 @@ function runStrategyModuleSelfTests() {
     acceptedShots: 20,
     confirmedHits: 0,
     behavior: evasiveBehavior
-  }, { randomUnit: 0.42 });
+  }, { triggerEnabled: true, randomUnit: 0.42 });
   const lockedExperiment = updateEvasiveAimExperimentCore(earlyExperiment, {
     targetId: 'target-a',
     engagementGeneration: 'engagement-a',
@@ -7224,7 +7224,7 @@ function runStrategyModuleSelfTests() {
     acceptedShots: 31,
     confirmedHits: 3,
     behavior: ordinaryTurn
-  }, { randomUnit: 0.99 });
+  }, { triggerEnabled: true, randomUnit: 0.99 });
   const nextEngagementExperiment = updateEvasiveAimExperimentCore(earlyExperiment, {
     targetId: 'target-a',
     engagementGeneration: 'engagement-a-reconnected',
@@ -7235,7 +7235,7 @@ function runStrategyModuleSelfTests() {
     acceptedShots: 0,
     confirmedHits: 0,
     behavior: ordinaryTurn
-  }, { randomUnit: 0.99 });
+  }, { triggerEnabled: true, randomUnit: 0.99 });
   const halfWindowPass = updateEvasiveAimExperimentCore(null, {
     targetId: 'target-b',
     engagementGeneration: 'engagement-b',
@@ -7246,7 +7246,7 @@ function runStrategyModuleSelfTests() {
     acceptedShots: 20,
     confirmedHits: 2,
     behavior: ordinaryTurn
-  }, { randomUnit: 0.01 });
+  }, { triggerEnabled: true, randomUnit: 0.01 });
   const halfWindowFail = updateEvasiveAimExperimentCore(null, {
     targetId: 'target-c',
     engagementGeneration: 'engagement-c',
@@ -7257,7 +7257,7 @@ function runStrategyModuleSelfTests() {
     acceptedShots: 20,
     confirmedHits: 1,
     behavior: ordinaryTurn
-  }, { randomUnit: 0.99 });
+  }, { triggerEnabled: true, randomUnit: 0.99 });
   results.push({
     name: 'evasive-aim-experiment-detects-only-sustained-evasion-and-locks-one-random-strategy',
     passed: highConfidenceEvasiveBehaviorCore(evasiveBehavior).eligible === true
@@ -7288,7 +7288,7 @@ function runStrategyModuleSelfTests() {
     acceptedShots: 20,
     confirmedHits: 0,
     behavior: evasiveBehavior
-  }, { earlyDetectionEnabled: false, randomUnit: 0.2 });
+  }, { triggerEnabled: true, earlyDetectionEnabled: false, randomUnit: 0.2 });
   const disabledExperiment = updateEvasiveAimExperimentCore(earlyExperiment, {
     targetId: 'target-a',
     engagementGeneration: 'engagement-a',
@@ -7298,7 +7298,7 @@ function runStrategyModuleSelfTests() {
     acceptedShots: 21,
     confirmedHits: 0,
     behavior: evasiveBehavior
-  }, { enabled: false, randomUnit: 0.8 });
+  }, { triggerEnabled: true, enabled: false, randomUnit: 0.8 });
   results.push({
     name: 'evasive-aim-rollbacks-disable-early-detection-or-the-whole-experiment',
     passed: earlyDetectionDisabled.active === false
@@ -7306,6 +7306,55 @@ function runStrategyModuleSelfTests() {
       && disabledExperiment.enabled === false
       && disabledExperiment.active === false
       && disabledExperiment.strategy === ''
+  });
+
+  const triggerDisabledEarly = updateEvasiveAimExperimentCore(null, {
+    targetId: 'target-e',
+    engagementGeneration: 'engagement-e',
+    startedAt: 1000,
+    startedTick: 50,
+    nowMs: 4200,
+    evaluationWindowMs: 28800,
+    acceptedShots: 25,
+    confirmedHits: 0,
+    behavior: evasiveBehavior
+  }, { triggerEnabled: false, randomUnit: 0.5 });
+  const triggerDisabledHalf = updateEvasiveAimExperimentCore(null, {
+    targetId: 'target-f',
+    engagementGeneration: 'engagement-f',
+    startedAt: 1000,
+    startedTick: 60,
+    nowMs: 15400,
+    evaluationWindowMs: 28800,
+    acceptedShots: 20,
+    confirmedHits: 0,
+    behavior: evasiveBehavior
+  }, { triggerEnabled: false, randomUnit: 0.5 });
+  const triggerDefaultNoOption = updateEvasiveAimExperimentCore(null, {
+    targetId: 'target-g',
+    engagementGeneration: 'engagement-g',
+    startedAt: 1000,
+    startedTick: 70,
+    nowMs: 4200,
+    evaluationWindowMs: 28800,
+    acceptedShots: 25,
+    confirmedHits: 0,
+    behavior: evasiveBehavior
+  }, { randomUnit: 0.5 });
+  results.push({
+    name: 'evasive-aim-trigger-disabled-by-default-never-activates',
+    passed: triggerDisabledEarly.enabled === true
+      && triggerDisabledEarly.triggerEnabled === false
+      && triggerDisabledEarly.active === false
+      && triggerDisabledEarly.strategy === ''
+      && triggerDisabledEarly.triggerReason === ''
+      && triggerDisabledHalf.enabled === true
+      && triggerDisabledHalf.triggerEnabled === false
+      && triggerDisabledHalf.active === false
+      && triggerDisabledHalf.halfWindowEvaluated === true
+      && triggerDefaultNoOption.enabled === true
+      && triggerDefaultNoOption.triggerEnabled === false
+      && triggerDefaultNoOption.active === false
   });
 
   const modelMotionSamples = [];

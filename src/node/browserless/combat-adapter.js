@@ -4387,6 +4387,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       },
       {
         enabled: options.combatEvasiveAimEnabled !== false,
+        triggerEnabled: options.combatEvasiveAimTriggerEnabled === true,
         earlyDetectionEnabled: options.combatEvasiveAimEarlyDetectionEnabled !== false,
         minimumEarlyAcceptedShots: 20,
         behaviorDetection: {

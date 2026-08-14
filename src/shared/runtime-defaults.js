@@ -86,6 +86,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     combatResponsePolicyShadowMinimumHoldMs: numberDefault(config.combatResponsePolicyShadowMinimumHoldMs, 500),
     combatTrajectoryCoverageMode: String(config.combatTrajectoryCoverageMode || 'live-single').trim().toLowerCase(),
     combatEvasiveAimEnabled: config.combatEvasiveAimEnabled !== false,
+    combatEvasiveAimTriggerEnabled: config.combatEvasiveAimTriggerEnabled === true,
     combatEvasiveAimEarlyDetectionEnabled: config.combatEvasiveAimEarlyDetectionEnabled !== false,
     dynamicWhitelistProximitySafetyEnabled: config.dynamicWhitelistProximitySafetyEnabled !== false,
     preTargetIncomingDodgeEnabled: config.preTargetIncomingDodgeEnabled !== false,
