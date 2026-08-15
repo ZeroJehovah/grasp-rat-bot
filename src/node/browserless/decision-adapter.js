@@ -3169,9 +3169,31 @@ function panelPlayerTargetKey(target) {
   return id === undefined || id === null || id === '' ? '' : String(id);
 }
 
-function panelPlayerCandidates(input) {
-  if (Array.isArray(input?.panelVisibleTargets)) return input.panelVisibleTargets;
-  return Array.isArray(input?.visibleTargets) ? input.visibleTargets : [];
+function snapshotNavigationTargetForPanel(action) {
+  const target = action?.target;
+  if (!target
+    || target.authority !== 'snapshot-navigation'
+    || target.remoteNavigationOnly !== true) return null;
+  const x = numberOrNull(target.x);
+  const y = numberOrNull(target.y);
+  const distance = numberOrNull(target.distance);
+  if (x === null || y === null || distance === null) return null;
+  return target;
+}
+
+function panelPlayerCandidates(input, action = null) {
+  const candidates = Array.isArray(input?.panelVisibleTargets)
+    ? input.panelVisibleTargets
+    : (Array.isArray(input?.visibleTargets) ? input.visibleTargets : []);
+  const snapshotTarget = snapshotNavigationTargetForPanel(action);
+  if (!snapshotTarget) return candidates;
+  const targetKey = panelPlayerTargetKey(snapshotTarget);
+  if (!targetKey || candidates.some(candidate => panelPlayerTargetKey(candidate) === targetKey)) {
+    return candidates;
+  }
+  // This is a presentation-only append. The snapshot target never enters
+  // visibleTargets, threats, combat selection, aim, fire, or Dodge input.
+  return [...candidates, snapshotTarget];
 }
 
 function summarizeNearbyForPanel(input, action, combat, options = {}, singleCoinBait = null) {
@@ -3183,6 +3205,8 @@ function summarizeNearbyForPanel(input, action, combat, options = {}, singleCoin
       ?? options.opportunityVisibleDistance
       ?? DEFAULT_GLOBAL_COIN_MAX_DISTANCE
   ));
+  const snapshotTarget = snapshotNavigationTargetForPanel(action);
+  const snapshotTargetKey = panelPlayerTargetKey(snapshotTarget);
   const coins = coinPanelCandidates(input, action, singleCoinBait)
     .filter(coin => Number.isFinite(Number(coin?.distance)))
     .filter(coin => visibleRange <= 0 || Number(coin.distance) <= visibleRange)
@@ -3216,9 +3240,11 @@ function summarizeNearbyForPanel(input, action, combat, options = {}, singleCoin
     combat?.target
   ].filter(Boolean).map(panelPlayerTargetKey).filter(Boolean));
   const lowDropThreshold = Math.max(0, Number(options.attackMinAfkDrop ?? DEFAULT_ATTACK_MIN_AFK_DROP));
-  const players = panelPlayerCandidates(input)
+  const players = panelPlayerCandidates(input, action)
     .filter(target => Number.isFinite(Number(target?.distance)))
-    .filter(target => visibleRange <= 0 || Number(target.distance) <= visibleRange)
+    .filter(target => visibleRange <= 0
+      || Number(target.distance) <= visibleRange
+      || (snapshotTargetKey && panelPlayerTargetKey(target) === snapshotTargetKey))
     .sort((a, b) => Number(a.distance) - Number(b.distance))
     .map(target => {
       const displayName = entityDisplayName(target);

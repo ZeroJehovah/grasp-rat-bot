@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.14.2';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.15.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -10,6 +10,25 @@ function mapMarkerKeyCore(kind, primary, fallback = '') {
   const normalizedFallback = fallback === null || fallback === undefined || fallback === '' ? '' : String(fallback);
   const identity = normalizedPrimary || normalizedFallback;
   return normalizedKind && identity ? `${normalizedKind}:${identity}` : '';
+}
+
+function mapRemoteTargetPositionCore(dx, dy, visibleRange, edgeRatio = 0.985) {
+  const x = Number(dx);
+  const y = Number(dy);
+  const range = Number(visibleRange);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !(range > 0)) return null;
+  const distance = Math.hypot(x, y);
+  if (!Number.isFinite(distance)) return null;
+  if (distance <= range) return { dx: x, dy: y, distance, outside: false };
+  const ratio = Math.max(0, Math.min(1, Number(edgeRatio) || 0.985));
+  const edgeDistance = range * ratio;
+  const scale = edgeDistance / distance;
+  return {
+    dx: x * scale,
+    dy: y * scale,
+    distance,
+    outside: true
+  };
 }
 
 function mapAnimationProgressCore(elapsedMs, durationMs) {
@@ -544,6 +563,7 @@ function renderBrowserlessWebPanel() {
     .target-coin{--target-color:rgba(251,191,36,.82);--target-bg:rgba(251,191,36,.13)}
     .target-afk{--target-color:rgba(74,222,128,.8);--target-bg:rgba(74,222,128,.12)}
     .target-combat{--target-color:rgba(251,113,133,.82);--target-bg:rgba(251,113,133,.12)}
+    .target-remote-snapshot{--target-color:rgba(156,163,175,.92);--target-bg:rgba(156,163,175,.12)}
     .target-flee{--target-color:rgba(96,165,250,.82);--target-bg:rgba(96,165,250,.12)}
     .target-route-next.target-coin{--target-color:rgba(251,191,36,.45);--target-bg:rgba(251,191,36,.07)}
     .target-bait{--target-color:rgba(251,191,36,.95);--target-bg:rgba(251,191,36,.16)}
@@ -755,6 +775,7 @@ function renderBrowserlessWebPanel() {
     const recoveryContactExitReasonText = ${recoveryContactExitReasonTextCore.toString()};
     const restartDrainBlockedReasonText = ${restartDrainBlockedReasonTextCore.toString()};
     const mapMarkerKey = ${mapMarkerKeyCore.toString()};
+    const mapRemoteTargetPosition = ${mapRemoteTargetPositionCore.toString()};
     const mapAnimationProgress = ${mapAnimationProgressCore.toString()};
     const interpolateMapMarker = ${interpolateMapMarkerCore.toString()};
     const mapTrailOpacity = ${mapTrailOpacityCore.toString()};
@@ -2204,8 +2225,19 @@ function renderBrowserlessWebPanel() {
       if (targetId && rowId) return targetId === rowId;
       return !targetId && Boolean(target.name) && String(target.name) === String(item?.[0] || '');
     }
+    function snapshotNavigationTarget(status) {
+      const target = status?.action?.target;
+      return target?.authority === 'snapshot-navigation' && target?.remoteNavigationOnly === true
+        ? target
+        : null;
+    }
+    function snapshotNavigationTargetMatches(status, item) {
+      const target = snapshotNavigationTarget(status);
+      return Boolean(target && mapTargetMatchesPlayer(target, item));
+    }
     function mapPlayerTargetRole(status, item, afk) {
       if (mapTargetMatchesPlayer(status.combat?.target, item)) return 'combat';
+      if (snapshotNavigationTargetMatches(status, item)) return 'remote-snapshot';
       const actionKind = String(status.action?.kind || status.decision?.actionKind || status.decision?.kind || '');
       if (actionKind === 'coin' || actionKind === 'seek-coin' || !mapTargetMatchesPlayer(status.action?.target, item)) return '';
       if (['flee', 'safety-exit', 'leave'].includes(actionKind)) return '';
@@ -2299,11 +2331,12 @@ function renderBrowserlessWebPanel() {
       }
       context.restore();
     }
-    function drawMapTargetPath(context, center, markers, color) {
+    function drawMapTargetPath(context, center, markers, color, dashed = false) {
       if (!markers.length) return;
       context.save();
       context.strokeStyle = color;
       context.lineWidth = .75;
+      if (dashed) context.setLineDash([5, 4]);
       context.beginPath();
       context.moveTo(center, center);
       for (const marker of markers) context.lineTo(marker.px, marker.py);
@@ -2332,7 +2365,11 @@ function renderBrowserlessWebPanel() {
       context.strokeText(marker.label, x, y);
       context.fillStyle = marker.targetRole === 'combat'
         ? '#fb7185'
-        : (marker.targetRole === 'afk' ? '#4ade80' : (marker.kind === 'coin' ? '#fbbf24' : '#eef2f5'));
+        : (marker.targetRole === 'afk'
+          ? '#4ade80'
+          : (marker.targetRole === 'remote-snapshot'
+            ? '#9ca3af'
+            : (marker.kind === 'coin' ? '#fbbf24' : '#eef2f5')));
       context.fillText(marker.label, x, y);
     }
     function cancelMapMarkerAnimation(resetPositions = false) {
@@ -2383,8 +2420,18 @@ function renderBrowserlessWebPanel() {
       const routeMarkers = coinMarkers.filter(marker => marker.routeOrder > 0).sort((a, b) => a.routeOrder - b.routeOrder);
       drawMapTargetPath(context, frame.center, routeMarkers.length ? routeMarkers : coinMarkers.filter(marker => marker.selected), '#fbbf24');
       const playerTarget = markers.find(marker => marker.targetRole === 'combat')
-        || markers.find(marker => marker.targetRole === 'afk');
-      if (playerTarget) drawMapTargetPath(context, frame.center, [playerTarget], playerTarget.targetRole === 'combat' ? '#fb7185' : '#4ade80');
+        || markers.find(marker => marker.targetRole === 'afk')
+        || markers.find(marker => marker.targetRole === 'remote-snapshot');
+      if (playerTarget) {
+        const remoteSnapshot = playerTarget.targetRole === 'remote-snapshot';
+        drawMapTargetPath(
+          context,
+          frame.center,
+          [playerTarget],
+          playerTarget.targetRole === 'combat' ? '#fb7185' : (remoteSnapshot ? '#9ca3af' : '#4ade80'),
+          remoteSnapshot
+        );
+      }
       for (const marker of markers.filter(marker => !marker.selected)) drawMapMarker(context, marker);
       for (const marker of markers.filter(marker => marker.selected)) drawMapMarker(context, marker);
       drawMapMarker(context, {
@@ -2508,24 +2555,35 @@ function renderBrowserlessWebPanel() {
         if (x === null || y === null) continue;
         const dx = x - selfX;
         const dy = y - selfY;
-        if (Math.hypot(dx, dy) > visibleRange * 1.01) continue;
         const afk = isAfkNearbyPlayer(item);
         const invulnerable = isInvulnerableNearbyPlayer(item?.[4]);
         const targetRole = mapPlayerTargetRole(status, item, afk);
+        const rawDistance = Math.hypot(dx, dy);
+        const remoteSnapshot = targetRole === 'remote-snapshot';
+        if (!Number.isFinite(rawDistance)
+          || (!remoteSnapshot && rawDistance > visibleRange * 1.01)) continue;
+        const mapPosition = remoteSnapshot
+          ? mapRemoteTargetPosition(dx, dy, visibleRange)
+          : { dx, dy };
+        if (!mapPosition) continue;
         const name = String(item?.[0] || '');
         const label = targetRole === 'combat'
           ? name + ' HP ' + integer(item?.[1])
-          : (targetRole === 'afk' ? name + ' Drop ' + integer(item?.[3]) : (recordNames.has(name) ? name : ''));
+          : (targetRole === 'afk'
+            ? name + ' Drop ' + integer(item?.[3])
+            : (targetRole === 'remote-snapshot'
+              ? name + ' Drop ' + integer(item?.[3])
+              : (recordNames.has(name) ? name : '')));
         markers.push({
           mapKey: mapMarkerKey('player', item?.[9], name),
-          px: frame.center + dx * scale,
-          py: frame.center + dy * scale,
+          px: frame.center + mapPosition.dx * scale,
+          py: frame.center + mapPosition.dy * scale,
           radius: 4.5,
-          color: afk ? '#4ade80' : '#fb7185',
+          color: remoteSnapshot ? '#9ca3af' : (afk ? '#4ade80' : '#fb7185'),
           kind: 'player',
           selected: Boolean(targetRole),
           targetRole,
-          direction: afk ? null : mapVelocity(item?.[14], item?.[15]),
+          direction: remoteSnapshot || afk ? null : mapVelocity(item?.[14], item?.[15]),
           invulnerable,
           worldX: x,
           worldY: y,
@@ -2534,6 +2592,7 @@ function renderBrowserlessWebPanel() {
           tooltip: [
             value(item?.[0]),
             'HP ' + integer(item?.[1]) + ' · Drop ' + integer(item?.[3]) + ' · 距离 ' + distance(item?.[5]),
+            remoteSnapshot ? '快照收益目标（仅导航）' : '',
             invulnerable ? '无敌 ' + invulnerableText(item?.[4]) : ''
           ].filter(Boolean).join(String.fromCharCode(10))
         });
@@ -2751,10 +2810,13 @@ function renderBrowserlessWebPanel() {
             (fleeTargetId && rowTargetId && fleeTargetId === rowTargetId)
             || (!fleeTargetId && fleeTargetName && String(name) === fleeTargetName)
           );
-          const targetType = isFleeTarget ? 'flee' : (afkTarget ? 'afk' : 'combat');
+          const isSnapshotTarget = selected && snapshotNavigationTargetMatches(status, item);
+          const targetType = isFleeTarget
+            ? 'flee'
+            : (isSnapshotTarget ? 'remote-snapshot' : (afkTarget ? 'afk' : 'combat'));
           const rowClass = selected ? 'target-current target-' + targetType : '';
           fragment.appendChild(createNearbyRow('player', [
-            { text: name, icon: selected ? targetType : '' },
+            { text: name, icon: selected && targetType !== 'remote-snapshot' ? targetType : '' },
             hpCell,
             staminaCell,
             { text: integer(drop), className: 'coin' },
@@ -3812,6 +3874,7 @@ module.exports = {
   lastExitPanelVisibleCore,
   mapAnimationProgressCore,
   mapMarkerKeyCore,
+  mapRemoteTargetPositionCore,
   pruneMapTrailHistoryCore,
   mapTrailOpacityCore,
   missCloseExitReasonTextCore,

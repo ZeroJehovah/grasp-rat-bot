@@ -34,7 +34,8 @@ const {
   highDropRankValueCore,
   highDropSortValueCore,
   isStaminaExhaustionExitReasonCore,
-  lastExitPanelVisibleCore
+  lastExitPanelVisibleCore,
+  mapRemoteTargetPositionCore
 } = require('./web-panel');
 const {
   createMapTrailTracker,
@@ -7007,6 +7008,134 @@ async function runBrowserlessRunnerSelfTest() {
       presentFirst: routeRowsText(routeRowsWhenFirstPresent),
       previewOnly: routeRowsText(previewRows)
     };
+    const lateDisplayCoins = Array.from({ length: 12 }, (_, index) => ({
+      drop_id: `late-display-${index}`,
+      id: `late-display-${index}`,
+      x: 100 + index * 100,
+      y: 0,
+      amount: 1,
+      distance: 100 + index * 100,
+      authority: 'realtime'
+    }));
+    const lateDisplayRouteAction = {
+      kind: 'coin',
+      band: 'profit',
+      target: lateDisplayCoins[10],
+      coinRoute: {
+        points: [
+          { id: lateDisplayCoins[10].id, x: lateDisplayCoins[10].x, y: 0, amount: 1, order: 1 },
+          { id: lateDisplayCoins[11].id, x: lateDisplayCoins[11].x, y: 0, amount: 1, order: 2 }
+        ]
+      }
+    };
+    const lateDisplayRows = summarizeNearbyForPanel(
+      { self: { x: 0, y: 0 }, profitCoins: lateDisplayCoins, visibleTargets: [] },
+      lateDisplayRouteAction,
+      {},
+      { globalCoinMaxDistance: 50000 }
+    ).c;
+    const lateDisplayCompact = buildCompactBrowserlessStatus({
+      updatedAt: '2026-08-15T01:00:00.000Z',
+      session: { userId: 7, sessionToken: 'late-display-self-test-token' },
+      current: {
+        self: { user_id: 7, name: 'self', x: 0, y: 0, hp: 100 },
+        decision: {
+          kind: 'coin',
+          action: lateDisplayRouteAction,
+          input: {
+            nearby: {
+              ar: 15000,
+              vr: 50000,
+              c: lateDisplayRows,
+              p: [],
+              observedAt: '2026-08-15T01:00:00.000Z',
+              ageMs: 100
+            }
+          }
+        }
+      }
+    }, { nowMs: Date.parse('2026-08-15T01:00:00.100Z') });
+    const lateDisplayRouteIds = lateDisplayCompact.nearby?.c?.map(row => row[0]) || [];
+    const lateDisplayRoutePanelTest = {
+      ok: lateDisplayRouteIds.includes('late-display-10')
+        && lateDisplayRouteIds.includes('late-display-11')
+        && lateDisplayCompact.nearby?.c?.find(row => row[0] === 'late-display-10')?.[3] === 1
+        && lateDisplayCompact.nearby?.c?.find(row => row[0] === 'late-display-10')?.[4] === 1
+        && lateDisplayCompact.nearby?.c?.find(row => row[0] === 'late-display-11')?.[4] === 2
+        && lateDisplayCompact.nearby?.coinLowHiddenCount === 0,
+      ids: lateDisplayRouteIds,
+      rows: lateDisplayCompact.nearby?.c || []
+    };
+    const remoteSnapshotPanelAction = {
+      kind: 'seek-remote-player',
+      band: 'profit',
+      reason: 'remote-snapshot-profit-target',
+      target: {
+        type: 'enemy',
+        userId: 99,
+        name: '远程收益玩家',
+        x: 90000,
+        y: 0,
+        hp: 100,
+        drop: 134,
+        distance: 90000,
+        active: false,
+        moving: false,
+        firing: false,
+        stamina5s: 10000,
+        stamina5sLimit: 10000,
+        authority: 'snapshot-navigation',
+        remoteNavigationOnly: true
+      }
+    };
+    const remoteSnapshotPanelRows = summarizeNearbyForPanel(
+      { self: { x: 0, y: 0 }, profitCoins: [], visibleTargets: [] },
+      remoteSnapshotPanelAction,
+      {},
+      { globalCoinMaxDistance: 50000 }
+    ).p;
+    const remoteSnapshotCompact = buildCompactBrowserlessStatus({
+      updatedAt: '2026-08-15T01:01:00.000Z',
+      session: { userId: 7, sessionToken: 'remote-display-self-test-token' },
+      current: {
+        self: { user_id: 7, name: 'self', x: 0, y: 0, hp: 100 },
+        decision: {
+          kind: 'seek-remote-player',
+          action: remoteSnapshotPanelAction,
+          input: {
+            nearby: {
+              ar: 15000,
+              vr: 50000,
+              c: [],
+              p: remoteSnapshotPanelRows,
+              observedAt: '2026-08-15T01:01:00.000Z',
+              ageMs: 100
+            }
+          }
+        }
+      }
+    }, { nowMs: Date.parse('2026-08-15T01:01:00.100Z') });
+    const remoteSnapshotRow = remoteSnapshotCompact.nearby?.p?.find(row => row[9] === '99') || null;
+    const remoteSnapshotTargetDisplayTest = {
+      ok: remoteSnapshotPanelRows.some(row => row[9] === '99')
+        && remoteSnapshotCompact.action?.target?.authority === 'snapshot-navigation'
+        && remoteSnapshotCompact.action?.target?.remoteNavigationOnly === true
+        && remoteSnapshotRow?.[0] === '远程收益玩家'
+        && remoteSnapshotRow?.[5] === 90000
+        && remoteSnapshotRow?.[6] === 1
+        && remoteSnapshotRow?.[12] === 90000
+        && remoteSnapshotRow?.[13] === 0,
+      row: remoteSnapshotRow,
+      nearbyRows: remoteSnapshotCompact.nearby?.p || []
+    };
+    const remoteSnapshotMapPosition = mapRemoteTargetPositionCore(90000, 0, 50000);
+    const remoteSnapshotMapProjectionTest = {
+      ok: remoteSnapshotMapPosition?.outside === true
+        && remoteSnapshotMapPosition.dx > 49000
+        && remoteSnapshotMapPosition.dx < 50000
+        && remoteSnapshotMapPosition.dy === 0,
+      position: remoteSnapshotMapPosition
+    };
     const fleePanelInput = {
       self: { x: 0, y: 0 },
       visibleTargets: [
@@ -8430,6 +8559,10 @@ async function runBrowserlessRunnerSelfTest() {
           && pageHtml.includes('const arcRadius = marker.radius + Math.max(1.5, marker.radius * .3)')
           && pageHtml.includes("context.strokeStyle = 'rgba(251,113,133,.68)'")
           && pageHtml.includes('context.lineWidth = .75')
+          && pageHtml.includes("targetRole === 'remote-snapshot'")
+          && pageHtml.includes('context.setLineDash([5, 4])')
+          && pageHtml.includes("color: remoteSnapshot ? '#9ca3af'")
+          && pageHtml.includes('mapRemoteTargetPosition')
           && !pageHtml.includes('context.setLineDash([7, 5])')
           && pageHtml.includes('const leftSide = marker.px < marker.mapCenter')
           && pageHtml.includes('const topSide = marker.py < marker.mapCenter')
@@ -8591,6 +8724,9 @@ async function runBrowserlessRunnerSelfTest() {
         && snapshotModePollerTest.ok
         && fixedSnapshotPollerTest.ok
         && nearbyCoinRoutePanelTest.ok
+        && lateDisplayRoutePanelTest.ok
+        && remoteSnapshotTargetDisplayTest.ok
+        && remoteSnapshotMapProjectionTest.ok
         && nearbySelectedPlayerCoordinatesTest.ok
         && nearbyMapCoordinatesTest.ok
         && nearbyMapLegacyCompatibilityTest.ok
@@ -8674,6 +8810,9 @@ async function runBrowserlessRunnerSelfTest() {
       fixedSnapshotPoller: fixedSnapshotPollerTest,
       dynamicSnapshotPollerStatus,
       nearbyCoinRoutePanelTest,
+      lateDisplayRoutePanelTest,
+      remoteSnapshotTargetDisplayTest,
+      remoteSnapshotMapProjectionTest,
       nearbySelectedPlayerCoordinatesTest,
       nearbyMapCoordinatesTest,
       mapTrailTrackerSelfTest,

@@ -36068,7 +36068,7 @@ async function runSelfTest() {
           panelHtml.includes("if (reason === 'remote-snapshot-profit-target') return '远程快照收益目标';")
         ].join('|');
       })(),
-      want: '2026.08.14.2|活动玩家|挂机玩家|正在靠近高Drop活动玩家|HTTP全局快照|WS状态帧|WS最后位置|true|true|true|true'
+      want: `${BROWSERLESS_WEB_PANEL_VERSION}|活动玩家|挂机玩家|正在靠近高Drop活动玩家|HTTP全局快照|WS状态帧|WS最后位置|true|true|true|true`
     },
     {
       name: 'browserless web panel colors each transport metric value by severity',
@@ -36094,7 +36094,7 @@ async function runSelfTest() {
           panelHtml.includes('.transport-metric.muted,.transport-metric.muted .metric-value{color:var(--muted)}')
         ].join('|');
       })(),
-      want: '2026.08.14.2|ok|warn|bad|ok|warn|bad|ok|warn|bad|muted|true|true|true|true|true|true'
+      want: `${BROWSERLESS_WEB_PANEL_VERSION}|ok|warn|bad|ok|warn|bad|ok|warn|bad|muted|true|true|true|true|true|true`
     },
     {
       name: 'browserless web panel animates keyed map markers between status refreshes',
@@ -36132,7 +36132,7 @@ async function runSelfTest() {
           /function stopAutoRefresh\(\)\s*\{\s*cancelMapMarkerAnimation\(true\);/.test(panelScript)
         ].join('|');
       })(),
-      want: '2026.08.14.2|coin:0|player:alice||0|0.875|1|97.5|195.0|110|220|true|true|true|true|true|true|true|true|true|true|true'
+      want: `${BROWSERLESS_WEB_PANEL_VERSION}|coin:0|player:alice||0|0.875|1|97.5|195.0|110|220|true|true|true|true|true|true|true|true|true|true|true`
     },
     {
       name: 'browserless status server adds dynamic whitelist players by name',
@@ -36512,7 +36512,7 @@ async function runSelfTest() {
           nearbyCoinIconCore({ selected: false, bait: false, routeOrder: 3 }) === 'coin3',
           panelScript.includes("const baitPresented = baitCoin && actionReason.startsWith('single-coin-bait-');"),
           panelScript.includes("const fleeTarget = (actionKind === 'flee' || actionKind === 'safety-exit' || actionKind === 'leave') && Boolean(status.action?.target);"),
-          panelScript.includes("const targetType = isFleeTarget ? 'flee' : (afkTarget ? 'afk' : 'combat');")
+          /const targetType = isFleeTarget[\s\S]*?remote-snapshot/.test(panelScript)
         ].join('|');
       })(),
       want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
@@ -37133,7 +37133,7 @@ async function runSelfTest() {
             < panelScript.indexOf("if (/combat/i.test(text)) return '正在处理打架';")
         ].join('|');
       })(),
-      want: '2026.08.14.2|true|true|true'
+      want: `${BROWSERLESS_WEB_PANEL_VERSION}|true|true|true`
     },
     {
       name: 'browserless restart drain wait explains planned service restart',
@@ -37670,7 +37670,7 @@ async function runSelfTest() {
           !panelScript.includes("setRichText('roleTitleMeta', [{ text: '已离线', className: 'muted' }], 'muted');")
         ].join('|');
       })(),
-      want: '2026.08.14.2|true|true|true|true|true|true'
+      want: `${BROWSERLESS_WEB_PANEL_VERSION}|true|true|true|true|true|true`
     },
     {
       name: 'browserless runner self-test passes',

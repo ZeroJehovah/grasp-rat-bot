@@ -1843,6 +1843,9 @@ function compactTarget(value) {
     entityId: value.entityId ?? null,
     name: compactString(value.name || value.label, 80),
     authority: compactString(value.authority, 48),
+    remoteNavigationOnly: value.remoteNavigationOnly === undefined || value.remoteNavigationOnly === null
+      ? null
+      : Boolean(value.remoteNavigationOnly),
     x: compactNumber(value.x),
     y: compactNumber(value.y),
     vx: compactNumber(value.vx),
