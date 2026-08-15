@@ -36,6 +36,10 @@ const DEFAULT_REPEAT_MAX_DRIFT_MS = 125;
 const DEFAULT_TRANSPORT_HIGH_WATER_BYTES = 64 * 1024;
 const DEFAULT_ATTACK_RANGE_CM = BROWSER_RUNTIME_DEFAULTS.attackRange;
 const DEFAULT_AFK_ATTACK_FULL_RANGE_CM = BROWSER_RUNTIME_DEFAULTS.afkAttackFullRangeCm;
+const DEFAULT_AFK_ATTACK_APPROACH_RESERVE_MAX_MS = Math.max(
+  0,
+  Number(BROWSER_RUNTIME_DEFAULTS.afkAttackApproachReserveMaxMs || 5000)
+);
 const DEFAULT_COIN_FEEDBACK_MIN_TIMEOUT_MS = 250;
 const DEFAULT_COIN_FEEDBACK_MAX_TIMEOUT_MS = 800;
 const DEFAULT_COIN_FEEDBACK_DELAY_SLACK_MS = 125;
@@ -1844,6 +1848,9 @@ function createBrowserlessActionAdapter(options = {}) {
       distanceCm: null,
       fullAttackRangeCm: null,
       movementReserveMs: mode === 'afk-attack' ? null : 0,
+      uncappedMovementReserveMs: mode === 'afk-attack' ? null : 0,
+      movementReserveMaxMs: mode === 'afk-attack' ? null : 0,
+      movementReserveCapped: false,
       shotCostMs,
       requiredStaminaMs: Math.ceil(afkShootRequiredStaminaMs)
     };
@@ -1867,13 +1874,26 @@ function createBrowserlessActionAdapter(options = {}) {
         ?? BROWSER_RUNTIME_DEFAULTS.opportunityMoveStaminaPerCm
         ?? 1
     ));
-    const movementReserveMs = Math.max(0, distance - fullAttackRange) * movementStaminaPerCm;
+    const configuredReserveMaxMs = Number(
+      options.afkAttackApproachReserveMaxMs
+        ?? options.afkShootApproachReserveMaxMs
+        ?? BROWSER_RUNTIME_DEFAULTS.afkAttackApproachReserveMaxMs
+        ?? DEFAULT_AFK_ATTACK_APPROACH_RESERVE_MAX_MS
+    );
+    const movementReserveMaxMs = Number.isFinite(configuredReserveMaxMs)
+      ? Math.max(0, configuredReserveMaxMs)
+      : DEFAULT_AFK_ATTACK_APPROACH_RESERVE_MAX_MS;
+    const uncappedMovementReserveMs = Math.max(0, distance - fullAttackRange) * movementStaminaPerCm;
+    const movementReserveMs = Math.min(uncappedMovementReserveMs, movementReserveMaxMs);
     return {
       mode,
       source: distance <= fullAttackRange ? 'full-attack' : 'approach',
       distanceCm: Math.round(distance),
       fullAttackRangeCm: Math.round(fullAttackRange),
       movementReserveMs: Math.ceil(movementReserveMs),
+      uncappedMovementReserveMs: Math.ceil(uncappedMovementReserveMs),
+      movementReserveMaxMs: Math.ceil(movementReserveMaxMs),
+      movementReserveCapped: uncappedMovementReserveMs > movementReserveMs,
       shotCostMs,
       requiredStaminaMs: Math.ceil(movementReserveMs)
     };

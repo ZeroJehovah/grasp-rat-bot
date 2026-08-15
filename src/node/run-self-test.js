@@ -10301,16 +10301,21 @@ async function runSelfTest() {
       got: (() => {
         const browser = buildRuntimeDefaults({}, false);
         const browserless = buildBrowserlessRuntimeDefaults();
+        const configured = buildBrowserlessRuntimeDefaults(parseBrowserlessRunnerArgs([], {
+          GRASP_RAT_BROWSERLESS_AFK_ATTACK_APPROACH_RESERVE_MAX_MS: '4200'
+        }));
         return [
           browserless.attackRange === browser.attackRange,
           browserless.attackEngageRange === browser.attackEngageRange,
           browserless.attackMinAfkDrop === browser.attackMinAfkDrop,
           browserless.globalCoinMaxDistance === browser.globalCoinMaxDistance,
           browserless.coinPrecisionTolerance === browser.coinPrecisionTolerance,
+          browserless.afkAttackApproachReserveMaxMs,
+          configured.afkAttackApproachReserveMaxMs,
           browserless.attackEngageRange
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|11000'
+      want: 'true|true|true|true|true|5000|4200|11000'
     },
     {
       name: 'browserless profit live ranks a closer coin above costlier high-drop AFK',
@@ -18444,6 +18449,73 @@ async function runSelfTest() {
       want: 'true|2|10|11|1020'
     },
     {
+      name: 'browserless combat threat memory keeps off-lane shots observational only',
+      got: (() => {
+        const stateful = {};
+        const self = { user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100 };
+        const target = {
+          user_id: 8,
+          name: 'observed-shooter',
+          x: 8000,
+          y: 0,
+          hp: 100,
+          max_hp: 100,
+          distance: 8000,
+          active: true,
+          moving: false,
+          firing: false
+        };
+        rememberBrowserlessCombatEngagement(stateful, self, target, {
+          nowMs: 1000,
+          currentTick: 20,
+          bullets: [{
+            bullet_id: 'off-lane',
+            ownerId: 8,
+            cpa: 11700,
+            incoming: true,
+            synthetic: false,
+            createdTick: 20
+          }],
+          combatBulletHitRadiusCm: 200
+        });
+        const offLaneSample = stateful.combatTarget.motionSamples.at(-1);
+        const offLaneBehavior = stateful.combatTarget.opponentBehaviorState;
+        const offLaneThreatAt = stateful.combatTarget.lastThreatAt;
+        const offLaneIncomingAt = stateful.combatTarget.lastIncomingBulletAt;
+        const offLaneThreatCount = stateful.combatMetrics.threatBulletCount;
+        rememberBrowserlessCombatEngagement(stateful, self, target, {
+          nowMs: 1100,
+          currentTick: 21,
+          bullets: [{
+            bullet_id: 'collision-path',
+            ownerId: 8,
+            cpa: 100,
+            incoming: true,
+            synthetic: false,
+            createdTick: 21
+          }],
+          combatBulletHitRadiusCm: 200
+        });
+        const collisionSample = stateful.combatTarget.motionSamples.at(-1);
+        return [
+          offLaneSample.realBulletPressure,
+          offLaneSample.hasThreateningBullet,
+          offLaneSample.newBulletCount,
+          offLaneSample.newShotEvents.length,
+          offLaneBehavior.seenShotEventIds.includes('off-lane'),
+          offLaneThreatAt,
+          offLaneIncomingAt,
+          offLaneThreatCount,
+          collisionSample.realBulletPressure,
+          collisionSample.hasThreateningBullet,
+          stateful.combatTarget.lastThreatAt,
+          stateful.combatTarget.lastIncomingBulletAt,
+          stateful.combatMetrics.threatBulletCount
+        ].join('|');
+      })(),
+      want: 'false|false|1|1|true|0|0|0|true|true|1100|1100|1'
+    },
+    {
       name: 'browserless target change releases ballistic latch and starts fresh engagement intent and shots',
       got: (() => {
         const stateful = {};
@@ -19377,6 +19449,81 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|target-real-bullet|true|true|tangent-dodge|tangent-dodge|0,1|false|true'
+    },
+    {
+      name: 'browserless first-contact guard ignores off-lane owner fire and keeps collision-path takeover',
+      got: (() => {
+        const self = {
+          user_id: 7,
+          entity_id: 1,
+          x: 0,
+          y: 0,
+          vx: 0,
+          vy: 0,
+          hp: 100,
+          max_hp: 100,
+          stamina_5s_remaining_milli: 5568
+        };
+        const target = {
+          user_id: 8,
+          entity_id: 2,
+          x: 14835,
+          y: 0,
+          vx: 0,
+          vy: 0,
+          hp: 100,
+          active: false,
+          current_join_mode: 'AFK',
+          drop: 775
+        };
+        const run = bullet => buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: {
+            tick: 20,
+            self,
+            entities: [self, target],
+            bullets: [bullet]
+          }
+        }, {
+          nowMs: 1000,
+          decisionState: {},
+          combatEnabled: true,
+          combatBulletHitRadiusCm: 200
+        });
+        const offLane = run({
+          bullet_id: 'off-lane-owner-shot',
+          owner_user_id: 8,
+          x: 12000,
+          y: 11700,
+          target_x: 0,
+          target_y: 11700,
+          speed_per_tick: 500,
+          created_tick: 20,
+          expire_tick: 50
+        });
+        const collision = run({
+          bullet_id: 'collision-owner-shot',
+          owner_user_id: 8,
+          x: 12000,
+          y: 0,
+          target_x: 0,
+          target_y: 0,
+          speed_per_tick: 500,
+          created_tick: 20,
+          expire_tick: 50
+        });
+        return [
+          offLane.target === null,
+          offLane.contactEntryGuard.active,
+          offLane.contactEntryGuard.reason,
+          collision.contactEntryGuard.active,
+          collision.contactEntryGuard.trigger,
+          collision.contactEntryGuard.realBulletTakeover,
+          collision.target?.combatIntent,
+          collision.movement.dodge?.threatField?.some(item => item.directHits > 0)
+        ].join('|');
+      })(),
+      want: 'true|false|target-not-active|true|target-real-bullet|true|defensive|true'
     },
     {
       name: 'browserless movement route model conditions next direction on current action phase',
@@ -25646,6 +25793,59 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|3900|3900|3900|afk-shoot-stamina-reserve|3900|vel 1 0,shoot 4900 0 0 0|vel 1 0'
+    },
+    {
+      name: 'browserless AFK attack caps approach reserve to the rolling movement window',
+      got: (() => {
+        const target = realtimePassiveAfk({ type: 'enemy', userId: 8, user_id: 8, x: 12801, y: 0, active: false });
+        const makeAdapter = () => {
+          const commands = [];
+          return {
+            commands,
+            adapter: createBrowserlessActionAdapter({
+              now: () => 1000,
+              commandIntervalMs: 1,
+              combatShootMinIntervalMs: 160,
+              afkShootMinIntervalMs: 160,
+              combatShootPassiveRunnerDodgeReserveMs: 1800,
+              opportunityMoveStaminaPerCm: 1,
+              opportunityShotStaminaCostMs: 500,
+              attackRangeCm: 14500,
+              transport: {
+                sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`),
+                sendShoot: (targetX, targetY, startX, startY) => commands.push(`shoot ${targetX} ${targetY} ${startX} ${startY}`)
+              }
+            })
+          };
+        };
+        const apply = (fixture, stamina5s) => fixture.adapter.applyDecision({
+          realtime: { self: { x: 0, y: 0 }, entities: [target], tick: 1 },
+          command: { shooting: { pendingShots: [], expiredShots: [] } }
+        }, {
+          kind: 'profit-candidate',
+          band: 'profit',
+          input: { self: { x: 0, y: 0, stamina5s } },
+          action: { kind: 'attack', band: 'profit', target }
+        });
+        const ready = makeAdapter();
+        const readyAction = apply(ready, 5568);
+        const blocked = makeAdapter();
+        const blockedAction = apply(blocked, 4999);
+        return [
+          readyAction.shoot.ok,
+          readyAction.shoot.skipped,
+          readyAction.shoot.stamina5s,
+          readyAction.shoot.requiredStaminaMs,
+          readyAction.shoot.staminaPlan.uncappedMovementReserveMs,
+          readyAction.shoot.staminaPlan.movementReserveMs,
+          readyAction.shoot.staminaPlan.movementReserveCapped,
+          blockedAction.shoot.reason,
+          blockedAction.shoot.requiredStaminaMs,
+          ready.commands.join(','),
+          blocked.commands.join(',')
+        ].join('|');
+      })(),
+      want: 'true|false|5568|5000|11801|5000|true|afk-shoot-stamina-reserve|5000|vel 1 0,shoot 12801 0 0 0|vel 1 0'
     },
     {
       name: 'browserless shoot repeat pauses at websocket high water and resumes without catch-up burst',

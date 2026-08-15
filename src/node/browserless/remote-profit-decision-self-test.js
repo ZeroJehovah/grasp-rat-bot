@@ -963,8 +963,120 @@ function assertOrdinaryProfitEscortContinuity() {
   );
 }
 
+function assertAfkProfitIgnoresOffLaneActiveBystander() {
+  const adapterOptions = {
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    dynamicProfitThresholdEnabled: false,
+    singleCoinBaitEnabled: false,
+    finalActionArbitrationHoldMs: 0,
+    opportunitySwitchConfirmFrames: 1,
+    opportunitySwitchMargin: 0,
+    opportunitySwitchRelativeMargin: 0
+  };
+  const decisionAdapter = createBrowserlessDecisionAdapter(adapterOptions);
+  const commands = [];
+  const actionAdapter = createBrowserlessActionAdapter({
+    ...adapterOptions,
+    now: () => 1000,
+    commandIntervalMs: 1,
+    afkShootMinIntervalMs: 160,
+    opportunityMoveStaminaPerCm: 1,
+    opportunityShotStaminaCostMs: 500,
+    transport: {
+      sendVelocity(dx, dy) {
+        commands.push(`vel ${dx} ${dy}`);
+        return { ok: true };
+      },
+      sendShoot(x, y, startX, startY) {
+        commands.push(`shoot ${x} ${y} ${startX} ${startY}`);
+        return { ok: true };
+      }
+    }
+  });
+  const self = fullStaminaSelf({
+    stamina_5s_remaining_milli: 5568,
+    stamina_5s_limit_milli: 10000
+  });
+  const profitTarget = ordinaryProfitTarget(42, 12801, 147);
+  const firstState = escortState(self, [profitTarget], 1);
+  const first = decide(decisionAdapter, firstState, 1000, null, adapterOptions);
+  assert.strictEqual(first.action?.kind, 'attack');
+  assert.strictEqual(first.action?.target?.userId, 42);
+  const applied = actionAdapter.applyDecision(firstState, first.action);
+  assert.strictEqual(applied.shoot?.ok, true);
+  assert.strictEqual(applied.shoot?.skipped, false);
+  assert.strictEqual(applied.shoot?.requiredStaminaMs, 5000);
+  assert.strictEqual(applied.shoot?.staminaPlan?.uncappedMovementReserveMs, 11801);
+  assert.strictEqual(applied.shoot?.staminaPlan?.movementReserveCapped, true);
+  assert(commands.some(command => command.startsWith('shoot 12801 0 ')));
+  decisionAdapter.observeActionResult(applied, first, { nowMs: 1000 });
+  assert.strictEqual(decisionAdapter.getState().attackHistory?.length, 1);
+
+  const activeBystander = escortCombatTarget({
+    entity_id: 1008,
+    user_id: 8,
+    name: 'active-bystander',
+    x: 14835,
+    y: 0,
+    vx: 0,
+    vy: 0,
+    active: true,
+    current_join_mode: 'Active',
+    firing: false,
+    drop: 775,
+    stamina_5s_remaining_milli: 5000,
+    stamina_5s_limit_milli: 10000
+  });
+  const offLaneBullet = {
+    bullet_id: 'off-lane-bystander-shot',
+    owner_user_id: 8,
+    x: 12000,
+    y: 11700,
+    target_x: 0,
+    target_y: 11700,
+    speed_per_tick: 500,
+    created_tick: 2,
+    expire_tick: 50
+  };
+  const retained = decide(
+    decisionAdapter,
+    escortState(self, [profitTarget, activeBystander], 2, { bullets: [offLaneBullet] }),
+    1100,
+    null,
+    adapterOptions
+  );
+  assert.strictEqual(retained.action?.kind, 'attack');
+  assert.strictEqual(retained.action?.target?.userId, 42);
+  assert.strictEqual(retained.combat?.target, null);
+  assert.strictEqual(retained.combat?.contactEntryGuard?.active, false);
+  assert.strictEqual(retained.combat?.profitEscortContinuity?.active, null);
+
+  const collisionBullet = {
+    ...offLaneBullet,
+    bullet_id: 'collision-bystander-shot',
+    y: 0,
+    target_y: 0,
+    created_tick: 3
+  };
+  const defended = decide(
+    decisionAdapter,
+    escortState(self, [profitTarget, activeBystander], 3, { bullets: [collisionBullet] }),
+    1200,
+    null,
+    adapterOptions
+  );
+  assert.strictEqual(defended.action?.kind, 'flee');
+  assert.strictEqual(defended.action?.reason, 'incoming-bullet-dodge');
+  assert.strictEqual(defended.combat?.target?.userId, 8);
+  assert.strictEqual(defended.combat?.target?.combatIntent, 'defensive');
+  assert.strictEqual(defended.combat?.contactEntryGuard?.realBulletTakeover, true);
+}
+
 function runRemoteProfitDecisionSelfTest() {
   assertOrdinaryProfitEscortContinuity();
+  assertAfkProfitIgnoresOffLaneActiveBystander();
   const adapter = createBrowserlessDecisionAdapter({
     userId: 7,
     controlMode: 'non-combat-profit',
@@ -1517,7 +1629,7 @@ function runRemoteProfitDecisionSelfTest() {
   assert.strictEqual(stale.input?.loot?.reason, 'snapshot-stale');
   assert.strictEqual(staleAdapter.getState().realtimeLootIntent, null);
 
-  return { ok: true, cases: 63 };
+  return { ok: true, cases: 64 };
 }
 
 if (require.main === module) {

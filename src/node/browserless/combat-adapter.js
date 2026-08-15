@@ -1072,10 +1072,28 @@ function ensureContactEntryGuardState(stateful = {}) {
   return stateful.contactEntryGuard;
 }
 
-function contactEntryTargetBullet(bullets, targetId) {
+function realtimeTargetBulletOwnedBy(bullet, targetId) {
   const id = String(targetId ?? '');
-  if (!id) return null;
-  return (bullets || []).find(bullet => String(bullet?.ownerId ?? '') === id) || null;
+  if (!id || !bullet || bullet.synthetic === true || bullet.incoming === false) return false;
+  if (bullet.authority && bullet.authority !== 'realtime') return false;
+  const ownerId = bullet.ownerId
+    ?? bullet.owner_id
+    ?? bullet.ownerUserId
+    ?? bullet.owner_user_id
+    ?? bullet.source_user_id
+    ?? bullet.user_id;
+  return ownerId !== null && ownerId !== undefined && String(ownerId) === id;
+}
+
+function realtimeTargetCollisionRiskBullet(bullet, targetId, options = {}) {
+  return realtimeTargetBulletOwnedBy(bullet, targetId)
+    && incomingBulletHasCollisionRiskCore(bullet, options);
+}
+
+function contactEntryTargetBullet(bullets, targetId, options = {}) {
+  return (bullets || []).find(bullet => (
+    realtimeTargetCollisionRiskBullet(bullet, targetId, options)
+  )) || null;
 }
 
 function contactEntryDodgeSummary(dodge, syntheticBullet = null) {
@@ -1125,15 +1143,12 @@ function updateContactEntryGuard(stateful, self, targets = [], bullets = [], opt
       || isInvulnerableEntity(activeTarget)
       || isHardCombatProtectedTarget(activeTarget, options)
       || dynamicWhitelistDistanceGuardBlocksCombatCore(activeTarget, {
-        incomingOverride: Boolean((bullets || []).some(bullet => (
-          String(bullet?.ownerId ?? '') === String(state.active.targetId || '')
-            && incomingBulletHasCollisionRiskCore(bullet, options)
-        )))
+        incomingOverride: Boolean(contactEntryTargetBullet(bullets, state.active.targetId, options))
       });
     if (activeTargetInvalid || nowMs >= Number(state.active.holdUntil || 0)) {
       state.active = null;
     } else {
-      const realBullet = contactEntryTargetBullet(bullets, state.active.targetId);
+      const realBullet = contactEntryTargetBullet(bullets, state.active.targetId, options);
       return {
         ...state.active,
         active: true,
@@ -1148,13 +1163,10 @@ function updateContactEntryGuard(stateful, self, targets = [], bullets = [], opt
   for (const target of targets) {
     const id = String(combatTargetId(target) || '');
     const targetHp = hpValue(target);
-    let targetBullet = contactEntryTargetBullet(bullets, id);
+    const targetBullet = contactEntryTargetBullet(bullets, id, options);
     const dynamicWhitelistMember = Boolean(
       target.dynamicWhitelistMember || target.whitelistContactPolicy?.dynamicWhitelistMember
     );
-    if (dynamicWhitelistMember && targetBullet && !incomingBulletHasCollisionRiskCore(targetBullet, options)) {
-      targetBullet = null;
-    }
     const dynamicContactEligible = target.whitelistContactPolicy?.proactiveCombatEligible === true;
     if (!id
       || (targetHp !== null && targetHp <= 0)
@@ -2580,7 +2592,7 @@ function buildCombatExitEvaluation(self, target, combatTargetState = {}, options
   };
 }
 
-function profitEscortEntryEvidence(target, combatTargetState, bullets = [], nowMs = Date.now()) {
+function profitEscortEntryEvidence(target, combatTargetState, bullets = [], nowMs = Date.now(), options = {}) {
   const currentTargetId = String(combatTargetId(target) || '');
   const recentMotionSamples = (Array.isArray(combatTargetState?.motionSamples)
     ? combatTargetState.motionSamples
@@ -2594,8 +2606,7 @@ function profitEscortEntryEvidence(target, combatTargetState, bullets = [], nowM
       && Number(firstMotionSample.distance) - Number(lastMotionSample.distance) >= 200
   );
   const realTargetBulletPressure = (bullets || []).some(bullet => (
-    bullet?.synthetic !== true
-      && String(bullet?.ownerId ?? bullet?.owner_id ?? '') === currentTargetId
+    realtimeTargetCollisionRiskBullet(bullet, currentTargetId, options)
   ));
   const recentTargetThreat = Number(combatTargetState?.lastThreatAt || 0) > 0
     && nowMs - Number(combatTargetState.lastThreatAt) <= 2500;
@@ -2651,7 +2662,7 @@ function reconcileBrowserlessProfitEscortContinuity(
     ? String(stateful.combatMetrics?.controlGeneration || '')
     : '';
   const evidence = target
-    ? profitEscortEntryEvidence(target, combatTargetState, bullets, nowMs)
+    ? profitEscortEntryEvidence(target, combatTargetState, bullets, nowMs, options)
     : null;
   const missionTarget = mission?.navigationTarget || mission?.target || mission;
   const missionTargetId = String(
@@ -3081,7 +3092,8 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     target,
     combatTargetState,
     bullets,
-    Number(options.nowMs || Date.now())
+    Number(options.nowMs || Date.now()),
+    options
   );
   const escortContinuity = options.profitEscortContinuity || null;
   const continuityMatches = profitEscortContinuityMatchesCore(escortContinuity, {
@@ -3721,13 +3733,9 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   const damageFromStart = firstHp !== null && minHp !== null ? Math.max(0, firstHp - minHp) : null;
   const inRange = Number.isFinite(distance)
     && distance <= Math.max(0, Number(options.combatAttackRange || options.attackRange || COMBAT_CONSTANTS.ATTACK_RANGE));
-  const incomingOwnerId = target.incomingBullet?.ownerId ?? target.incomingBullet?.owner_id ?? null;
   const targetOwnsRealBullet = Boolean(
     target.incomingBullet
-      && !target.incomingBullet.synthetic
-      && incomingOwnerId !== null
-      && incomingOwnerId !== undefined
-      && String(incomingOwnerId) === String(id)
+      && realtimeTargetCollisionRiskBullet(target.incomingBullet, id, options)
   );
   const previousMetrics = continuesActiveGeneration
     && stateful.combatMetrics?.targetId === String(id)
@@ -3738,26 +3746,29 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   const previousThreatBulletIds = previousMetrics.threatBulletIds || [];
   const previousSeenShotEventIds = previousBehavior?.seenShotEventIds || [];
   const targetBulletIds = [];
+  const threateningTargetBulletIds = [];
   const newShotEvents = [];
   let newBulletCount = 0;
   for (const bullet of options.bullets || []) {
-    if (String(bullet?.ownerId ?? '') !== String(id)) continue;
+    if (!realtimeTargetBulletOwnedBy(bullet, id)) continue;
     const bulletId = combatBulletIdentity(bullet);
     if (!bulletId) continue;
     targetBulletIds.push(bulletId);
-    if (!previousThreatBulletIds.includes(bulletId)) newBulletCount += 1;
+    if (incomingBulletHasCollisionRiskCore(bullet, options)) threateningTargetBulletIds.push(bulletId);
+    if (!previousSeenShotEventIds.includes(bulletId)) newBulletCount += 1;
     const createdTick = numberOrNull(bullet?.createdTick ?? bullet?.created_tick);
     if (createdTick !== null && !previousSeenShotEventIds.includes(bulletId)) {
       newShotEvents.push({ bulletId, createdTick });
     }
   }
-  const lastIncomingBulletAt = targetBulletIds.length
+  const targetThreatBulletPressure = Boolean(targetOwnsRealBullet || threateningTargetBulletIds.length);
+  const lastIncomingBulletAt = targetThreatBulletPressure
     ? nowMs
     : (same ? Number(previous.lastIncomingBulletAt || 0) : 0);
   const attributableSelfDamage = Boolean(
     selfDamaged
       && (targetOwnsRealBullet
-        || targetBulletIds.length
+        || threateningTargetBulletIds.length
         || (same && nowMs - Number(previous.lastIncomingBulletAt || 0) <= 1000))
   );
   const creditedHits = damaged
@@ -3801,8 +3812,8 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     selfVy: numberOrNull(self?.vy),
     distance: Number.isFinite(distance) ? distance : null,
     firing: Boolean(target.firing),
-    realBulletPressure: Boolean(targetOwnsRealBullet || targetBulletIds.length),
-    hasThreateningBullet: Boolean(targetOwnsRealBullet || targetBulletIds.length),
+    realBulletPressure: targetThreatBulletPressure,
+    hasThreateningBullet: targetThreatBulletPressure,
     newBulletCount: Math.max(0, newBulletCount),
     newShotEvents,
     currentTick: numberOrNull(options.currentTick),
@@ -3904,7 +3915,7 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     lastSelfDamage: selfDamaged ? Math.max(0, previousSelfHp - currentSelfHp) : 0,
     selfHpLossObserved: selfDamaged,
     hasDamagedSelf: Boolean((same && previous.hasDamagedSelf) || attributableSelfDamage),
-    lastThreatAt: attributableSelfDamage || targetBulletIds.length || targetOwnsRealBullet
+    lastThreatAt: attributableSelfDamage || targetThreatBulletPressure
       ? nowMs
       : (same ? Number(previous.lastThreatAt || 0) : 0),
     incomingHitCount: Math.max(0, Number(same ? previous.incomingHitCount || 0 : 0))
@@ -3937,7 +3948,7 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   };
   recordRouteTransitionObservation(stateful, id, opponentBehaviorState, nowMs);
   finalizeCombatRouteFeedback(stateful, id, stateful.combatTarget, options.currentTick, nowMs, options);
-  const threatBulletIds = appendUniqueStringsBounded(previousThreatBulletIds, targetBulletIds, 200);
+  const threatBulletIds = appendUniqueStringsBounded(previousThreatBulletIds, threateningTargetBulletIds, 200);
   const initialStamina1d = Number(previousMetrics.initialStamina1d);
   const currentStamina1d = Number(self?.stamina_1d_remaining_milli ?? self?.stamina1dRemainingMilli);
   const staminaSpentKnown = Number.isFinite(initialStamina1d) && Number.isFinite(currentStamina1d);
