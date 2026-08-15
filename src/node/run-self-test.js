@@ -340,6 +340,7 @@ const {
 const {
   runStrategyModuleSelfTests
 } = require('../strategy/self-test');
+const { runDropRaceObservabilitySelfTest } = require('./browserless/drop-race-observability');
 
 function createMapStorage(data = new Map()) {
   return {
@@ -6385,6 +6386,14 @@ async function runSelfTest() {
         return `${result.failed}:${result.success}`;
       })(),
       want: '0:true'
+    },
+    {
+      name: 'browserless drop-race observability self-test passes',
+      got: (() => {
+        const result = runDropRaceObservabilitySelfTest();
+        return `${result.ok}:${result.cases}:${result.maxCompetitors}`;
+      })(),
+      want: 'true:3:8'
     },
     {
       name: 'shared GRZ frame parser decodes gzip pos summaries',

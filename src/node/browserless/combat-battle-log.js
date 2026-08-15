@@ -18,6 +18,7 @@ const path = require('path');
 const zlib = require('zlib');
 const { redactStructuredSecrets } = require('./session-client');
 const { utc8DayKey } = require('./utc8-day');
+const { sanitizeDropRaceLifecycle } = require('./drop-race-observability');
 const {
   buildCombatAudit,
   createCombatAuditLedger,
@@ -33,6 +34,7 @@ const BATTLES_DIR = 'battles';
 const INDEX_FILE = 'index.jsonl';
 const SHOT_AMENDMENTS_FILE = 'shot-amendments.jsonl';
 const SEGMENT_LIFECYCLE_FILE = 'segment-lifecycle.jsonl';
+const DROP_RACE_FILE = 'drop-race.jsonl';
 const MAX_ORIGIN_RESOLUTION_CANDIDATES = 4;
 const MAX_INDEX_LINE_BYTES = 8192;
 const BATTLE_INDEX_FORMAT_VERSION = 3;
@@ -1596,6 +1598,21 @@ function createCombatBattleLog(options = {}) {
     return { recorded: true, file: active.rawFile, engagementId: active.engagementId, tail: true };
   }
 
+  function recordDropRace(detail, recordOptions = {}) {
+    const normalized = sanitizeDropRaceLifecycle(detail);
+    if (!normalized) return { recorded: false, reason: 'invalid-or-non-realtime-drop-race' };
+    const atMs = Number(recordOptions.atMs || normalized.tSettleMs || normalized.tDropMs || normalized.tKillMs || now());
+    if (active) {
+      io.appendFrame(active.rawFile, atMs, 'drop-race', normalized);
+      active.lastFrameAtMs = Math.max(active.lastFrameAtMs, atMs);
+      return { recorded: true, file: active.rawFile, engagementId: active.engagementId, dropRace: true };
+    }
+    const file = path.join(battlesDirFor(atMs), DROP_RACE_FILE);
+    io.appendIndex(file, { at: new Date(atMs).toISOString(), type: 'drop-race', detail: normalized });
+    framesWritten += 1;
+    return { recorded: true, file, dropRace: true, standalone: true };
+  }
+
   function recordShotExecution(detail, recordOptions = {}) {
     const atMs = Number(recordOptions.atMs || detail?.atMs || now());
     const wireTarget = detail?.wireTarget && typeof detail.wireTarget === 'object'
@@ -1869,7 +1886,7 @@ function createCombatBattleLog(options = {}) {
     return String(active.segmentGeneration || active.segmentId || '');
   }
 
-  return { record, recordTail, recordShotExecution, currentSegmentGeneration, finalizeActive, flush, status };
+  return { record, recordTail, recordDropRace, recordShotExecution, currentSegmentGeneration, finalizeActive, flush, status };
 }
 
 function runCombatBattleLogSelfTest() {
@@ -2170,6 +2187,25 @@ function runCombatBattleLogSelfTest() {
       pending: { ok: true, completedAtMs: nowMs }
     });
     assert('active battle raw file exists before switch', fs.existsSync(path.join(battlesDir, '100_1000.jsonl')));
+    const dropRaceRecord = log.recordDropRace({
+      event: 'drop-visible',
+      targetId: '100',
+      coinKey: 'coin:100',
+      coinAmount: 40,
+      realtimeAuthority: 'realtime',
+      dropPoint: { x: 1000, y: 0 },
+      dropPointSource: 'realtime-coin',
+      self: { user_id: 7, x: 0, y: 0, vx: 50, vy: 0 },
+      competitors: [{ user_id: 8, active: true, x: 900, y: 0, vx: 0, vy: 0 }]
+    }, { atMs: nowMs });
+    assert('realtime drop-race is appended to the active battle', dropRaceRecord.recorded === true
+      && dropRaceRecord.dropRace === true);
+    assert('snapshot-only drop-race is rejected', log.recordDropRace({
+      event: 'drop-visible',
+      targetId: '100',
+      realtimeAuthority: 'snapshot',
+      dropPoint: { x: 1000, y: 0 }
+    }).recorded === false);
 
     // Switching to a new engagement finalizes the first battle.
     nowMs += 50;
@@ -2289,7 +2325,7 @@ function runCombatBattleLogSelfTest() {
     // Compressed content round-trips and secrets were redacted at append time.
     const decompressed = zlibSync.gunzipSync(fs.readFileSync(path.join(battlesDir, '100_1000.jsonl.gz'))).toString('utf8');
     const gzLines = decompressed.trim().split('\n').filter(Boolean);
-    assert('gz has combat frames, execution events, and terminal tail', gzLines.length === 19);
+    assert('gz has combat frames, execution events, drop-race, and terminal tail', gzLines.length === 20);
     assert('gz frames keep {at,type,detail} shape', gzLines.every(line => {
       const entry = JSON.parse(line);
       return entry.at && entry.type && entry.detail && typeof entry.detail === 'object';
@@ -2807,6 +2843,7 @@ function runCombatBattleLogSelfTest() {
 
 module.exports = {
   BATTLE_INDEX_FORMAT_VERSION,
+  DROP_RACE_FILE,
   DEFAULT_IDLE_FINALIZE_MS,
   MAX_INDEX_LINE_BYTES,
   BEHAVIOR_MODE_KEYS,

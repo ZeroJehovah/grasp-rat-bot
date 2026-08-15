@@ -82,6 +82,7 @@ const {
   settlementSummary,
   updatePostKillSettlementsCore
 } = require('../../strategy/post-kill-settlement');
+const { sanitizeDropRaceLifecycle } = require('./drop-race-observability');
 const {
   coinFailureIgnoreCore,
   staleCoinEscapeDirectionCore,
@@ -8001,6 +8002,186 @@ function reconcilePostAttackSettlements(input, stateful = {}, options = {}, comb
   };
 }
 
+function dropRaceActorId(value) {
+  const id = value?.userId ?? value?.user_id ?? value?.entityId ?? value?.entity_id ?? value?.id;
+  return id === null || id === undefined || id === '' ? '' : String(id);
+}
+
+function dropRaceActorDrop(value) {
+  if (!value || String(value.dropAuthority || '').toLowerCase() !== 'realtime') return null;
+  return numberOrNull(value.drop);
+}
+
+function dropRaceTargetMemory(input, stateful, settlement) {
+  const id = String(settlement?.targetId ?? '');
+  if (!id) return null;
+  return [
+    ...(input?.visibleTargets || []),
+    stateful?.combatTarget,
+    ...((stateful?.attackHistory || []).slice().reverse())
+  ].find(target => dropRaceActorId(target) === id) || null;
+}
+
+function dropRaceRealtimeCompetitors(input, settlement, dropPoint = settlement) {
+  const selfId = dropRaceActorId(input?.self);
+  const targetId = String(settlement?.targetId ?? '');
+  return (input?.visibleTargets || [])
+    .filter(target => {
+      const id = dropRaceActorId(target);
+      return id && id !== selfId && id !== targetId
+        && target?.alive !== false
+        && (target?.active === true
+          || String(target?.current_join_mode || target?.mode || '').toLowerCase() === 'active');
+    })
+    .slice()
+    .sort((left, right) => (distanceBetween(left, dropPoint) ?? Infinity)
+      - (distanceBetween(right, dropPoint) ?? Infinity))
+    .slice(0, 8);
+}
+
+function dropRaceKillAt(stateful, settlement) {
+  const targetId = String(settlement?.targetId ?? '');
+  const startedAt = Number(settlement?.startedAt || 0);
+  const attack = (stateful?.attackHistory || [])
+    .filter(item => String(item?.id ?? '') === targetId)
+    .filter(item => !startedAt || Number(item?.at || 0) <= startedAt)
+    .sort((left, right) => Number(right?.at || 0) - Number(left?.at || 0))[0] || null;
+  return Number(attack?.at || settlement?.confirmedAt || settlement?.startedAt || 0) || null;
+}
+
+function dropRaceDropDeltas(baseline = {}, self, competitors = []) {
+  const selfDrop = dropRaceActorDrop(self);
+  const selfDropDelta = selfDrop === null || baseline.selfDrop === null || baseline.selfDrop === undefined
+    ? null
+    : selfDrop - Number(baseline.selfDrop);
+  const competitorDropDeltas = [];
+  for (const competitor of competitors) {
+    const id = dropRaceActorId(competitor);
+    const current = dropRaceActorDrop(competitor);
+    const prior = baseline.competitorDrops?.[id];
+    if (!id || current === null || prior === null || prior === undefined) continue;
+    competitorDropDeltas.push({ id, delta: current - Number(prior) });
+  }
+  return { selfDropDelta, competitorDropDeltas: competitorDropDeltas.slice(0, 8) };
+}
+
+function observeDropRaceLifecycles(input, stateful, previousSettlements, nextSettlements, options = {}) {
+  const memory = stateful.dropRaceObservations && typeof stateful.dropRaceObservations === 'object'
+    ? stateful.dropRaceObservations
+    : {};
+  const pending = Array.isArray(stateful.dropRacePendingEvents)
+    ? stateful.dropRacePendingEvents
+    : [];
+  const nowMs = Number(input?.nowMs || Date.now());
+  for (const [key, settlement] of Object.entries(nextSettlements || {})) {
+    if (!settlement || typeof settlement !== 'object') continue;
+    const previous = previousSettlements?.[key] || null;
+    const target = dropRaceTargetMemory(input, stateful, settlement);
+    const dropPoint = Number.isFinite(Number(settlement.x)) && Number.isFinite(Number(settlement.y))
+      ? { x: Number(settlement.x), y: Number(settlement.y) }
+      : (target && Number.isFinite(Number(target.x)) && Number.isFinite(Number(target.y))
+          ? { x: Number(target.x), y: Number(target.y) }
+          : null);
+    if (!dropPoint) continue;
+    const competitors = dropRaceRealtimeCompetitors(input, settlement, dropPoint);
+    const observation = memory[key] && typeof memory[key] === 'object' ? memory[key] : {
+      key,
+      targetId: String(settlement.targetId || ''),
+      tKillMs: dropRaceKillAt(stateful, settlement),
+      tDropMs: null,
+      tLastVisibleMs: null,
+      tSettleMs: null,
+      baseline: {
+        selfDrop: dropRaceActorDrop(input?.self),
+        competitorDrops: Object.fromEntries(competitors.map(item => [dropRaceActorId(item), dropRaceActorDrop(item)]))
+      }
+    };
+    observation.dropPoint = dropPoint;
+    observation.dropPointSource = settlement.matchedCoinAuthority === 'realtime'
+      ? 'realtime-coin'
+      : 'realtime-target-last-visible';
+    observation.lastSelf = cloneJson(input?.self || null);
+    observation.lastCompetitors = cloneJson(competitors);
+    if (settlement.active !== false) observation.tLastVisibleMs = nowMs;
+    if (settlement.phase === 'drop-visible' && settlement.matchedCoinAuthority === 'realtime') {
+      observation.tDropMs = Number(settlement.matchedCoinObservedAtMs || nowMs);
+    }
+    const created = !previous && settlement.active !== false;
+    const realtimeDropAppeared = settlement.active !== false
+      && settlement.phase === 'drop-visible'
+      && settlement.matchedCoinAuthority === 'realtime'
+      && previous?.phase !== 'drop-visible';
+    const terminal = previous?.active !== false && settlement.active === false;
+    const event = created
+      ? 'kill'
+      : (realtimeDropAppeared
+          ? 'drop-visible'
+          : (terminal ? (settlement.phase === 'expired' ? 'expired' : 'settled') : ''));
+    if (terminal) observation.tSettleMs = Number(settlement.updatedAt || nowMs);
+    if (event) {
+      const deltas = terminal
+        ? dropRaceDropDeltas(observation.baseline, input?.self, competitors)
+        : { selfDropDelta: null, competitorDropDeltas: [] };
+      const pickerId = settlement.pickerUserId
+        ?? settlement.pickedByUserId
+        ?? settlement.picker_id
+        ?? settlement.picked_by_user_id
+        ?? null;
+      pending.push({
+        event,
+        targetId: String(settlement.targetId || ''),
+        coinKey: settlement.matchedCoinAuthority === 'realtime' ? settlement.matchedCoinKey || null : null,
+        coinAmount: settlement.matchedCoinAuthority === 'realtime' ? numberOrNull(settlement.matchedCoinAmount) : null,
+        targetDrop: numberOrNull(settlement.targetDrop),
+        targetDropAuthority: target?.dropAuthority || '',
+        realtimeAuthority: 'realtime',
+        dropPoint,
+        dropPointSource: observation.dropPointSource,
+        tKillMs: observation.tKillMs,
+        tDropMs: observation.tDropMs,
+        tLastVisibleMs: observation.tLastVisibleMs,
+        tSettleMs: observation.tSettleMs,
+        self: input?.self || observation.lastSelf,
+        competitors: competitors.length ? competitors : observation.lastCompetitors,
+        disappearance: {
+          ...deltas,
+          picker: pickerId ? { id: pickerId, source: 'server-picker', authority: 'server' } : null
+        },
+        reason: settlement.terminalReason || settlement.reason || event,
+        engagementId: stateful?.combatMetrics?.engagementId || '',
+        controlGeneration: stateful?.combatMetrics?.controlGeneration || input?.command?.controlGeneration || '',
+        generation: key,
+        runId: options.runId || '',
+        runtimeRevision: options.runtimeRevision || ''
+      });
+    }
+    memory[key] = observation;
+  }
+  const retainedKeys = Object.entries(nextSettlements || {})
+    .sort((left, right) => Number(right[1]?.updatedAt || right[1]?.startedAt || 0)
+      - Number(left[1]?.updatedAt || left[1]?.startedAt || 0))
+    .slice(0, 16)
+    .map(([key]) => key);
+  stateful.dropRaceObservations = Object.fromEntries(retainedKeys
+    .filter(key => memory[key])
+    .map(key => [key, memory[key]]));
+  stateful.dropRacePendingEvents = pending.slice(-16);
+}
+
+function consumeDropRaceLifecycles(input, stateful, action = null) {
+  const pending = Array.isArray(stateful?.dropRacePendingEvents)
+    ? stateful.dropRacePendingEvents.splice(0, 8)
+    : [];
+  return pending
+    .map(event => sanitizeDropRaceLifecycle({
+      ...event,
+      input,
+      action,
+      stateful
+    }))
+    .filter(Boolean);
+}
+
 function reconcilePostKillSettlement(input, stateful = {}, combat = {}, previousCombatTarget = null, options = {}) {
   const observation = stateful.realtimeSnapshotObservation || null;
   const currentCombatTarget = combat?.target || combat?.dryRun?.target || null;
@@ -8070,6 +8251,7 @@ function reconcilePostKillSettlement(input, stateful = {}, combat = {}, previous
     evidenceBootstrapMaxAgeMs: options.postKillEvidenceBootstrapMaxAgeMs ?? 12000,
     evidenceBootstrapMaxAgeTicks: options.postKillEvidenceBootstrapMaxAgeTicks
   });
+  observeDropRaceLifecycles(input, stateful, previousSettlements, result.states || {}, options);
   stateful.postKillSettlements = result.states || {};
   stateful.postKillEvidenceSeen = result.seenEvidenceKeys || {};
   stateful.postKillSettlement = result.selected ? settlementSummary(result.selected, input?.nowMs) : null;
@@ -10283,11 +10465,14 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
   }
   stageTimings.gates = performance.now() - stageStarted;
   stageStarted = performance.now();
+  const dropRaceEvents = consumeDropRaceLifecycles(input, stateful, action);
   const output = {
     kind: action?.kind || '',
     band: action?.band || '',
     reason: action?.reason || '',
     action,
+    dropRace: dropRaceEvents[0] || null,
+    dropRaceEvents,
     combat: {
       ...(lootControl.combat || combat.dryRun || {}),
       profitMission: cloneJson(stateful.profitMission || null),
@@ -10308,6 +10493,7 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
       selfKillEvidence: input.realtimeSnapshotObservation?.selfKillEvidence || [],
       postKillSettlement,
       postKillSettlements: summarizePostKillSettlements(stateful, input.nowMs),
+      dropRace: dropRaceEvents[0] || null,
       loot: lootControl.summary,
       centerHardBoundary: summarizeCenterHardBoundary(centerHardBoundary.boundary),
       dataGaps: input.dataGaps
@@ -12667,6 +12853,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   }
   rememberEasyKillApproach(action, input, stateful, options);
   stateful.lastDecisionAction = cloneJson(action);
+  const dropRaceEvents = consumeDropRaceLifecycles(input, stateful, action);
   const easyKillCandidateDiagnostics = summarizeEasyKillCandidateDiagnostics(
     input,
     opportunity,
@@ -12683,6 +12870,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     at: new Date(input.nowMs).toISOString(),
     tick: input.realtime.tick,
     action,
+    dropRace: dropRaceEvents[0] || null,
+    dropRaceEvents,
     finalSelection,
     whitelistSafety: summarizeWhitelistSafetyState(input, incomingThreatAssessment, safetyContextOptions),
     input: {
@@ -12701,6 +12890,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       selfKillEvidence: topItems(input.selfKillEvidence, item => item, 20),
       postKillSettlement,
       postKillSettlements: summarizePostKillSettlements(stateful, input.nowMs),
+      dropRace: dropRaceEvents[0] || null,
       postAttackSettlement,
       nearby: summarizeNearbyForPanel(input, action, combat.dryRun || combat, options, stateful.singleCoinBait),
       dataGaps: input.dataGaps
@@ -12783,6 +12973,8 @@ function summarizeBrowserlessDecision(decision) {
     at: decision.at || '',
     tick: decision.tick ?? null,
     action: decision.action || null,
+    dropRace: decision.dropRace || null,
+    dropRaceEvents: Array.isArray(decision.dropRaceEvents) ? decision.dropRaceEvents : [],
     finalSelection: decision.finalSelection || null,
     whitelistSafety: decision.whitelistSafety || null,
     input: decision.input || null,
@@ -13127,6 +13319,8 @@ function createBrowserlessDecisionAdapter(options = {}) {
         postKillSettlements: decisionState.postKillSettlements || {},
         postKillEvidenceSeen: decisionState.postKillEvidenceSeen || {},
         postKillSettlement: decisionState.postKillSettlement || null,
+        dropRaceObservations: decisionState.dropRaceObservations || {},
+        dropRacePendingEvents: decisionState.dropRacePendingEvents || [],
         combatTarget: decisionState.combatTarget || null,
         combatEngagements: decisionState.combatEngagements || {},
         combatMetricsByTarget: decisionState.combatMetricsByTarget || {},

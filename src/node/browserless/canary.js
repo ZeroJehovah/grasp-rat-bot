@@ -2144,7 +2144,15 @@ async function runReadOnlyCanary(config, options = {}) {
     }
   };
   const logDecision = detail => {
-    if (logStore) logStore.append('decisions', 'decision', addRunMeta(detail));
+    if (!logStore) return;
+    const enriched = addRunMeta(detail);
+    logStore.append('decisions', 'decision', enriched);
+    const events = Array.isArray(enriched?.dropRaceEvents)
+      ? enriched.dropRaceEvents
+      : (enriched?.dropRace ? [enriched.dropRace] : []);
+    for (const event of events) {
+      if (event && typeof event === 'object') logStore.append('runner', 'drop-race', addRunMeta(event));
+    }
   };
   const logSafety = detail => {
     if (logStore) logStore.append('exits', 'safety-event', addRunMeta(withExitAttemptId(detail)));
@@ -2232,6 +2240,12 @@ async function runReadOnlyCanary(config, options = {}) {
     if (combatBattleLog) {
       try {
         combatBattleLog.record(type, enriched);
+        const dropRaceEvents = Array.isArray(root.dropRaceEvents)
+          ? root.dropRaceEvents
+          : (root.dropRace ? [root.dropRace] : []);
+        for (const event of dropRaceEvents) {
+          combatBattleLog.recordDropRace?.(addRunMeta(event), { atMs: now() });
+        }
       } catch (err) {
         log('combat-battle-log-error', { error: errorMessage(err) });
       }
@@ -3229,6 +3243,10 @@ async function runReadOnlyCanary(config, options = {}) {
       at: control.at || new Date(atMs).toISOString(),
       tick: control.tick ?? currentState?.realtime?.tick ?? null,
       action: gatedAction,
+      dropRace: control.dropRace || control.input?.dropRace || null,
+      dropRaceEvents: Array.isArray(control.dropRaceEvents)
+        ? control.dropRaceEvents
+        : (control.dropRace || control.input?.dropRace ? [control.dropRace || control.input.dropRace] : []),
       combat: combatSummary,
       input: control.input || null
     });

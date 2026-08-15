@@ -122,6 +122,8 @@ function createInitialDecisionState(options = {}) {
     postKillSettlements: cloneJson(options.postKillSettlements || {}),
     postKillEvidenceSeen: asRecord(options.postKillEvidenceSeen),
     postKillSettlement: cloneJson(options.postKillSettlement || null),
+    dropRaceObservations: asRecord(options.dropRaceObservations),
+    dropRacePendingEvents: asArray(options.dropRacePendingEvents),
     combatTarget: cloneJson(options.combatTarget || null),
     combatEngagements: asRecord(options.combatEngagements),
     combatMetricsByTarget: asRecord(options.combatMetricsByTarget),
@@ -236,6 +238,11 @@ function summarizeBrowserlessDecisionState(state, options = {}) {
     },
     postKillSettlement: redactBoundedValue(state.postKillSettlement || null),
     postKillSettlements: recordEntries(state.postKillSettlements || {}, limit),
+    dropRace: {
+      observationCount: Object.keys(state.dropRaceObservations || {}).length,
+      pendingCount: Array.isArray(state.dropRacePendingEvents) ? state.dropRacePendingEvents.length : 0,
+      recent: boundedList(Object.values(state.dropRaceObservations || {}), limit)
+    },
     postKillEvidenceSeen: {
       count: Object.keys(state.postKillEvidenceSeen || {}).length,
       recent: recordEntries(state.postKillEvidenceSeen || {}, limit)

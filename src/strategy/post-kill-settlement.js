@@ -20,6 +20,19 @@ function coinKey(coin) {
   return valueId(coin?.key ?? coin?.drop_id ?? coin?.dropId ?? coin?.id);
 }
 
+function coinAuthority(coin) {
+  if (!coin || typeof coin !== 'object') return '';
+  if (coin.snapshotOnly === true || String(coin.authority || '').toLowerCase() === 'snapshot') return 'snapshot';
+  if (String(coin.authority || '').toLowerCase() === 'realtime'
+    || String(coin.authority || '').toLowerCase() === 'native') return 'realtime';
+  return '';
+}
+
+function coinObservedAtMs(coin, fallback = 0) {
+  const value = finiteNumber(coin?.observedAtMs ?? coin?.observed_at_ms ?? coin?.atMs ?? coin?.at);
+  return value === null ? Number(fallback || 0) : Math.max(0, value);
+}
+
 function snapshotTick(context = {}) {
   const value = Number(context.snapshotTick ?? context.snapshot?.tick ?? context.observation?.tick);
   return Number.isFinite(value) ? value : 0;
@@ -116,6 +129,8 @@ function settlementSummary(state, nowMs = Date.now()) {
     matchedCoinKey: state.matchedCoinKey || '',
     matchedCoinAmount: finiteNumber(state.matchedCoinAmount),
     matchedCoinCreatedTick: finiteNumber(state.matchedCoinCreatedTick),
+    matchedCoinAuthority: state.matchedCoinAuthority || '',
+    matchedCoinObservedAtMs: finiteNumber(state.matchedCoinObservedAtMs),
     evidenceKey: state.evidenceKey || '',
     x: finiteNumber(state.x),
     y: finiteNumber(state.y),
@@ -183,6 +198,8 @@ function updatePostKillSettlementCore(previous, context = {}, options = {}) {
         matchedCoinKey: '',
         matchedCoinAmount: null,
         matchedCoinCreatedTick: null,
+        matchedCoinAuthority: '',
+        matchedCoinObservedAtMs: 0,
         lastSnapshotTick: observedTick,
         evidenceMinTick,
         evidenceMinAtMs,
@@ -242,6 +259,8 @@ function updatePostKillSettlementCore(previous, context = {}, options = {}) {
     state.matchedCoinKey = coinKey(coin);
     state.matchedCoinAmount = Number.isFinite(Number(coin.amount)) ? Number(coin.amount) : null;
     state.matchedCoinCreatedTick = evidenceTick(coin);
+    state.matchedCoinAuthority = coinAuthority(coin);
+    state.matchedCoinObservedAtMs = coinObservedAtMs(coin, nowMs);
     state.lastSnapshotTick = observedTick || Number(state.lastSnapshotTick || 0);
     state.expiresAt = nowMs + pickupMs;
     state.reason = 'matched-player-drop-visible';
@@ -335,6 +354,8 @@ function explicitPostKillSettlement(evidence, context, options = {}) {
     matchedCoinKey: '',
     matchedCoinAmount: null,
     matchedCoinCreatedTick: null,
+    matchedCoinAuthority: '',
+    matchedCoinObservedAtMs: 0,
     evidenceKey,
     lastSnapshotTick: observedTick,
     evidenceMinTick: evidenceTickValue,
@@ -381,6 +402,8 @@ function updateExplicitPostKillSettlement(state, context, options = {}) {
     state.matchedCoinKey = coinKey(coin);
     state.matchedCoinAmount = Number.isFinite(Number(coin.amount)) ? Number(coin.amount) : null;
     state.matchedCoinCreatedTick = evidenceTick(coin);
+    state.matchedCoinAuthority = coinAuthority(coin);
+    state.matchedCoinObservedAtMs = coinObservedAtMs(coin, nowMs);
     state.lastSnapshotTick = observedTick || Number(state.lastSnapshotTick || 0);
     state.expiresAt = nowMs + pickupMs;
     state.reason = 'matched-player-drop-visible';
