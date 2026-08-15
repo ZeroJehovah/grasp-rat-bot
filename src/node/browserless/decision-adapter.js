@@ -6455,6 +6455,22 @@ function profitMissionChoiceSource(choice) {
   return choice.sourceCoin || choice.sourceTarget || choice.coin || choice.target || choice;
 }
 
+function isRealtimeProfitOpportunity(item) {
+  if (!item || String(item.type || '') === 'remote-player-navigation') return false;
+  if (String(item.type || '') === 'enemy') {
+    const source = item.sourceTarget || item.target || null;
+    if (!source || source.cachedNavigationOnly === true) return false;
+    const authority = String(item.authority || source.authority || '');
+    return authority === 'realtime' || authority === 'native';
+  }
+  if (String(item.type || '') === 'coin') {
+    const source = item.sourceCoin || item.coin || item;
+    const authority = String(item.authority || source?.authority || '');
+    return source?.snapshotOnly !== true && (authority === 'realtime' || authority === 'native');
+  }
+  return false;
+}
+
 function profitMissionChoiceType(choice) {
   return String(choice?.type || '');
 }
@@ -7315,8 +7331,17 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     && storedRemoteGeneration === remoteProfit.generation
     && opportunities.some(item => item.type === 'remote-player-navigation'
       && String(item.id) === String(storedCurrent.id));
+  // A remembered remote mission is resume state, not an ownership claim over
+  // the current action. Once a realtime/native profit candidate is valid,
+  // release a remote current choice so the normal ranking and switch policy
+  // can compare the visible target immediately.
+  const realtimeProfitAvailable = opportunities.some(isRealtimeProfitOpportunity);
   let current = storedCurrent?.type === 'remote-player-navigation'
-    ? (remoteCurrentPresent && (!thresholdContext.active || storedCurrentEligible) ? storedCurrent : null)
+    ? (remoteCurrentPresent
+      && !realtimeProfitAvailable
+      && (!thresholdContext.active || storedCurrentEligible)
+        ? storedCurrent
+        : null)
     : (storedCurrent?.type === 'enemy'
         ? storedCurrent
         : (thresholdContext.active && !storedCurrentEligible ? null : storedCurrent));
@@ -7458,6 +7483,10 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
   const missionEscortContinuity = lockedProfitMission
     ? activeProfitEscortContinuityForMission(stateful, lockedProfitMission, input.nowMs)
     : null;
+  const remoteMissionReclaimBlocked = Boolean(
+    lockedProfitMission?.type === 'remote-player-navigation'
+      && realtimeProfitAvailable
+  );
   if (lockedProfitMission && (lockedProfitMission.highValue || missionEscortContinuity)) {
     let missionOpportunity = opportunities.find(item => profitMissionMatchesChoice(lockedProfitMission, item)) || null;
     if (!missionOpportunity) {
@@ -7490,7 +7519,8 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     }
     if (lockedProfitMission?.highValue
       && missionOpportunity
-      && (!current || !profitMissionMatchesChoice(lockedProfitMission, current))) {
+      && (!current || !profitMissionMatchesChoice(lockedProfitMission, current))
+      && !remoteMissionReclaimBlocked) {
       current = missionOpportunity;
     }
   }
@@ -7605,6 +7635,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       missSuppressedIds: remoteProfit.missSuppressedIds,
       filtered: remoteProfit.filtered,
       invalidatedIds: remoteProfit.invalidatedIds,
+      remoteMissionReclaimBlocked,
       selected: chosen?.type === 'remote-player-navigation' ? remoteProfitActionTarget(chosen) : null
     },
     threshold: {

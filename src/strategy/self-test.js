@@ -132,6 +132,7 @@ const {
   opportunityChoiceId,
   opportunityChoiceKey,
   opportunityMatchesChoiceCore,
+  opportunityNetRoiCore,
   chooseStableOpportunityCore,
   buildMissingHeldOpportunityCore,
   rememberOpportunityChoiceCore
@@ -5664,6 +5665,26 @@ function runStrategyModuleSelfTests() {
         && item.authority === 'snapshot-navigation')
       && remoteCompetitionChoice.chosen?.type === 'remote-player-navigation'
       && visibleCompetitionChoice.chosen?.type === 'coin'
+  });
+  const remoteNormalizedRoi = opportunityNetRoiCore({
+    type: 'remote-player-navigation',
+    reward: 87,
+    staminaCost: 100000,
+    score: 620744,
+    selectionScore: 620744,
+    scoreAuthority: 'adjusted-distance-score'
+  });
+  const realtimeNormalizedRoi = opportunityNetRoiCore({
+    type: 'enemy',
+    reward: 103,
+    staminaCost: 33311,
+    score: 1855863
+  });
+  results.push({
+    name: 'opportunity-choice-normalizes-remote-roi-to-reward-per-stamina',
+    passed: Math.abs(remoteNormalizedRoi - 0.00087) < 1e-12
+      && Math.abs(realtimeNormalizedRoi - (103 / 33311)) < 1e-12
+      && remoteNormalizedRoi < realtimeNormalizedRoi
   });
   const remoteSwitchCurrent = {
     key: 'coin:visible',

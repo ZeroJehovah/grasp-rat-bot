@@ -54,18 +54,19 @@ function opportunityReward(item) {
 
 function opportunityNetRoiCore(item, extraStaminaCost = 0) {
   if (!item) return null;
-  if (item.scoreAuthority === 'adjusted-distance-score' || item.selectionScore !== undefined) {
-    const score = Number(item.selectionScore ?? item.score);
-    const staminaCost = Number(item.staminaCost);
-    if (!Number.isFinite(score)) return null;
-    if (!(extraStaminaCost > 0) || !(staminaCost > 0)) return score;
-    return score * staminaCost / (staminaCost + Math.max(0, Number(extraStaminaCost || 0)));
-  }
   const reward = opportunityReward(item);
   const staminaCost = Number(item.staminaCost);
   if (reward !== null && Number.isFinite(staminaCost) && staminaCost + extraStaminaCost > 0) {
     return reward / (staminaCost + Math.max(0, Number(extraStaminaCost || 0)));
   }
+  // Remote snapshot candidates use `score`/`selectionScore` only as an
+  // adjusted-distance ranking value.  It is intentionally not a net ROI:
+  // comparing that value with a realtime reward/stamina ratio would put the
+  // two candidate classes on incompatible scales and can pin navigation to
+  // an off-screen target.  Keep the diagnostic unavailable when the remote
+  // economics are incomplete so the normal score/confirmation path can make
+  // the conservative decision instead of inventing a cross-unit ROI.
+  if (item.scoreAuthority === 'adjusted-distance-score') return null;
   const score = Number(item.score);
   if (!Number.isFinite(score)) return null;
   if (!(extraStaminaCost > 0) || !(staminaCost > 0)) return score;

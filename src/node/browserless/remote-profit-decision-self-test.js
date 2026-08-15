@@ -423,6 +423,84 @@ function ordinaryProfitTarget(userId, x, drop, overrides = {}) {
   };
 }
 
+function assertRemoteMissionDoesNotOverrideRealtimeProfit() {
+  const adapter = createBrowserlessDecisionAdapter({
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    dynamicProfitThresholdEnabled: false,
+    singleCoinBaitEnabled: false,
+    finalActionArbitrationHoldMs: 0,
+    opportunitySwitchConfirmFrames: 1,
+    opportunitySwitchMargin: 0,
+    opportunitySwitchRelativeMargin: 0
+  });
+  const remoteBatch = batch(remoteCandidate({
+    userId: 9127,
+    name: 'off-screen',
+    x: 52512,
+    drop: 87,
+    expectedReward: 87,
+    staminaCost: 100000,
+    adjustedScore: 620744
+  }), { generation: 23 });
+  const first = decide(adapter, state(fullStaminaSelf()), 2000, remoteBatch, {
+    controlMode: 'profit-live',
+    combatEnabled: true
+  });
+  assert.strictEqual(first.action?.kind, 'seek-remote-player');
+  assert.strictEqual(first.action?.target?.userId, 9127);
+  assert.strictEqual(first.profit?.mission?.targetId, '9127');
+
+  const invulnerableVisible = ordinaryProfitTarget(7248, 1600, 103, {
+    invulnerable_remaining_ms: 12000
+  });
+  const visible = decide(
+    adapter,
+    state(fullStaminaSelf(), [invulnerableVisible], 2),
+    2100,
+    remoteBatch,
+    { controlMode: 'profit-live', combatEnabled: true }
+  );
+  assert.strictEqual(visible.action?.kind, 'seek-enemy');
+  assert.strictEqual(visible.action?.target?.userId, 7248);
+  assert.strictEqual(visible.action?.reason, 'invulnerable-profit-approach-window');
+  assert.strictEqual(visible.profit?.remoteProfit?.remoteMissionReclaimBlocked, true);
+  // The mission remains resumable, but it cannot own the current action while
+  // a valid realtime/native profit target is available.
+  assert.strictEqual(visible.profit?.mission?.type, 'remote-player-navigation');
+  assert.strictEqual(visible.profit?.mission?.targetId, '9127');
+  assert.strictEqual(visible.profit?.remoteProfit?.selected, null);
+
+  const nextSnapshot = {
+    ...remoteBatch,
+    generation: 24,
+    observedAtMs: 3000,
+    candidates: [remoteCandidate({
+      userId: 9127,
+      name: 'off-screen',
+      x: 55096,
+      drop: 87,
+      expectedReward: 87,
+      staminaCost: 100000,
+      adjustedScore: 594676
+    })]
+  };
+  const anotherVisible = ordinaryProfitTarget(6649, 33311, 103);
+  const next = decide(
+    adapter,
+    state(fullStaminaSelf(), [anotherVisible], 3),
+    3200,
+    nextSnapshot,
+    { controlMode: 'profit-live', combatEnabled: true }
+  );
+  assert.strictEqual(next.action?.kind, 'seek-enemy');
+  assert.strictEqual(next.action?.target?.userId, 6649);
+  assert.notStrictEqual(next.action?.kind, 'seek-remote-player');
+  assert.strictEqual(next.profit?.remoteProfit?.remoteMissionReclaimBlocked, true);
+  assert.strictEqual(next.profit?.remoteProfit?.selected, null);
+}
+
 function escortCombatTarget(overrides = {}) {
   return {
     entity_id: 1008,
@@ -1224,6 +1302,7 @@ function runRemoteProfitDecisionSelfTest() {
   assertImmediateRemoteRelease(remoteBatch, 210900, 211000);
   assertRealtimeSupersededMissionContinuity();
   assertSelfKillReleasesSupersededMission();
+  assertRemoteMissionDoesNotOverrideRealtimeProfit();
 
   const ordinaryAdapter = createBrowserlessDecisionAdapter({
     userId: 7,
@@ -1438,7 +1517,7 @@ function runRemoteProfitDecisionSelfTest() {
   assert.strictEqual(stale.input?.loot?.reason, 'snapshot-stale');
   assert.strictEqual(staleAdapter.getState().realtimeLootIntent, null);
 
-  return { ok: true, cases: 62 };
+  return { ok: true, cases: 63 };
 }
 
 if (require.main === module) {
