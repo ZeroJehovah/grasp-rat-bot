@@ -205,6 +205,7 @@ const {
   combatPressureStrafeCore,
   combatPressureTargetRangeCore
 } = require('./combat-pressure');
+const { lootRacePositioningCore } = require('./loot-race-positioning');
 const {
   updateCombatResponsePolicyShadowCore
 } = require('./combat-response-policy-shadow');
@@ -2453,6 +2454,69 @@ function runStrategyModuleSelfTests() {
       && defensiveDamageRelease.reason === 'recent-self-damage'
       && defensivePersistentThreatRelease.active === false
       && defensivePersistentThreatRelease.reason === 'persistent-target-threat'
+  });
+
+  const lootRaceActive = lootRacePositioningCore({
+    self: { user_id: 1, x: 0, y: 0, hp: 100 },
+    target: { user_id: 2, x: 5000, y: 0, hp: 12, drop: 47, dropKnown: true },
+    realtimeTargets: [
+      { user_id: 1, x: 0, y: 0, active: true },
+      { user_id: 2, x: 5000, y: 0, active: true },
+      { user_id: 3, x: 3000, y: 500, active: true }
+    ],
+    combatTargetState: { firstHp: 100, damageFromStart: 88, lastDamageAmount: 3 },
+    combatMetrics: { targetDamage: 88, confirmedHits: 10 },
+    aim: { predictedTargetAtCreation: { x: 5000, y: 0 } },
+    closePressureActive: true,
+    closePressureTooClose: false
+  }, {
+    combatLootRacePositioningEnabled: true
+  });
+  const lootRaceNoCompetitor = lootRacePositioningCore({
+    self: { user_id: 1, x: 0, y: 0, hp: 100 },
+    target: { user_id: 2, x: 5000, y: 0, hp: 12, drop: 47, dropKnown: true },
+    realtimeTargets: [
+      { user_id: 1, x: 0, y: 0, active: true },
+      { user_id: 2, x: 5000, y: 0, active: true },
+      { user_id: 3, x: -5000, y: 0, active: true }
+    ],
+    combatTargetState: { firstHp: 100, damageFromStart: 88 },
+    aim: { predictedTargetAtCreation: { x: 5000, y: 0 } },
+    closePressureActive: true,
+    closePressureTooClose: false
+  });
+  const lootRaceHighHp = lootRacePositioningCore({
+    self: { user_id: 1, x: 0, y: 0, hp: 100 },
+    target: { user_id: 2, x: 5000, y: 0, hp: 75, drop: 47, dropKnown: true },
+    realtimeTargets: [{ user_id: 3, x: 3000, y: 0, active: true }],
+    combatTargetState: { firstHp: 100, damageFromStart: 25 },
+    aim: { predictedTargetAtCreation: { x: 5000, y: 0 } },
+    closePressureActive: true,
+    closePressureTooClose: false
+  });
+  const lootRaceLowHp = lootRacePositioningCore({
+    self: { user_id: 1, x: 0, y: 0, hp: 50 },
+    target: { user_id: 2, x: 5000, y: 0, hp: 12, drop: 47, dropKnown: true },
+    realtimeTargets: [{ user_id: 3, x: 3000, y: 0, active: true }],
+    combatTargetState: { firstHp: 100, damageFromStart: 88 },
+    aim: { predictedTargetAtCreation: { x: 5000, y: 0 } },
+    closePressureActive: true,
+    closePressureTooClose: false
+  });
+  results.push({
+    name: 'loot-race-positioning-uses-realtime-competitor-eta-and-preserves-safety-gates',
+    passed: lootRaceActive.active === true
+      && lootRaceActive.reason === 'competitor-eta-close'
+      && lootRaceActive.direction.dx === 1
+      && lootRaceActive.direction.dy === 0
+      && lootRaceActive.dropPointSource === 'aim-predicted-target-at-creation'
+      && lootRaceActive.targetDrop === 47
+      && lootRaceNoCompetitor.active === false
+      && lootRaceNoCompetitor.reason === 'competitor-eta-not-close'
+      && lootRaceHighHp.active === false
+      && lootRaceHighHp.reason === 'kill-horizon-too-long'
+      && lootRaceLowHp.active === false
+      && lootRaceLowHp.reason === 'self-hp-below-loot-race-threshold'
   });
 
   const efficiencyThreshold100 = combatDamageEfficiencyThresholdCore(100, {

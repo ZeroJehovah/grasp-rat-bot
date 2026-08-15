@@ -100,6 +100,12 @@ const DEFAULTS = {
   combatClosePressureReserveMs: 2600,
   combatClosePressureMinSelfHp: 60,
   combatClosePressureMaxHpGap: 20,
+  combatLootRacePositioningEnabled: true,
+  combatLootRaceMinDrop: 10,
+  combatLootRaceMaxKillHorizonMs: 1200,
+  combatLootRaceCompetitorEtaMarginMs: 350,
+  combatLootRaceMinSelfHp: 50,
+  combatLootRaceMinOwnEtaMs: 250,
   combatEfficiencyWindowMs: 0,
   combatEfficiencyReferenceDamageHp: 9,
   combatEfficiencyExpectedDamagePerShot: 3,
@@ -308,6 +314,30 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     combatClosePressureReserveMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_RESERVE_MS, DEFAULTS.combatClosePressureReserveMs),
     combatClosePressureMinSelfHp: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_MIN_SELF_HP, DEFAULTS.combatClosePressureMinSelfHp),
     combatClosePressureMaxHpGap: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_MAX_HP_GAP, DEFAULTS.combatClosePressureMaxHpGap),
+    combatLootRacePositioningEnabled: boolEnv(
+      env.GRASP_RAT_BROWSERLESS_COMBAT_LOOT_RACE_POSITIONING_ENABLED,
+      DEFAULTS.combatLootRacePositioningEnabled
+    ),
+    combatLootRaceMinDrop: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_COMBAT_LOOT_RACE_MIN_DROP,
+      DEFAULTS.combatLootRaceMinDrop
+    ),
+    combatLootRaceMaxKillHorizonMs: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_COMBAT_LOOT_RACE_MAX_KILL_HORIZON_MS,
+      DEFAULTS.combatLootRaceMaxKillHorizonMs
+    ),
+    combatLootRaceCompetitorEtaMarginMs: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_COMBAT_LOOT_RACE_COMPETITOR_ETA_MARGIN_MS,
+      DEFAULTS.combatLootRaceCompetitorEtaMarginMs
+    ),
+    combatLootRaceMinSelfHp: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_COMBAT_LOOT_RACE_MIN_SELF_HP,
+      DEFAULTS.combatLootRaceMinSelfHp
+    ),
+    combatLootRaceMinOwnEtaMs: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_COMBAT_LOOT_RACE_MIN_OWN_ETA_MS,
+      DEFAULTS.combatLootRaceMinOwnEtaMs
+    ),
     combatEfficiencyWindowMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_EFFICIENCY_WINDOW_MS, DEFAULTS.combatEfficiencyWindowMs),
     combatEfficiencyReferenceDamageHp: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_EFFICIENCY_REFERENCE_DAMAGE_HP, DEFAULTS.combatEfficiencyReferenceDamageHp),
     combatEfficiencyExpectedDamagePerShot: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_EFFICIENCY_EXPECTED_DAMAGE_PER_SHOT, DEFAULTS.combatEfficiencyExpectedDamagePerShot),
@@ -576,6 +606,20 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.combatClosePressureMinSelfHp = numberEnv(argv[++i], config.combatClosePressureMinSelfHp);
     } else if (arg === '--combat-close-pressure-max-hp-gap') {
       config.combatClosePressureMaxHpGap = numberEnv(argv[++i], config.combatClosePressureMaxHpGap);
+    } else if (arg === '--combat-loot-race-positioning') {
+      config.combatLootRacePositioningEnabled = true;
+    } else if (arg === '--no-combat-loot-race-positioning') {
+      config.combatLootRacePositioningEnabled = false;
+    } else if (arg === '--combat-loot-race-min-drop') {
+      config.combatLootRaceMinDrop = numberEnv(argv[++i], config.combatLootRaceMinDrop);
+    } else if (arg === '--combat-loot-race-max-kill-horizon-ms') {
+      config.combatLootRaceMaxKillHorizonMs = numberEnv(argv[++i], config.combatLootRaceMaxKillHorizonMs);
+    } else if (arg === '--combat-loot-race-competitor-eta-margin-ms') {
+      config.combatLootRaceCompetitorEtaMarginMs = numberEnv(argv[++i], config.combatLootRaceCompetitorEtaMarginMs);
+    } else if (arg === '--combat-loot-race-min-self-hp') {
+      config.combatLootRaceMinSelfHp = numberEnv(argv[++i], config.combatLootRaceMinSelfHp);
+    } else if (arg === '--combat-loot-race-min-own-eta-ms') {
+      config.combatLootRaceMinOwnEtaMs = numberEnv(argv[++i], config.combatLootRaceMinOwnEtaMs);
     } else if (arg === '--combat-efficiency-window-ms') {
       config.combatEfficiencyWindowMs = numberEnv(argv[++i], config.combatEfficiencyWindowMs);
     } else if (arg === '--combat-efficiency-reference-damage-hp') {
@@ -749,6 +793,12 @@ function usage() {
     '  --combat-close-pressure-reserve-ms <ms>  Close-pressure stamina reserve. Default: 2600',
     '  --combat-close-pressure-min-self-hp <hp>  Minimum HP for exchange continuation. Default: 60',
     '  --combat-close-pressure-max-hp-gap <hp>  Maximum target HP lead for continuation. Default: 20',
+    '  --[no-]combat-loot-race-positioning  Enable low-HP high-Drop competitor positioning. Default: enabled',
+    '  --combat-loot-race-min-drop <coins>  Minimum target Drop for loot-race positioning. Default: 10',
+    '  --combat-loot-race-max-kill-horizon-ms <ms>  Maximum estimated lethal horizon. Default: 1200',
+    '  --combat-loot-race-competitor-eta-margin-ms <ms>  Allowed competitor ETA margin. Default: 350',
+    '  --combat-loot-race-min-self-hp <hp>  Minimum self HP for loot-race positioning. Default: 50',
+    '  --combat-loot-race-min-own-eta-ms <ms>  Ignore already-safe own drop ETA. Default: 250',
     '  --combat-efficiency-window-ms <ms>  Explicit efficiency-window override; 0 derives the Drop-aware 9 HP window. Default: 0',
     '  --combat-efficiency-reference-damage-hp <hp>  Reference damage used to derive the efficiency window. Default: 9',
     '  --combat-efficiency-expected-damage-per-shot <hp>  Expected damage per successful shot for the derived window. Default: 3',

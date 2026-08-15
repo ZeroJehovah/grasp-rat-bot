@@ -1850,6 +1850,7 @@ function compactTarget(value) {
     hp: compactNumber(value.hp),
     maxHp: compactNumber(value.maxHp ?? value.max_hp),
     drop: compactNumber(value.drop),
+    dropAuthority: compactString(value.dropAuthority, 24),
     stamina5s: compactNumber(value.stamina5s ?? value.stamina5sRemainingMilli ?? value.stamina_5s_remaining_milli),
     stamina5sLimit: compactNumber(value.stamina5sLimit ?? value.stamina5sLimitMilli ?? value.stamina_5s_limit_milli),
     stamina1h: compactNumber(value.stamina1h ?? value.stamina1hRemainingMilli ?? value.stamina_1h_remaining_milli),

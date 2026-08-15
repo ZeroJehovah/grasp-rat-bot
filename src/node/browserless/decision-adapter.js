@@ -1566,6 +1566,12 @@ function enrichRealtimeEntityWithSnapshotProfitMetadata(entity, snapshotEntity, 
     coin_reward: currentDropKnown ? entity.coin_reward : reward,
     drop: currentDropKnown ? entity.drop : reward,
     dropKnown: true,
+    // Keep reward provenance separate from the broader profit metadata flag.
+    // Snapshot reward metadata may enrich ordinary profit scoring, but it must
+    // never become authority for a combat movement decision.
+    dropAuthority: currentDropKnown
+      ? String(entity.dropAuthority || 'realtime')
+      : 'snapshot',
     profitMetadataAuthority: 'snapshot'
   };
 }
@@ -2247,6 +2253,7 @@ function summarizeTarget(target) {
     maxHp: numberOrNull(target.max_hp ?? target.maxHp),
     drop: entityDropValue(target),
     dropKnown: entityDropKnown(target),
+    dropAuthority: target.dropAuthority || '',
     stamina5s: staminaRemainingValue(target, '5s'),
     stamina5sLimit: staminaLimitForWindow(target, '5s'),
     stamina1h: staminaRemainingValue(target, '1h'),

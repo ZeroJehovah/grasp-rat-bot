@@ -8576,6 +8576,38 @@ async function runSelfTest() {
       want: 'target-label|12|12|snapshot'
     },
     {
+      name: 'browserless decision input preserves realtime Drop authority beside snapshot metadata',
+      got: (() => {
+        const state = {
+          userId: 7,
+          realtime: {
+            tick: 47,
+            frameAgeMs: 100,
+            self: { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
+              { entity_id: 2, user_id: 8, label: 'target-label', x: 2000, y: 0, hp: 80, drop: 12, current_join_mode: 'None' }
+            ],
+            bullets: [],
+            coinDrops: []
+          },
+          fallback: {
+            tick: 48,
+            frameAgeMs: 100,
+            entities: [
+              { entity_id: 2, user_id: 8, label: 'target-label', x: 2000, y: 0, hp: 80, death_drop_coins: 12 }
+            ],
+            coinDrops: [],
+            messages: []
+          }
+        };
+        const input = buildBrowserlessStrategyInput(state, { controlMode: 'profit-live', nowMs: 1200 }, {});
+        const target = input.visibleTargets.find(entity => Number(entity.user_id) === 8);
+        return [target?.drop, target?.dropAuthority, target?.profitMetadataAuthority].join('|');
+      })(),
+      want: '12|realtime|snapshot'
+    },
+    {
       name: 'browserless decision input accepts a fresh zero-age realtime frame',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });

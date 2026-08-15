@@ -93,6 +93,7 @@ const { createBrowserlessActionAdapter } = require('./action-adapter');
 const { buildBrowserlessCombatDryRun } = require('./combat-adapter');
 const { runCombatShotExecutionSelfTest } = require('./combat-shot-execution-self-test');
 const { runCombatTargetFrameGapSelfTest } = require('./combat-target-frame-gap-self-test');
+const { runLootRacePositioningSelfTest } = require('./loot-race-positioning-self-test');
 const { createSourceIpController } = require('./source-ip-controller');
 const {
   DEFAULT_SOURCE_IP_INTERFACE,
@@ -232,6 +233,12 @@ function publicConfig(config) {
     combatSafeRetreatInterceptEnabled: config.combatSafeRetreatInterceptEnabled === true,
     combatTargetSwitchUrgentReversalGuardEnabled: config.combatTargetSwitchUrgentReversalGuardEnabled === true,
     combatShootMinIntervalMs: Number(config.combatShootMinIntervalMs || 0),
+    combatLootRacePositioningEnabled: config.combatLootRacePositioningEnabled !== false,
+    combatLootRaceMinDrop: Number(config.combatLootRaceMinDrop || 0),
+    combatLootRaceMaxKillHorizonMs: Number(config.combatLootRaceMaxKillHorizonMs || 0),
+    combatLootRaceCompetitorEtaMarginMs: Number(config.combatLootRaceCompetitorEtaMarginMs || 0),
+    combatLootRaceMinSelfHp: Number(config.combatLootRaceMinSelfHp || 0),
+    combatLootRaceMinOwnEtaMs: Number(config.combatLootRaceMinOwnEtaMs || 0),
     combatEfficiencyWindowMs: Number(config.combatEfficiencyWindowMs || 0),
     combatEfficiencyReferenceDamageHp: Number(config.combatEfficiencyReferenceDamageHp || 0),
     combatEfficiencyExpectedDamagePerShot: Number(config.combatEfficiencyExpectedDamagePerShot || 0),
@@ -8508,6 +8515,7 @@ async function runBrowserlessRunnerSelfTest() {
     const combatBattleLog = runCombatBattleLogSelfTest();
     const combatShotExecution = runCombatShotExecutionSelfTest();
     const combatTargetFrameGap = runCombatTargetFrameGapSelfTest();
+    const lootRacePositioning = runLootRacePositioningSelfTest();
     const dynamicWhitelist = await require('./dynamic-whitelist-self-test').runDynamicWhitelistSelfTest();
     const recoveryContact = require('./recovery-contact-self-test').runRecoveryContactSelfTest();
     const runnerLog = path.join(tmp, 'logs', '2026-07-08', 'runner.jsonl');
@@ -8595,6 +8603,7 @@ async function runBrowserlessRunnerSelfTest() {
         && combatBattleLog.ok
         && combatShotExecution.ok
         && combatTargetFrameGap.ok
+        && lootRacePositioning.ok
         && dynamicWhitelist.ok
         && recoveryContact.ok
         && complexCombatMainThreadBudget.battleLogOk
@@ -8677,6 +8686,7 @@ async function runBrowserlessRunnerSelfTest() {
       combatBattleLog,
       combatShotExecution,
       combatTargetFrameGap,
+      lootRacePositioning,
       dynamicWhitelist,
       recoveryContact,
       complexCombatMainThreadBudget,

@@ -98,6 +98,7 @@ const {
   combatPressureStrafeCore,
   combatPressureTargetRangeCore
 } = require('../../strategy/combat-pressure');
+const { lootRacePositioningCore } = require('../../strategy/loot-race-positioning');
 const {
   dynamicWhitelistDistanceGuardBlocksCombatCore
 } = require('../../strategy/dynamic-whitelist-safety');
@@ -3034,6 +3035,29 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     dy: Math.sign(Number(target.y || 0) - Number(self.y || 0))
   };
   const awayFromTarget = { dx: -towardTarget.dx, dy: -towardTarget.dy };
+  const lootRaceCandidate = closePressureActive
+    && !closePressureTooClose
+    && !ballisticCloseTooClose
+    && !pressureClose
+    && Number(target.distance || Infinity) <= closeRange + closePressureHysteresisCm
+    ? lootRacePositioningCore({
+        self,
+        target,
+        realtimeTargets: options.realtimeTargets,
+        combatTargetState,
+        combatMetrics: options.combatMetrics,
+        aim: options.combatAim,
+        nowMs: options.nowMs,
+        commandDelayTicks: Number((options.movementExecutionTiming || options.executionTiming || {}).p90Ticks || 0),
+        closePressureActive,
+        closePressureTooClose
+      }, options)
+    : {
+        active: false,
+        applied: false,
+        reason: 'close-pressure-positioning-window-inactive',
+        direction: { dx: 0, dy: 0 }
+      };
   const profitMission = options.profitMission && typeof options.profitMission === 'object'
     ? options.profitMission
     : null;
@@ -3109,18 +3133,25 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   const escortDirection = profitEscort?.active && !ballisticCloseActive
     ? profitEscort.direction
     : null;
+  const lootRaceDirection = lootRaceCandidate?.active === true
+    && !profitEscort?.active
+    && !preDodge
+    ? lootRaceCandidate.direction
+    : null;
   const strategicDirection = escortDirection
     ? escortDirection
     : (closePressureTooClose || ballisticCloseTooClose
         ? awayFromTarget
-        : (strafe?.active
-            ? { dx: strafe.dx, dy: strafe.dy }
-            : (safeRetreatInterceptEnabled
-                && safeRetreatIntercept.eligible
-                && !preDodge
-                && !ballisticCloseActive
-                ? safeRetreatIntercept.direction
-                : (closeIn ? towardTarget : null))));
+        : (lootRaceDirection
+            ? lootRaceDirection
+            : (strafe?.active
+                ? { dx: strafe.dx, dy: strafe.dy }
+                : (safeRetreatInterceptEnabled
+                    && safeRetreatIntercept.eligible
+                    && !preDodge
+                    && !ballisticCloseActive
+                    ? safeRetreatIntercept.direction
+                    : (closeIn ? towardTarget : null)))));
   const pendingCommands = (options.pendingVelocityCommands || [])
     .filter(command => command && Number.isFinite(Number(command.effectiveAfterTicks)))
     .slice()
@@ -3162,6 +3193,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       modifiers.push('profit-escort');
       if (profitEscort.detour) modifiers.push('profit-escort-detour');
     } else if (closePressureTooClose || ballisticCloseTooClose) modifiers.push('back-away');
+    else if (lootRaceDirection) modifiers.push('loot-race-approach');
     else if (strafe?.active) modifiers.push('close-pressure-strafe');
     else modifiers.push('close-in');
     movement = { dx: movementArbitration.dx, dy: movementArbitration.dy, modifiers };
@@ -3229,9 +3261,11 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
           ? 'escort'
           : (closePressureTooClose || ballisticCloseTooClose
               ? 'separate'
-              : (strafe?.active
-                  ? 'strafe'
-                  : (closeIn ? 'approach' : 'hold-spacing'))),
+              : (lootRaceDirection
+                  ? 'loot-race'
+                  : (strafe?.active
+                      ? 'strafe'
+                      : (closeIn ? 'approach' : 'hold-spacing')))),
         currentDirection,
         pendingDirection,
         pendingVelocityCommands: options.pendingVelocityCommands,
@@ -3242,7 +3276,9 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
           ? profitEscort.direction
           : (closePressureTooClose || ballisticCloseTooClose
               ? awayFromTarget
-              : (closeIn ? towardTarget : movement)),
+              : (lootRaceDirection
+                  ? lootRaceDirection
+                  : (closeIn ? towardTarget : movement))),
         previousState: options.distanceAwareDodgeState || null,
         reactionSlack: distanceAwareReactionSlack,
         activeOpponent: target.active === true,
@@ -3327,10 +3363,15 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     : (retreatingClose
         ? 'combat-retreating-fighter-close'
         : (passiveRunnerClose ? 'passive-runner-close' : (behaviorClose ? `combat-${opponentBehavior.mode}-response` : 'close-in'))));
-  const reason = movement.modifiers.includes('close-pressure-strafe')
-    ? (preDodge ? 'close-pressure-predictive-hold' : (strafe?.reason || 'close-pressure-deterministic-strafe'))
-    : movement.modifiers.includes('dodge')
+  const lootRaceApplied = movement.modifiers.includes('loot-race-approach')
+    && !movement.modifiers.includes('dodge')
+    && !movement.modifiers.includes('hold-current');
+  const reason = movement.modifiers.includes('dodge')
     ? (effectiveDodge?.reason || 'direct-threat-dodge')
+    : lootRaceApplied
+    ? 'combat-loot-race-approach'
+    : movement.modifiers.includes('close-pressure-strafe')
+    ? (preDodge ? 'close-pressure-predictive-hold' : (strafe?.reason || 'close-pressure-deterministic-strafe'))
     : movement.modifiers.includes('hold-current')
     ? (preDodge ? 'close-pressure-predictive-hold' : 'combat-current-safe-hold')
     : movement.modifiers.includes('predictive-hold')
@@ -3451,6 +3492,22 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       tooClose: ballisticCloseTooClose,
       closing: ballisticCloseIn,
       ownsMovement: ballisticCloseActive && !movement.modifiers.includes('dodge')
+    },
+    lootRacePositioning: {
+      ...lootRaceCandidate,
+      direction: lootRaceCandidate?.direction ? { ...lootRaceCandidate.direction } : null,
+      applied: lootRaceApplied,
+      overrideReason: lootRaceApplied
+        ? ''
+        : (lootRaceCandidate?.active
+            ? (preDodge
+                ? 'pre-dodge'
+                : (profitEscort?.active
+                    ? 'profit-escort'
+                    : (movement.modifiers.includes('dodge')
+                        ? 'dodge'
+                        : (movement.modifiers.includes('hold-current') ? 'hold-current' : 'movement-arbitration'))))
+            : '')
     },
     profitEscort: profitEscort ? {
       ...profitEscort,
@@ -3592,6 +3649,17 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   const targetDrop = currentDropKnown
     ? entityDropValue(target)
     : (previousDropKnown ? Math.max(0, Number(previous.drop) || 0) : entityDropValue(target));
+  const currentDropAuthority = currentDropKnown
+    ? String(target.dropAuthority || (
+        target.profitMetadataAuthority === 'snapshot' ? 'snapshot' : 'realtime'
+      ))
+    : '';
+  const previousDropAuthority = previousDropKnown
+    ? String(previous.dropAuthority || (
+        previous.profitMetadataAuthority === 'snapshot' ? 'snapshot' : ''
+      ))
+    : '';
+  const targetDropAuthority = currentDropAuthority || previousDropAuthority;
   const previousHp = same && Number.isFinite(Number(previous.hp)) ? Number(previous.hp) : null;
   const damaged = hp !== null && previousHp !== null && hp < previousHp - 0.01;
   const healed = hp !== null && previousHp !== null && hp > previousHp + 0.01;
@@ -3810,6 +3878,8 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     displayHp: numberOrNull(target.hp),
     drop: targetDrop,
     dropKnown: targetDropKnown,
+    dropAuthority: targetDropAuthority,
+    profitMetadataAuthority: target.profitMetadataAuthority || previous?.profitMetadataAuthority || '',
     distance,
     active: Boolean(target.active),
     moving: Boolean(target.moving),
@@ -4854,6 +4924,9 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     controlGeneration: stateful?.combatMetrics?.controlGeneration || '',
     currentTick: realtime.tick,
     bullets,
+    realtimeTargets: targets,
+    combatMetrics: stateful?.combatMetrics || null,
+    combatAim: aim.ok ? aim : null,
     contactEntryGuard: contactApplies ? contactEntryGuard : null
   }, mergedOptions => buildCombatMovementPlan(self, target, bullets, mergedOptions));
   if (stateful?.profitEscortContinuity?.active === true && movement?.profitEscort?.latched === true) {
@@ -4868,6 +4941,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   }
   if (stateful?.combatTarget) {
     stateful.combatTarget.ballisticClose = movement?.ballisticClose?.state || null;
+    stateful.combatTarget.lootRacePositioning = movement?.lootRacePositioning || null;
     if (stateful.combatEngagements && stateful.combatTarget.id !== null && stateful.combatTarget.id !== undefined) {
       stateful.combatEngagements[String(stateful.combatTarget.id)] = stateful.combatTarget;
     }
