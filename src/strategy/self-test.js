@@ -124,6 +124,7 @@ const {
   coinRouteSkipsCloserRoutePointCore,
   coinRouteSkipsHeldSingleCoinCore,
   closerCoinRouteForFirstTargetCore,
+  selectCoinRouteCandidatePoolCore,
   pickCoinRouteOpportunityCore
 } = require('./coin-route');
 const {
@@ -4904,6 +4905,54 @@ function runStrategyModuleSelfTests() {
       && builtRoute.coinRoute?.points?.length === 3
       && builtRoute.coinRoute?.ids?.join(',') === '1,2,3'
       && builtRoute.routeKind === 'short'
+  });
+
+  const earlyLooseCoins = Array.from({ length: 10 }, (_, index) => ({
+    drop_id: `early-${index + 1}`,
+    amount: 1,
+    x: 1000 + index * 4000,
+    y: 0,
+    distance: 1000 + index * 4000
+  }));
+  const lateDenseRouteCoins = [
+    { drop_id: 'late-a', amount: 1, x: 42000, y: 0, distance: 42000 },
+    { drop_id: 'late-b', amount: 1, x: 42500, y: 0, distance: 42500 },
+    { drop_id: 'late-c', amount: 1, x: 43000, y: 0, distance: 43000 }
+  ];
+  const lateRouteInput = [...earlyLooseCoins, ...lateDenseRouteCoins];
+  const lateRouteOptions = {
+    ...routeOptions,
+    poolLimit: 12,
+    clusterRadius: 1500,
+    linkDistance: 2000,
+    maxLinkDistance: 2500,
+    maxDistance: 50000,
+    staminaAffordable: cost => cost <= 100000,
+    routeEligible: () => true
+  };
+  const selectedLateRoutePool = selectCoinRouteCandidatePoolCore(routeSelf, lateRouteInput, lateRouteOptions);
+  const heldLateRoutePool = selectCoinRouteCandidatePoolCore(routeSelf, lateRouteInput, {
+    ...lateRouteOptions,
+    poolLimit: 2,
+    heldRouteChoice: {
+      type: 'coin',
+      id: 'late-a',
+      coinRouteIds: ['late-a', 'late-b', 'late-c']
+    }
+  });
+  const selectedLateRoute = pickCoinRouteOpportunityCore(
+    routeSelf,
+    lateRouteInput,
+    [],
+    lateRouteOptions
+  );
+  results.push({
+    name: 'coin-route-pool-keeps-late-dense-field-after-early-input-coins',
+    passed: selectedLateRoutePool.length === 12
+      && lateDenseRouteCoins.every(coin => selectedLateRoutePool.some(item => item.drop_id === coin.drop_id))
+      && heldLateRoutePool.length === 3
+      && lateDenseRouteCoins.every(coin => heldLateRoutePool.some(item => item.drop_id === coin.drop_id))
+      && selectedLateRoute?.coinRoute?.ids?.join(',') === 'late-a,late-b,late-c'
   });
 
   const discountedRouteCoins = [

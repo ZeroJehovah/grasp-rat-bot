@@ -17032,6 +17032,77 @@ async function runSelfTest() {
       want: 'one-a|one-a,one-b|one-a:1:1,one-b:0:2,route-a:0:0,route-b:0:0,route-c:0:0|active-threat:0:0:0:0,drop-afk:0:1:1:0,low-afk:0:1:1:1|false|false|true'
     },
     {
+      name: 'browserless route selection ignores compact ten-coin display boundary',
+      got: (() => {
+        const earlyLooseCoins = [
+          { x: 12000, y: 0 },
+          { x: -12000, y: 0 },
+          { x: 0, y: 12000 },
+          { x: 0, y: -12000 },
+          { x: 8485, y: 8485 },
+          { x: -8485, y: 8485 },
+          { x: 8485, y: -8485 },
+          { x: -8485, y: -8485 },
+          { x: 6000, y: 10392 },
+          { x: -6000, y: 10392 }
+        ].map((point, index) => ({ drop_id: `early-${index + 1}`, amount: 1, ...point }));
+        const lateDenseRouteCoins = [
+          { drop_id: 'late-a', amount: 1, x: 27000, y: 0 },
+          { drop_id: 'late-b', amount: 1, x: 27500, y: 0 },
+          { drop_id: 'late-c', amount: 1, x: 28000, y: 0 }
+        ];
+        const coins = [...earlyLooseCoins, ...lateDenseRouteCoins];
+        const self = {
+          entity_id: 1,
+          user_id: 7,
+          name: 'self',
+          x: 0,
+          y: 0,
+          hp: 100,
+          max_hp: 100,
+          stamina_1h_remaining_milli: 100000,
+          stamina_1d_remaining_milli: 100000
+        };
+        const decision = buildBrowserlessDecision({
+          userId: 7,
+          realtime: {
+            tick: 63,
+            frameAgeMs: 100,
+            self,
+            entities: [self],
+            bullets: [],
+            coinDrops: coins
+          },
+          fallback: { coinDrops: [] }
+        }, {}, {
+          nowMs: Date.UTC(2026, 7, 15, 3, 0),
+          controlMode: 'profit-live',
+          combatEnabled: false,
+          coinMaxDistance: 500,
+          globalCoinMaxDistance: 50000,
+          coinRouteMaxDistance: 50000,
+          coinRoutePoolLimit: 12,
+          coinRouteClusterRadius: 1500,
+          coinRouteLinkDistance: 2000,
+          coinRouteMaxLinkDistance: 2500,
+          coinRouteMaxPointsSparse: 3,
+          coinRouteMinCoins: 3
+        });
+        const rows = decision.input.nearby.c || [];
+        return [
+          decision.reason,
+          decision.action?.target?.id,
+          decision.action?.coinRoute?.ids?.join(','),
+          rows.some(row => row[0] === 'late-a' && row[3] === 1 && row[4] === 1),
+          rows.some(row => row[0] === 'late-b' && row[4] === 2),
+          rows.some(row => row[0] === 'late-c' && row[4] === 3),
+          decision.profit?.threshold?.active,
+          decision.profit?.threshold?.filteredCount >= 10
+        ].join('|');
+      })(),
+      want: 'best-opportunity-coin-route|late-a|late-a,late-b,late-c|true|true|true|true|true'
+    },
+    {
       name: 'browserless profit live enriches realtime AFK reward from fresh snapshot metadata',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });

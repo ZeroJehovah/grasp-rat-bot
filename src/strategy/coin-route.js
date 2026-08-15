@@ -69,6 +69,163 @@ function coinRoutePointLimitCore(anchor, candidates, options = {}) {
   return Math.max(3, Number(options.maxPointsSparse || 2));
 }
 
+function coinRouteCandidateDistanceCore(self, coin, dist) {
+  const geometryDistance = dist(self, coin);
+  if (Number.isFinite(geometryDistance)) return Math.max(0, geometryDistance);
+  const reportedDistance = Number(coin?.distance);
+  return Number.isFinite(reportedDistance) ? Math.max(0, reportedDistance) : Infinity;
+}
+
+function coinRouteNeighborCountsCore(candidates, radius, dist, options = {}) {
+  const items = Array.isArray(candidates) ? candidates : [];
+  const counts = items.map(() => 1);
+  const rawLimit = Number(options.neighborCountCap ?? 64);
+  const limit = Math.max(1, Math.round(Number.isFinite(rawLimit) ? rawLimit : 64));
+  const rawRadius = Number(radius || 0);
+  const maxRadius = Math.max(0, Number.isFinite(rawRadius) ? rawRadius : 0);
+  if (!(maxRadius > 0) || items.length < 2) return counts;
+
+  // The route pool is intentionally bounded, but the pre-pool input can be a
+  // full snapshot. A small spatial grid keeps density/link coverage bounded
+  // even when one cell contains many stale or co-located drops.
+  const cellSize = Math.max(1, maxRadius);
+  const grid = new Map();
+  const cellFor = item => {
+    const x = Number(item?.x);
+    const y = Number(item?.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    return [Math.floor(x / cellSize), Math.floor(y / cellSize)];
+  };
+  for (let index = 0; index < items.length; index += 1) {
+    const cell = cellFor(items[index]);
+    if (!cell) continue;
+    const key = `${cell[0]}:${cell[1]}`;
+    const bucket = grid.get(key);
+    if (bucket) bucket.push(index);
+    else grid.set(key, [index]);
+  }
+  for (let index = 0; index < items.length; index += 1) {
+    if (counts[index] >= limit) continue;
+    const cell = cellFor(items[index]);
+    if (!cell) continue;
+    let done = false;
+    for (let dx = -1; dx <= 1 && !done; dx += 1) {
+      for (let dy = -1; dy <= 1 && !done; dy += 1) {
+        const bucket = grid.get(`${cell[0] + dx}:${cell[1] + dy}`) || [];
+        for (const otherIndex of bucket) {
+          if (otherIndex === index) continue;
+          if (dist(items[index], items[otherIndex]) > maxRadius) continue;
+          counts[index] += 1;
+          if (counts[index] >= limit) {
+            done = true;
+            break;
+          }
+        }
+      }
+    }
+  }
+  return counts;
+}
+
+/**
+ * Select a bounded route-planning pool from the complete safe coin set.
+ *
+ * This is deliberately separate from the compact nearby panel projection:
+ * the panel may show only the nearest ten low-value coins, while route
+ * planning must still see a later dense field or a linkable route segment.
+ */
+function selectCoinRouteCandidatePoolCore(self, candidates, options = {}) {
+  const items = Array.isArray(candidates) ? candidates : [];
+  if (!items.length) return [];
+  const baseDist = typeof options.dist === 'function' ? options.dist : defaultDist;
+  const routeKey = typeof options.routeKey === 'function' ? options.routeKey : coinRouteKey;
+  const rawPoolLimit = Number(options.poolLimit ?? 72);
+  const poolLimit = Math.max(2, Math.round(Number.isFinite(rawPoolLimit) ? rawPoolLimit : 72));
+  if (items.length <= poolLimit) return items.slice();
+
+  const metadata = items.map((coin, index) => ({
+    coin,
+    index,
+    key: routeKey(coin),
+    distance: coinRouteCandidateDistanceCore(self, coin, baseDist),
+    value: coinRouteValueCore(coin, options)
+  }));
+  const clusterCounts = coinRouteNeighborCountsCore(
+    items,
+    options.clusterRadius,
+    baseDist,
+    options
+  );
+  const rawLinkRadius = Number(options.maxLinkDistance ?? options.linkDistance ?? options.clusterRadius ?? 0);
+  const linkRadius = Number.isFinite(rawLinkRadius) ? Math.max(0, rawLinkRadius) : 0;
+  const linkCounts = coinRouteNeighborCountsCore(
+    items,
+    linkRadius,
+    baseDist,
+    options
+  );
+  metadata.forEach(item => {
+    item.clusterCount = Number(clusterCounts[item.index] || 1);
+    item.linkCount = Number(linkCounts[item.index] || 1);
+  });
+
+  const stableSort = comparator => metadata.slice().sort((left, right) => comparator(left, right) || left.index - right.index);
+  const nearest = stableSort((left, right) => left.distance - right.distance || right.value - left.value);
+  const valuable = stableSort((left, right) => right.value - left.value || left.distance - right.distance);
+  const dense = stableSort((left, right) => right.clusterCount - left.clusterCount
+    || right.linkCount - left.linkCount
+    || left.distance - right.distance);
+  const connected = stableSort((left, right) => right.linkCount - left.linkCount
+    || right.clusterCount - left.clusterCount
+    || left.distance - right.distance);
+
+  const choiceId = typeof options.choiceId === 'function' ? options.choiceId : choice => String(choice?.id ?? '');
+  const heldIds = new Set();
+  for (const choice of [options.heldChoice, options.heldRouteChoice]) {
+    if (!choice) continue;
+    const id = choiceId(choice);
+    if (id !== undefined && id !== null && id !== '') heldIds.add(String(id));
+    for (const routeId of coinRouteIdsFrom(choice)) heldIds.add(String(routeId));
+  }
+
+  const selectedIndexes = new Set();
+  const selected = [];
+  const add = item => {
+    if (!item || selectedIndexes.has(item.index)) return false;
+    selectedIndexes.add(item.index);
+    selected.push(item);
+    return true;
+  };
+  // Preserve the active coin/route before applying coverage quotas. A held
+  // route has only the normal bounded route length, so this remains bounded
+  // even when a caller configures a very small experimental pool limit.
+  for (const item of metadata) {
+    if (heldIds.has(String(item.key))) add(item);
+  }
+
+  const rankings = [nearest, valuable, dense, connected];
+  const cursors = rankings.map(() => 0);
+  const selectionLimit = Math.max(poolLimit, selected.length);
+  while (selected.length < selectionLimit) {
+    let progress = false;
+    for (let rankingIndex = 0; rankingIndex < rankings.length && selected.length < selectionLimit; rankingIndex += 1) {
+      const ranking = rankings[rankingIndex];
+      while (cursors[rankingIndex] < ranking.length
+        && selectedIndexes.has(ranking[cursors[rankingIndex]].index)) {
+        cursors[rankingIndex] += 1;
+      }
+      if (cursors[rankingIndex] >= ranking.length) continue;
+      add(ranking[cursors[rankingIndex]]);
+      cursors[rankingIndex] += 1;
+      progress = true;
+    }
+    if (!progress) break;
+  }
+  return selected
+    .sort((left, right) => left.index - right.index)
+    .map(item => item.coin);
+}
+
 function coinRouteSummaryCore(route, self, options = {}) {
   const dist = typeof options.dist === 'function' ? options.dist : defaultDist;
   const moveStaminaCost = typeof options.moveStaminaCost === 'function' ? options.moveStaminaCost : distance => Math.max(0, Number(distance || 0));
@@ -485,10 +642,13 @@ function pickCoinRouteOpportunityCore(self, coins, activeThreats, options = {}) 
   const choiceId = typeof options.choiceId === 'function' ? options.choiceId : choice => String(choice?.id ?? '');
   const maxDistance = Math.max(0, Number(options.maxDistance || 0));
   if (!(maxDistance > 0)) return null;
-  const poolLimit = Math.max(2, Number(options.poolLimit || 72));
-  const candidates = safeCoinCandidates((coins || []).filter(coin => !isSnapshotOnlyCoin(coin)), activeThreats, maxDistance, self)
-    .filter(coin => Number(coin.amount || 0) > 0)
-    .slice(0, poolLimit);
+  const safeCandidates = safeCoinCandidates((coins || []).filter(coin => !isSnapshotOnlyCoin(coin)), activeThreats, maxDistance, self)
+    .filter(coin => Number(coin.amount || 0) > 0);
+  const candidates = selectCoinRouteCandidatePoolCore(self, safeCandidates, {
+    ...options,
+    dist,
+    routeKey
+  });
   if (candidates.length < 2) return null;
   const legClearOptions = { ...options, dist };
   const legClearCache = new WeakMap();
@@ -611,6 +771,7 @@ module.exports = {
   coinRouteLegStaminaCostCore,
   coinRouteLegClearCore,
   coinRoutePointLimitCore,
+  selectCoinRouteCandidatePoolCore,
   coinRouteSummaryCore,
   coinRoutePoints,
   coinRouteActionMetaCore,
