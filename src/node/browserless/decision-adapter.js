@@ -22,6 +22,7 @@ const {
   opportunityValueScoreCore,
   uniqueVisibleRouteCoinsCore
 } = require('../../strategy/opportunity-candidates');
+const { playerProfitScoreMultiplierCore } = require('../../strategy/player-profit-score');
 const { estimateEightWayRouteCore } = require('../../strategy/eight-way-route-eta');
 const {
   chooseStableOpportunityCore,
@@ -4169,11 +4170,12 @@ function scoreEnemyOpportunity(target, options = {}) {
       : dropWeight
   ) ?? 1);
   const effective = effectiveProfitReward(target, options);
-  return opportunityValueScoreCore(effective.expectedReward, effective.staminaCost, {
+  const economicScore = opportunityValueScoreCore(effective.expectedReward, effective.staminaCost, {
     distanceFloor: options.opportunityDistanceFloor ?? BROWSER_RUNTIME_DEFAULTS.opportunityDistanceFloor,
     distanceScoreScale: options.distanceScoreScale || options.opportunityDistanceScoreScale || BROWSER_RUNTIME_DEFAULTS.opportunityDistanceScoreScale || 10000,
     weight
   });
+  return economicScore * playerProfitScoreMultiplierCore(effective.rawDrop);
 }
 
 function coinSafeFromThreats(coin, threats = [], options = {}) {

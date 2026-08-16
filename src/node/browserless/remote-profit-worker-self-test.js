@@ -62,9 +62,29 @@ async function runRemoteProfitWorkerSelfTest() {
     const reset = worker.context(Date.now());
     assert.deepStrictEqual(reset.realtimeSupersededIds, []);
     assert.deepStrictEqual(reset.missSuppressedIds, []);
+    const qualityRequest = requestPayload(3);
+    qualityRequest.entities = [
+      { ...qualityRequest.entities[0], user_id: 50, entity_id: 150, drop: 50 },
+      { ...qualityRequest.entities[0], user_id: 52, entity_id: 152, drop: 52 }
+    ];
+    const quality = await worker.publish(qualityRequest);
+    assert(quality && quality.candidates.length === 2);
+    const drop50 = quality.candidates.find(item => item.userId === 50);
+    const drop52 = quality.candidates.find(item => item.userId === 52);
+    assert(drop50 && drop52);
+    assert.strictEqual(drop50.profitScoreMultiplier, 1);
+    assert.strictEqual(drop52.profitScoreMultiplier, 1.01);
+    assert.strictEqual(drop50.expectedReward, 50);
+    assert.strictEqual(drop52.expectedReward, 52);
+    assert.strictEqual(drop50.staminaCost, drop52.staminaCost);
+    assert(Math.abs(
+      drop52.baseScore / drop50.baseScore - (52 / 50) * 1.01
+    ) < 1e-12, 'remote worker applies the Drop quality multiplier exactly once');
+    assert(Math.abs(drop52.adjustedScore / drop52.baseScore - drop52.distanceFactor) < 1e-12);
+    assert.strictEqual(quality.candidates[0].userId, 52);
     const status = worker.status(Date.now());
-    assert.strictEqual(status.latestPublishedGeneration, 2);
-    assert(status.completed >= 2);
+    assert.strictEqual(status.latestPublishedGeneration, 3);
+    assert(status.completed >= 3);
     if (process.platform === 'linux') assert(Number(status.workerNice) >= 10);
     assert(events.some(event => event.type === 'published'));
     assert.strictEqual(isRemoteProfitSnapshotEligible(
@@ -115,7 +135,7 @@ async function runRemoteProfitWorkerSelfTest() {
     const busyImmediate = await worker.publish(requestPayload(4));
     assert.strictEqual(busyImmediate, null);
     await busyPending;
-    return { ok: true, cases: 20, status };
+    return { ok: true, cases: 30, status };
   } finally {
     await worker.close();
   }

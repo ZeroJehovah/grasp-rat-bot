@@ -4,6 +4,7 @@ const os = require('os');
 const { parentPort } = require('worker_threads');
 const { performance } = require('perf_hooks');
 const { evaluateRemoteProfitTargets } = require('../../strategy/remote-profit-targets');
+const { playerProfitScoreMultiplierCore } = require('../../strategy/player-profit-score');
 const {
   effectiveProfitReward,
   normalizeEntityForDecision,
@@ -39,6 +40,7 @@ function scoreTarget(request, target, details = {}) {
     expectedReward: effective.expectedReward,
     staminaCost,
     baseScore,
+    profitScoreMultiplier: playerProfitScoreMultiplierCore(effective.rawDrop),
     effective
   };
 }

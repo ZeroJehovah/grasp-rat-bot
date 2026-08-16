@@ -4,7 +4,9 @@ const assert = require('assert');
 const { createBrowserlessActionAdapter } = require('./action-adapter');
 const {
   buildBrowserlessStrategyInput,
-  createBrowserlessDecisionAdapter
+  createBrowserlessDecisionAdapter,
+  effectiveProfitReward,
+  scoreEnemyOpportunity
 } = require('./decision-adapter');
 
 function fullStaminaSelf(overrides = {}) {
@@ -1090,6 +1092,26 @@ function assertAfkProfitIgnoresOffLaneActiveBystander() {
 }
 
 function runRemoteProfitDecisionSelfTest() {
+  const realtimeScoreOptions = {
+    isAfkProfitTarget: () => true,
+    staminaCostOverride: 107,
+    coinOpportunityValue: 1,
+    opportunityDistanceScoreScale: 1,
+    opportunityDistanceFloor: 1
+  };
+  const ordinaryRealtimeTarget = { drop: 49, active: false };
+  const qualityRealtimeTarget = { drop: 52, active: false };
+  const ordinaryRealtimeScore = scoreEnemyOpportunity(ordinaryRealtimeTarget, {
+    ...realtimeScoreOptions,
+    staminaCostOverride: 100
+  });
+  const qualityRealtimeScore = scoreEnemyOpportunity(qualityRealtimeTarget, realtimeScoreOptions);
+  const qualityRealtimeEconomics = effectiveProfitReward(qualityRealtimeTarget, realtimeScoreOptions);
+  assert(qualityRealtimeScore > ordinaryRealtimeScore, 'Drop quality bonus can prioritize a scarcer high-Drop target');
+  assert.strictEqual(qualityRealtimeEconomics.expectedReward, 52);
+  assert.strictEqual(qualityRealtimeEconomics.staminaCost, 107);
+  assert.strictEqual(qualityRealtimeEconomics.netROI, 52 / 107 * 10000);
+
   assertOrdinaryProfitEscortContinuity();
   assertAfkProfitIgnoresOffLaneActiveBystander();
   const adapter = createBrowserlessDecisionAdapter({
@@ -1752,7 +1774,7 @@ function runRemoteProfitDecisionSelfTest() {
   assert.strictEqual(lowDropDecision.profit?.postKillCoinSuppression?.removedCount, 1);
   assert.strictEqual(lowDropDecision.stateful.profitMission?.targetId, '99');
 
-  return { ok: true, cases: 64 };
+  return { ok: true, cases: 68 };
 }
 
 if (require.main === module) {

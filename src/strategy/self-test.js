@@ -252,9 +252,30 @@ const {
   evaluateDynamicWhitelistContactCore
 } = require('./dynamic-whitelist-safety');
 const { runRemoteProfitTargetsSelfTest } = require('./remote-profit-targets-self-test');
+const { playerProfitScoreMultiplierCore } = require('./player-profit-score');
 
 function runStrategyModuleSelfTests() {
   const results = [];
+
+  const playerProfitScoreBoundaries = [
+    [49, 1],
+    [50, 1],
+    [51, 1],
+    [52, 1.01],
+    [449, 2.99],
+    [450, 3],
+    [451, 3]
+  ];
+  results.push({
+    name: 'player-profit-score-drop-quality-boundaries',
+    passed: playerProfitScoreBoundaries.every(([drop, expected]) => (
+      playerProfitScoreMultiplierCore(drop) === expected
+    )),
+    values: Object.fromEntries(playerProfitScoreBoundaries.map(([drop]) => [
+      drop,
+      playerProfitScoreMultiplierCore(drop)
+    ]))
+  });
 
   const remoteProfitTargets = runRemoteProfitTargetsSelfTest();
   results.push({

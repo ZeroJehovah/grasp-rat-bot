@@ -308,6 +308,9 @@ function classifyRemoteTarget(target, context, config, helpers) {
       ? economics.score
       : (expectedReward !== null && staminaCost !== null && staminaCost > 0 ? expectedReward / staminaCost : expectedReward));
   const baseScore = finiteNumber(baseValue);
+  const profitScoreMultiplier = finiteNumber(
+    hasOwn('profitScoreMultiplier') ? economics.profitScoreMultiplier : null
+  );
   const distanceFactor = remoteProfitDistanceFactor(distance, config);
   const adjustedScore = baseScore !== null && distanceFactor !== null ? baseScore * distanceFactor : null;
   if (!(expectedReward > 0)
@@ -338,6 +341,7 @@ function classifyRemoteTarget(target, context, config, helpers) {
       expectedReward,
       staminaCost,
       baseScore,
+      profitScoreMultiplier,
       distanceFactor,
       adjustedScore
     }
@@ -452,6 +456,7 @@ function buildRemotePlayerNavigationOpportunitiesCore(candidates = [], options =
       score,
       selectionScore: score,
       baseScore: finiteNumber(candidate.baseScore),
+      profitScoreMultiplier: finiteNumber(candidate.profitScoreMultiplier),
       distanceFactor: finiteNumber(candidate.distanceFactor),
       adjustedScore: score,
       scoreAuthority: 'adjusted-distance-score',
