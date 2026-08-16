@@ -16643,6 +16643,49 @@ async function runSelfTest() {
       want: 'leave|safety|stamina-exhausted-leave|1d|31|true'
     },
     {
+      name: 'browserless profit live exempts only 1d exhaustion during the utc8 first hour',
+      got: (() => {
+        const nowMs = Date.parse('2026-07-14T16:30:00.000Z');
+        const makeDecision = (stamina1h, atMs = nowMs) => {
+          const store = createBrowserlessStateStore({ userId: 7 });
+          store.ingestFrame({
+            type: 'pos',
+            tick: 59,
+            entities: [{
+              entity_id: 1,
+              user_id: 7,
+              name: 'self',
+              x: 0,
+              y: 0,
+              hp: 100,
+              max_hp: 100,
+              stamina_5s_remaining_milli: 10000,
+              stamina_1h_remaining_milli: stamina1h,
+              stamina_1d_remaining_milli: 31
+            }],
+            bullets: []
+          }, { receivedAtMs: atMs });
+          return buildBrowserlessDecision(store.getState(atMs + 200), {}, {
+            nowMs: atMs + 200,
+            controlMode: 'profit-live'
+          });
+        };
+        const dailyOnly = makeDecision(3000000);
+        const hourlyAndDaily = makeDecision(31);
+        const afterGrace = makeDecision(3000000, Date.parse('2026-07-14T17:00:00.000Z'));
+        return [
+          dailyOnly.reason,
+          dailyOnly.action.staminaExhausted === undefined,
+          hourlyAndDaily.reason,
+          hourlyAndDaily.action.staminaExhausted.exhausted.join(','),
+          hourlyAndDaily.action.reloginDelayMs,
+          afterGrace.reason,
+          afterGrace.action.staminaExhausted.exhausted.join(',')
+        ].join('|');
+      })(),
+      want: 'no-profitable-candidate|true|stamina-exhausted-leave|1h|1800000|stamina-exhausted-leave|1d'
+    },
+    {
       name: 'browserless profit live honors browserless stamina exhausted threshold alias',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
@@ -30436,7 +30479,7 @@ async function runSelfTest() {
           env.includes('GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_FILE='),
           env.includes('GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_SUCCESS_REQUIRED=1'),
           env.includes('GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_PROBE_INTERVAL_MS=30000'),
-          env.includes('GRASP_RAT_BROWSERLESS_DAILY_FIRST_LOGIN_DELAY_MS=30000'),
+          env.includes('GRASP_RAT_BROWSERLESS_DAILY_FIRST_LOGIN_DELAY_MS=0'),
           env.includes('GRASP_RAT_BROWSERLESS_FRAME_GAP_ALERT_MS=2000'),
           env.includes('GRASP_RAT_BROWSERLESS_LEAVE_RETRY_MS=200'),
           env.includes('GRASP_RAT_BROWSERLESS_LEAVE_HEDGE_MS=1000'),
@@ -30692,7 +30735,7 @@ async function runSelfTest() {
           'GRASP_RAT_BROWSERLESS_DRY_RUN=true',
           'GRASP_RAT_BROWSERLESS_CANARY_PROFILE=read-only',
           'GRASP_RAT_BROWSERLESS_CONTROL_MODE=read-only',
-          'GRASP_RAT_BROWSERLESS_DAILY_FIRST_LOGIN_DELAY_MS=30000',
+          'GRASP_RAT_BROWSERLESS_DAILY_FIRST_LOGIN_DELAY_MS=0',
           'GRASP_RAT_BROWSERLESS_WEB_TOKEN=local-secret-token',
           ''
         ].join('\n'));
@@ -30778,7 +30821,7 @@ async function runSelfTest() {
           'GRASP_RAT_BROWSERLESS_DRY_RUN=false',
           'GRASP_RAT_BROWSERLESS_CANARY_PROFILE=profit',
           'GRASP_RAT_BROWSERLESS_CONTROL_MODE=non-combat-profit',
-          'GRASP_RAT_BROWSERLESS_DAILY_FIRST_LOGIN_DELAY_MS=30000',
+          'GRASP_RAT_BROWSERLESS_DAILY_FIRST_LOGIN_DELAY_MS=0',
           'GRASP_RAT_BROWSERLESS_WEB_TOKEN=local-secret-token',
           'GRASP_RAT_BROWSERLESS_USER_ID=0',
           'GRASP_RAT_BROWSERLESS_SESSION_TOKEN=',
@@ -30816,7 +30859,7 @@ async function runSelfTest() {
         }, auditDeps);
         const staleDailyDelayEnvPath = path.join(dir, 'stale-daily-delay.env');
         fs.writeFileSync(staleDailyDelayEnvPath, fs.readFileSync(envPath, 'utf8')
-          .replace('GRASP_RAT_BROWSERLESS_DAILY_FIRST_LOGIN_DELAY_MS=30000', 'GRASP_RAT_BROWSERLESS_DAILY_FIRST_LOGIN_DELAY_MS=120000'));
+          .replace('GRASP_RAT_BROWSERLESS_DAILY_FIRST_LOGIN_DELAY_MS=0', 'GRASP_RAT_BROWSERLESS_DAILY_FIRST_LOGIN_DELAY_MS=120000'));
         const staleDailyDelay = auditBrowserlessDeployment({
           ...commonOptions,
           envPath: staleDailyDelayEnvPath,
@@ -32438,27 +32481,69 @@ async function runSelfTest() {
           plan.reason,
           plan.forceExitReason,
           plan.delayMs,
+          plan.notBeforeAt,
           plan.staminaExhausted.exhausted.join(','),
           plan.staminaExhausted.remaining1d
         ].join('|');
       })(),
-      want: 'true|stamina-exhausted-leave|true|2850000|1d|31'
+      want: 'true|stamina-exhausted-leave|true|2820000|2026-07-10T16:00:00.000Z|1d|31'
     },
     {
-      name: 'browserless runner delays only the utc8 daily first login until 00:00:30',
+      name: 'browserless runner does not infer a 1d stamina hold during the utc8 first hour',
       got: (() => {
-        const before = browserlessDailyFirstLoginDelayPlan({
+        const plan = browserlessLoopPlan({
+          ok: false,
+          canary: {
+            runId: 'no-self-midnight-daily-stamina',
+            error: 'no-self',
+            safety: { event: { reason: 'no-self' } },
+            leave: {
+              ok: true,
+              attempts: [{
+                response: {
+                  stamina_5s_remaining_milli: 10000,
+                  stamina_1h_remaining_milli: 3000000,
+                  stamina_1d_remaining_milli: 31
+                }
+              }]
+            }
+          }
+        }, {
+          once: false,
+          loopDelayMs: 1234,
+          nowMs: Date.parse('2026-07-10T16:30:00.000Z')
+        });
+        return [
+          plan.continue,
+          plan.reason,
+          plan.delayMs,
+          plan.staminaExhausted === undefined,
+          plan.forceExitReason === undefined
+        ].join('|');
+      })(),
+      want: 'true|no-self|1234|true|true'
+    },
+    {
+      name: 'browserless runner defaults the utc8 daily first login to 00:00:00',
+      got: (() => {
+        const defaultReady = browserlessDailyFirstLoginDelayPlan({
           stats: {
             today: { day: '2026-07-14', sessionCount: 7 },
             currentSession: { online: false }
           }
         }, {}, Date.parse('2026-07-14T16:00:10.000Z'));
-        const ready = browserlessDailyFirstLoginDelayPlan({
+        const explicitBefore = browserlessDailyFirstLoginDelayPlan({
           stats: {
             today: { day: '2026-07-14', sessionCount: 7 },
             currentSession: { online: false }
           }
-        }, {}, Date.parse('2026-07-14T16:00:30.000Z'));
+        }, { dailyFirstLoginDelayMs: 30000 }, Date.parse('2026-07-14T16:00:10.000Z'));
+        const explicitReady = browserlessDailyFirstLoginDelayPlan({
+          stats: {
+            today: { day: '2026-07-14', sessionCount: 7 },
+            currentSession: { online: false }
+          }
+        }, { dailyFirstLoginDelayMs: 30000 }, Date.parse('2026-07-14T16:00:30.000Z'));
         const alreadyLogged = browserlessDailyFirstLoginDelayPlan({
           stats: {
             today: { day: '2026-07-15', sessionCount: 1 },
@@ -32472,22 +32557,23 @@ async function runSelfTest() {
           }
         }, { dailyFirstLoginDelayMs: 30000 }, Date.parse('2026-07-14T16:00:10.000Z'));
         return [
-          before.reason,
-          before.delayMs,
-          before.notBeforeAt,
-          before.explicitDelay,
+          defaultReady === null,
           parseBrowserlessRunnerArgs([], {}).dailyFirstLoginDelayMs,
-          ready === null,
+          explicitBefore.reason,
+          explicitBefore.delayMs,
+          explicitBefore.notBeforeAt,
+          explicitReady === null,
           alreadyLogged === null,
           alreadyOnline === null
         ].join('|');
       })(),
-      want: 'daily-first-login-delay|20000|2026-07-14T16:00:30.000Z|true|30000|true|true|true'
+      want: 'true|0|daily-first-login-delay|20000|2026-07-14T16:00:30.000Z|true|true|true'
     },
     {
-      name: 'browserless compact status extends stale midnight reconnect display to daily 00:00:30 and omits missing cooldown',
+      name: 'browserless compact status migrates stale daily stamina reconnect display to 00:00:00',
       got: (() => {
         const waiting = buildCompactBrowserlessStatus({
+          updatedAt: '2026-07-14T15:13:00.000Z',
           runner: {
             currentAction: {
               kind: 'loop-wait',
@@ -32502,10 +32588,13 @@ async function runSelfTest() {
               reason: 'stamina-exhausted-leave',
               nextRunAt: '2026-07-14T16:00:10.000Z'
             }
+          },
+          lastKnown: {
+            stamina: { remaining1h: 3000000, remaining1d: 31 },
+            at: '2026-07-14T15:13:00.000Z'
           }
         }, {
-          nowMs: Date.parse('2026-07-14T15:59:10.000Z'),
-          dailyFirstLoginDelayMs: 30000
+          nowMs: Date.parse('2026-07-14T15:59:10.000Z')
         });
         const noCooldown = buildCompactBrowserlessStatus({
           runner: { currentAction: { kind: 'loop-wait', reason: 'offline-wait', nextRunAt: '' } },
@@ -32518,7 +32607,7 @@ async function runSelfTest() {
           noCooldown.stats.offline.reconnectRemainingMs ?? 'null'
         ].join('|');
       })(),
-      want: '2026-07-14T16:00:30.000Z|80000||null'
+      want: '2026-07-14T16:00:00.000Z|50000||null'
     },
     {
       name: 'browserless runner resumes persisted reconnect wait after restart',
@@ -32775,6 +32864,10 @@ async function runSelfTest() {
               reason: 'restart-drain-ready',
               nextRunAt: '2026-07-12T16:00:10.000Z'
             }
+          },
+          lastKnown: {
+            stamina: { remaining1h: 3000000, remaining1d: 31 },
+            at: '2026-07-12T15:13:00.000Z'
           }
         }, { updatedAt: '2026-07-12T03:11:09.932Z' });
         config.snapshotEdgeEnabled = true;
@@ -32832,7 +32925,7 @@ async function runSelfTest() {
           }, Date.parse('2026-07-12T16:00:10.000Z'))
         ].join('|');
       }),
-      want: 'explicit-stop|0|80000|stamina-exhausted-leave|true|stamina-reset|stamina-exhausted-leave|2026-07-12T16:00:30.000Z|true|daily-first-login-invulnerability|true'
+      want: 'explicit-stop|0|50000|stamina-exhausted-leave|true|stamina-reset|stamina-exhausted-leave|2026-07-12T16:00:00.000Z|false|daily-first-login-invulnerability|true'
     },
     {
       name: 'browserless restart drain interrupts an in-process explicit stamina wait',
@@ -35798,7 +35891,7 @@ async function runSelfTest() {
           compact.stats.offline.blocker?.nextReadyAt
         ].join('|');
       })(),
-      want: 'false|true|true|100|2316|10000|31|stamina-exhausted-leave|1d|2026-07-10T16:00:30.000Z|2850000|2026-07-10T16:00:30.000Z'
+      want: 'false|true|true|100|2316|10000|31|stamina-exhausted-leave|1d|2026-07-10T16:00:00.000Z|2820000|2026-07-10T16:00:00.000Z'
     },
     {
       name: 'browserless persisted last known survives missing realtime self and blocked restart',
@@ -35911,6 +36004,10 @@ async function runSelfTest() {
               reason: 'stamina-exhausted-leave',
               nextRunAt: '2026-07-12T16:00:10.000Z'
             }
+          },
+          lastKnown: {
+            stamina: { remaining1h: 3000000, remaining1d: 31 },
+            at: '2026-07-12T03:11:09.932Z'
           }
         }, {
           nowMs: Date.parse('2026-07-12T16:00:20.000Z')
@@ -35918,10 +36015,10 @@ async function runSelfTest() {
         return [
           compact.stats.offline.blocker === null,
           compact.stats.offline.nextReconnectAt,
-          compact.stats.offline.reconnectRemainingMs
+          compact.stats.offline.reconnectRemainingMs ?? 'null'
         ].join('|');
       })(),
-      want: 'true|2026-07-12T16:00:30.000Z|10000'
+      want: 'true||null'
     },
     {
       name: 'browserless state file replaces current action snapshots',

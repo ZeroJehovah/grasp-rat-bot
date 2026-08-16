@@ -50,6 +50,7 @@ const {
   summarizeNearestCoinStaminaBudgetExitCore
 } = require('../../strategy/stamina-budget');
 const { buildRuntimeDefaults } = require('../../shared/runtime-defaults');
+const { effectiveLongStaminaExhaustedWindows } = require('../../shared/daily-stamina-window');
 const {
   NORMALIZED_COMBAT_BULLETS,
   NORMALIZED_COMBAT_INPUT,
@@ -5732,16 +5733,18 @@ function buildEligibleProfitStaminaBudgetExitDecision(input, options = {}) {
 function buildLongStaminaExhaustedLeaveDecision(input, options = {}) {
   if (!input?.self) return null;
   const thresholdMs = staminaExhaustedThreshold(options);
+  const nowMs = Number.isFinite(Number(options.nowMs))
+    ? Number(options.nowMs)
+    : (Number.isFinite(Number(input.nowMs)) ? Number(input.nowMs) : Date.now());
   const remaining = {
     '1h': staminaRemaining(input.self, '1h'),
     '1d': staminaRemaining(input.self, '1d')
   };
-  const exhausted = Object.entries(remaining)
+  const exhausted = effectiveLongStaminaExhaustedWindows(Object.entries(remaining)
     .filter(([, value]) => value !== null && value < thresholdMs)
-    .map(([key]) => key);
+    .map(([key]) => key), nowMs);
   if (!exhausted.length) return null;
 
-  const nowMs = Number.isFinite(Number(input.nowMs)) ? Number(input.nowMs) : Date.now();
   const resetAt = exhausted.includes('1d') ? nextDailyStaminaResetAt(nowMs) : 0;
   const fixedDelayMs = exhausted.includes('1h') ? staminaBudgetReloginDelayMs(options) : 0;
   const resetDelayMs = resetAt ? Math.max(0, resetAt + staminaResetGraceMs(options) - nowMs) : 0;

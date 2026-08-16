@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.15.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.17.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -925,7 +925,7 @@ function renderBrowserlessWebPanel() {
       return String(today.day || '') !== utc8DayKey(Date.now()) || Math.max(0, number(today.sessionCount) || 0) <= 0;
     };
     const sourceIpDeferredDetailText = status => dailyFirstLoginExempt(status)
-      ? '已保留 3 个 IP，等待下一个登录时点；每日首次登录豁免仍有效，届时直接使用主 IP 登录'
+      ? '已保留 3 个 IP，等待下一个登录时点；每日零点首次登录豁免仍有效，00:00:00 将直接使用主 IP 登录'
       : '已保留 3 个 IP，等待下一个登录时点；届时不重复主页测试，并先使用主 IP 做快照安全检查';
     const transportModeText = health => {
       if (!health || health.enabled === false) return '--';
@@ -1383,7 +1383,7 @@ function renderBrowserlessWebPanel() {
       'snapshot safety not confirmed: damage-actor-near-login-point': '今日伤害过我的玩家在登录点附近，暂不进入',
       'snapshot-safety-streak-pending': '登录点已安全，等待连续确认',
       'snapshot-safety-streak-missing': '缺少登录点安全结果',
-      'daily-first-login-delay': '每日首次登录将在 00:00:30 开始',
+      'daily-first-login-delay': '每日首次登录将在 00:00:00 准时开始',
       'missing-manual-session': '等待登录信息',
       'missing-login-point': '缺少登录点坐标',
       'missing-snapshot-tick': '快照缺少时间戳',

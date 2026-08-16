@@ -8,6 +8,10 @@ const {
   normalizeSourceIpRisk,
   uniqueIpv4
 } = require('./source-ip-preflight');
+const {
+  dailyStaminaExitExemptAt,
+  effectiveLongStaminaExhaustedWindows
+} = require('../../shared/daily-stamina-window');
 
 const SCHEMA_VERSION = 1;
 const KILL_ACCOUNTING_VERSION = 3;
@@ -16,7 +20,7 @@ const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const PICKED_COINS_PER_SELF_DROP = 2;
 const DEFAULT_STAMINA_EXHAUSTED_THRESHOLD_MS = 1000;
-const DEFAULT_STAMINA_RESET_GRACE_MS = 30000;
+const DEFAULT_STAMINA_RESET_GRACE_MS = 0;
 const RECENT_EXIT_MATCH_WINDOW_MS = 60000;
 const RECENT_EXIT_COMBAT_ASSOCIATION_MAX_AGE_MS = 6000;
 const HIGH_DROP_PANEL_THRESHOLD = 500;
@@ -636,7 +640,7 @@ function compactDailyFirstLoginNotBeforeMs(stats, config = {}, candidateMs = 0) 
   if (String(today.day || '') === candidateDay && Math.max(0, Number(today.sessionCount || 0)) > 0) {
     return 0;
   }
-  const delayAfterMidnightMs = Math.max(0, Number(config.dailyFirstLoginDelayMs ?? 30000));
+  const delayAfterMidnightMs = Math.max(0, Number(config.dailyFirstLoginDelayMs ?? 0));
   return browserlessStatsDayStartMs(candidateDay) + delayAfterMidnightMs;
 }
 
@@ -1518,14 +1522,34 @@ function compactBrowserlessStats(normalized, game, action, options = {}, lastKno
     : stats.lastExit;
   const rawNextRunAtMs = parseTimeMs(rawNextRunAt);
   const blockerReadyAtMs = parseTimeMs(offlineBlocker?.nextReadyAt);
-  let nextRunAt = blockerReadyAtMs > rawNextRunAtMs
+  const dailyOnlyStaminaBlocker = offlineBlocker?.reason === 'stamina-exhausted-leave'
+    && Array.isArray(offlineBlocker.exhausted)
+    && offlineBlocker.exhausted.length === 1
+    && offlineBlocker.exhausted[0] === '1d';
+  const dailyOnlyDeadlineMigration = dailyOnlyStaminaBlocker
+    && blockerReadyAtMs > 0
+    && rawNextRunAtMs > 0
+    && rawNextRunAtMs <= blockerReadyAtMs + 60 * 60 * 1000;
+  let nextRunAt = dailyOnlyDeadlineMigration
     ? offlineBlocker.nextReadyAt
-    : rawNextRunAt;
+    : (blockerReadyAtMs > rawNextRunAtMs ? offlineBlocker.nextReadyAt : rawNextRunAt);
   let nextRunAtMs = parseTimeMs(nextRunAt);
   const dailyFirstLoginNotBeforeMs = compactDailyFirstLoginNotBeforeMs(stats, options, nextRunAtMs);
   if (dailyFirstLoginNotBeforeMs > nextRunAtMs) {
     nextRunAtMs = dailyFirstLoginNotBeforeMs;
     nextRunAt = new Date(nextRunAtMs).toISOString();
+  }
+  const staminaGraceRelease = !offlineBlocker
+    && compactDailyOnlyStaminaEvidence(lastKnown, options)
+    && dailyStaminaExitExemptAt(nowMs)
+    && /stamina-exhausted-leave|体力耗尽/i.test([
+      action?.reason,
+      stats.lastExit.reason,
+      session.exitReason
+    ].filter(Boolean).join(' '));
+  if (staminaGraceRelease) {
+    nextRunAt = '';
+    nextRunAtMs = 0;
   }
   return {
     currentSession: {
@@ -2138,11 +2162,15 @@ function compactOfflineBlocker(normalized, lastKnown, options = {}, nowMs = Date
   const currentDayStartMs = browserlessStatsDayStartMs(browserlessStatsDayKey(nowMs));
   const staminaIsFromCurrentDay = !lastKnownAtMs || lastKnownAtMs >= currentDayStartMs;
   const thresholdMs = Math.max(0, Number(options.staminaExhaustedBelowMs ?? DEFAULT_STAMINA_EXHAUSTED_THRESHOLD_MS));
-  const exhausted = [];
-  if (staminaIsFromCurrentDay && stamina.remaining1h !== null && stamina.remaining1h < thresholdMs) exhausted.push('1h');
-  if (staminaIsFromCurrentDay && stamina.remaining1d !== null && stamina.remaining1d < thresholdMs) exhausted.push('1d');
+  const exhausted = effectiveLongStaminaExhaustedWindows([
+    ...(staminaIsFromCurrentDay && stamina.remaining1h !== null && stamina.remaining1h < thresholdMs ? ['1h'] : []),
+    ...(staminaIsFromCurrentDay && stamina.remaining1d !== null && stamina.remaining1d < thresholdMs ? ['1d'] : [])
+  ], nowMs);
   if (!staminaIsFromCurrentDay) return null;
-  if (!exhausted.length && !/stamina-exhausted-leave|体力耗尽/i.test(offlineReason)) return null;
+  if (!exhausted.length) {
+    if (dailyStaminaExitExemptAt(nowMs) && /stamina-exhausted-leave|体力耗尽/i.test(offlineReason)) return null;
+    if (!/stamina-exhausted-leave|体力耗尽/i.test(offlineReason)) return null;
+  }
   const resetGraceMs = Math.max(0, Number(options.staminaResetGraceMs ?? DEFAULT_STAMINA_RESET_GRACE_MS));
   const resetAt = exhausted.includes('1d') ? nextDailyStaminaResetAt(nowMs) : 0;
   const nextReadyAt = resetAt ? new Date(resetAt + resetGraceMs).toISOString() : '';
@@ -2154,6 +2182,17 @@ function compactOfflineBlocker(normalized, lastKnown, options = {}, nowMs = Date
     remaining1d: stamina.remaining1d,
     nextReadyAt
   };
+}
+
+function compactDailyOnlyStaminaEvidence(lastKnown, options = {}) {
+  const stamina = lastKnown?.stamina || {};
+  const thresholdMs = Math.max(0, Number(options.staminaExhaustedBelowMs ?? DEFAULT_STAMINA_EXHAUSTED_THRESHOLD_MS));
+  const remaining1h = compactNumber(stamina.remaining1h);
+  const remaining1d = compactNumber(stamina.remaining1d);
+  return remaining1h !== null
+    && remaining1d !== null
+    && remaining1h >= thresholdMs
+    && remaining1d < thresholdMs;
 }
 
 function compactProfit(profit) {

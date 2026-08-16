@@ -90,6 +90,10 @@ const {
   snapshotSelfKillEvidence,
   summarizeNearbyForPanel
 } = require('./decision-adapter');
+const {
+  dailyStaminaExitExemptAt,
+  effectiveLongStaminaExhaustedWindows
+} = require('../../shared/daily-stamina-window');
 const { createBrowserlessActionAdapter } = require('./action-adapter');
 const { buildBrowserlessCombatDryRun } = require('./combat-adapter');
 const { runCombatShotExecutionSelfTest } = require('./combat-shot-execution-self-test');
@@ -858,7 +862,7 @@ function isFirstBrowserlessLoginOfDay(state, nowMs = Date.now()) {
 function browserlessDailyFirstLoginNotBeforeMs(state, config = {}, nowMs = Date.now()) {
   const nowValue = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
   if (!isFirstBrowserlessLoginOfDay(state, nowValue)) return 0;
-  const delayAfterMidnightMs = Math.max(0, Number(config.dailyFirstLoginDelayMs ?? 30000));
+  const delayAfterMidnightMs = Math.max(0, Number(config.dailyFirstLoginDelayMs ?? 0));
   return browserlessDayStartMs(nowValue) + delayAfterMidnightMs;
 }
 
@@ -990,11 +994,12 @@ function inferredLongStaminaExhaustionFromCanary(canary, config = {}) {
   const thresholdMs = staminaExhaustedThresholdMs(config);
   const remaining1h = numberOrNull(response.stamina_1h_remaining_milli ?? response.stamina1hRemainingMilli);
   const remaining1d = numberOrNull(response.stamina_1d_remaining_milli ?? response.stamina1dRemainingMilli);
-  const exhausted = [];
-  if (remaining1h !== null && remaining1h < thresholdMs) exhausted.push('1h');
-  if (remaining1d !== null && remaining1d < thresholdMs) exhausted.push('1d');
-  if (!exhausted.length) return null;
   const nowMs = loopPlanNowMs(config);
+  const exhausted = effectiveLongStaminaExhaustedWindows([
+    ...(remaining1h !== null && remaining1h < thresholdMs ? ['1h'] : []),
+    ...(remaining1d !== null && remaining1d < thresholdMs ? ['1d'] : [])
+  ], nowMs);
+  if (!exhausted.length) return null;
   const resetAt = exhausted.includes('1d') ? nextDailyStaminaResetAt(nowMs) : 0;
   const fixedDelayMs = exhausted.includes('1h') ? staminaBudgetReloginDelayMs(config) : 0;
   const resetDelayMs = resetAt ? Math.max(0, resetAt + staminaResetGraceMs(config) - nowMs) : 0;
@@ -1008,6 +1013,50 @@ function inferredLongStaminaExhaustionFromCanary(canary, config = {}) {
     fixedDelayMs,
     reloginDelayMs
   };
+}
+
+function stateLongStaminaExhaustedWindows(state = {}, config = {}) {
+  const thresholdMs = staminaExhaustedThresholdMs(config);
+  const stamina = {
+    ...(state?.stats?.currentSession || {}),
+    ...(state?.current?.stamina || {}),
+    ...(state?.lastKnown?.stamina || {})
+  };
+  const remaining1h = numberOrNull(
+    stamina.remaining1h
+      ?? stamina.stamina1hRemainingMilli
+      ?? stamina.stamina_1h_remaining_milli
+      ?? state?.stats?.lastStamina1hRemaining
+  );
+  const remaining1d = numberOrNull(
+    stamina.remaining1d
+      ?? stamina.stamina1dRemainingMilli
+      ?? stamina.stamina_1d_remaining_milli
+      ?? state?.stats?.lastStamina1dRemaining
+  );
+  return [
+    ...(remaining1h !== null && remaining1h < thresholdMs ? ['1h'] : []),
+    ...(remaining1d !== null && remaining1d < thresholdMs ? ['1d'] : [])
+  ];
+}
+
+function migrateDailyStaminaDeadlineAt(state, reason, nextRunAtMs, nowMs, config = {}) {
+  if (reason !== 'stamina-exhausted-leave' || !nextRunAtMs) return 0;
+  const exhausted = stateLongStaminaExhaustedWindows(state, config);
+  if (exhausted.length !== 1 || exhausted[0] !== '1d') return 0;
+  const deadlineDayStartMs = browserlessDayStartMs(nextRunAtMs);
+  if (nextRunAtMs > deadlineDayStartMs + 60 * 60 * 1000) return 0;
+  if (dailyStaminaExitExemptAt(nowMs)) return nowMs;
+  if (deadlineDayStartMs > nowMs) return deadlineDayStartMs;
+  return 0;
+}
+
+function dailyStaminaResetNotBeforeAt(staminaExhaustion, nowMs) {
+  if (staminaExhaustion?.exhausted?.length !== 1
+    || staminaExhaustion.exhausted[0] !== '1d'
+    || !Number.isFinite(Number(staminaExhaustion.resetAt))
+    || Number(staminaExhaustion.resetAt) <= Number(nowMs)) return '';
+  return new Date(Number(staminaExhaustion.resetAt)).toISOString();
 }
 
 function createNoThrowLogStore(logStore, onError = () => {}) {
@@ -1243,7 +1292,29 @@ function persistedReconnectDelayPlan(state, config = {}, nowMs = Date.now()) {
       selected = candidate;
     }
   }
+  const actionSafetyReason = String(action.safetyReason || '');
+  const deadlineReason = String(gameplayDeadline?.reason || '');
+  const lastExitReason = String(lastExit.reason || '');
+  const selectedReason = String(selected?.reason || '');
+  const staminaReason = [
+    deadlineReason,
+    actionSafetyReason,
+    lastExitReason,
+    action.reason,
+    selectedReason
+  ].map(staminaGameplayDeadlineReason).find(Boolean) || '';
   const originalNextRunAtMs = nextRunAtMs;
+  const migratedDailyStaminaDeadlineMs = migrateDailyStaminaDeadlineAt(
+    state,
+    staminaReason,
+    nextRunAtMs,
+    nowValue,
+    config
+  );
+  if (migratedDailyStaminaDeadlineMs > 0) {
+    nextRunAtMs = migratedDailyStaminaDeadlineMs;
+    nextRunAt = new Date(nextRunAtMs).toISOString();
+  }
   const dailyFirstLoginNotBeforeMs = browserlessDailyFirstLoginNotBeforeMs(state, config, nextRunAtMs);
   const dailyFirstLoginDeadlineApplied = dailyFirstLoginNotBeforeMs > nextRunAtMs;
   if (dailyFirstLoginDeadlineApplied) {
@@ -1257,17 +1328,6 @@ function persistedReconnectDelayPlan(state, config = {}, nowMs = Date.now()) {
     Number(config.maxPersistedReconnectDelayMs || 0) || DAY_MS
   );
   if (remainingMs > maxDelayMs) return null;
-  const actionSafetyReason = String(action.safetyReason || '');
-  const deadlineReason = String(gameplayDeadline?.reason || '');
-  const lastExitReason = String(lastExit.reason || '');
-  const selectedReason = String(selected?.reason || '');
-  const staminaReason = [
-    deadlineReason,
-    actionSafetyReason,
-    lastExitReason,
-    action.reason,
-    selectedReason
-  ].map(staminaGameplayDeadlineReason).find(Boolean) || '';
   const reason = staminaReason || selectedReason || deadlineReason || actionSafetyReason || lastExitReason
     || String(action.reason || 'persisted-reconnect-wait');
   const explicitCooldown = Boolean(
@@ -1440,7 +1500,9 @@ function browserlessLoopPlan(result, config = {}) {
   const delayMs = Math.max(1000, Number(config.loopDelayMs || 30000));
   const snapshotEdgeEnabled = config.snapshotEdgeEnabled === true;
   const fastDelayMs = 1000;
-  const loopNowMs = parseIsoTimeMs(canary?.completedAt) || parseIsoTimeMs(canary?.startedAt) || Date.now();
+  const loopNowMs = parseIsoTimeMs(canary?.completedAt)
+    || parseIsoTimeMs(canary?.startedAt)
+    || loopPlanNowMs(config);
   const pendingExit = normalizePendingExit(canary?.pendingExit, loopNowMs, {
     maximumAgeMs: config.pendingExitPersistMaxMs
   });
@@ -1478,6 +1540,11 @@ function browserlessLoopPlan(result, config = {}) {
     ?? 0
   );
   const inferredStaminaExhaustion = inferredLongStaminaExhaustionFromCanary(canary, config);
+  const decisionStaminaExhaustion = safetyEvent?.detail?.decision?.staminaExhausted || null;
+  const staminaResetNotBeforeAt = dailyStaminaResetNotBeforeAt(
+    inferredStaminaExhaustion || decisionStaminaExhaustion,
+    loopNowMs
+  );
   const fastRecoverableTransportReasons = new Set([
     'action-settlement-stalled',
     'frame-gap',
@@ -1533,7 +1600,8 @@ function browserlessLoopPlan(result, config = {}) {
     return resume('stamina-exhausted-leave', inferredStaminaExhaustion.reloginDelayMs, {
       explicitDelay: true,
       forceExitReason: true,
-      staminaExhausted: inferredStaminaExhaustion
+      staminaExhausted: inferredStaminaExhaustion,
+      ...(staminaResetNotBeforeAt ? { notBeforeAt: staminaResetNotBeforeAt } : {})
     });
   }
   if (safetyReason === 'no-self') return resume('no-self');
@@ -1550,7 +1618,8 @@ function browserlessLoopPlan(result, config = {}) {
       ),
       {
         explicitDelay: true,
-        ...(inferredStaminaExhaustion ? { staminaExhausted: inferredStaminaExhaustion } : {})
+        ...(inferredStaminaExhaustion ? { staminaExhausted: inferredStaminaExhaustion } : {}),
+        ...(staminaResetNotBeforeAt ? { notBeforeAt: staminaResetNotBeforeAt } : {})
       }
     );
   }
@@ -2962,9 +3031,12 @@ async function runBrowserlessRunner(config, deps = {}) {
     const pendingExitDeadlineMs = pendingExit
       ? Math.max(schedulingNowMs, Number(pendingExit.nextRetryAtMs || schedulingNowMs))
       : 0;
+    const explicitNotBeforeMs = parseIsoTimeMs(loopPlan.notBeforeAt);
     const initialPlannedNextRunAtMs = pendingExit
       ? pendingExitDeadlineMs
-      : schedulingNowMs + loopPlan.delayMs;
+      : (explicitNotBeforeMs > schedulingNowMs
+          ? explicitNotBeforeMs
+          : schedulingNowMs + loopPlan.delayMs);
     const dailyFirstLoginNotBeforeMs = pendingExit ? 0 : browserlessDailyFirstLoginNotBeforeMs(
       currentBeforeWait,
       config,
@@ -8569,7 +8641,7 @@ async function runBrowserlessRunnerSelfTest() {
           && pageHtml.includes('MAP_TRAIL_MAX_AGE_MS = 30000')
           && pageHtml.includes('MAP_TRAIL_LINE_WIDTH = 2')
           && pageHtml.includes('const sourceIpDeferredDetailText = status => dailyFirstLoginExempt(status)')
-          && pageHtml.includes('每日首次登录豁免仍有效，届时直接使用主 IP 登录')
+          && pageHtml.includes('每日零点首次登录豁免仍有效，00:00:00 将直接使用主 IP 登录')
           && pageHtml.includes('先使用主 IP 做快照安全检查')
           && pageHtml.includes('function startMapMarkerAnimation(scene, markers, animate = true)')
           && pageHtml.includes('function syncMapTrailHistory(status, markers, nowMs)')
