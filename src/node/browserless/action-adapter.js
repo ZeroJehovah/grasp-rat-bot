@@ -10,6 +10,7 @@ const {
 const { evaluateAfkFirePolicyCore } = require('../../strategy/afk-fire-policy');
 const { isInvulnerableEntity } = require('../../strategy/combat-target-selection');
 const { stamina5sRemaining } = require('../../strategy/combat-fire-discipline');
+const { remoteProfitApproachDistanceCm } = require('../../strategy/remote-profit-targets');
 
 const BROWSER_RUNTIME_DEFAULTS = buildRuntimeDefaults({}, false);
 const DEFAULT_TARGET_DEAD_ZONE_CM = 900;
@@ -3047,8 +3048,12 @@ function createBrowserlessActionAdapter(options = {}) {
     if (profitAction.type === 'remote-player') {
       clearCoinFeedbackGate();
       const target = profitAction.target;
+      const remoteClassification = target?.remoteClassification || target?.sourceTarget?.classification || '';
       const arrivalToleranceCm = Math.max(0, Number(
         target?.arrivalToleranceCm
+          ?? (remoteClassification
+            ? remoteProfitApproachDistanceCm(remoteClassification, target?.sourceTarget || target || {})
+            : null)
           ?? options.remoteProfitArrivalToleranceCm
           ?? BROWSER_RUNTIME_DEFAULTS.remoteProfitArrivalToleranceCm
           ?? 1000
@@ -3356,31 +3361,22 @@ function createBrowserlessActionAdapter(options = {}) {
       };
     }
     if (target?.active && target?.easyKillProfitTarget) {
-      const invulnerableApproach = target?.invulnerable
-        && target?.easyKillInvulnerableApproachEligible === true;
+      const invulnerableApproach = target?.invulnerable === true;
       const vector = movementVectorToTarget(self, target, invulnerableApproach
         ? {
             ...options,
-            targetDeadZoneCm: Math.max(0, Number(target.invulnerableApproachDistanceCm || 15000))
+            targetDeadZoneCm: Math.max(0, Number(
+              target.invulnerableApproachDistanceCm
+                ?? options.invulnerableActiveProfitApproachDistanceCm
+                ?? 10000
+            ))
           }
         : options);
       const distance = Number.isFinite(Number(vector.distance))
         ? Number(vector.distance)
         : Math.hypot(Number(target?.x) - Number(self?.x), Number(target?.y) - Number(self?.y));
       const attackRange = Math.max(0, Number(options.combatAttackRange ?? options.attackRangeCm ?? options.attackRange ?? DEFAULT_ATTACK_RANGE_CM));
-      if (target?.invulnerable && target?.easyKillInvulnerableApproachEligible !== true) {
-        const stopped = stop('profit-easy-kill-target-invulnerable');
-        return {
-          ok: stopped.ok,
-          kind: 'stop',
-          reason: 'profit-easy-kill-target-invulnerable',
-          command: stopped.command || null,
-          skipped: Boolean(stopped.skipped),
-          ...transportFailure(stopped),
-          target
-        };
-      }
-      if (Number.isFinite(distance) && distance <= attackRange) {
+      if (!invulnerableApproach && Number.isFinite(distance) && distance <= attackRange) {
         const stopped = stop('profit-easy-kill-combat-handoff');
         return {
           ok: stopped.ok,
@@ -3390,6 +3386,20 @@ function createBrowserlessActionAdapter(options = {}) {
           skipped: Boolean(stopped.skipped),
           ...transportFailure(stopped),
           target
+        };
+      }
+      if (invulnerableApproach && !vector.ok) {
+        const stopped = stop('profit-easy-kill-invulnerable-close-wait');
+        return {
+          ok: stopped.ok,
+          kind: 'stop',
+          reason: 'profit-easy-kill-invulnerable-close-wait',
+          command: stopped.command || null,
+          skipped: Boolean(stopped.skipped),
+          ...transportFailure(stopped),
+          target,
+          easyKillApproach: true,
+          approachDistanceCm: Math.round(Number(target.invulnerableApproachDistanceCm ?? 10000))
         };
       }
       if (!vector.ok) {
@@ -3430,7 +3440,16 @@ function createBrowserlessActionAdapter(options = {}) {
         target
       };
     }
-    const vector = movementVectorToTarget(self, target, options);
+    const invulnerableApproachDistance = target?.invulnerable
+      ? Math.max(0, Number(
+        target.invulnerableApproachDistanceCm
+          ?? options.invulnerableProfitApproachDistanceCm
+          ?? 0
+      ))
+      : null;
+    const vector = movementVectorToTarget(self, target, target?.invulnerable
+      ? { ...options, targetDeadZoneCm: invulnerableApproachDistance }
+      : options);
     const distance = Number.isFinite(Number(vector.distance))
       ? Number(vector.distance)
       : Math.hypot(Number(target?.x) - Number(self?.x), Number(target?.y) - Number(self?.y));
@@ -3446,7 +3465,7 @@ function createBrowserlessActionAdapter(options = {}) {
       return { ok: sent.ok, kind: 'velocity', reason: 'missing-realtime-enemy-hold', vector, command: sent.command || null, skipped: Boolean(sent.skipped), target, cachedNavigationOnly: true, ...transportFailure(sent) };
     }
     if (target?.invulnerable) {
-      if (!vector.ok || (Number.isFinite(distance) && distance <= fullAttackRange)) {
+      if (!vector.ok || (Number.isFinite(distance) && distance <= invulnerableApproachDistance)) {
         const stopped = stop('profit-invulnerable-target-close-wait');
         return {
           ok: stopped.ok,
@@ -3456,7 +3475,7 @@ function createBrowserlessActionAdapter(options = {}) {
           skipped: Boolean(stopped.skipped),
           target,
           invulnerableApproach: true,
-          approachDistanceCm: Math.round(fullAttackRange),
+          approachDistanceCm: Math.round(invulnerableApproachDistance),
           ...transportFailure(stopped)
         };
       }
@@ -3470,7 +3489,7 @@ function createBrowserlessActionAdapter(options = {}) {
         skipped: Boolean(sent.skipped),
         target,
         invulnerableApproach: true,
-        approachDistanceCm: Math.round(fullAttackRange),
+        approachDistanceCm: Math.round(invulnerableApproachDistance),
         ...transportFailure(sent)
       };
     }

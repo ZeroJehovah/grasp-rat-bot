@@ -135,7 +135,7 @@ function remoteBatch() {
 function runInvulnerableProfitCommitmentSelfTest() {
   const outsideTarget = afk(21, 21000, 20, 120000);
   const outside = decide(adapter(), state(self(), [outsideTarget]), 1000);
-  assert.strictEqual(candidate(outside, 21), null);
+  assert(candidate(outside, 21), 'invulnerability remaining time no longer blocks a profitable AFK target');
 
   const readyTarget = afk(21, 21000, 20, 25000);
   const ready = decide(adapter(), state(self(), [readyTarget]), 1000);
@@ -252,7 +252,8 @@ function runInvulnerableProfitCommitmentSelfTest() {
     state(self(), [protectedTarget], [], [], 4),
     protectedDecision
   );
-  assert.strictEqual(protectedAction.reason, 'profit-invulnerable-target-close-wait');
+  assert.strictEqual(protectedAction.reason, 'profit-invulnerable-target-approach');
+  assert.strictEqual(protectedAction.kind, 'velocity');
   assert.strictEqual(shots.length, 0);
 
   const vulnerableTarget = afk(41, 900, 20, 0, 3);

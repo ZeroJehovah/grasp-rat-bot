@@ -47,7 +47,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     afkAttackExternalDamageRateHpPerSec: numberDefault(config.afkAttackExternalDamageRateHpPerSec, 2.05),
     afkAttackProjectileSpeedCmPerSec: numberDefault(config.afkAttackProjectileSpeedCmPerSec, 10000),
     afkAttackHpSafetyBuffer: numberDefault(config.afkAttackHpSafetyBuffer, 3),
-    invulnerableProfitApproachDistanceCm: numberDefault(config.invulnerableProfitApproachDistanceCm, 1000),
+    invulnerableProfitApproachDistanceCm: numberDefault(config.invulnerableProfitApproachDistanceCm, 0),
     invulnerableProfitApproachSlackMs: numberDefault(config.invulnerableProfitApproachSlackMs, 10000),
     invulnerableProfitAxisSpeedCmPerSec: numberDefault(config.invulnerableProfitAxisSpeedCmPerSec, 950),
     invulnerableProfitDiagonalSpeedCmPerSec: numberDefault(config.invulnerableProfitDiagonalSpeedCmPerSec, 940),

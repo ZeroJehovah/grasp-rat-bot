@@ -130,7 +130,7 @@ const DEFAULTS = {
   loginPointX: null,
   loginPointY: null,
   loginPointHp: null,
-  invulnerableProfitApproachDistanceCm: 1000,
+  invulnerableProfitApproachDistanceCm: 0,
   invulnerableProfitApproachSlackMs: 10000,
   invulnerableProfitAxisSpeedCmPerSec: 950,
   invulnerableProfitDiagonalSpeedCmPerSec: 940,

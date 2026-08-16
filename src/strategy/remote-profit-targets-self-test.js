@@ -52,22 +52,40 @@ function evaluate(entities, overrides = {}) {
   }, { scoreTarget: (_entity, details) => scoring({ ...details, drop: _entity.drop, distance: details.distance }) });
 }
 
+function evaluateAt(self, entities, overrides = {}) {
+  return evaluateRemoteProfitTargets({
+    generation: 7,
+    tick: 12,
+    source: 'gap-http',
+    observedAtMs: 1000,
+    self: { user_id: 1, ...self },
+    entities,
+    easyKillPlayers: [],
+    whitelistUserIds: [],
+    config: { ...overrides },
+    online: true
+  }, { scoreTarget: (_entity, details) => scoring({ ...details, drop: _entity.drop, distance: details.distance }) });
+}
+
 function runRemoteProfitTargetsSelfTest() {
   assert.strictEqual(remoteProfitDistanceFactor(50000), 1);
   assert.strictEqual(remoteProfitDistanceFactor(100000), 0.75);
   assert.strictEqual(remoteProfitDistanceFactor(150000), 0.5);
   assert.strictEqual(remoteProfitDistanceFactor(250000), 0.5);
-  assert.strictEqual(remoteProfitApproachEtaMs(100000), 104211);
-  assert.strictEqual(remoteProfitApproachDistanceCm('high-drop-afk'), 1000);
-  assert.strictEqual(remoteProfitApproachDistanceCm('easy-kill-active'), 15000);
-  assert.strictEqual(remoteProfitApproachEtaMs(100000, {}, 'easy-kill-active'), 89474);
+  assert.strictEqual(remoteProfitApproachEtaMs(100000), 105263);
+  assert.strictEqual(remoteProfitApproachDistanceCm('high-drop-afk'), 0);
+  assert.strictEqual(remoteProfitApproachDistanceCm('easy-kill-active'), 10000);
+  assert.strictEqual(remoteProfitApproachEtaMs(100000, {}, 'easy-kill-active'), 94737);
   assert.strictEqual(rawInvulnerabilityMsToWallMs(36600), 15250);
   assert.strictEqual(rawInvulnerabilityMsToWallMs(34200), 14250);
   assert.strictEqual(rawInvulnerabilityMsFrom({ invulnerable_remaining_ms: 36600 }), 15250);
   assert.strictEqual(protocolInvulnerabilityMsFrom({ invulnerableRemainingMs: 226080 }), 94200);
   assert.strictEqual(canonicalInvulnerabilityMsFrom({ invulnerableRemainingMs: 94200 }), 94200);
 
-  assert.strictEqual(evaluate([target({ drop: 49 })]).candidates.length, 0);
+  assert.strictEqual(evaluate([target({ drop: 49 })]).candidates.length, 1, 'nearby drop 49 remains eligible');
+  assert.strictEqual(evaluate([target({ drop: 20 })]).candidates.length, 1, 'nearby drop 20 is eligible');
+  assert.strictEqual(evaluate([target({ drop: 19 })]).candidates.length, 0, 'nearby drop below 20 is rejected');
+  assert.strictEqual(evaluateAt({ x: -100001, y: 0 }, [target({ x: 0, drop: 49 })]).candidates.length, 0, 'outside 1000m keeps the 50 minimum');
   assert.strictEqual(evaluate([target({ drop: 50 })]).candidates.length, 1);
   assert.strictEqual(evaluate([target({ hp: 99 })]).candidates.length, 0);
   assert.strictEqual(evaluate([target({ hp: 100, max_hp: 1 })]).candidates.length, 1);
@@ -189,7 +207,7 @@ function runRemoteProfitTargetsSelfTest() {
   const invulnerableReady = evaluate([target({ x: 100000, invulnerable: true, invulnerableRemainingMs: 80000 })]);
   assert.strictEqual(invulnerableReady.candidates.length, 1);
   const invulnerableLate = evaluate([target({ x: 100000, invulnerable: true, invulnerableRemainingMs: 115000 })]);
-  assert.strictEqual(invulnerableLate.candidates.length, 0);
+  assert.strictEqual(invulnerableLate.candidates.length, 1);
   const invulnerableActiveReady = evaluateRemoteProfitTargets({
     self: { user_id: 1, x: 0, y: 0 },
     entities: [target({ user_id: 24, x: 100000, current_join_mode: 'Active', invulnerable: true, invulnerableRemainingMs: 85000 })],
@@ -198,7 +216,7 @@ function runRemoteProfitTargetsSelfTest() {
     online: true
   }, { scoreTarget: (_entity, details) => scoring({ ...details, drop: _entity.drop, distance: details.distance }) });
   assert.strictEqual(invulnerableActiveReady.candidates.length, 1);
-  assert.strictEqual(invulnerableActiveReady.candidates[0].approachDistanceCm, 15000);
+  assert.strictEqual(invulnerableActiveReady.candidates[0].approachDistanceCm, 10000);
   const invulnerableActiveLate = evaluateRemoteProfitTargets({
     self: { user_id: 1, x: 0, y: 0 },
     entities: [target({ user_id: 24, x: 100000, current_join_mode: 'Active', invulnerable: true, invulnerableRemainingMs: 89475 })],
@@ -206,11 +224,11 @@ function runRemoteProfitTargetsSelfTest() {
     config: {},
     online: true
   }, { scoreTarget: (_entity, details) => scoring({ ...details, drop: _entity.drop, distance: details.distance }) });
-  assert.strictEqual(invulnerableActiveLate.candidates.length, 0);
+  assert.strictEqual(invulnerableActiveLate.candidates.length, 1);
   const rawInvulnerableReady = evaluate([target({ x: 15000, invulnerable: true, invulnerable_remaining_ms: 24000 })]);
   assert.strictEqual(rawInvulnerableReady.candidates.length, 1, 'raw protocol countdown converts to wall milliseconds');
   const rawInvulnerableLate = evaluate([target({ x: 15000, invulnerable: true, invulnerable_remaining_ms: 60000 })]);
-  assert.strictEqual(rawInvulnerableLate.candidates.length, 0, 'converted countdown blocks a late approach');
+  assert.strictEqual(rawInvulnerableLate.candidates.length, 1, 'converted countdown is diagnostic only');
   const rawCamelFallbackReady = evaluate([target({
     x: 15000,
     invulnerable: true,

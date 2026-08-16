@@ -99,6 +99,21 @@ function decide(adapter, currentState, nowMs, remoteProfitBatch, options = {}) {
   });
 }
 
+function defaultAdapter(overrides = {}) {
+  return createBrowserlessDecisionAdapter({
+    userId: 7,
+    controlMode: 'non-combat-profit',
+    combatEnabled: false,
+    dynamicProfitThresholdEnabled: false,
+    singleCoinBaitEnabled: false,
+    finalActionArbitrationHoldMs: 0,
+    opportunitySwitchConfirmFrames: 1,
+    opportunitySwitchMargin: 0,
+    opportunitySwitchRelativeMargin: 0,
+    ...overrides
+  });
+}
+
 function assertImmediateRemoteRelease(nextBatch, firstNowMs = 2000, nextNowMs = 2100) {
   const adapter = createBrowserlessDecisionAdapter({
     userId: 7,
@@ -1094,6 +1109,7 @@ function runRemoteProfitDecisionSelfTest() {
   assert.strictEqual(first.action?.reason, 'remote-snapshot-profit-target');
   assert.strictEqual(first.action?.target?.authority, 'snapshot-navigation');
   assert.strictEqual(first.action?.target?.remoteNavigationOnly, true);
+  assert.strictEqual(first.action?.target?.arrivalToleranceCm, 1000);
   assert.strictEqual(first.profit?.remoteProfit?.selected?.userId, 99);
   assert.strictEqual(first.combat?.target, null);
   assert.strictEqual(first.action?.opportunisticShot, undefined);
@@ -1220,7 +1236,7 @@ function runRemoteProfitDecisionSelfTest() {
     easyKillScore: 3,
     invulnerable: true,
     invulnerableRemainingMs: 75000,
-    approachDistanceCm: 15000,
+    approachDistanceCm: 10000,
     approachEtaMs: 75000
   });
   const invulnerableActiveBatch = batch(invulnerableActiveCandidate);
@@ -1233,7 +1249,37 @@ function runRemoteProfitDecisionSelfTest() {
   );
   assert.strictEqual(invulnerableRemoteFirst.action?.kind, 'seek-remote-player');
   assert.strictEqual(invulnerableRemoteFirst.action?.target?.invulnerableRemainingMs, 74000);
-  assert.strictEqual(invulnerableRemoteFirst.action?.target?.arrivalToleranceCm, 15000);
+  assert.strictEqual(invulnerableRemoteFirst.action?.target?.arrivalToleranceCm, 10000);
+  const remoteApproachAdapter = createBrowserlessActionAdapter({
+    userId: 7,
+    commandIntervalMs: 0,
+    shootRepeatEnabled: false,
+    transport: {
+      sendVelocity() { return { ok: true }; },
+      sendShoot() { return { ok: true }; }
+    }
+  });
+  const remoteActiveClose = remoteApproachAdapter.applyDecision(
+    state(fullStaminaSelf({ x: 80000 })),
+    invulnerableRemoteFirst
+  );
+  assert.strictEqual(remoteActiveClose.kind, 'stop');
+  assert.strictEqual(remoteActiveClose.reason, 'remote-target-arrived');
+  const invulnerableAfkBatch = batch(remoteCandidate({
+    invulnerable: true,
+    invulnerableRemainingMs: 75000,
+    approachDistanceCm: 0,
+    approachEtaMs: 90000
+  }));
+  const invulnerableAfkNear = decide(
+    invulnerableRemoteAdapter,
+    state(fullStaminaSelf({ x: 89999 })),
+    2000,
+    invulnerableAfkBatch,
+    { finalActionArbitrationHoldMs: 1800 }
+  );
+  assert.strictEqual(invulnerableAfkNear.action?.kind, 'seek-remote-player');
+  assert.strictEqual(invulnerableAfkNear.action?.target?.arrivalToleranceCm, 0);
   const invulnerableRemoteTooClose = decide(
     invulnerableRemoteAdapter,
     state(fullStaminaSelf({ x: 10000 }), [], [{ drop_id: 'fallback', amount: 1, x: 10100, y: 0 }]),
@@ -1241,8 +1287,8 @@ function runRemoteProfitDecisionSelfTest() {
     invulnerableActiveBatch,
     { finalActionArbitrationHoldMs: 1800 }
   );
-  assert.strictEqual(invulnerableRemoteTooClose.profit.remoteProfit.filtered['invulnerable-not-ready-on-current-approach'], 1);
-  assert.notStrictEqual(invulnerableRemoteTooClose.action?.kind, 'seek-remote-player');
+  assert.strictEqual(invulnerableRemoteTooClose.profit.remoteProfit.filtered['invulnerable-not-ready-on-current-approach'], undefined);
+  assert.strictEqual(invulnerableRemoteTooClose.action?.kind, 'seek-remote-player');
 
   const realtimeInvulnerableAdapter = createBrowserlessDecisionAdapter({
     userId: 7,
@@ -1284,7 +1330,26 @@ function runRemoteProfitDecisionSelfTest() {
   );
   assert.strictEqual(realtimeInvulnerableReady.action?.kind, 'seek-enemy');
   assert.strictEqual(realtimeInvulnerableReady.action?.target?.easyKillInvulnerableApproachEligible, true);
-  assert.strictEqual(realtimeInvulnerableReady.action?.target?.invulnerableApproachDistanceCm, 15000);
+  assert.strictEqual(realtimeInvulnerableReady.action?.target?.invulnerableApproachDistanceCm, 10000);
+  const activeApproachAdapter = createBrowserlessActionAdapter({
+    userId: 7,
+    commandIntervalMs: 0,
+    shootRepeatEnabled: false,
+    transport: {
+      sendVelocity() { return { ok: true }; },
+      sendShoot() { return { ok: true }; }
+    }
+  });
+  const activeApproachAction = activeApproachAdapter.applyDecision(
+    state(fullStaminaSelf({ x: 0 }), [activeInvulnerable(20000, 72000)]),
+    realtimeInvulnerableReady
+  );
+  assert.strictEqual(activeApproachAction.reason, 'profit-easy-kill-seek');
+  const activeCloseAction = activeApproachAdapter.applyDecision(
+    state(fullStaminaSelf({ x: 10000 }), [activeInvulnerable(10000, 72000)]),
+    realtimeInvulnerableReady
+  );
+  assert.strictEqual(activeCloseAction.reason, 'profit-easy-kill-invulnerable-close-wait');
   const realtimeInvulnerableTooClose = decide(
     realtimeInvulnerableAdapter,
     state(fullStaminaSelf(), [activeInvulnerable(20000, 72000)]),
@@ -1298,8 +1363,8 @@ function runRemoteProfitDecisionSelfTest() {
       finalActionArbitrationHoldMs: 1800
     }
   );
-  assert.strictEqual(realtimeInvulnerableTooClose.profit.easyKill.stopLoss?.reason, 'easy-kill-invulnerability-eta-no-longer-eligible');
-  assert.notStrictEqual(realtimeInvulnerableTooClose.action?.kind, 'seek-enemy');
+  assert.strictEqual(realtimeInvulnerableTooClose.profit.easyKill.stopLoss, null);
+  assert.strictEqual(realtimeInvulnerableTooClose.action?.kind, 'seek-enemy');
 
   const highValueCoin = decide(
     adapter,
@@ -1628,6 +1693,64 @@ function runRemoteProfitDecisionSelfTest() {
   assert.notStrictEqual(stale.action?.kind, 'coin');
   assert.strictEqual(stale.input?.loot?.reason, 'snapshot-stale');
   assert.strictEqual(staleAdapter.getState().realtimeLootIntent, null);
+
+  const staleSnapshotAdapter = defaultAdapter();
+  const staleSnapshotFirst = decide(staleSnapshotAdapter, state(fullStaminaSelf()), 2000, remoteBatch);
+  assert.strictEqual(staleSnapshotFirst.action?.kind, 'seek-remote-player');
+  const sourceDrop = {
+    drop_id: 'mango-drop',
+    source_user_id: 99,
+    amount: 50,
+    x: 90000,
+    y: 0
+  };
+  decide(
+    staleSnapshotAdapter,
+    state(fullStaminaSelf(), [], [sourceDrop], true),
+    2100,
+    remoteBatch
+  );
+  const staleSnapshotReplay = decide(
+    staleSnapshotAdapter,
+    state(fullStaminaSelf()),
+    2200,
+    remoteBatch
+  );
+  assert.strictEqual(staleSnapshotReplay.profit?.remoteProfit?.filtered?.['target-drop-observed'], 1);
+  assert.notStrictEqual(staleSnapshotReplay.action?.kind, 'seek-remote-player');
+  assert.strictEqual(staleSnapshotAdapter.getState().profitMission, null);
+
+  const lowDropSettlementAdapter = defaultAdapter();
+  const lowDropFirst = decide(lowDropSettlementAdapter, state(fullStaminaSelf()), 2000, remoteBatch);
+  assert.strictEqual(lowDropFirst.action?.kind, 'seek-remote-player');
+  lowDropSettlementAdapter.patchState({
+    postAttackSettlement: {
+      phase: 'drop-observed',
+      targetId: '37351',
+      targetName: 'temporary-target',
+      targetDrop: 5,
+      x: 100,
+      y: 0,
+      matchedCoinKey: 'id:1097',
+      matchedCoinAmount: 5,
+      matchedCoinEvidence: 'realtime'
+    }
+  });
+  const lowDropDecision = decide(
+    lowDropSettlementAdapter,
+    state(fullStaminaSelf(), [], [{
+      drop_id: 1097,
+      amount: 5,
+      source_user_id: 37351,
+      x: 100,
+      y: 0
+    }], true),
+    2100,
+    remoteBatch
+  );
+  assert.strictEqual(lowDropDecision.action?.kind, 'seek-remote-player');
+  assert.strictEqual(lowDropDecision.profit?.postKillCoinSuppression?.removedCount, 1);
+  assert.strictEqual(lowDropDecision.stateful.profitMission?.targetId, '99');
 
   return { ok: true, cases: 64 };
 }

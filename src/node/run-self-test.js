@@ -9662,7 +9662,7 @@ async function runSelfTest() {
       want: 'attack|8|1|0|0|attack|8|1|1|0'
     },
     {
-      name: 'browserless profit admits invulnerable AFK only when approach outlasts protection',
+      name: 'browserless profit admits invulnerable AFK regardless of protection remaining',
       got: (() => {
         const choose = (distance, remainingMs) => buildBrowserlessDecision({
           userId: 7,
@@ -9709,7 +9709,7 @@ async function runSelfTest() {
           alreadyClose.profit.best === null
         ].join('|');
       })(),
-      want: 'profit-candidate|seek-enemy|8|true|5833|profit-candidate|false|wait|true'
+      want: 'profit-candidate|seek-enemy|8|true|5833|profit-candidate|false|profit-candidate|false'
     },
     {
       name: 'browserless just-seen out-of-range full-stamina AFK target is selectable',

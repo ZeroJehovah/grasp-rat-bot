@@ -8,14 +8,16 @@ const { estimateEightWayRouteCore } = require('./eight-way-route-eta');
 
 const DEFAULT_REMOTE_PROFIT_TARGET_CONFIG = Object.freeze({
   minDrop: 50,
+  nearbyMinDrop: 20,
+  nearbyDropMaxDistanceCm: 100000,
   centerRadiusCm: 100000,
   easyKillScoreOneMaxDistanceCm: 50000,
   distanceFullFactorMaxCm: 50000,
   distanceHalfFactorCm: 150000,
   distanceFloorFactor: 0.5,
   staminaFullRatio: 0.98,
-  invulnerableAfkApproachDistanceCm: 1000,
-  invulnerableActiveApproachDistanceCm: 15000,
+  invulnerableAfkApproachDistanceCm: 0,
+  invulnerableActiveApproachDistanceCm: 10000,
   invulnerableAxisSpeedCmPerSec: 950,
   invulnerableDiagonalSpeedCmPerSec: 940,
   invulnerableRouteSegmentOverheadMs: 120,
@@ -227,11 +229,20 @@ function classifyRemoteTarget(target, context, config, helpers) {
   if (context.whitelistIds.has(id)) return { reject: 'whitelisted' };
   if (target.alive === false) return { reject: 'dead' };
   if (target.x === null || target.y === null || target.hp === null || drop === null) return { reject: 'non-finite-entity' };
-  if (drop < config.minDrop) return { reject: 'drop-below-minimum' };
+  const nearbyMinDrop = Math.max(0, Number(
+    config.nearbyMinDrop ?? DEFAULT_REMOTE_PROFIT_TARGET_CONFIG.nearbyMinDrop
+  ));
+  const nearbyDropMaxDistanceCm = Math.max(0, Number(
+    config.nearbyDropMaxDistanceCm ?? DEFAULT_REMOTE_PROFIT_TARGET_CONFIG.nearbyDropMaxDistanceCm
+  ));
   const centerDistance = Math.hypot(target.x, target.y);
   if (!Number.isFinite(centerDistance) || centerDistance > config.centerRadiusCm) return { reject: 'outside-center-radius' };
   const distance = distanceBetween(context.self, target);
   if (!Number.isFinite(distance)) return { reject: 'non-finite-distance' };
+  const minimumDrop = nearbyDropMaxDistanceCm > 0 && distance <= nearbyDropMaxDistanceCm
+    ? Math.min(Number(config.minDrop), nearbyMinDrop)
+    : Number(config.minDrop);
+  if (!(drop >= minimumDrop)) return { reject: 'drop-below-minimum' };
 
   const easy = context.easyKills.get(id) || null;
   const joinModeActive = entityJoinModeActive(target);
@@ -273,12 +284,6 @@ function classifyRemoteTarget(target, context, config, helpers) {
       ?? config.invulnerableProfitApproachSlackMs
       ?? DEFAULT_REMOTE_PROFIT_TARGET_CONFIG.invulnerableAfkApproachSlackMs))
     : 0;
-  if (invulnerable && (
-    invulnerableRemainingMs === null
-      || approachEtaMs === null
-      || invulnerableRemainingMs > approachEtaMs + approachSlackMs
-  )) return { reject: 'invulnerable-not-ready-on-approach' };
-
   const scoringTarget = {
     ...target,
     // The normalized snapshot may be full-stamina Active and therefore have

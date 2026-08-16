@@ -76,7 +76,11 @@ function buildNativeCoinSnapshotCore(coins, options = {}) {
       amount: Math.max(0, Math.round(Number(coin?.amount || 0) || 0)),
       x: Number(coin?.x),
       y: Number(coin?.y),
-      at: t
+      at: t,
+      source_user_id: coin?.source_user_id ?? coin?.sourceUserId
+        ?? coin?.owner_user_id ?? coin?.ownerUserId ?? null,
+      created_tick: coin?.created_tick ?? coin?.createdTick ?? coin?.tick ?? null,
+      system_spawned: coin?.system_spawned === true || coin?.systemSpawned === true
     }))
     .filter(coin => coin.key && coin.amount > 0 && Number.isFinite(coin.x) && Number.isFinite(coin.y));
 }
