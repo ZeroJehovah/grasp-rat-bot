@@ -1,5 +1,6 @@
 'use strict';
 
+const assert = require('assert/strict');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
@@ -176,7 +177,8 @@ const {
   preserveOnlineSessionForLoopWait,
   runnerResultExitDetail,
   runBrowserlessRunner,
-  runBrowserlessRunnerSelfTest
+  runBrowserlessRunnerSelfTest,
+  statusWallTimeSpikeDetail
 } = require('./browserless/runner');
 const {
   gracefulShutdownLeave,
@@ -36408,6 +36410,144 @@ async function runSelfTest() {
         }
       })(),
       want: 'full|compact|true|true|1|1|status-full-dispatch,status-response,status-compact-dispatch,status-response'
+    },
+    {
+      name: 'browserless status timing profiles CPU work pause and response send on the synchronous interval',
+      got: () => (async () => {
+        const wallSamples = [0, 110.257, 200, 200.5, 300, 380, 400, 455];
+        const cpuValues = [10, 119, 200, 200.1, 300, 305, 400, 400.2];
+        const tasks = [];
+        const handle = await startStatusServer({
+          host: '127.0.0.1',
+          port: 0,
+          webToken: 'test-token',
+          getStatusText: async () => JSON.stringify({ ok: true, marker: 'full' }),
+          getCompactStatusText: async () => JSON.stringify({ ok: true, marker: 'compact' }),
+          taskPerformanceNow: () => wallSamples.shift(),
+          mainThreadCpuSampler: () => ({
+            source: 'linux-main-thread-schedstat',
+            value: cpuValues.shift()
+          }),
+          onMainThreadTask: (task, durationMs, detail) => tasks.push({ task, durationMs, detail })
+        });
+        try {
+          const base = `http://127.0.0.1:${handle.port}`;
+          await fetch(`${base}/api/status?token=test-token`).then(response => response.json());
+          await fetch(`${base}/api/panel-status?token=test-token`).then(response => response.json());
+          assert.equal(tasks.length, 4);
+          assert.equal(tasks[0].task, 'status-full-dispatch');
+          assert.equal(tasks[0].durationMs, 110.257);
+          assert.deepEqual(tasks[0].detail, {
+            path: '/api/status',
+            cpuUsageSource: 'linux-main-thread-schedstat',
+            cpuWorkMs: 109,
+            nonCpuWallMs: 1.257,
+            likelyPauseOrContention: false,
+            classification: 'cpu-work'
+          });
+          assert.equal(tasks[1].task, 'status-response');
+          assert.equal(tasks[1].detail.compact, false);
+          assert.equal(tasks[2].task, 'status-compact-dispatch');
+          assert.equal(tasks[2].detail.classification, 'pause-gc-or-contention');
+          assert.equal(tasks[2].detail.likelyPauseOrContention, true);
+          assert.equal(tasks[2].detail.nonCpuWallMs, 75);
+          assert.equal(tasks[3].task, 'status-response');
+          assert.equal(tasks[3].durationMs, 55);
+          assert.equal(tasks[3].detail.classification, 'pause-gc-or-contention');
+          return true;
+        } finally {
+          await handle.close();
+        }
+      })(),
+      want: true
+    },
+    {
+      name: 'browserless status timing preserves an unavailable sampler fallback',
+      got: () => (async () => {
+        const wallSamples = [0, 60, 100, 100.1];
+        const tasks = [];
+        const handle = await startStatusServer({
+          host: '127.0.0.1',
+          port: 0,
+          getStatusText: async () => JSON.stringify({ ok: true }),
+          taskPerformanceNow: () => wallSamples.shift(),
+          mainThreadCpuSampler: () => null,
+          onMainThreadTask: (task, durationMs, detail) => tasks.push({ task, durationMs, detail })
+        });
+        try {
+          await fetch(`http://127.0.0.1:${handle.port}/api/status`).then(response => response.json());
+          assert.deepEqual(tasks[0], {
+            task: 'status-full-dispatch',
+            durationMs: 60,
+            detail: {
+              path: '/api/status',
+              cpuUsageSource: 'unavailable',
+              cpuWorkMs: null,
+              nonCpuWallMs: null,
+              likelyPauseOrContention: null,
+              classification: 'cpu-sampler-unavailable'
+            }
+          });
+          return true;
+        } finally {
+          await handle.close();
+        }
+      })(),
+      want: true
+    },
+    {
+      name: 'status wall spike logging is thresholded revision-bound and allowlisted',
+      got: (() => {
+        const cpu = statusWallTimeSpikeDetail('status-full-dispatch', 110.257, {
+          path: '/api/status',
+          cpuUsageSource: 'linux-main-thread-schedstat',
+          cpuWorkMs: 109,
+          nonCpuWallMs: 1.257,
+          likelyPauseOrContention: false,
+          classification: 'cpu-work',
+          token: 'must-not-log',
+          payload: { unbounded: true }
+        }, 'aaaaaaaaaaaa');
+        const pause = statusWallTimeSpikeDetail('status-compact-dispatch', 80, {
+          path: '/api/panel-status',
+          cpuUsageSource: 'linux-main-thread-schedstat',
+          cpuWorkMs: 5,
+          nonCpuWallMs: 75,
+          likelyPauseOrContention: true,
+          classification: 'pause-gc-or-contention'
+        }, 'bbbbbbbbbbbb');
+        const unavailable = statusWallTimeSpikeDetail('status-response', 55, {
+          path: '/api/panel-status',
+          compact: true,
+          cpuUsageSource: 'unavailable',
+          cpuWorkMs: null,
+          nonCpuWallMs: null,
+          likelyPauseOrContention: null,
+          classification: 'cpu-sampler-unavailable'
+        }, 'bbbbbbbbbbbb');
+        assert.equal(statusWallTimeSpikeDetail('status-full-dispatch', 49.999, {}, 'aaaaaaaaaaaa'), null);
+        assert.deepEqual(cpu, {
+          task: 'status-full-dispatch',
+          durationMs: 110.257,
+          diagnosticOnly: true,
+          cpuUsageSource: 'linux-main-thread-schedstat',
+          cpuWorkMs: 109,
+          nonCpuWallMs: 1.257,
+          likelyPauseOrContention: false,
+          classification: 'cpu-work',
+          runtimeRevision: 'aaaaaaaaaaaa',
+          path: '/api/status'
+        });
+        assert.equal(Object.hasOwn(cpu, 'token'), false);
+        assert.equal(Object.hasOwn(cpu, 'payload'), false);
+        assert.equal(pause.runtimeRevision, 'bbbbbbbbbbbb');
+        assert.equal(pause.classification, 'pause-gc-or-contention');
+        assert.equal(unavailable.cpuWorkMs, null);
+        assert.equal(unavailable.classification, 'cpu-sampler-unavailable');
+        assert.equal(unavailable.compact, true);
+        return true;
+      })(),
+      want: true
     },
     {
       name: 'browserless compact status and web panel expose the high drop player list',

@@ -1,5 +1,6 @@
 'use strict';
 
+const fs = require('fs');
 const http = require('http');
 const { performance } = require('perf_hooks');
 const { buildCompactBrowserlessStatus } = require('./state-file');
@@ -73,6 +74,48 @@ function withStatusServerMeta(status, config, preRedacted = false) {
   return output;
 }
 
+function currentMainThreadCpuSample() {
+  try {
+    const text = fs.readFileSync(`/proc/self/task/${process.pid}/schedstat`, 'utf8').trim();
+    const runtimeNs = Number(text.split(/\s+/)[0]);
+    return Number.isFinite(runtimeNs)
+      ? { source: 'linux-main-thread-schedstat', value: runtimeNs / 1e6 }
+      : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function taskWorkProfile(started, finished, wallMs) {
+  const compatible = started
+    && finished
+    && started.source === 'linux-main-thread-schedstat'
+    && finished.source === started.source
+    && Number.isFinite(Number(started.value))
+    && Number.isFinite(Number(finished.value))
+    && Number(finished.value) >= Number(started.value);
+  if (!compatible) {
+    return {
+      cpuUsageSource: 'unavailable',
+      cpuWorkMs: null,
+      nonCpuWallMs: null,
+      likelyPauseOrContention: null,
+      classification: 'cpu-sampler-unavailable'
+    };
+  }
+  const cpuWorkMs = Math.max(0, Number(finished.value) - Number(started.value));
+  const nonCpuWallMs = Math.max(0, Number(wallMs || 0) - cpuWorkMs);
+  return {
+    cpuUsageSource: started.source,
+    cpuWorkMs: Math.round(cpuWorkMs * 1000) / 1000,
+    nonCpuWallMs: Math.round(nonCpuWallMs * 1000) / 1000,
+    likelyPauseOrContention: nonCpuWallMs >= 5,
+    classification: nonCpuWallMs >= Math.max(5, cpuWorkMs * 0.35)
+      ? 'pause-gc-or-contention'
+      : 'cpu-work'
+  };
+}
+
 function createStatusServer(options = {}) {
   const webToken = String(options.webToken || '');
   const getStatus = typeof options.getStatus === 'function' ? options.getStatus : () => ({ ok: true });
@@ -83,6 +126,12 @@ function createStatusServer(options = {}) {
   const onMainThreadTask = typeof options.onMainThreadTask === 'function'
     ? options.onMainThreadTask
     : null;
+  const taskPerformanceNow = typeof options.taskPerformanceNow === 'function'
+    ? options.taskPerformanceNow
+    : () => performance.now();
+  const mainThreadCpuSampler = typeof options.mainThreadCpuSampler === 'function'
+    ? options.mainThreadCpuSampler
+    : currentMainThreadCpuSample;
   const onStop = typeof options.onStop === 'function' ? options.onStop : null;
   const onAuthUrl = typeof options.onAuthUrl === 'function' ? options.onAuthUrl : null;
   const onCallback = typeof options.onCallback === 'function' ? options.onCallback : null;
@@ -95,11 +144,20 @@ function createStatusServer(options = {}) {
   const recordTask = (task, started, detail = {}) => {
     if (!onMainThreadTask) return;
     try {
-      onMainThreadTask(task, performance.now() - started, detail);
+      const cpuFinished = mainThreadCpuSampler();
+      const durationMs = taskPerformanceNow() - started.wallStarted;
+      onMainThreadTask(task, durationMs, {
+        ...detail,
+        ...taskWorkProfile(started.cpuStarted, cpuFinished, durationMs)
+      });
     } catch (_) {}
   };
+  const startTask = () => ({
+    wallStarted: taskPerformanceNow(),
+    cpuStarted: onMainThreadTask ? mainThreadCpuSampler() : null
+  });
   const dispatchStatus = async (getter, task, detail = {}) => {
-    const started = performance.now();
+    const started = startTask();
     let pending;
     try {
       pending = getter();
@@ -109,7 +167,7 @@ function createStatusServer(options = {}) {
     return await pending;
   };
   const sendStatusJson = (res, body, detail = {}) => {
-    const started = performance.now();
+    const started = startTask();
     try {
       sendJson(res, 200, body);
     } finally {
@@ -117,7 +175,7 @@ function createStatusServer(options = {}) {
     }
   };
   const sendStatusText = (res, text, detail = {}) => {
-    const started = performance.now();
+    const started = startTask();
     try {
       sendJsonText(res, 200, String(text || '{}'));
     } finally {

@@ -153,6 +153,45 @@ const STATUS_COMPACT_MAX_STALE_MS = 5000;
 const STATUS_RENDER_TIMEOUT_MS = 2000;
 const BACKGROUND_IO_CLOSE_TIMEOUT_MS = 5000;
 const STATUS_IO_CLOSE_TIMEOUT_MS = 2000;
+const STATUS_WALL_TIME_SPIKE_MS = 50;
+const STATUS_CPU_USAGE_SOURCES = new Set(['linux-main-thread-schedstat', 'unavailable']);
+const STATUS_WALL_CLASSIFICATIONS = new Set(['cpu-work', 'pause-gc-or-contention', 'cpu-sampler-unavailable']);
+
+function roundedStatusTiming(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.round(Math.max(0, number) * 1000) / 1000 : null;
+}
+
+function statusWallTimeSpikeDetail(task, durationMs, detail = {}, runtimeRevision = browserlessRuntimeRevision()) {
+  const roundedDurationMs = roundedStatusTiming(durationMs);
+  if (roundedDurationMs === null || Number(durationMs) < STATUS_WALL_TIME_SPIKE_MS) return null;
+  const cpuWorkMs = roundedStatusTiming(detail.cpuWorkMs);
+  const nonCpuWallMs = roundedStatusTiming(detail.nonCpuWallMs);
+  const cpuUsageSource = STATUS_CPU_USAGE_SOURCES.has(detail.cpuUsageSource)
+    ? detail.cpuUsageSource
+    : 'unavailable';
+  const completeProfile = cpuUsageSource !== 'unavailable'
+    && cpuWorkMs !== null
+    && nonCpuWallMs !== null;
+  const classification = completeProfile && STATUS_WALL_CLASSIFICATIONS.has(detail.classification)
+    ? detail.classification
+    : 'cpu-sampler-unavailable';
+  const output = {
+    task: String(task || '').slice(0, 80),
+    durationMs: roundedDurationMs,
+    diagnosticOnly: true,
+    cpuUsageSource: completeProfile ? cpuUsageSource : 'unavailable',
+    cpuWorkMs: completeProfile ? cpuWorkMs : null,
+    nonCpuWallMs: completeProfile ? nonCpuWallMs : null,
+    likelyPauseOrContention: completeProfile ? detail.likelyPauseOrContention === true : null,
+    classification,
+    runtimeRevision: String(runtimeRevision || 'unknown').slice(0, 64)
+  };
+  if (detail.path !== undefined) output.path = String(detail.path || '').slice(0, 160);
+  if (typeof detail.compact === 'boolean') output.compact = detail.compact;
+  return output;
+}
 
 function publicConfig(config) {
   return {
@@ -3628,13 +3667,8 @@ async function runBrowserlessRunner(config, deps = {}) {
               responseSendMs: Math.round(Number(durationMs || 0) * 1000) / 1000
             };
           }
-          if (Number(durationMs) < 50) return;
-          logStore.append('runner', 'main-thread-wall-time-spike', {
-            task,
-            durationMs: Math.round(Number(durationMs) * 1000) / 1000,
-            diagnosticOnly: true,
-            ...detail
-          });
+          const spike = statusWallTimeSpikeDetail(task, durationMs, detail);
+          if (spike) logStore.append('runner', 'main-thread-wall-time-spike', spike);
         },
         getChat: () => chatService.status?.(now()) || { ok: true, messages: [] },
         onChatActivity: () => chatService.notePageActivity?.(now()),
@@ -8853,6 +8887,7 @@ module.exports = {
   sourceIpPreflightAction,
   sourceIpPreflightCanReuse,
   snapshotSafetyAllowsImmediateResume,
+  statusWallTimeSpikeDetail,
   persistedReconnectDelayPlan,
   preserveOnlineSessionForLoopWait,
   publicConfig,
