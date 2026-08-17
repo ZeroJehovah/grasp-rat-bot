@@ -121,6 +121,8 @@ const {
 } = require('../../strategy/single-coin-bait');
 const { activeCoinCompetitionCore } = require('../../strategy/coin-competition');
 const { updateOutsideCenterIdleCore } = require('../../strategy/outside-center-idle');
+const { recoveryPriorityDecision } = require('../../strategy/recovery-profit-priority');
+const { secondaryCombatExitPolicy } = require('../../strategy/dual-target-policy');
 const {
   DEFAULT_CENTER_ACTIVITY_HARD_BOUNDARY_RADIUS_CM,
   evaluateCenterActivityHardBoundaryCore,
@@ -1690,6 +1692,36 @@ function observeCompletedProfitTargets(input = {}, stateful = {}, options = {}) 
       ?? options.remoteProfitTargetCompletionTtlMs
       ?? DEFAULT_COMPLETED_PROFIT_TARGET_TTL_MS
   ));
+  const killEvidence = Array.isArray(input?.selfKillEvidence) ? input.selfKillEvidence : [];
+  stateful.completedProfitKillEvidence = stateful.completedProfitKillEvidence
+    && typeof stateful.completedProfitKillEvidence === 'object'
+    ? stateful.completedProfitKillEvidence
+    : {};
+  const evidenceMaxEntries = Math.max(64, Number(options.completedProfitKillEvidenceMaxEntries || 512));
+  for (const evidence of killEvidence) {
+    const targetUserId = numberOrNull(evidence?.targetUserId ?? evidence?.target_user_id ?? evidence?.targetId ?? evidence?.target_id);
+    if (targetUserId === null) continue;
+    const tick = numberOrNull(evidence?.tick) ?? 0;
+    const evidenceKey = `${targetUserId}:${tick}`;
+    if (!stateful.completedProfitKillEvidence[evidenceKey]) {
+      stateful.completedProfitKillEvidence[evidenceKey] = { observedAt: nowMs, targetUserId, tick };
+      const id = String(targetUserId);
+      const previous = records[id] || {};
+      records[id] = {
+        observedAt: Math.min(Number(previous.observedAt || nowMs), nowMs),
+        lastObservedAt: Math.max(Number(previous.lastObservedAt || 0), nowMs),
+        until: Math.max(Number(previous.until || 0), nowMs + ttlMs),
+        reason: 'self-kill-evidence',
+        killTick: tick,
+        coinKey: String(previous.coinKey || ''),
+        amount: Math.max(Number(previous.amount || 0), Number(evidence.amount || 0))
+      };
+    }
+  }
+  const evidenceEntries = Object.entries(stateful.completedProfitKillEvidence)
+    .sort((left, right) => Number(right[1]?.observedAt || 0) - Number(left[1]?.observedAt || 0))
+    .slice(0, evidenceMaxEntries);
+  stateful.completedProfitKillEvidence = Object.fromEntries(evidenceEntries);
   const coins = [
     ...(input?.realtimeObservedCoins || []),
     ...(input?.snapshotObservedCoins || []),
@@ -7061,7 +7093,10 @@ function updateProfitMissionFromOpportunity(stateful = {}, choice = null, input 
       stateful.profitMission = inheritProfitMissionAuthorityHandoff(retained, candidate, input);
       return stateful.profitMission;
     }
-    if (retained?.highValue) return retained;
+    if (retained?.navigationPaused === true
+      && retained.navigationPauseReason === 'realtime-superseded-awaiting-authority') {
+      return retained;
+    }
   }
   stateful.profitMission = candidate;
   return candidate;
@@ -7398,14 +7433,13 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     && storedRemoteGeneration === remoteProfit.generation
     && opportunities.some(item => item.type === 'remote-player-navigation'
       && String(item.id) === String(storedCurrent.id));
-  // A remembered remote mission is resume state, not an ownership claim over
-  // the current action. Once a realtime/native profit candidate is valid,
-  // release a remote current choice so the normal ranking and switch policy
-  // can compare the visible target immediately.
+  // A remembered remote mission remains resumable while its same-generation
+  // candidate is present. Continuity is resolved below, after the visible
+  // high-Drop guard, so a lower-value realtime/AFK observation cannot discard
+  // an already selected off-screen target.
   const realtimeProfitAvailable = opportunities.some(isRealtimeProfitOpportunity);
   let current = storedCurrent?.type === 'remote-player-navigation'
     ? (remoteCurrentPresent
-      && !realtimeProfitAvailable
       && (!thresholdContext.active || storedCurrentEligible)
         ? storedCurrent
         : null)
@@ -7414,6 +7448,39 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
         : (thresholdContext.active && !storedCurrentEligible ? null : storedCurrent));
   const currentEnemyPresent = current?.type === 'enemy'
     && opportunities.some(item => String(item.type) === 'enemy' && String(item.id) === String(current.id));
+  let visibleHighDropGuard = null;
+  const currentVisibleOpportunity = currentEnemyPresent
+    ? opportunities.find(item => String(item.type) === 'enemy' && String(item.id) === String(current.id)) || null
+    : null;
+  const currentVisibleTarget = currentVisibleOpportunity?.sourceTarget
+    || currentVisibleOpportunity?.target
+    || null;
+  const currentVisibleDrop = entityDropValue(currentVisibleTarget);
+  if (currentVisibleTarget
+    && currentVisibleTarget.active === false
+    && currentVisibleDrop > 100) {
+    const removed = [];
+    opportunities = opportunities.filter(item => {
+      if (item.type !== 'remote-player-navigation') return true;
+      const source = item.sourceTarget || item.target || item;
+      const remoteActive = source.active === true
+        || String(source.classification || item.classification || '').includes('active');
+      const remoteDrop = entityDropValue(source);
+      const blocked = remoteActive && remoteDrop < currentVisibleDrop;
+      if (blocked) removed.push({ id: String(item.id || ''), drop: remoteDrop });
+      return !blocked;
+    });
+    if (removed.length) {
+      remoteProfit.filtered['lower-active-offscreen-than-visible-high-drop'] = removed.length;
+      visibleHighDropGuard = {
+        active: true,
+        targetId: String(current.id || ''),
+        targetDrop: currentVisibleDrop,
+        thresholdDrop: 100,
+        blocked: removed
+      };
+    }
+  }
   const enemyLastSeenAt = Number(
     current?.lastSeenAt
       || current?.at
@@ -7550,10 +7617,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
   const missionEscortContinuity = lockedProfitMission
     ? activeProfitEscortContinuityForMission(stateful, lockedProfitMission, input.nowMs)
     : null;
-  const remoteMissionReclaimBlocked = Boolean(
-    lockedProfitMission?.type === 'remote-player-navigation'
-      && realtimeProfitAvailable
-  );
+  const remoteMissionReclaimBlocked = false;
   if (lockedProfitMission && (lockedProfitMission.highValue || missionEscortContinuity)) {
     let missionOpportunity = opportunities.find(item => profitMissionMatchesChoice(lockedProfitMission, item)) || null;
     if (!missionOpportunity) {
@@ -7587,7 +7651,8 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     if (lockedProfitMission?.highValue
       && missionOpportunity
       && (!current || !profitMissionMatchesChoice(lockedProfitMission, current))
-      && !remoteMissionReclaimBlocked) {
+      && !remoteMissionReclaimBlocked
+      && !realtimeProfitAvailable) {
       current = missionOpportunity;
     }
   }
@@ -7703,6 +7768,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       filtered: remoteProfit.filtered,
       invalidatedIds: remoteProfit.invalidatedIds,
       remoteMissionReclaimBlocked,
+      visibleHighDropGuard,
       selected: chosen?.type === 'remote-player-navigation' ? remoteProfitActionTarget(chosen) : null
     },
     threshold: {
@@ -11552,19 +11618,27 @@ function combatDecisionIsWhitelistSafetyCombat(combatDecision, stateful = {}) {
   const target = combatDecision?.target || combatDecision?.dryRun?.target || null;
   if (!target) return false;
   const dynamicWhitelistMember = Boolean(
-    target.dynamicWhitelistMember || target.whitelistContactPolicy?.dynamicWhitelistMember
+    target.dynamicWhitelistMember
+      || target.whitelistContactPolicy?.dynamicWhitelistMember
+      || target.whitelisted
+      || target.profitProtected
+      || target.creatorProtected
+      || target.legacyWhitelistProtected
   );
   if (!dynamicWhitelistMember) return false;
   const combatState = stateful?.combatTarget || null;
   return [target.combatIntent, combatState?.intent, combatState?.originIntent]
     .map(value => String(value || ''))
-    .some(intent => intent === 'whitelist-proximity' || intent === 'defensive');
+    .some(intent => intent === 'whitelist-proximity' || intent === 'defensive' || intent === 'secondary')
+    || target.combatRole === 'secondary'
+    || target.secondaryTarget === true;
 }
 
 function combatDecisionIsOrdinaryProfitPursuit(combatDecision, input, stateful = {}) {
   const target = combatDecision?.target || combatDecision?.dryRun?.target || null;
   if (!target) return false;
   if (combatDecisionIsWhitelistSafetyCombat(combatDecision, stateful)) return false;
+  if (target.combatRole === 'secondary' || target.secondaryTarget === true) return false;
   const combatState = stateful?.combatTarget || null;
   const intent = String(target.combatIntent || combatState?.intent || '');
   const originIntent = String(combatState?.originIntent || combatState?.intent || intent || '');
@@ -12516,9 +12590,12 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       : null,
     incomingThreatAssessment
   );
-  const dynamicWhitelistContactExitAction = input.self && !realtimeStale
+  const rawDynamicWhitelistContactExitAction = input.self && !realtimeStale
     ? buildDynamicWhitelistContactSafetyExitDecision(input, safetyContextOptions, incomingThreatAssessment)
     : null;
+  const dynamicWhitelistContactExitAction = secondaryCombatExitPolicy(combat?.target, hpValue(input.self)).healthy
+    ? null
+    : rawDynamicWhitelistContactExitAction;
   const criticalIncomingExitAction = preTargetIncomingSafetyAction?.shouldLeave
     ? preTargetIncomingSafetyAction
     : null;
@@ -12691,8 +12768,30 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const recoveryAction = (profitLive || nonCombatProfit) && !whitelistSafetyCombat
     ? buildRecoveryDecision(input, opportunity, options)
     : null;
-  const selectedRecoveryFootCoinAction = healthyLootPriority ? null : recoveryFootCoinAction;
-  const selectedRecoveryAction = healthyLootPriority ? null : recoveryAction;
+  const recoveryPriority = recoveryPriorityDecision(
+    input.self,
+    opportunity,
+    recoveryAction || recoveryFootCoinAction,
+    options
+  );
+  const recoveryPriorityMetadata = {
+    equivalentDrop: recoveryPriority.equivalentDrop,
+    profitDrop: recoveryPriority.profitDrop,
+    hardGate: recoveryPriority.hardGate,
+    reason: recoveryPriority.reason
+  };
+  const selectedRecoveryFootCoinAction = healthyLootPriority || !recoveryPriority.recoveryWins
+    ? null
+    : (recoveryFootCoinAction ? {
+        ...recoveryFootCoinAction,
+        recoveryPriority: recoveryPriorityMetadata
+      } : null);
+  const selectedRecoveryAction = healthyLootPriority || !recoveryPriority.recoveryWins
+    ? null
+    : (recoveryAction ? {
+        ...recoveryAction,
+        recoveryPriority: recoveryPriorityMetadata
+      } : null);
   const injuredCautionFootCoinAction = safetyAction
     && safetyActionCanYieldToInjuredFootCoin(safetyAction)
     && input.self
@@ -12823,8 +12922,14 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       candidate(postAttackDropCoinAction, 80, 'post-attack-drop-coin', false, { commitmentRank: 20 }),
       candidate(postAttackDropWaitAction, 90, 'post-attack-drop-wait', false, { commitmentRank: 20 }),
       candidate(staminaBudgetExitAction, 100, 'stamina-budget-exit', true, { riskScore: 100 }),
-      candidate(selectedRecoveryFootCoinAction, 110, 'recovery-foot-coin', true),
-      candidate(selectedRecoveryAction, 120, 'ordinary-recovery', true),
+      candidate(selectedRecoveryFootCoinAction, 110, 'recovery-foot-coin', recoveryPriority.hardGate, {
+        expectedReward: recoveryPriority.equivalentDrop,
+        roiScore: recoveryPriority.equivalentDrop
+      }),
+      candidate(selectedRecoveryAction, 120, 'ordinary-recovery', recoveryPriority.hardGate, {
+        expectedReward: recoveryPriority.equivalentDrop,
+        roiScore: recoveryPriority.equivalentDrop
+      }),
       candidate(injuredCautionFootCoinAction, 130, 'injured-caution-foot-coin'),
       candidate(yieldableSafetyAction, 140, 'yieldable-safety'),
       candidate(singleCoinBaitAction, 150, 'single-coin-bait', false, {
@@ -13352,6 +13457,20 @@ function createBrowserlessDecisionAdapter(options = {}) {
         decisionState.completedProfitTargets = merged;
         ensureCompletedProfitTargets(decisionState, Date.now(), options);
       }
+      if (Object.prototype.hasOwnProperty.call(plannerState, 'completedProfitKillEvidence')) {
+        const incomingEvidence = plannerState.completedProfitKillEvidence && typeof plannerState.completedProfitKillEvidence === 'object'
+          ? plannerState.completedProfitKillEvidence
+          : {};
+        const mergedEvidence = { ...(decisionState.completedProfitKillEvidence || {}) };
+        for (const [key, record] of Object.entries(incomingEvidence)) {
+          if (Number(record?.observedAt || 0) >= Number(mergedEvidence[key]?.observedAt || 0)) {
+            mergedEvidence[key] = cloneJson(record);
+          }
+        }
+        decisionState.completedProfitKillEvidence = Object.fromEntries(Object.entries(mergedEvidence)
+          .sort((left, right) => Number(right[1]?.observedAt || 0) - Number(left[1]?.observedAt || 0))
+          .slice(0, 512));
+      }
       if (Object.prototype.hasOwnProperty.call(plannerState, 'profitEscortContinuity')) {
         const incomingContinuity = plannerState.profitEscortContinuity || null;
         const incomingRelease = plannerState.profitEscortContinuityLastRelease || null;
@@ -13461,6 +13580,7 @@ function createBrowserlessDecisionAdapter(options = {}) {
         lastDecisionAction: decisionState.lastDecisionAction || null,
         profitMission: decisionState.profitMission || null,
         completedProfitTargets: decisionState.completedProfitTargets || {},
+        completedProfitKillEvidence: decisionState.completedProfitKillEvidence || {},
         profitEscortContinuity: decisionState.profitEscortContinuity || null,
         profitEscortContinuityLastRelease: decisionState.profitEscortContinuityLastRelease || null,
         legacyStateMigration: decisionState.legacyStateMigration || null,

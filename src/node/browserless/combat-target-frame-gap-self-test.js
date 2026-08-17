@@ -159,11 +159,12 @@ function runCombatTargetFrameGapSelfTest() {
     decisionState,
     { ...options, nowMs: nowMs + 100 }
   );
-  assert('same defensive target resumes on the next visible frame',
+  assert('same defensive target resumes as secondary on the next visible frame',
     restoredDecision.action?.kind === 'combat-live'
       && restoredDecision.action?.reason === 'combat-live-realtime'
       && restoredDecision.combat?.target?.userId === targetId
-      && restoredDecision.combat?.target?.combatIntent === 'engaged'
+      && restoredDecision.combat?.target?.combatIntent === 'secondary'
+      && restoredDecision.combat?.target?.combatRole === 'secondary'
       && decisionState.combatTarget?.originIntent === 'defensive');
 
   const sparseMetadataState = {};

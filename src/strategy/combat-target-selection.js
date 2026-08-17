@@ -324,7 +324,7 @@ function recentAfkAttackCommitmentCore(previousAction, entities = [], options = 
 function isCombatEligibleThreat(entity, options = {}) {
   if (!entity) return false;
 
-  if (entity.alive === false || isInvulnerableEntity(entity)) return false;
+  if (entity.alive === false) return false;
   if (entity.authority && entity.authority !== 'realtime') return false;
 
   const incomingBullet = incomingBulletForTarget(entity, options);
@@ -344,16 +344,34 @@ function isCombatEligibleThreat(entity, options = {}) {
       || dynamicPolicy?.legacyWhitelistProtected
       || (!dynamicWhitelistMember && options.whitelistCheck && options.whitelistCheck(entity))
   );
+  const entityKey = targetId(entity);
+  const secondaryTarget = Boolean(
+    options.secondaryTargetIds instanceof Set
+      ? options.secondaryTargetIds.has(entityKey)
+      : options.secondaryTargetId && String(options.secondaryTargetId) === entityKey
+  ) || dynamicWhitelistMember || creatorProtected || legacyWhitelistProtected || Boolean(entity.profitProtected || entity.whitelisted);
+  const defensiveEvidence = Boolean(
+    incomingOverride.defensiveTargetEligible
+      || incomingOwnerMatchesTarget(entity, options)
+      || recentInjury
+      || defensiveEngagement
+      || (options.establishedCombatTargetId !== null
+        && options.establishedCombatTargetId !== undefined
+        && options.establishedCombatTargetId !== ''
+        && String(options.establishedCombatTargetId) === String(entityKey))
+      || isFiringCombatEntity(entity)
+  );
 
-  // The creator and legacy hard whitelist remain offensive vetoes. Their
-  // bullets are handled by the pre-target Dodge/leave safety path instead.
-  if (creatorProtected || legacyWhitelistProtected) return false;
+  // Whitelist identities are never profit targets. They can only be retained
+  // as a defensive secondary contact when realtime threat evidence exists.
+  if (isInvulnerableEntity(entity)) return secondaryTarget && defensiveEvidence;
+  if (creatorProtected || legacyWhitelistProtected) return secondaryTarget && defensiveEvidence;
 
   // Realtime collision-path fire and recent attributable injury outrank the
   // dynamic whitelist distance guard and the easy-kill trust exemption.
   if (incomingOverride.defensiveTargetEligible || recentInjury || defensiveEngagement) return true;
 
-  if (dynamicWhitelistMember) return dynamicPolicy?.proactiveCombatEligible === true;
+  if (secondaryTarget) return defensiveEvidence;
 
   // A recently killed player stays outside ordinary defensive combat until it
   // has actually damaged self. A deliberately selected easy-kill profit target

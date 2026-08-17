@@ -9427,7 +9427,7 @@ async function runSelfTest() {
       want: 'profit-candidate|seek-coin|coin-a|true|true'
     },
     {
-      name: 'browserless combat selector skips whitelisted active targets',
+      name: 'browserless combat selector admits a firing whitelisted target only as secondary',
       got: (() => {
         const combat = buildBrowserlessCombatDryRun({
           userId: 7,
@@ -9448,13 +9448,15 @@ async function runSelfTest() {
           targetWhitelistUserIds: [8]
         });
         return [
-          combat.target === null,
+          combat.target?.combatRole,
+          combat.target?.whitelisted,
           combat.candidates.length,
-          combat.shooting.reason,
+          combat.shooting.wouldShoot,
+          combat.shooting.finalFireBlocker,
           combat.dataGaps.includes('missing-self-or-target')
         ].join('|');
       })(),
-      want: 'true|0|no-target|true'
+      want: 'secondary|true|1|false|secondary:secondary-five-second-shot-quota|false'
     },
     {
       name: 'browserless out-of-range recent activity blocks just-stopped AFK profit target',

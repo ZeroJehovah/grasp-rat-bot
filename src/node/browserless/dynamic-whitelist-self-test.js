@@ -70,6 +70,9 @@ function decisionState(options = {}) {
         max_hp: 100,
         current_join_mode: options.targetMode ?? 'Passive',
         firing: options.targetFiring === true,
+        ...(options.targetInvulnerableMs
+          ? { invulnerable_remaining_ms: options.targetInvulnerableMs }
+          : {}),
         stamina_5s_remaining_milli: options.targetStamina5s ?? 10000,
         drop: options.targetDrop ?? 100
       };
@@ -305,15 +308,20 @@ async function runDynamicWhitelistSelfTest() {
       assert.strictEqual(healthyPassThrough.combat.target, null);
       assert.strictEqual(healthyPassThrough.whitelistSafety.targets[0].policy.reason, 'dynamic-whitelist-healthy-pass-through');
       assert.strictEqual(healthyPassThrough.whitelistSafety.targets[0].policy.proactiveCombatHpEligible, false);
-      assert.strictEqual(boundaryContact.reason, 'combat-live-realtime');
-      assert.strictEqual(boundaryContact.combat.target.combatIntent, 'whitelist-proximity');
+      assert.strictEqual(boundaryContact.reason, 'wait-for-full-stamina-and-hp');
+      assert.strictEqual(boundaryContact.combat.target, null);
       assert.strictEqual(healthyIncoming.reason, 'incoming-bullet-dodge');
-      assert.strictEqual(healthyIncoming.combat.target.combatIntent, 'defensive');
+      assert.strictEqual(healthyIncoming.combat.target.combatRole, 'secondary');
+      assert.strictEqual(healthyIncoming.combat.target.whitelisted, true);
       assert.strictEqual(healthyIncoming.whitelistSafety.incoming.collisionBulletCount > 0, true);
       assert.strictEqual(continuedDefense.reason, 'combat-live-realtime');
       assert.strictEqual(String(continuedDefense.combat.target.userId), '8');
+      assert.strictEqual(continuedDefense.combat.target.combatRole, 'secondary');
+      assert.strictEqual(continuedDefense.combat.shooting.wouldShoot, false);
+      assert.strictEqual(continuedDefense.combat.shooting.secondaryPolicy.reason, 'secondary-five-second-shot-quota');
+      assert.strictEqual(defensiveState.combatTarget.combatRole, 'secondary');
       assert.strictEqual(defensiveState.combatTarget.originIntent, 'defensive');
-      cases.push('healthy-pass-through-keeps-current-incoming-fire-defense');
+      cases.push('whitelist-never-initiates-and-retained-contact-is-secondary-defense');
     }
 
     {
@@ -373,7 +381,8 @@ async function runDynamicWhitelistSelfTest() {
       });
       const creator = buildBrowserlessDecision(decisionState({ hp: 60 }), {}, creatorOptions);
       assert.strictEqual(creator.reason, 'incoming-bullet-dodge');
-      assert.strictEqual(creator.combat.target, null);
+      assert.strictEqual(creator.combat.target.combatRole, 'secondary');
+      assert.strictEqual(creator.combat.target.whitelisted, true);
       assert.strictEqual(creator.action.target.creatorProtected, true);
       assert.notStrictEqual(creator.action.kind, 'combat-live');
       const legacy = buildBrowserlessDecision(
@@ -387,10 +396,28 @@ async function runDynamicWhitelistSelfTest() {
         })
       );
       assert.strictEqual(legacy.reason, 'incoming-bullet-dodge');
-      assert.strictEqual(legacy.combat.target, null);
+      assert.strictEqual(legacy.combat.target.combatRole, 'secondary');
+      assert.strictEqual(legacy.combat.target.whitelisted, true);
       assert.strictEqual(legacy.action.target.legacyWhitelistProtected, true);
       assert.notStrictEqual(legacy.action.kind, 'combat-live');
-      cases.push('creator-and-static-whitelist-incoming-dodge-never-offensive');
+      cases.push('creator-and-static-whitelist-contacts-are-secondary-dodge-first-defense');
+    }
+
+    {
+      const invulnerableSecondary = buildBrowserlessDecision(
+        decisionState({ hp: 80, targetInvulnerableMs: 10000, targetFiring: true }),
+        {},
+        decisionOptions()
+      );
+      assert.strictEqual(invulnerableSecondary.combat.target.combatRole, 'secondary');
+      assert.strictEqual(invulnerableSecondary.combat.shooting.secondaryPolicy.invulnerable, true);
+      assert.strictEqual(invulnerableSecondary.combat.shooting.wouldShoot, false);
+      assert.strictEqual(
+        invulnerableSecondary.combat.shooting.secondaryPolicy.reason,
+        'secondary-invulnerable-dodge-only'
+      );
+      assert.strictEqual(invulnerableSecondary.reason, 'incoming-bullet-dodge');
+      cases.push('invulnerable-secondary-is-dodge-only');
     }
 
     {
@@ -510,11 +537,11 @@ async function runDynamicWhitelistSelfTest() {
         {},
         decisionOptions({ dynamicWhitelistProximitySafetyEnabled: false })
       );
-      assert.strictEqual(lowStaminaContact.reason, 'combat-live-realtime');
-      assert.strictEqual(String(lowStaminaContact.combat.target.userId), '8');
+      assert.strictEqual(lowStaminaContact.reason, 'wait-for-full-stamina-and-hp');
+      assert.strictEqual(lowStaminaContact.combat.target, null);
       assert.notStrictEqual(rolledBack.reason, 'dynamic-whitelist-contact-no-dodge-budget-leave');
       assert.strictEqual(rollbackLowHp.reason, 'dynamic-whitelist-low-hp-contact-leave');
-      cases.push('low-stamina-contact-engages-and-low-hp-exit-survives-proximity-rollback');
+      cases.push('low-stamina-whitelist-contact-does-not-initiate-and-low-hp-exit-survives');
     }
 
     {
@@ -567,10 +594,10 @@ async function runDynamicWhitelistSelfTest() {
         decisionOptions()
       );
       assert.strictEqual(lowHpWithCoin.reason, 'dynamic-whitelist-low-hp-contact-leave');
-      assert.strictEqual(proximity.reason, 'combat-live-realtime');
-      assert.strictEqual(proximity.combat.target.combatIntent, 'whitelist-proximity');
+      assert.strictEqual(proximity.reason, 'wait-for-full-stamina-and-hp');
+      assert.strictEqual(proximity.combat.target, null);
       assert.strictEqual(proximity.combat.profitPursuitSuppression, null);
-      cases.push('coin-and-economic-stop-loss-cannot-suppress-whitelist-safety');
+      cases.push('low-hp-whitelist-exit-survives-while-healthy-contact-does-not-initiate');
     }
 
     {
@@ -619,8 +646,9 @@ async function runDynamicWhitelistSelfTest() {
       assert.strictEqual(stableIdMatched, true);
       assert.strictEqual(whitelist.isMember({ userId: 8 }), true);
       assert.strictEqual(whitelist.isEnabled({ userId: 8 }), true);
-      assert.strictEqual(current.combat.target.whitelistContactPolicy.damagedSelfToday, true);
-      assert.strictEqual(current.combat.target.whitelistContactPolicy.proactiveCombatRangeCm, 14500);
+      assert.strictEqual(current.combat.target, null);
+      assert.strictEqual(current.whitelistSafety.targets[0].policy.damagedSelfToday, true);
+      assert.strictEqual(current.whitelistSafety.targets[0].policy.proactiveCombatRangeCm, 14500);
       assert.strictEqual(nextDayStatus.playerCount, 0);
       cases.push('daily-damage-stable-id-override-persists-after-battle-and-resets-utc8');
     }
@@ -639,8 +667,10 @@ async function runDynamicWhitelistSelfTest() {
         const remote = await worker.decide(state, options, {
           damageStatus: { userIds: [8], players: [{ userId: 8 }] }
         });
-        const directPolicy = direct.combat.target.whitelistContactPolicy;
-        const workerPolicy = remote.decision.combat.target.whitelistContactPolicy;
+        const directPolicy = direct.whitelistSafety.targets[0].policy;
+        const workerPolicy = remote.decision.whitelistSafety.targets[0].policy;
+        assert.strictEqual(direct.combat.target, null);
+        assert.strictEqual(remote.decision.combat.target, null);
         assert.strictEqual(direct.reason, remote.decision.reason);
         assert.strictEqual(directPolicy.reason, workerPolicy.reason);
         assert.strictEqual(directPolicy.proactiveCombatRangeCm, workerPolicy.proactiveCombatRangeCm);

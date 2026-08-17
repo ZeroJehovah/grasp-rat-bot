@@ -58,6 +58,17 @@ const {
   selectProfitEscortDirectionCore,
   updateProfitEscortContinuityCore
 } = require('./profit-escort');
+const {
+  recoveryEquivalentDropForHp,
+  recoveryPriorityDecision
+} = require('./recovery-profit-priority');
+const {
+  classifyCombatTargetRole,
+  secondaryCadenceMs,
+  secondaryCombatExitPolicy,
+  secondaryFirePolicy
+} = require('./dual-target-policy');
+const { profitKillRacePolicy } = require('./profit-kill-race');
 const { runCombatHpLossAttributionSelfTest } = require('./combat-hp-loss-attribution');
 const { recordActionSwitchDiagnosticsCore } = require('./action-switch-diagnostics');
 const { attackWorthTakingCore } = require('./attack-worth');
@@ -256,6 +267,136 @@ const { playerProfitScoreMultiplierCore } = require('./player-profit-score');
 
 function runStrategyModuleSelfTests() {
   const results = [];
+
+  const recoveryCurve = [
+    [40, 100],
+    [50, 100],
+    [65, 70],
+    [80, 40],
+    [90, 40]
+  ];
+  results.push({
+    name: 'recovery-profit-priority-linear-hp-curve',
+    passed: recoveryCurve.every(([hp, expected]) => recoveryEquivalentDropForHp(hp) === expected)
+  });
+  results.push({
+    name: 'recovery-profit-priority-compares-equivalent-drop',
+    passed: recoveryPriorityDecision(
+      { hp: 50 },
+      { choice: { sourceTarget: { drop: 101 } } },
+      { kind: 'recover' }
+    ).recoveryWins === false
+      && recoveryPriorityDecision(
+        { hp: 80 },
+        { choice: { sourceTarget: { drop: 40 } } },
+        { kind: 'recover' }
+      ).recoveryWins === true
+  });
+
+  const primaryRole = classifyCombatTargetRole({ user_id: 7 }, { targetId: 7 });
+  const secondaryRole = classifyCombatTargetRole({ user_id: 8 }, { targetId: 7 });
+  const whitelistRole = classifyCombatTargetRole({ user_id: 7, profitProtected: true }, { targetId: 7 });
+  results.push({
+    name: 'dual-target-role-primary-secondary-and-whitelist-boundaries',
+    passed: primaryRole.role === 'primary'
+      && primaryRole.secondaryTarget === false
+      && secondaryRole.role === 'secondary'
+      && secondaryRole.primaryTargetId === '7'
+      && whitelistRole.role === 'secondary'
+      && whitelistRole.whitelisted === true
+  });
+
+  const secondarySamples = [
+    { at: 7000, newBulletCount: 1 },
+    { at: 9000, newBulletCount: 1 }
+  ];
+  const secondaryAllowed = secondaryFirePolicy({
+    nowMs: 10000,
+    combatTargetState: { noDamageMs: 10000, motionSamples: secondarySamples },
+    dispatchTimes: [6000],
+    lastShotAt: 6000
+  });
+  const secondaryQuotaBlocked = secondaryFirePolicy({
+    nowMs: 10000,
+    combatTargetState: { noDamageMs: 10000, motionSamples: secondarySamples },
+    dispatchTimes: [6000, 8000],
+    lastShotAt: 8000
+  });
+  const secondaryPrimaryBlocked = secondaryFirePolicy({
+    nowMs: 10000,
+    combatTargetState: { motionSamples: secondarySamples },
+    dispatchTimes: [],
+    primaryCanAttack: true
+  });
+  const secondaryInvulnerableBlocked = secondaryFirePolicy({
+    nowMs: 10000,
+    target: { invulnerable: true },
+    combatTargetState: { motionSamples: secondarySamples },
+    dispatchTimes: []
+  });
+  results.push({
+    name: 'secondary-fire-cadence-quota-primary-and-invulnerable-gates',
+    passed: secondaryCadenceMs(0) === 600
+      && secondaryCadenceMs(10000) === 1100
+      && secondaryAllowed.allowed === true
+      && secondaryAllowed.ownShots === 1
+      && secondaryAllowed.opponentShots === 2
+      && secondaryQuotaBlocked.allowed === false
+      && secondaryQuotaBlocked.reason === 'secondary-five-second-shot-quota'
+      && secondaryPrimaryBlocked.reason === 'primary-target-fire-available'
+      && secondaryInvulnerableBlocked.reason === 'secondary-invulnerable-dodge-only'
+  });
+
+  const killRaceBlocked = profitKillRacePolicy({
+    self: { user_id: 1, x: 0, y: 0 },
+    target: { user_id: 2, x: 200, y: 0, hp: 19 },
+    primaryTarget: true,
+    realtimeTargets: [{ user_id: 3, x: 150, y: 0, active: true }]
+  });
+  const killRaceEqualAllowed = profitKillRacePolicy({
+    self: { user_id: 1, x: 0, y: 0 },
+    target: { user_id: 2, x: 200, y: 0, hp: 19 },
+    primaryTarget: true,
+    realtimeTargets: [{ user_id: 3, x: 400, y: 0, active: true }]
+  });
+  const killRaceJoinModeActiveBlocked = profitKillRacePolicy({
+    self: { user_id: 1, x: 0, y: 0 },
+    target: { user_id: 2, x: 200, y: 0, hp: 19 },
+    primaryTarget: true,
+    realtimeTargets: [{
+      user_id: 3,
+      x: 150,
+      y: 0,
+      active: false,
+      current_join_mode: 'Active'
+    }]
+  });
+  results.push({
+    name: 'primary-profit-low-hp-kill-race-closes-and-requires-strictly-nearest',
+    passed: killRaceBlocked.active === true
+      && killRaceBlocked.approaching === true
+      && killRaceBlocked.direction.dx === 1
+      && killRaceBlocked.fireAllowed === false
+      && killRaceEqualAllowed.fireAllowed === true
+      && killRaceJoinModeActiveBlocked.fireAllowed === false
+  });
+
+  const healthySecondaryExitPolicy = secondaryCombatExitPolicy(
+    { combatRole: 'secondary', secondaryTarget: true },
+    80
+  );
+  const lowHpSecondaryExitPolicy = secondaryCombatExitPolicy(
+    { combatRole: 'secondary', secondaryTarget: true },
+    50
+  );
+  results.push({
+    name: 'secondary-exit-suppression-stops-at-hp-fifty',
+    passed: healthySecondaryExitPolicy.suppressClearHpGap === true
+      && healthySecondaryExitPolicy.suppressMissCloseTimeout === true
+      && healthySecondaryExitPolicy.suppressExchangeStopLoss === true
+      && lowHpSecondaryExitPolicy.preserveLowHpExits === true
+      && lowHpSecondaryExitPolicy.suppressClearHpGap === false
+  });
 
   const playerProfitScoreBoundaries = [
     [49, 1],

@@ -34,7 +34,12 @@ function state(options = {}) {
     vy: 0,
     hp: Number(options.hp ?? 98),
     max_hp: 100,
-    stamina_5s_remaining_milli: Number(options.stamina5s ?? 10000)
+    stamina_5s_remaining_milli: Number(options.stamina5s ?? 10000),
+    stamina_5s_limit_milli: Number(options.stamina5sLimit ?? 10000),
+    stamina_1h_remaining_milli: Number(options.stamina1h ?? 1000000),
+    stamina_1h_limit_milli: 1000000,
+    stamina_1d_remaining_milli: Number(options.stamina1d ?? 10000000),
+    stamina_1d_limit_milli: 10000000
   };
   const target = options.target === null ? null : {
     entity_id: 2,
@@ -46,7 +51,7 @@ function state(options = {}) {
     vy: Number(options.targetVy ?? 0),
     hp: 100,
     max_hp: 100,
-    current_join_mode: 'Active',
+    current_join_mode: options.targetMode ?? 'Active',
     firing: options.targetFiring === true,
     stamina_5s_remaining_milli: 10000,
     drop: Number(options.targetDrop ?? 20)
@@ -115,6 +120,39 @@ function confirmLowHpContact(decide, stateful, extra = {}) {
 
 function runRecoveryContactSelfTest() {
   const cases = [];
+
+  {
+    const recoveryWins = buildBrowserlessDecision(
+      state({
+        nowMs: 1000,
+        hp: 80,
+        targetX: 30000,
+        targetVx: 0,
+        targetMode: 'Passive',
+        targetDrop: 39
+      }),
+      {},
+      decisionOptions(1000)
+    );
+    const profitWins = buildBrowserlessDecision(
+      state({
+        nowMs: 1000,
+        hp: 50,
+        targetX: 30000,
+        targetVx: 0,
+        targetMode: 'Passive',
+        targetDrop: 101
+      }),
+      {},
+      decisionOptions(1000)
+    );
+    assert.strictEqual(recoveryWins.reason, 'wait-for-full-stamina-and-hp');
+    assert.strictEqual(recoveryWins.action.recoveryPriority.equivalentDrop, 40);
+    assert.strictEqual(recoveryWins.action.recoveryPriority.profitDrop, 39);
+    assert.strictEqual(profitWins.action.kind, 'seek-enemy');
+    assert.strictEqual(profitWins.action.target.userId, 8);
+    cases.push('recovery-priority-yields-to-higher-equivalent-drop-profit');
+  }
 
   {
     const stateful = { lastDecisionAction: recoveryAction() };

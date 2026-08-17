@@ -86,6 +86,7 @@ function createInitialDecisionState(options = {}) {
     opportunitySwitchLock: cloneJson(options.opportunitySwitchLock || options.switchLock || null),
     profitMission: cloneJson(options.profitMission || null),
     completedProfitTargets: asRecord(options.completedProfitTargets),
+    completedProfitKillEvidence: asRecord(options.completedProfitKillEvidence),
     profitEscortContinuity: cloneJson(options.profitEscortContinuity || null),
     profitEscortContinuityLastRelease: cloneJson(options.profitEscortContinuityLastRelease || null),
     legacyStateMigration: cloneJson(options.legacyStateMigration || (legacyInvulnerableProfitApproach ? {
@@ -204,6 +205,7 @@ function summarizeBrowserlessDecisionState(state, options = {}) {
       switchLock: redactBoundedValue(state.opportunitySwitchLock || state.switchLock || null),
       profitMission: redactBoundedValue(state.profitMission || null),
       completedProfitTargets: recordEntries(state.completedProfitTargets || {}, limit),
+      completedProfitKillEvidence: recordEntries(state.completedProfitKillEvidence || {}, limit),
       profitEscortContinuity: redactBoundedValue(state.profitEscortContinuity || null),
       profitEscortContinuityLastRelease: redactBoundedValue(state.profitEscortContinuityLastRelease || null),
       legacyStateMigration: redactBoundedValue(state.legacyStateMigration || null)

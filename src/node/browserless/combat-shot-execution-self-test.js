@@ -4,6 +4,7 @@ const assert = require('assert');
 const { createBrowserlessActionAdapter } = require('./action-adapter');
 const {
   rememberBrowserlessCombatEngagement,
+  syncCombatShotExecutionEvents,
   syncConfirmedCombatShots
 } = require('./combat-adapter');
 const { createBrowserlessStateStore } = require('./state-store');
@@ -45,7 +46,7 @@ function combatTarget(id, x = 1000) {
 }
 
 function combatDecision(generation, mode, cadence = 160, advisoryCadence = 1000, overrides = {}) {
-  const target = combatTarget(8);
+  const target = { ...combatTarget(8), ...(overrides.target || {}) };
   const shooting = {
     wouldShoot: true,
     commandSuppressed: false,
@@ -389,6 +390,43 @@ function runCombatShotExecutionSelfTest() {
     && executionEvents.find(event => event.type === 'shoot-dispatch' && event.evasiveAimApplied === true)?.evasiveAimLinearAngleDeg === 0.75
     && actionStore.getCommandState(actionNow).shooting.pendingShots.find(request => request.evasiveAimApplied === true)?.evasiveAimDisagreementDeg === 1.25);
 
+  const secondaryStateful = {};
+  const secondaryTarget = {
+    ...combatTarget(8),
+    combatRole: 'secondary',
+    secondaryTarget: true,
+    whitelisted: true
+  };
+  rememberBrowserlessCombatEngagement(
+    secondaryStateful,
+    { user_id: 1, x: 0, y: 0, hp: 100, max_hp: 100 },
+    secondaryTarget,
+    engagementOptions(actionControl, 40)
+  );
+  const secondaryGeneration = secondaryStateful.combatMetrics.engagementGeneration;
+  actionNow += 160;
+  const secondaryDispatch = adapter.applyDecision(stateSnapshot, combatDecision(
+    secondaryGeneration,
+    'mixed/unknown',
+    160,
+    1000,
+    {
+      controlGeneration: actionControl,
+      tick: 40,
+      target: secondaryTarget
+    }
+  ));
+  const secondaryCommandState = actionStore.getCommandState(actionNow);
+  const syncedSecondaryEvents = syncCombatShotExecutionEvents(
+    secondaryStateful,
+    { command: secondaryCommandState },
+    secondaryTarget
+  );
+  check('actual secondary dispatches enter the bounded shot ledger', secondaryDispatch.shoot?.skipped === false
+    && syncedSecondaryEvents >= 1
+    && secondaryStateful.combatTarget.secondaryDispatchTimes.length === 1
+    && secondaryStateful.combatMetrics.actualShots >= 1);
+
   actionNow += 50;
   const throttled = adapter.applyDecision(stateSnapshot, combatDecision(
     'execution-generation',
@@ -420,7 +458,7 @@ function runCombatShotExecutionSelfTest() {
   ));
   check('Dodge reserve remains an explicit hard fire-state boundary', reserveBlocked.shoot?.skipped === true
     && reserveBlocked.shoot?.reason === 'dodge-reserve'
-    && wireDispatches === modes.length);
+    && wireDispatches === modes.length + 1);
 
   const safetyStop = adapter.sealShooting('safety-trigger:test-exit', {
     observedTick: 22,
@@ -441,7 +479,7 @@ function runCombatShotExecutionSelfTest() {
     && safetyStop.engagementGeneration === 'execution-generation'
     && staleAfterSafety.shoot?.skipped === true
     && staleAfterSafety.shoot?.reason === 'safety-trigger:test-exit'
-    && wireDispatches === modes.length);
+    && wireDispatches === modes.length + 1);
   check('safety shot stop and stale skip remain structured and generation-bound', executionEvents.some(event => (
     event.type === 'shoot-stop'
     && event.executionClass === 'safety'
