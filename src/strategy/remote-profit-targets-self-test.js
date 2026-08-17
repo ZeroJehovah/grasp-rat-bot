@@ -72,8 +72,12 @@ function runRemoteProfitTargetsSelfTest() {
   assert.strictEqual(remoteProfitDistanceFactor(100000), 0.75);
   assert.strictEqual(remoteProfitDistanceFactor(150000), 0.5);
   assert.strictEqual(remoteProfitDistanceFactor(250000), 0.5);
-  assert.strictEqual(remoteProfitApproachEtaMs(100000), 105263);
-  assert.strictEqual(remoteProfitApproachDistanceCm('high-drop-afk'), 0);
+  assert.strictEqual(remoteProfitApproachEtaMs(100000), 105105);
+  assert.strictEqual(remoteProfitApproachDistanceCm('high-drop-afk'), 150);
+  assert.strictEqual(remoteProfitApproachDistanceCm('high-drop-afk', {
+    playerDropPickupRadiusCm: 220,
+    invulnerableAfkApproachDistanceCm: 0
+  }), 220);
   assert.strictEqual(remoteProfitApproachDistanceCm('easy-kill-active'), 10000);
   assert.strictEqual(remoteProfitApproachEtaMs(100000, {}, 'easy-kill-active'), 94737);
   assert.strictEqual(rawInvulnerabilityMsToWallMs(36600), 15250);
@@ -206,6 +210,7 @@ function runRemoteProfitTargetsSelfTest() {
 
   const invulnerableReady = evaluate([target({ x: 100000, invulnerable: true, invulnerableRemainingMs: 80000 })]);
   assert.strictEqual(invulnerableReady.candidates.length, 1);
+  assert.strictEqual(invulnerableReady.candidates[0].approachDistanceCm, 150);
   const invulnerableLate = evaluate([target({ x: 100000, invulnerable: true, invulnerableRemainingMs: 115000 })]);
   assert.strictEqual(invulnerableLate.candidates.length, 1);
   const invulnerableActiveReady = evaluateRemoteProfitTargets({
@@ -304,7 +309,7 @@ function runRemoteProfitTargetsSelfTest() {
   assert.strictEqual(movedSelfOpportunities[0].baseScore, opportunities[0].baseScore);
   assert.strictEqual(movedSelfOpportunities[0].distanceFactor, opportunities[0].distanceFactor);
   assert.strictEqual(movedSelfOpportunities[0].adjustedScore, opportunities[0].adjustedScore);
-  return { ok: true, cases: 49 };
+  return { ok: true, cases: 51 };
 }
 
 if (require.main === module) {

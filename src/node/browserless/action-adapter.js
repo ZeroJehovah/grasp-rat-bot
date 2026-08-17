@@ -16,6 +16,11 @@ const { remoteProfitApproachDistanceCm } = require('../../strategy/remote-profit
 const BROWSER_RUNTIME_DEFAULTS = buildRuntimeDefaults({}, false);
 const DEFAULT_TARGET_DEAD_ZONE_CM = 900;
 const DEFAULT_COIN_TARGET_DEAD_ZONE_CM = 150;
+const DEFAULT_PLAYER_DROP_PICKUP_RADIUS_CM = Math.max(
+  0,
+  Number(BROWSER_RUNTIME_DEFAULTS.playerDropPickupRadiusCm || 150)
+);
+const DEFAULT_INVULNERABLE_PROFIT_ARRIVAL_HYSTERESIS_CM = 100;
 const DEFAULT_COMMAND_INTERVAL_MS = 500;
 const DEFAULT_SETTLEMENT_FRAMES = 2;
 const DEFAULT_MOVEMENT_SETTLEMENT_STALL_MS = 5000;
@@ -570,6 +575,16 @@ function createInitialActionState() {
     nearCoinContinuationPulseCount: 0,
     nearCoinContinuationCancelCount: 0,
     nearCoinContinuationLastCancelReason: '',
+    invulnerableProfitApproachLock: null,
+    invulnerableProfitApproachArrival: null,
+    invulnerableProfitApproachFeedbackGate: null,
+    invulnerableProfitApproachFeedbackWaitCount: 0,
+    invulnerableProfitApproachFeedbackAckCount: 0,
+    invulnerableProfitApproachFeedbackTimeoutCount: 0,
+    invulnerableProfitApproachPulseCount: 0,
+    invulnerableProfitApproachArrivalCount: 0,
+    invulnerableProfitApproachReleaseCount: 0,
+    invulnerableProfitApproachLastClearReason: '',
     velocityPulseToken: 0,
     velocityStopTimer: null,
     velocityRepeatToken: 0,
@@ -1294,6 +1309,272 @@ function createBrowserlessActionAdapter(options = {}) {
     }
     state.coinFeedbackWaitCount += 1;
     return true;
+  }
+
+  function invulnerableProfitApproachTargetKey(target) {
+    const id = targetRepeatKey(target);
+    if (id) return `player:${id}`;
+    const x = numberOrNull(target?.x);
+    const y = numberOrNull(target?.y);
+    return x === null || y === null ? '' : `player-position:${x}:${y}`;
+  }
+
+  function invulnerableProfitApproachRadiusCm() {
+    return Math.max(0, optionNumber(
+      options,
+      'playerDropPickupRadiusCm',
+      optionNumber(
+        options,
+        'invulnerableProfitApproachDistanceCm',
+        DEFAULT_PLAYER_DROP_PICKUP_RADIUS_CM
+      )
+    ));
+  }
+
+  function invulnerableProfitApproachReleaseRadiusCm(arrivalRadiusCm) {
+    return arrivalRadiusCm + Math.max(0, optionNumber(
+      options,
+      'invulnerableProfitArrivalHysteresisCm',
+      DEFAULT_INVULNERABLE_PROFIT_ARRIVAL_HYSTERESIS_CM
+    ));
+  }
+
+  function invulnerableProfitApproachSummary() {
+    const arrival = state.invulnerableProfitApproachArrival;
+    return arrival ? { ...arrival } : null;
+  }
+
+  function clearInvulnerableProfitApproach(reason = '') {
+    const hadState = Boolean(
+      state.invulnerableProfitApproachLock
+      || state.invulnerableProfitApproachArrival
+      || state.invulnerableProfitApproachFeedbackGate
+    );
+    state.invulnerableProfitApproachLock = null;
+    state.invulnerableProfitApproachArrival = null;
+    state.invulnerableProfitApproachFeedbackGate = null;
+    if (hadState) state.invulnerableProfitApproachLastClearReason = String(reason || 'cleared');
+    return hadState;
+  }
+
+  function invulnerableProfitApproachFeedbackPending(self, targetKey, atMs = now()) {
+    const gate = state.invulnerableProfitApproachFeedbackGate;
+    if (!gate || gate.targetKey !== targetKey) return false;
+    const x = numberOrNull(self?.x);
+    const y = numberOrNull(self?.y);
+    const changed = x !== null && y !== null
+      && Math.hypot(x - gate.startX, y - gate.startY) >= gate.minPositionDeltaCm;
+    if (changed) {
+      state.invulnerableProfitApproachFeedbackAckCount += 1;
+      state.invulnerableProfitApproachFeedbackGate = null;
+      return false;
+    }
+    if (atMs >= gate.expiresAtMs) {
+      state.invulnerableProfitApproachFeedbackTimeoutCount += 1;
+      state.invulnerableProfitApproachFeedbackGate = null;
+      return false;
+    }
+    state.invulnerableProfitApproachFeedbackWaitCount += 1;
+    return true;
+  }
+
+  function armInvulnerableProfitApproachFeedbackGate(
+    stateSnapshot,
+    targetKey,
+    feedbackPlan,
+    sent,
+    self = stateSnapshot?.realtime?.self || null
+  ) {
+    if (!sent?.ok || sent.skipped || !sent.command) return null;
+    const startX = numberOrNull(self?.x);
+    const startY = numberOrNull(self?.y);
+    if (startX === null || startY === null) return null;
+    const startedAtMs = now();
+    state.invulnerableProfitApproachFeedbackGate = {
+      targetKey,
+      commandId: sent.command.id,
+      startX,
+      startY,
+      startTick: optionalNumber(stateSnapshot?.realtime?.tick),
+      sentAtMs: startedAtMs,
+      expiresAtMs: startedAtMs + Number(feedbackPlan?.timeoutMs || 0),
+      timeoutMs: Number(feedbackPlan?.timeoutMs || 0),
+      mode: String(feedbackPlan?.mode || 'conservative'),
+      planReason: String(feedbackPlan?.reason || 'missing-feedback-plan'),
+      minPositionDeltaCm: Math.max(1, optionNumber(options, 'coinFeedbackMinPositionDeltaCm', 1))
+    };
+    return state.invulnerableProfitApproachFeedbackGate;
+  }
+
+  function invulnerableProfitPrecisionVector(self, target, targetKey, atMs = now()) {
+    const movementState = { coinApproachLock: state.invulnerableProfitApproachLock };
+    const vector = coinMotionVectorToTarget(self, {
+      ...target,
+      type: 'coin',
+      id: targetKey,
+      drop_id: targetKey
+    }, {
+      ...options,
+      coinPickupJitterEnabled: false
+    }, movementState, atMs);
+    state.invulnerableProfitApproachLock = movementState.coinApproachLock;
+    if (vector && typeof vector === 'object') {
+      delete vector.pushThrough;
+      delete vector.jitter;
+      delete vector.crossSweep;
+    }
+    return vector;
+  }
+
+  function applyPassiveInvulnerableProfitApproach(stateSnapshot, self, target, detail = {}) {
+    const targetKey = invulnerableProfitApproachTargetKey(target);
+    const sx = coordinateOrNull(self?.x);
+    const sy = coordinateOrNull(self?.y);
+    const tx = coordinateOrNull(target?.x);
+    const ty = coordinateOrNull(target?.y);
+    const missingReason = detail.remoteNavigationOnly
+      ? 'remote-target-missing-position'
+      : 'profit-invulnerable-target-missing-position';
+    if (!targetKey || sx === null || sy === null || tx === null || ty === null) {
+      clearInvulnerableProfitApproach(missingReason);
+      const stopped = stop(missingReason);
+      return {
+        ok: stopped.ok,
+        kind: 'stop',
+        reason: missingReason,
+        command: stopped.command || null,
+        skipped: Boolean(stopped.skipped),
+        target,
+        remoteNavigationOnly: Boolean(detail.remoteNavigationOnly),
+        ...transportFailure(stopped)
+      };
+    }
+
+    const distance = Math.hypot(tx - sx, ty - sy);
+    const arrivalRadiusCm = invulnerableProfitApproachRadiusCm();
+    const releaseRadiusCm = invulnerableProfitApproachReleaseRadiusCm(arrivalRadiusCm);
+    let arrival = state.invulnerableProfitApproachArrival;
+    if (arrival && arrival.targetKey !== targetKey) {
+      clearInvulnerableProfitApproach('target-changed');
+      arrival = null;
+    }
+    const heldByHysteresis = Boolean(
+      arrival?.arrived
+      && distance <= releaseRadiusCm
+    );
+    if (distance <= arrivalRadiusCm || heldByHysteresis) {
+      if (!arrival?.arrived) state.invulnerableProfitApproachArrivalCount += 1;
+      state.invulnerableProfitApproachArrival = {
+        targetKey,
+        arrived: true,
+        arrivedAtMs: Number(arrival?.arrivedAtMs || now()),
+        lastObservedAtMs: now(),
+        distanceCm: Math.round(distance),
+        arrivalRadiusCm: Math.round(arrivalRadiusCm),
+        releaseRadiusCm: Math.round(releaseRadiusCm),
+        heldByHysteresis
+      };
+      state.invulnerableProfitApproachLock = null;
+      state.invulnerableProfitApproachFeedbackGate = null;
+      const reason = detail.remoteNavigationOnly
+        ? 'remote-target-arrived'
+        : 'profit-invulnerable-target-close-wait';
+      const stopped = stop(reason);
+      return {
+        ok: stopped.ok,
+        kind: 'stop',
+        reason,
+        command: stopped.command || null,
+        skipped: Boolean(stopped.skipped),
+        target,
+        invulnerableApproach: true,
+        approachDistanceCm: Math.round(arrivalRadiusCm),
+        arrival: invulnerableProfitApproachSummary(),
+        remoteNavigationOnly: Boolean(detail.remoteNavigationOnly),
+        ...transportFailure(stopped)
+      };
+    }
+
+    if (arrival?.arrived) state.invulnerableProfitApproachReleaseCount += 1;
+    state.invulnerableProfitApproachArrival = {
+      targetKey,
+      arrived: false,
+      arrivedAtMs: 0,
+      lastObservedAtMs: now(),
+      distanceCm: Math.round(distance),
+      arrivalRadiusCm: Math.round(arrivalRadiusCm),
+      releaseRadiusCm: Math.round(releaseRadiusCm),
+      heldByHysteresis: false
+    };
+    const vector = invulnerableProfitPrecisionVector(self, target, targetKey);
+    if (!vector.ok) {
+      clearInvulnerableProfitApproach(vector.reason || missingReason);
+      const stopped = stop(vector.reason || missingReason);
+      return {
+        ok: stopped.ok,
+        kind: 'stop',
+        reason: vector.reason || missingReason,
+        vector,
+        command: stopped.command || null,
+        skipped: Boolean(stopped.skipped),
+        target,
+        remoteNavigationOnly: Boolean(detail.remoteNavigationOnly),
+        ...transportFailure(stopped)
+      };
+    }
+    const feedbackGuided = Number(vector.distance) <= optionNumber(
+      options,
+      'coinFeedbackGuidedDistanceCm',
+      BROWSER_RUNTIME_DEFAULTS.coinPickupSweepDistance
+    ) && Number(vector.precisionPulseMs) > 0;
+    const feedbackPlan = feedbackGuided ? coinFeedbackPlan(stateSnapshot) : null;
+    if (feedbackGuided && invulnerableProfitApproachFeedbackPending(self, targetKey)) {
+      return {
+        ok: true,
+        kind: 'feedback-wait',
+        reason: 'profit-invulnerable-target-position-feedback-wait',
+        skipped: true,
+        target,
+        vector,
+        invulnerableApproach: true,
+        approachDistanceCm: Math.round(arrivalRadiusCm),
+        feedbackGate: { ...state.invulnerableProfitApproachFeedbackGate },
+        arrival: invulnerableProfitApproachSummary(),
+        remoteNavigationOnly: Boolean(detail.remoteNavigationOnly)
+      };
+    }
+    const reason = detail.remoteNavigationOnly
+      ? 'seek-remote-player'
+      : 'profit-invulnerable-target-approach';
+    const sent = sendVelocity(vector.dx, vector.dy, reason, target, { suppressRepeat: feedbackGuided });
+    if (feedbackGuided) {
+      armInvulnerableProfitApproachFeedbackGate(stateSnapshot, targetKey, feedbackPlan, sent, self);
+    }
+    const precisionPulseMs = schedulePrecisionPulseStop(
+      sent,
+      vector.precisionPulseMs,
+      'profit-candidate'
+    );
+    if (precisionPulseMs) state.invulnerableProfitApproachPulseCount += 1;
+    return {
+      ok: sent.ok,
+      kind: 'velocity',
+      reason,
+      vector,
+      command: sent.command || null,
+      skipped: Boolean(sent.skipped),
+      target,
+      invulnerableApproach: true,
+      approachDistanceCm: Math.round(arrivalRadiusCm),
+      precisionPulseMs,
+      feedbackGuided,
+      feedbackGate: state.invulnerableProfitApproachFeedbackGate
+        ? { ...state.invulnerableProfitApproachFeedbackGate }
+        : null,
+      arrival: invulnerableProfitApproachSummary(),
+      remoteNavigationOnly: Boolean(detail.remoteNavigationOnly),
+      ...transportFailure(sent)
+    };
   }
 
   function nearCoinContinuationSummary(continuation = state.nearCoinContinuation) {
@@ -3066,6 +3347,7 @@ function createBrowserlessActionAdapter(options = {}) {
     cancelShootRepeat(state.transportSealReason);
     clearCoinFeedbackGate();
     clearNearCoinContinuation(state.transportSealReason);
+    clearInvulnerableProfitApproach(state.transportSealReason);
     return {
       sealed: true,
       reason: state.transportSealReason,
@@ -3090,10 +3372,14 @@ function createBrowserlessActionAdapter(options = {}) {
       const combat = combatSummaryFromDecision(decision);
       if (combat) {
         clearNearCoinContinuation('combat-decision');
+        clearInvulnerableProfitApproach('combat-decision');
         return applyCombatDecision(stateSnapshot, decision, { combat });
       }
       const profitAction = profitActionFromDecision(decision);
       if (profitAction?.type !== 'coin') clearNearCoinContinuation('planner-non-coin-action');
+      if (profitAction?.type !== 'enemy' && profitAction?.type !== 'remote-player') {
+        clearInvulnerableProfitApproach('planner-non-player-action');
+      }
     const safetyMotion = safetyMotionFromDecision(decision);
     if (safetyMotion) {
       return applySafetyMotionDecision(safetyMotion);
@@ -3142,6 +3428,12 @@ function createBrowserlessActionAdapter(options = {}) {
       clearCoinFeedbackGate();
       const target = profitAction.target;
       const remoteClassification = target?.remoteClassification || target?.sourceTarget?.classification || '';
+      if (target?.invulnerable === true && remoteClassification !== 'easy-kill-active') {
+        return applyPassiveInvulnerableProfitApproach(stateSnapshot, self, target, {
+          remoteNavigationOnly: true
+        });
+      }
+      clearInvulnerableProfitApproach('remote-player-not-passive-invulnerable');
       const arrivalToleranceCm = Math.max(0, Number(
         target?.arrivalToleranceCm
           ?? (remoteClassification
@@ -3418,6 +3710,7 @@ function createBrowserlessActionAdapter(options = {}) {
 
   function applySafetyMotionDecision(action) {
     clearNearCoinContinuation('safety-motion');
+    clearInvulnerableProfitApproach('safety-motion');
     const sent = sendVelocity(
       roundVelocity(action.dx),
       roundVelocity(action.dy),
@@ -3442,6 +3735,7 @@ function createBrowserlessActionAdapter(options = {}) {
     clearNearCoinContinuation('profit-enemy-action');
     const rawRealtimeTarget = findRealtimeEntity(stateSnapshot, targetRepeatKey(target));
     if (!rawRealtimeTarget && target?.cachedNavigationOnly !== true) {
+      clearInvulnerableProfitApproach('profit-target-missing-realtime');
       const stopped = stop('profit-target-missing-realtime');
       return {
         ok: stopped.ok,
@@ -3461,6 +3755,7 @@ function createBrowserlessActionAdapter(options = {}) {
       };
     }
     if (target?.active && target?.easyKillProfitTarget) {
+      clearInvulnerableProfitApproach('active-profit-target');
       const invulnerableApproach = target?.invulnerable === true;
       const vector = movementVectorToTarget(self, target, invulnerableApproach
         ? {
@@ -3529,6 +3824,7 @@ function createBrowserlessActionAdapter(options = {}) {
       };
     }
     if (target?.active) {
+      clearInvulnerableProfitApproach('active-target-blocked');
       const stopped = stop('profit-active-target-blocked');
       return {
         ok: stopped.ok,
@@ -3540,23 +3836,13 @@ function createBrowserlessActionAdapter(options = {}) {
         target
       };
     }
-    const invulnerableApproachDistance = target?.invulnerable
-      ? Math.max(0, Number(
-        target.invulnerableApproachDistanceCm
-          ?? options.invulnerableProfitApproachDistanceCm
-          ?? 0
-      ))
-      : null;
-    const vector = movementVectorToTarget(self, target, target?.invulnerable
-      ? { ...options, targetDeadZoneCm: invulnerableApproachDistance }
-      : options);
-    const distance = Number.isFinite(Number(vector.distance))
-      ? Number(vector.distance)
-      : Math.hypot(Number(target?.x) - Number(self?.x), Number(target?.y) - Number(self?.y));
+    const distance = Math.hypot(Number(target?.x) - Number(self?.x), Number(target?.y) - Number(self?.y));
     const attackRange = Math.max(0, Number(options.attackRangeCm ?? options.attackRange ?? DEFAULT_ATTACK_RANGE_CM));
     const shootRange = Math.min(attackRange, afkAttackFireMaxRangeCm(options));
     const fullAttackRange = afkAttackFullRangeCm(options);
     if (target?.cachedNavigationOnly) {
+      clearInvulnerableProfitApproach('cached-navigation-only');
+      const vector = movementVectorToTarget(self, target, options);
       if (!vector.ok || (Number.isFinite(distance) && distance <= Math.max(300, Number(options.targetDeadZoneCm || DEFAULT_TARGET_DEAD_ZONE_CM)))) {
         const stopped = stop('cached-enemy-position-reached');
         return { ok: stopped.ok, kind: 'stop', reason: 'cached-enemy-position-reached', command: stopped.command || null, skipped: Boolean(stopped.skipped), target };
@@ -3565,34 +3851,10 @@ function createBrowserlessActionAdapter(options = {}) {
       return { ok: sent.ok, kind: 'velocity', reason: 'missing-realtime-enemy-hold', vector, command: sent.command || null, skipped: Boolean(sent.skipped), target, cachedNavigationOnly: true, ...transportFailure(sent) };
     }
     if (target?.invulnerable) {
-      if (!vector.ok || (Number.isFinite(distance) && distance <= invulnerableApproachDistance)) {
-        const stopped = stop('profit-invulnerable-target-close-wait');
-        return {
-          ok: stopped.ok,
-          kind: 'stop',
-          reason: 'profit-invulnerable-target-close-wait',
-          command: stopped.command || null,
-          skipped: Boolean(stopped.skipped),
-          target,
-          invulnerableApproach: true,
-          approachDistanceCm: Math.round(invulnerableApproachDistance),
-          ...transportFailure(stopped)
-        };
-      }
-      const sent = sendVelocity(vector.dx, vector.dy, 'profit-invulnerable-target-approach', target);
-      return {
-        ok: sent.ok,
-        kind: 'velocity',
-        reason: 'profit-invulnerable-target-approach',
-        vector,
-        command: sent.command || null,
-        skipped: Boolean(sent.skipped),
-        target,
-        invulnerableApproach: true,
-        approachDistanceCm: Math.round(invulnerableApproachDistance),
-        ...transportFailure(sent)
-      };
+      return applyPassiveInvulnerableProfitApproach(stateSnapshot, self, target);
     }
+    clearInvulnerableProfitApproach('target-vulnerable');
+    const vector = movementVectorToTarget(self, target, options);
     if (!(Number.isFinite(distance) && distance <= shootRange)) {
       if (!vector.ok) {
         const stopped = stop(vector.reason || 'profit-afk-missing-position');
@@ -3946,7 +4208,18 @@ function createBrowserlessActionAdapter(options = {}) {
       nearCoinContinuationRenewCount: state.nearCoinContinuationRenewCount,
       nearCoinContinuationPulseCount: state.nearCoinContinuationPulseCount,
       nearCoinContinuationCancelCount: state.nearCoinContinuationCancelCount,
-      nearCoinContinuationLastCancelReason: state.nearCoinContinuationLastCancelReason
+      nearCoinContinuationLastCancelReason: state.nearCoinContinuationLastCancelReason,
+      invulnerableProfitApproach: invulnerableProfitApproachSummary(),
+      invulnerableProfitApproachFeedbackGate: state.invulnerableProfitApproachFeedbackGate
+        ? { ...state.invulnerableProfitApproachFeedbackGate }
+        : null,
+      invulnerableProfitApproachFeedbackWaitCount: state.invulnerableProfitApproachFeedbackWaitCount,
+      invulnerableProfitApproachFeedbackAckCount: state.invulnerableProfitApproachFeedbackAckCount,
+      invulnerableProfitApproachFeedbackTimeoutCount: state.invulnerableProfitApproachFeedbackTimeoutCount,
+      invulnerableProfitApproachPulseCount: state.invulnerableProfitApproachPulseCount,
+      invulnerableProfitApproachArrivalCount: state.invulnerableProfitApproachArrivalCount,
+      invulnerableProfitApproachReleaseCount: state.invulnerableProfitApproachReleaseCount,
+      invulnerableProfitApproachLastClearReason: state.invulnerableProfitApproachLastClearReason
     };
   }
 

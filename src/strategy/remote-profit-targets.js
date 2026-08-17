@@ -16,7 +16,7 @@ const DEFAULT_REMOTE_PROFIT_TARGET_CONFIG = Object.freeze({
   distanceHalfFactorCm: 150000,
   distanceFloorFactor: 0.5,
   staminaFullRatio: 0.98,
-  invulnerableAfkApproachDistanceCm: 0,
+  invulnerableAfkApproachDistanceCm: 150,
   invulnerableActiveApproachDistanceCm: 10000,
   invulnerableAxisSpeedCmPerSec: 950,
   invulnerableDiagonalSpeedCmPerSec: 940,
@@ -103,7 +103,9 @@ function remoteProfitApproachDistanceCm(classification = '', config = {}) {
   const active = String(classification || '') === 'easy-kill-active';
   const configured = active
     ? config.invulnerableActiveApproachDistanceCm
-    : config.invulnerableAfkApproachDistanceCm;
+    : (config.playerDropPickupRadiusCm
+      ?? config.invulnerableAfkApproachDistanceCm
+      ?? config.invulnerableProfitApproachDistanceCm);
   const fallback = active
     ? DEFAULT_REMOTE_PROFIT_TARGET_CONFIG.invulnerableActiveApproachDistanceCm
     : DEFAULT_REMOTE_PROFIT_TARGET_CONFIG.invulnerableAfkApproachDistanceCm;

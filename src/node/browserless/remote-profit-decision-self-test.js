@@ -2129,7 +2129,7 @@ function runRemoteProfitDecisionSelfTest() {
     { finalActionArbitrationHoldMs: 1800 }
   );
   assert.strictEqual(invulnerableAfkNear.action?.kind, 'seek-remote-player');
-  assert.strictEqual(invulnerableAfkNear.action?.target?.arrivalToleranceCm, 0);
+  assert.strictEqual(invulnerableAfkNear.action?.target?.arrivalToleranceCm, 150);
   const invulnerableRemoteTooClose = decide(
     invulnerableRemoteAdapter,
     state(fullStaminaSelf({ x: 10000 }), [], [{ drop_id: 'fallback', amount: 1, x: 10100, y: 0 }]),

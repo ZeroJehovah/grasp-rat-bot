@@ -191,7 +191,7 @@ const EASY_KILL_SEEK_RANGE_CM_BY_SCORE = Object.freeze({
   2: null,
   3: null
 });
-const DEFAULT_INVULNERABLE_PROFIT_APPROACH_DISTANCE_CM = BROWSER_RUNTIME_DEFAULTS.invulnerableProfitApproachDistanceCm ?? 0;
+const DEFAULT_INVULNERABLE_PROFIT_APPROACH_DISTANCE_CM = BROWSER_RUNTIME_DEFAULTS.playerDropPickupRadiusCm ?? 150;
 const DEFAULT_INVULNERABLE_ACTIVE_PROFIT_APPROACH_DISTANCE_CM = 10000;
 const DEFAULT_INVULNERABLE_PROFIT_MOVE_SPEED_CM_PER_SEC = 1000;
 const DEFAULT_DANGEROUS_TARGET_COOLDOWN_MS = BROWSER_RUNTIME_DEFAULTS.browserlessDangerousTargetCooldownMs ?? 900000;
@@ -879,8 +879,7 @@ function refreshEasyKillTargetAnnotations(
         target.active
           ? (options.invulnerableActiveProfitApproachDistanceCm
             ?? DEFAULT_INVULNERABLE_ACTIVE_PROFIT_APPROACH_DISTANCE_CM)
-          : (options.invulnerableProfitApproachDistanceCm
-            ?? DEFAULT_INVULNERABLE_PROFIT_APPROACH_DISTANCE_CM)
+          : invulnerableAfkProfitApproachDistanceCm(options)
       ))
       : null;
     target.easyKillProfitTarget = Boolean(
@@ -3256,9 +3255,7 @@ function invulnerableProfitApproachEstimate(target, options = {}) {
   const configuredApproachDistance = target?.active
     ? (options.invulnerableActiveProfitApproachDistanceCm
       ?? DEFAULT_INVULNERABLE_ACTIVE_PROFIT_APPROACH_DISTANCE_CM)
-    : (options.invulnerableProfitApproachDistanceCm
-      ?? BROWSER_RUNTIME_DEFAULTS.invulnerableProfitApproachDistanceCm
-      ?? DEFAULT_INVULNERABLE_PROFIT_APPROACH_DISTANCE_CM);
+    : invulnerableAfkProfitApproachDistanceCm(options);
   const approachDistance = Math.max(0, Number(
     configuredApproachDistance
   ));
@@ -3297,6 +3294,15 @@ function invulnerableProfitApproachEstimate(target, options = {}) {
     // distance until native state authorizes combat.
     ready: route.ok === true,
   };
+}
+
+function invulnerableAfkProfitApproachDistanceCm(options = {}) {
+  return Math.max(0, Number(
+    options.playerDropPickupRadiusCm
+      ?? options.invulnerableProfitApproachDistanceCm
+      ?? BROWSER_RUNTIME_DEFAULTS.playerDropPickupRadiusCm
+      ?? DEFAULT_INVULNERABLE_PROFIT_APPROACH_DISTANCE_CM
+  ));
 }
 
 function invulnerableProfitTargetReadyOnApproach(target, options = {}) {

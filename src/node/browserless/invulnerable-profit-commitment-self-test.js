@@ -145,6 +145,8 @@ function runInvulnerableProfitCommitmentSelfTest() {
   assert.strictEqual(readyCandidate.target?.invulnerableApproachEstimate?.ready, true);
   assert.strictEqual(ready.action?.target?.userId, 21);
   assert.strictEqual(ready.action?.reason, 'invulnerable-profit-approach-window');
+  assert.strictEqual(ready.action?.target?.invulnerableApproachDistanceCm, 150);
+  assert.strictEqual(ready.action?.target?.invulnerableApproachEstimate?.approachDistanceCm, 150);
   assert.strictEqual(ready.action?.finalCandidate?.switchReason, 'best-eligible-profit');
 
   const ordinary = decide(adapter(), state(self(), [afk(21, 21000, 20, 0)]), 1000);
@@ -256,6 +258,169 @@ function runInvulnerableProfitCommitmentSelfTest() {
   assert.strictEqual(protectedAction.kind, 'velocity');
   assert.strictEqual(shots.length, 0);
 
+  let incidentNow = 3000;
+  const incidentCommands = [];
+  const incidentTimers = [];
+  const incidentActionAdapter = createBrowserlessActionAdapter({
+    userId: 7,
+    now: () => incidentNow,
+    commandIntervalMs: 0,
+    decisionIntervalMs: 1000,
+    shootRepeatEnabled: false,
+    playerDropPickupRadiusCm: 150,
+    invulnerableProfitArrivalHysteresisCm: 100,
+    setTimeout(fn, ms) {
+      const timer = { fn, ms, canceled: false };
+      incidentTimers.push(timer);
+      return timer;
+    },
+    clearTimeout(timer) {
+      if (timer) timer.canceled = true;
+    },
+    transport: {
+      sendVelocity(dx, dy) {
+        incidentCommands.push({ dx, dy, at: incidentNow });
+        return { ok: true };
+      },
+      sendShoot() {
+        throw new Error('invulnerable incident approach must not shoot');
+      }
+    }
+  });
+  const incidentTarget = {
+    ...afk(41, -11129, 54, 120000),
+    y: 70489
+  };
+  const incidentDecision = decide(
+    adapter(),
+    state(self(-11215, 70252), [incidentTarget], [], [], 10),
+    incidentNow
+  );
+  const firstIncidentPulse = incidentActionAdapter.applyDecision(
+    state(self(-11215, 70252), [incidentTarget], [], [], 10),
+    incidentDecision
+  );
+  assert.strictEqual(firstIncidentPulse.reason, 'profit-invulnerable-target-approach');
+  assert.strictEqual(firstIncidentPulse.approachDistanceCm, 150);
+  assert.strictEqual(firstIncidentPulse.feedbackGuided, true);
+  assert.strictEqual(firstIncidentPulse.precisionPulseMs, 75);
+  assert.strictEqual(firstIncidentPulse.vector.pushThrough, undefined);
+  assert.deepStrictEqual(incidentCommands.at(-1), { dx: 1, dy: 1, at: 3000 });
+  incidentNow += 75;
+  incidentTimers[0].fn();
+  assert.deepStrictEqual(incidentCommands.at(-1), { dx: 0, dy: 0, at: 3075 });
+
+  const secondSelf = self(-11162.5, 70304.5);
+  incidentNow = 4000;
+  const secondIncidentPulse = incidentActionAdapter.applyDecision(
+    state(secondSelf, [incidentTarget], [], [], 11),
+    incidentDecision
+  );
+  assert.strictEqual(secondIncidentPulse.precisionPulseMs, 75);
+  assert.deepStrictEqual(incidentCommands.at(-1), { dx: 1, dy: 1, at: 4000 });
+  incidentNow += 75;
+  incidentTimers[1].fn();
+  assert.deepStrictEqual(incidentCommands.at(-1), { dx: 0, dy: 0, at: 4075 });
+
+  incidentNow = 5000;
+  const arrivedIncident = incidentActionAdapter.applyDecision(
+    state(self(-11110, 70357), [incidentTarget], [], [], 12),
+    incidentDecision
+  );
+  assert.strictEqual(arrivedIncident.kind, 'stop');
+  assert.strictEqual(arrivedIncident.reason, 'profit-invulnerable-target-close-wait');
+  assert.strictEqual(arrivedIncident.arrival.distanceCm, 133);
+  assert.strictEqual(arrivedIncident.arrival.releaseRadiusCm, 250);
+
+  incidentNow = 6000;
+  const hysteresisHold = incidentActionAdapter.applyDecision(
+    state(self(-10909, 70489), [incidentTarget], [], [], 13),
+    incidentDecision
+  );
+  assert.strictEqual(hysteresisHold.kind, 'stop');
+  assert.strictEqual(hysteresisHold.arrival.distanceCm, 220);
+  assert.strictEqual(hysteresisHold.arrival.heldByHysteresis, true);
+
+  incidentNow = 7000;
+  const releasedIncident = incidentActionAdapter.applyDecision(
+    state(self(-10878, 70489), [incidentTarget], [], [], 14),
+    incidentDecision
+  );
+  assert.strictEqual(releasedIncident.kind, 'velocity');
+  assert.strictEqual(releasedIncident.vector.dx, -1);
+  assert.strictEqual(releasedIncident.vector.dy, 0);
+  assert.strictEqual(releasedIncident.vector.jitter, undefined);
+  assert.strictEqual(releasedIncident.vector.crossSweep, undefined);
+  assert.strictEqual(releasedIncident.precisionPulseMs, 75);
+
+  const pendingIncidentTimer = incidentTimers.at(-1);
+  const safetyAction = incidentActionAdapter.applyDecision(
+    state(self(-10878, 70489), [incidentTarget], [], [], 15),
+    {
+      kind: 'flee',
+      band: 'safety',
+      action: { kind: 'flee', band: 'safety', reason: 'test-safety-preemption', dx: 0, dy: 1 }
+    }
+  );
+  assert.strictEqual(safetyAction.reason, 'test-safety-preemption');
+  assert.strictEqual(pendingIncidentTimer.canceled, true);
+  assert.strictEqual(incidentActionAdapter.getState().invulnerableProfitApproach, null);
+  assert.strictEqual(incidentActionAdapter.getState().invulnerableProfitApproachPulseCount, 3);
+  assert.strictEqual(incidentActionAdapter.getState().invulnerableProfitApproachArrivalCount, 1);
+  assert.strictEqual(incidentActionAdapter.getState().invulnerableProfitApproachReleaseCount, 1);
+
+  const boundaryDecision = {
+    action: {
+      kind: 'seek-enemy',
+      band: 'profit',
+      reason: 'invulnerable-profit-approach-window',
+      target: {
+        type: 'enemy',
+        userId: 55,
+        x: 150,
+        y: 0,
+        hp: 100,
+        drop: 54,
+        invulnerable: true,
+        active: false
+      }
+    }
+  };
+  const boundaryTarget = afk(55, 150, 54, 120000);
+  const boundaryVelocities = [];
+  const boundaryActionAdapter = createBrowserlessActionAdapter({
+    userId: 7,
+    commandIntervalMs: 0,
+    shootRepeatEnabled: false,
+    playerDropPickupRadiusCm: 150,
+    transport: {
+      sendVelocity(dx, dy) {
+        boundaryVelocities.push({ dx, dy });
+        return { ok: true };
+      }
+    }
+  });
+  const atBoundary = boundaryActionAdapter.applyDecision(
+    state(self(), [boundaryTarget], [], [], 16),
+    boundaryDecision
+  );
+  assert.strictEqual(atBoundary.reason, 'profit-invulnerable-target-close-wait');
+  assert.deepStrictEqual(boundaryVelocities.at(-1), { dx: 0, dy: 0 });
+  const outsideBoundaryAdapter = createBrowserlessActionAdapter({
+    userId: 7,
+    commandIntervalMs: 0,
+    shootRepeatEnabled: false,
+    playerDropPickupRadiusCm: 150,
+    transport: { sendVelocity() { return { ok: true }; } }
+  });
+  const outsideBoundaryTarget = afk(55, 151, 54, 120000);
+  const outsideBoundary = outsideBoundaryAdapter.applyDecision(
+    state(self(), [outsideBoundaryTarget], [], [], 17),
+    boundaryDecision
+  );
+  assert.strictEqual(outsideBoundary.reason, 'profit-invulnerable-target-approach');
+  assert.strictEqual(outsideBoundary.precisionPulseMs, 75);
+
   const vulnerableTarget = afk(41, 900, 20, 0, 3);
   const vulnerableDecision = decide(actionDecisionAdapter, state(self(), [vulnerableTarget], [], [], 5), 2100);
   const vulnerableAction = actionAdapter.applyDecision(
@@ -273,7 +438,7 @@ function runInvulnerableProfitCommitmentSelfTest() {
   assert.strictEqual(missingAction.reason, 'profit-target-missing-realtime');
   assert.strictEqual(shots.length, 1);
 
-  return { ok: true, cases: 18 };
+  return { ok: true, cases: 27 };
 }
 
 if (require.main === module) {

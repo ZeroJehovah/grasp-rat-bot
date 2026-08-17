@@ -13584,7 +13584,7 @@ async function runSelfTest() {
           commands.filter(item => item === 'shoot').length
         ].join('|');
       })(),
-      want: 'stop|profit-invulnerable-target-close-wait|true|5550|snapshot|0|profit-attack|false|0|realtime|1'
+      want: 'velocity|profit-invulnerable-target-approach|true|5550|snapshot|0|profit-attack|false|0|realtime|1'
     },
     {
       name: 'browserless profit live releases non-attacking former AFK target for better primary profit',

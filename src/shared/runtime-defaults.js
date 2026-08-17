@@ -7,6 +7,7 @@ function numberDefault(value, fallback) {
 }
 
 function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
+  const playerDropPickupRadiusCm = numberDefault(config.playerDropPickupRadiusCm, 150);
   return {
     dryRun: Boolean(config.dryRun),
     once: Boolean(config.once),
@@ -47,7 +48,8 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     afkAttackExternalDamageRateHpPerSec: numberDefault(config.afkAttackExternalDamageRateHpPerSec, 2.05),
     afkAttackProjectileSpeedCmPerSec: numberDefault(config.afkAttackProjectileSpeedCmPerSec, 10000),
     afkAttackHpSafetyBuffer: numberDefault(config.afkAttackHpSafetyBuffer, 3),
-    invulnerableProfitApproachDistanceCm: numberDefault(config.invulnerableProfitApproachDistanceCm, 0),
+    invulnerableProfitApproachDistanceCm: playerDropPickupRadiusCm,
+    invulnerableProfitArrivalHysteresisCm: numberDefault(config.invulnerableProfitArrivalHysteresisCm, 100),
     invulnerableProfitApproachSlackMs: numberDefault(config.invulnerableProfitApproachSlackMs, 10000),
     invulnerableProfitAxisSpeedCmPerSec: numberDefault(config.invulnerableProfitAxisSpeedCmPerSec, 950),
     invulnerableProfitDiagonalSpeedCmPerSec: numberDefault(config.invulnerableProfitDiagonalSpeedCmPerSec, 940),
@@ -385,7 +387,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     activeCoinCompetitionEasyKillScoreMultiplier: numberDefault(config.activeCoinCompetitionEasyKillScoreMultiplier, 0.5),
     profitKillRaceHpThreshold: numberDefault(config.profitKillRaceHpThreshold, 20),
     profitKillRaceCompetitorRadiusCm: numberDefault(config.profitKillRaceCompetitorRadiusCm, 8000),
-    playerDropPickupRadiusCm: numberDefault(config.playerDropPickupRadiusCm, 150),
+    playerDropPickupRadiusCm,
     invulnerableActiveCoinDangerRadius: 36000,
     invulnerableActiveCoinHeadingBlockRadius: 65000,
     invulnerableActiveCoinHeadingLaneRadius: 18000,

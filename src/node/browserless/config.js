@@ -130,7 +130,9 @@ const DEFAULTS = {
   loginPointX: null,
   loginPointY: null,
   loginPointHp: null,
-  invulnerableProfitApproachDistanceCm: 0,
+  playerDropPickupRadiusCm: 150,
+  invulnerableProfitApproachDistanceCm: 150,
+  invulnerableProfitArrivalHysteresisCm: 100,
   invulnerableProfitApproachSlackMs: 10000,
   invulnerableProfitAxisSpeedCmPerSec: 950,
   invulnerableProfitDiagonalSpeedCmPerSec: 940,
@@ -377,7 +379,24 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     loginPointX: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_X, DEFAULTS.loginPointX),
     loginPointY: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y, DEFAULTS.loginPointY),
     loginPointHp: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_HP, DEFAULTS.loginPointHp),
-    invulnerableProfitApproachDistanceCm: numberEnv(env.GRASP_RAT_BROWSERLESS_INVULNERABLE_PROFIT_APPROACH_DISTANCE_CM, DEFAULTS.invulnerableProfitApproachDistanceCm),
+    playerDropPickupRadiusCm: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_PLAYER_DROP_PICKUP_RADIUS_CM,
+      numberEnv(
+        env.GRASP_RAT_BROWSERLESS_INVULNERABLE_PROFIT_APPROACH_DISTANCE_CM,
+        DEFAULTS.playerDropPickupRadiusCm
+      )
+    ),
+    invulnerableProfitApproachDistanceCm: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_PLAYER_DROP_PICKUP_RADIUS_CM,
+      numberEnv(
+        env.GRASP_RAT_BROWSERLESS_INVULNERABLE_PROFIT_APPROACH_DISTANCE_CM,
+        DEFAULTS.invulnerableProfitApproachDistanceCm
+      )
+    ),
+    invulnerableProfitArrivalHysteresisCm: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_INVULNERABLE_PROFIT_ARRIVAL_HYSTERESIS_CM,
+      DEFAULTS.invulnerableProfitArrivalHysteresisCm
+    ),
     invulnerableProfitApproachSlackMs: numberEnv(env.GRASP_RAT_BROWSERLESS_INVULNERABLE_PROFIT_APPROACH_SLACK_MS, DEFAULTS.invulnerableProfitApproachSlackMs),
     invulnerableProfitAxisSpeedCmPerSec: numberEnv(env.GRASP_RAT_BROWSERLESS_INVULNERABLE_PROFIT_AXIS_SPEED_CM_PER_SEC, DEFAULTS.invulnerableProfitAxisSpeedCmPerSec),
     invulnerableProfitDiagonalSpeedCmPerSec: numberEnv(env.GRASP_RAT_BROWSERLESS_INVULNERABLE_PROFIT_DIAGONAL_SPEED_CM_PER_SEC, DEFAULTS.invulnerableProfitDiagonalSpeedCmPerSec),
