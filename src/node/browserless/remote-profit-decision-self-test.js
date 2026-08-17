@@ -736,6 +736,8 @@ function assertDualTargetRuntimeRules() {
     { ...common, easyKillPlayers: [{ userId: 8, score: 3 }], dailyDamageUserIds: [8] }
   );
   assert.strictEqual(raceFirst.combat?.target?.combatRole, 'primary');
+  assert.strictEqual(raceFirst.combat?.movement?.profitKillRace?.active, false);
+  assert.notStrictEqual(raceFirst.combat?.movement?.reason, 'profit-target-competition-approach');
   const closerPlayer = {
     entity_id: 2009,
     user_id: 9,
@@ -761,13 +763,24 @@ function assertDualTargetRuntimeRules() {
     { ...common, easyKillPlayers: [{ userId: 8, score: 3 }], dailyDamageUserIds: [8] }
   );
   assert.strictEqual(raceSecond.combat?.target?.combatRole, 'primary');
-  assert.strictEqual(raceSecond.combat?.movement?.reason, 'low-hp-profit-kill-race-approach');
+  assert.strictEqual(raceSecond.combat?.movement?.reason, 'profit-target-competition-approach');
   assert.strictEqual(raceSecond.combat?.shooting?.wouldShoot, false);
   assert.strictEqual(
     raceSecond.combat?.shooting?.finalFireBlocker,
-    'profit-kill-race:active-player-closer-to-low-hp-profit-target'
+    'profit-kill-race:active-player-as-close-or-closer-to-primary-profit-target'
   );
   assert.strictEqual(raceSecond.combat?.shooting?.profitKillRace?.closerCompetitor?.id, '9');
+
+  const racePickupRadius = decide(
+    raceAdapter,
+    state(fullStaminaSelf({ x: 4850, y: 5000 }), [{ ...raceTarget, firing: false }, closerPlayer]),
+    4000,
+    null,
+    { ...common, easyKillPlayers: [{ userId: 8, score: 3 }], dailyDamageUserIds: [8] }
+  );
+  assert.strictEqual(racePickupRadius.combat?.target?.combatRole, 'primary');
+  assert.strictEqual(racePickupRadius.combat?.shooting?.profitKillRace?.insidePickupRadius, true);
+  assert.strictEqual(racePickupRadius.combat?.shooting?.wouldShoot, true);
 }
 
 function assertHpSegmentedSecondaryEngagementRules() {

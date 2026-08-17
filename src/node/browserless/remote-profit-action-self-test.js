@@ -45,7 +45,45 @@ function runRemoteProfitActionSelfTest() {
   assert.strictEqual(arrived.kind, 'stop');
   assert.strictEqual(arrived.reason, 'remote-target-arrived');
   assert.strictEqual(shootCount, 0);
-  return { ok: true, cases: 2, velocityCount, shootCount };
+
+  const postKillVelocities = [];
+  const postKillAdapter = createBrowserlessActionAdapter({
+    now: () => 2000,
+    commandIntervalMs: 0,
+    transport: {
+      sendVelocity(dx, dy) {
+        postKillVelocities.push({ dx, dy });
+        return { ok: true };
+      }
+    }
+  });
+  const postKillDecision = x => ({
+    action: {
+      kind: 'post-attack-drop-wait',
+      band: 'profit',
+      reason: 'post-kill-settlement-wait',
+      target: { type: 'post-attack-target', id: 91, x, y: 0 }
+    }
+  });
+  const insidePickup = postKillAdapter.applyDecision(
+    { realtime: { tick: 3, self: { x: 0, y: 0 } } },
+    postKillDecision(149)
+  );
+  const pickupBoundary = postKillAdapter.applyDecision(
+    { realtime: { tick: 4, self: { x: 0, y: 0 } } },
+    postKillDecision(150)
+  );
+  const outsidePickup = postKillAdapter.applyDecision(
+    { realtime: { tick: 5, self: { x: 0, y: 0 } } },
+    postKillDecision(151)
+  );
+  assert.strictEqual(insidePickup.vector.reason, 'target-reached');
+  assert.strictEqual(pickupBoundary.vector.reason, 'target-reached');
+  assert.strictEqual(outsidePickup.vector.ok, true);
+  assert.strictEqual(outsidePickup.vector.distance, 151);
+  assert.strictEqual(postKillVelocities.at(-1).dx, 1);
+
+  return { ok: true, cases: 5, velocityCount, shootCount, postKillVelocityCount: postKillVelocities.length };
 }
 
 if (require.main === module) {

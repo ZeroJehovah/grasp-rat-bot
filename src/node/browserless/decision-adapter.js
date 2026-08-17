@@ -8598,7 +8598,13 @@ function buildPostAttackDropWaitDecision(input, stateful = {}, options = {}, com
   if (Number(target.targetDrop || 0) < minDrop) return null;
   const distance = distanceBetween(input.self, target);
   const maxDistance = Math.max(0, Number(options.postAttackDropWaitMaxDistance ?? options.opportunityVisibleDistance ?? options.globalCoinMaxDistance ?? DEFAULT_GLOBAL_COIN_MAX_DISTANCE));
-  const stopDistance = Math.max(0, Number(options.postAttackDropWaitStopDistance ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropWaitStopDistance ?? BROWSER_RUNTIME_DEFAULTS.coinPickupSweepDistance ?? 0));
+  const stopDistance = Math.max(0, Number(
+    options.playerDropPickupRadiusCm
+      ?? options.postAttackDropWaitStopDistance
+      ?? BROWSER_RUNTIME_DEFAULTS.playerDropPickupRadiusCm
+      ?? BROWSER_RUNTIME_DEFAULTS.postAttackDropWaitStopDistance
+      ?? 150
+  ));
   if (!(distance > stopDistance && distance <= maxDistance)) return null;
   if (postAttackThreats(input).some(threat => !coinSafeFromThreats(target, [threat], options))) return null;
   return {

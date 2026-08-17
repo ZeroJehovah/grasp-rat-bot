@@ -22,14 +22,20 @@ function directionTo(from, to) {
   };
 }
 
+function realtimePlayerActivity(entity) {
+  const mode = String(entity?.current_join_mode ?? entity?.mode ?? '').toLowerCase();
+  if (mode === 'active') return 'active';
+  if (mode === 'passive' || mode === 'afk') return 'passive';
+  if (entity?.active === true) return 'active';
+  if (entity?.active === false) return 'passive';
+  return 'unknown';
+}
+
 function activeRealtimePlayer(entity, selfId, targetId) {
   const id = idOf(entity);
   if (!id || id === selfId || id === targetId || entity.alive === false) return false;
   if (entity.authority && entity.authority !== 'realtime') return false;
-  if (entity.active === true) return true;
-  // Normalized realtime frames can expose `active: false` for a stationary
-  // player while the native join mode still identifies an active session.
-  return String(entity.current_join_mode ?? entity.mode ?? '').toLowerCase() === 'active';
+  return realtimePlayerActivity(entity) === 'active';
 }
 
 function profitKillRacePolicy(input = {}, options = {}) {
@@ -38,9 +44,33 @@ function profitKillRacePolicy(input = {}, options = {}) {
   const targetHp = numberOrNull(target?.hp ?? target?.knownHp ?? target?.displayHp);
   const distance = distanceBetween(self, target);
   const threshold = Math.max(1, Number(options.profitKillRaceHpThreshold ?? 20));
-  const radius = Math.max(1, Number(options.profitKillRaceCloseDistanceCm ?? 100));
-  const active = Boolean(input.primaryTarget === true && self && target && targetHp !== null && targetHp > 0 && targetHp < threshold);
-  if (!active) return { active: false, reason: 'not-low-hp-primary-profit-target', distance: Number.isFinite(distance) ? distance : null };
+  const pickupRadius = Math.max(1, Number(
+    options.profitKillRaceCloseDistanceCm
+      ?? options.playerDropPickupRadiusCm
+      ?? 150
+  ));
+  const competitorRadius = Math.max(1, Number(options.profitKillRaceCompetitorRadiusCm ?? 8000));
+  const targetActivity = realtimePlayerActivity(target);
+  const eligibleTarget = targetActivity === 'passive'
+    || (targetActivity === 'active' && targetHp !== null && targetHp > 0 && targetHp < threshold);
+  const eligible = Boolean(
+    input.primaryTarget === true
+      && self
+      && target
+      && targetHp !== null
+      && targetHp > 0
+      && eligibleTarget
+  );
+  if (!eligible) {
+    return {
+      active: false,
+      reason: 'target-not-passive-or-low-hp-active',
+      targetActivity,
+      distance: Number.isFinite(distance) ? distance : null,
+      pickupRadiusCm: pickupRadius,
+      competitorRadiusCm: competitorRadius
+    };
+  }
   const selfId = idOf(self);
   const targetId = idOf(target);
   const competitors = (input.realtimeTargets || [])
@@ -49,24 +79,53 @@ function profitKillRacePolicy(input = {}, options = {}) {
       id: idOf(entity),
       distanceCm: distanceBetween(entity, target)
     }))
-    .filter(row => Number.isFinite(row.distanceCm));
-  const closer = competitors.find(row => row.distanceCm < distance) || null;
+    .filter(row => Number.isFinite(row.distanceCm) && row.distanceCm <= competitorRadius)
+    .sort((left, right) => left.distanceCm - right.distanceCm);
+  const nearestCompetitor = competitors[0] || null;
+  if (!nearestCompetitor) {
+    return {
+      active: false,
+      reason: 'no-nearby-active-competitor',
+      targetId,
+      targetHp,
+      targetActivity,
+      distance: Number.isFinite(distance) ? distance : null,
+      pickupRadiusCm: pickupRadius,
+      competitorRadiusCm: competitorRadius,
+      competitorCount: 0
+    };
+  }
+  const insidePickupRadius = Number.isFinite(distance) && distance <= pickupRadius;
+  const strictlyCloser = Number.isFinite(distance) && distance < nearestCompetitor.distanceCm;
+  const fireAllowed = insidePickupRadius || strictlyCloser;
   return {
     active: true,
     targetId,
     targetHp,
+    targetActivity,
     distance: Number.isFinite(distance) ? distance : null,
-    closeDistanceCm: radius,
-    approaching: Number.isFinite(distance) && distance >= radius,
-    direction: Number.isFinite(distance) && distance >= radius ? directionTo(self, target) : { dx: 0, dy: 0 },
-    closerCompetitor: closer,
-    fireAllowed: !closer,
-    reason: closer ? 'active-player-closer-to-low-hp-profit-target' : 'no-closer-active-player'
+    closeDistanceCm: pickupRadius,
+    pickupRadiusCm: pickupRadius,
+    competitorRadiusCm: competitorRadius,
+    competitorCount: competitors.length,
+    insidePickupRadius,
+    selfStrictlyCloser: strictlyCloser,
+    approaching: Number.isFinite(distance) && distance > pickupRadius,
+    direction: Number.isFinite(distance) && distance > pickupRadius ? directionTo(self, target) : { dx: 0, dy: 0 },
+    nearestCompetitor,
+    closerCompetitor: fireAllowed ? null : nearestCompetitor,
+    fireAllowed,
+    reason: insidePickupRadius
+      ? 'inside-player-drop-pickup-radius'
+      : (strictlyCloser
+          ? 'self-closer-to-primary-profit-target'
+          : 'active-player-as-close-or-closer-to-primary-profit-target')
   };
 }
 
 module.exports = {
   activeRealtimePlayer,
   distanceBetween,
-  profitKillRacePolicy
+  profitKillRacePolicy,
+  realtimePlayerActivity
 };

@@ -376,19 +376,49 @@ function runStrategyModuleSelfTests() {
 
   const killRaceBlocked = profitKillRacePolicy({
     self: { user_id: 1, x: 0, y: 0 },
-    target: { user_id: 2, x: 200, y: 0, hp: 19 },
+    target: { user_id: 2, x: 200, y: 0, hp: 19, current_join_mode: 'Active' },
     primaryTarget: true,
     realtimeTargets: [{ user_id: 3, x: 150, y: 0, active: true }]
   });
-  const killRaceEqualAllowed = profitKillRacePolicy({
+  const killRaceEqualBlocked = profitKillRacePolicy({
     self: { user_id: 1, x: 0, y: 0 },
-    target: { user_id: 2, x: 200, y: 0, hp: 19 },
+    target: { user_id: 2, x: 200, y: 0, hp: 19, current_join_mode: 'Active' },
     primaryTarget: true,
     realtimeTargets: [{ user_id: 3, x: 400, y: 0, active: true }]
   });
+  const killRaceSelfCloser = profitKillRacePolicy({
+    self: { user_id: 1, x: 0, y: 0 },
+    target: { user_id: 2, x: 200, y: 0, hp: 19, current_join_mode: 'Active' },
+    primaryTarget: true,
+    realtimeTargets: [{ user_id: 3, x: 500, y: 0, active: true }]
+  });
+  const killRacePickupRadiusAllowed = profitKillRacePolicy({
+    self: { user_id: 1, x: 50, y: 0 },
+    target: { user_id: 2, x: 200, y: 0, hp: 19, current_join_mode: 'Active' },
+    primaryTarget: true,
+    realtimeTargets: [{ user_id: 3, x: 190, y: 0, active: true }]
+  });
+  const killRaceFarCompetitorIgnored = profitKillRacePolicy({
+    self: { user_id: 1, x: 0, y: 0 },
+    target: { user_id: 2, x: 200, y: 0, hp: 19, current_join_mode: 'Active' },
+    primaryTarget: true,
+    realtimeTargets: [{ user_id: 3, x: 8201, y: 0, active: true }]
+  });
+  const passiveKillRaceBlocked = profitKillRacePolicy({
+    self: { user_id: 1, x: 0, y: 0 },
+    target: { user_id: 2, x: 200, y: 0, hp: 100, current_join_mode: 'Passive', active: false },
+    primaryTarget: true,
+    realtimeTargets: [{ user_id: 3, x: 150, y: 0, active: true }]
+  });
+  const activeHpBoundaryInactive = profitKillRacePolicy({
+    self: { user_id: 1, x: 0, y: 0 },
+    target: { user_id: 2, x: 200, y: 0, hp: 20, current_join_mode: 'Active' },
+    primaryTarget: true,
+    realtimeTargets: [{ user_id: 3, x: 150, y: 0, active: true }]
+  });
   const killRaceJoinModeActiveBlocked = profitKillRacePolicy({
     self: { user_id: 1, x: 0, y: 0 },
-    target: { user_id: 2, x: 200, y: 0, hp: 19 },
+    target: { user_id: 2, x: 200, y: 0, hp: 19, current_join_mode: 'Active' },
     primaryTarget: true,
     realtimeTargets: [{
       user_id: 3,
@@ -399,12 +429,24 @@ function runStrategyModuleSelfTests() {
     }]
   });
   results.push({
-    name: 'primary-profit-low-hp-kill-race-closes-and-requires-strictly-nearest',
+    name: 'primary-profit-target-competition-is-nearby-bounded-and-pickup-aware',
     passed: killRaceBlocked.active === true
       && killRaceBlocked.approaching === true
       && killRaceBlocked.direction.dx === 1
       && killRaceBlocked.fireAllowed === false
-      && killRaceEqualAllowed.fireAllowed === true
+      && killRaceBlocked.pickupRadiusCm === 150
+      && killRaceBlocked.competitorRadiusCm === 8000
+      && killRaceEqualBlocked.fireAllowed === false
+      && killRaceSelfCloser.fireAllowed === true
+      && killRacePickupRadiusAllowed.fireAllowed === true
+      && killRacePickupRadiusAllowed.insidePickupRadius === true
+      && killRacePickupRadiusAllowed.approaching === false
+      && killRaceFarCompetitorIgnored.active === false
+      && killRaceFarCompetitorIgnored.reason === 'no-nearby-active-competitor'
+      && passiveKillRaceBlocked.active === true
+      && passiveKillRaceBlocked.targetActivity === 'passive'
+      && passiveKillRaceBlocked.fireAllowed === false
+      && activeHpBoundaryInactive.active === false
       && killRaceJoinModeActiveBlocked.fireAllowed === false
   });
 

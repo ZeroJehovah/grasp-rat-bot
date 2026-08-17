@@ -3454,7 +3454,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
           'back-away-mixed',
           'profit-escort'
         ].includes(modifier)),
-        profitKillRace.active ? 'low-hp-profit-kill-race' : 'secondary-main-target'
+        profitKillRace.active ? 'profit-target-competition' : 'secondary-main-target'
       ]))
     };
     effectiveDodge = null;
@@ -3483,8 +3483,8 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     ? (profitEscort?.reason || 'profit-escort-forward')
     : movement.modifiers.includes('secondary-main-target')
     ? 'secondary-follow-primary-target'
-    : movement.modifiers.includes('low-hp-profit-kill-race')
-    ? 'low-hp-profit-kill-race-approach'
+    : movement.modifiers.includes('profit-target-competition')
+    ? 'profit-target-competition-approach'
     : (movement.modifiers.includes('back-away') || movement.modifiers.includes('back-away-mixed')
         ? (closePressureTooClose
             ? 'combat-close-pressure-separate'
@@ -5792,7 +5792,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   if (resolvedWouldShoot && effectiveProfitKillRace.active && !effectiveProfitKillRace.fireAllowed) {
     resolvedWouldShoot = false;
     resolvedFinalFireBlocker = `profit-kill-race:${effectiveProfitKillRace.reason}`;
-    resolvedFireAuthorizationClass = 'profit-kill-race-closer-player-blocked';
+    resolvedFireAuthorizationClass = 'profit-target-competition-position-blocked';
   }
   if (stateful?.combatMetrics) {
     const metrics = stateful.combatMetrics;

@@ -33,7 +33,7 @@ function frame(target, overrides = {}) {
       tick: overrides.tick ?? 1,
       receivedAtMs: overrides.receivedAtMs ?? 1000,
       self,
-      entities: [self, target],
+      entities: [self, target, ...(overrides.entities || [])],
       bullets: overrides.bullets || []
     },
     command: overrides.command || { shooting: { pendingShots: [], expiredShots: [] } }
@@ -115,6 +115,7 @@ function runAfkDynamicFireSelfTest() {
   assert.strictEqual(fired.shoot.skipped, false);
   assert.strictEqual(fired.shoot.firePolicy.authorized, true);
   assert.strictEqual(fired.shoot.firePolicy.remainingHp, 3);
+  assert.strictEqual(fired.movement.reason, 'profit-afk-attack-hold');
   assert.strictEqual(shots.length, 1);
 
   const missing = adapter.applyDecision({
@@ -249,9 +250,94 @@ function runAfkDynamicFireSelfTest() {
   assert.strictEqual(ownDamageObserved.shoot.firePolicy.unexplainedExternalDamageRateHpPerSec, 0);
   assert.strictEqual(ownDamageObserved.shoot.firePolicy.externalDamageRateHpPerSec, 0);
 
+  const competitionShots = [];
+  const competitionVelocities = [];
+  const competitionAdapter = createBrowserlessActionAdapter({
+    userId: 7,
+    commandIntervalMs: 0,
+    shootRepeatEnabled: false,
+    afkAttackDynamicFireEnabled: true,
+    transport: {
+      sendVelocity(dx, dy) {
+        competitionVelocities.push({ dx, dy });
+        return { ok: true };
+      },
+      sendShoot(x, y) {
+        competitionShots.push({ x, y });
+        return { ok: true };
+      }
+    }
+  });
+  const activeCompetitor = {
+    entity_id: 3,
+    user_id: 99,
+    x: 450,
+    y: 0,
+    hp: 100,
+    current_join_mode: 'Active',
+    active: true
+  };
+  const contestedTarget = { ...target, x: 500, hp: 3 };
+  const contested = competitionAdapter.applyDecision(frame(contestedTarget, {
+    entities: [activeCompetitor]
+  }), action({ userId: 41, x: 500, y: 0, hp: 3, invulnerable: false }));
+  assert.strictEqual(contested.shoot.skipped, true);
+  assert.strictEqual(contested.shoot.reason, 'profit-target-competition-position-blocked');
+  assert.strictEqual(contested.movement.reason, 'profit-target-competition-approach');
+  assert.strictEqual(contested.profitKillRace.active, true);
+  assert.strictEqual(competitionVelocities.at(-1).dx, 1);
+  assert.strictEqual(competitionShots.length, 0);
+
+  const pickupRadiusTarget = { ...target, x: 150, hp: 3 };
+  const pickupRadiusAllowed = competitionAdapter.applyDecision(frame(pickupRadiusTarget, {
+    tick: 2,
+    entities: [{ ...activeCompetitor, x: 140 }]
+  }), action({ userId: 41, x: 150, y: 0, hp: 3, invulnerable: false }));
+  assert.strictEqual(pickupRadiusAllowed.shoot.skipped, false);
+  assert.strictEqual(pickupRadiusAllowed.shoot.profitKillRace.insidePickupRadius, true);
+  assert.strictEqual(competitionShots.length, 1);
+
+  let repeatNow = 10000;
+  let timerId = 0;
+  const repeatShots = [];
+  const repeatAdapter = createBrowserlessActionAdapter({
+    userId: 7,
+    now: () => repeatNow,
+    commandIntervalMs: 0,
+    shootRepeatEnabled: true,
+    shootRepeatMs: 450,
+    afkAttackDynamicFireEnabled: true,
+    setTimeout: () => ++timerId,
+    clearTimeout: () => {},
+    transport: {
+      sendVelocity() {
+        return { ok: true };
+      },
+      sendShoot(x, y) {
+        repeatShots.push({ x, y });
+        return { ok: true };
+      }
+    }
+  });
+  const repeatTarget = { ...target, x: 500, hp: 3 };
+  const repeatStarted = repeatAdapter.applyDecision(
+    frame(repeatTarget, { tick: 10, receivedAtMs: repeatNow }),
+    action({ userId: 41, x: 500, y: 0, hp: 3, invulnerable: false })
+  );
+  assert.strictEqual(repeatStarted.shoot.skipped, false);
+  assert.strictEqual(repeatShots.length, 1);
+  repeatNow += 50;
+  repeatAdapter.observeState(frame(repeatTarget, {
+    tick: 11,
+    receivedAtMs: repeatNow,
+    entities: [activeCompetitor]
+  }));
+  assert.strictEqual(repeatShots.length, 1);
+  assert.strictEqual(repeatAdapter.getState().shootRepeatWaitReason, 'profit-target-competition-position-blocked');
+
   return {
     ok: true,
-    cases: 7,
+    cases: 10,
     velocityCount: velocities.length,
     shootCount: shots.length,
     evidenceShootCount: evidenceShots.length,

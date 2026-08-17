@@ -10,6 +10,7 @@ const {
 const { evaluateAfkFirePolicyCore } = require('../../strategy/afk-fire-policy');
 const { isInvulnerableEntity } = require('../../strategy/combat-target-selection');
 const { stamina5sRemaining } = require('../../strategy/combat-fire-discipline');
+const { profitKillRacePolicy } = require('../../strategy/profit-kill-race');
 const { remoteProfitApproachDistanceCm } = require('../../strategy/remote-profit-targets');
 
 const BROWSER_RUNTIME_DEFAULTS = buildRuntimeDefaults({}, false);
@@ -1978,6 +1979,24 @@ function createBrowserlessActionAdapter(options = {}) {
       };
     }
     target = realtimeTarget.target;
+    const profitKillRace = profitKillRacePolicy({
+      self,
+      target,
+      primaryTarget: gateOptions.primaryTarget === true,
+      realtimeTargets: gateOptions.stateSnapshot?.realtime?.entities || []
+    }, options);
+    if (profitKillRace.active && !profitKillRace.fireAllowed) {
+      return {
+        ok: false,
+        reason: 'profit-target-competition-position-blocked',
+        stamina5s: stamina5sRemaining(self),
+        requiredStaminaMs: null,
+        staminaPlan: null,
+        outstanding: null,
+        firePolicy: null,
+        profitKillRace
+      };
+    }
     const stamina5s = stamina5sRemaining(self);
     const staminaPlan = afkShootStaminaPlan(self, target, gateOptions.staminaMode);
     const requiredStaminaMs = staminaPlan.requiredStaminaMs;
@@ -2008,7 +2027,8 @@ function createBrowserlessActionAdapter(options = {}) {
           requiredStaminaMs,
           staminaPlan,
           outstanding: null,
-          firePolicy
+          firePolicy,
+          profitKillRace
         };
       }
     }
@@ -2019,7 +2039,8 @@ function createBrowserlessActionAdapter(options = {}) {
         stamina5s,
         requiredStaminaMs,
         staminaPlan,
-        outstanding: null
+        outstanding: null,
+        profitKillRace
       };
     }
     return {
@@ -2035,6 +2056,7 @@ function createBrowserlessActionAdapter(options = {}) {
         ? null
         : Math.max(0, outstanding.retryAtMs - now()),
       firePolicy,
+      profitKillRace,
       target
     };
   }
@@ -2061,6 +2083,7 @@ function createBrowserlessActionAdapter(options = {}) {
       retryAtMs: gate.retryAtMs ?? null,
       retryInMs: gate.retryInMs ?? null,
       firePolicy: gate.firePolicy || null,
+      profitKillRace: gate.profitKillRace || null,
       execution: recordSkip
         ? skippedShootExecution(gate.reason, target, {}, {
             executionClass: SHOOT_EXECUTION_CLASSES.PROFIT_OPPORTUNITY,
@@ -2077,6 +2100,7 @@ function createBrowserlessActionAdapter(options = {}) {
     const gate = afkShootGate(self, target, stateSnapshot?.command?.shooting || null, {
       staminaMode: sendOptions.staminaMode,
       dynamicFire: sendOptions.dynamicFire,
+      primaryTarget: sendOptions.primaryTarget,
       stateSnapshot
     });
     if (state.shootRepeat) updateShootRepeatGate(gate);
@@ -2127,6 +2151,7 @@ function createBrowserlessActionAdapter(options = {}) {
     sent.requiredStaminaMs = gate.requiredStaminaMs;
     sent.staminaPlan = gate.staminaPlan || null;
     sent.firePolicy = gate.firePolicy || null;
+    sent.profitKillRace = gate.profitKillRace || null;
     if (state.shootRepeat && !sent.skipped && sent.command) {
       state.shootRepeatWaitReason = '';
       state.shootRepeatOutstandingCommandId = sent.command.id ?? null;
@@ -2370,6 +2395,7 @@ function createBrowserlessActionAdapter(options = {}) {
     const gate = afkShootGate(repeat.self, repeat.target, repeat.commandShooting, {
       staminaMode: repeat.staminaMode,
       dynamicFire: repeat.dynamicFire,
+      primaryTarget: repeat.primaryTarget,
       stateSnapshot: repeat.stateSnapshot
     });
     updateShootRepeatGate(gate);
@@ -2378,6 +2404,7 @@ function createBrowserlessActionAdapter(options = {}) {
       if (gate.reason === 'afk-fire-delay-own-kill-before-near'
         || gate.reason === 'afk-fire-delay-external-kill-before-near'
         || gate.reason === 'afk-fire-approach-range'
+        || gate.reason === 'profit-target-competition-position-blocked'
         || gate.reason === 'afk-shoot-stamina-reserve') {
         state.shootRepeatWaitReason = gate.reason;
         armShootRepeatTimer(repeat.cadenceMs);
@@ -2413,7 +2440,8 @@ function createBrowserlessActionAdapter(options = {}) {
     const sent = sendAfkShoot(repeat.stateSnapshot || { command: { shooting: repeat.commandShooting } }, repeat.self, repeat.target, repeat.reason, repeat.cadenceMs, {
       recordSkip: false,
       staminaMode: repeat.staminaMode,
-      dynamicFire: repeat.dynamicFire
+      dynamicFire: repeat.dynamicFire,
+      primaryTarget: repeat.primaryTarget
     });
     if (!sent.ok) {
       cancelShootRepeat(sent.error || sent.reason || 'shoot-repeat-failed', { error: true });
@@ -2454,7 +2482,8 @@ function createBrowserlessActionAdapter(options = {}) {
       commandShooting: stateSnapshot?.command?.shooting || null,
       observedTick: optionalNumber(stateSnapshot?.realtime?.tick),
       dynamicFire: repeatOptions.dynamicFire !== false,
-      stateSnapshot
+      stateSnapshot,
+      primaryTarget: repeatOptions.primaryTarget === true
     };
     const token = state.shootRepeatToken + 1;
     state.shootRepeatToken = token;
@@ -3253,6 +3282,7 @@ function createBrowserlessActionAdapter(options = {}) {
       || shoot.reason === 'afk-fire-delay-own-kill-before-near'
       || shoot.reason === 'afk-fire-delay-external-kill-before-near'
       || shoot.reason === 'afk-fire-approach-range'
+      || shoot.reason === 'profit-target-competition-position-blocked'
     ));
   }
 
@@ -3312,7 +3342,15 @@ function createBrowserlessActionAdapter(options = {}) {
   function applyPostAttackWaitDecision(stateSnapshot, action) {
     const self = stateSnapshot?.realtime?.self || null;
     const target = action.target || null;
-    const vector = movementVectorToTarget(self, target, options);
+    const vector = movementVectorToTarget(self, target, {
+      ...options,
+      targetDeadZoneCm: Math.max(0, Number(
+        options.playerDropPickupRadiusCm
+          ?? options.postAttackDropWaitStopDistance
+          ?? BROWSER_RUNTIME_DEFAULTS.playerDropPickupRadiusCm
+          ?? 150
+      ))
+    });
     if (!vector.ok) {
       const stopped = stop(vector.reason || 'post-attack-drop-wait-stop');
       return {
@@ -3588,10 +3626,22 @@ function createBrowserlessActionAdapter(options = {}) {
       };
     }
 
+    const profitKillRace = profitKillRacePolicy({
+      self,
+      target,
+      primaryTarget: true,
+      realtimeTargets: stateSnapshot?.realtime?.entities || []
+    }, options);
     const fullAttack = Number.isFinite(distance) && distance <= fullAttackRange;
-    const movement = fullAttack
-      ? sendVelocity(0, 0, 'profit-afk-attack-hold', target)
-      : sendVelocity(vector.dx, vector.dy, 'profit-afk-attack-approach', target);
+    const competitionApproach = profitKillRace.active && profitKillRace.approaching;
+    const movementReason = competitionApproach
+      ? 'profit-target-competition-approach'
+      : (fullAttack ? 'profit-afk-attack-hold' : 'profit-afk-attack-approach');
+    const movement = competitionApproach
+      ? sendVelocity(profitKillRace.direction.dx, profitKillRace.direction.dy, movementReason, target)
+      : (fullAttack
+          ? sendVelocity(0, 0, movementReason, target)
+          : sendVelocity(vector.dx, vector.dy, movementReason, target));
     const staminaMode = 'afk-attack';
     const shoot = sendAfkShoot(
       stateSnapshot,
@@ -3599,7 +3649,7 @@ function createBrowserlessActionAdapter(options = {}) {
       target,
       decision?.action?.reason || decision?.reason || 'profit-afk-attack',
       combatShootMinIntervalMs,
-      { staminaMode, dynamicFire: options.afkAttackDynamicFireEnabled !== false }
+      { staminaMode, dynamicFire: options.afkAttackDynamicFireEnabled !== false, primaryTarget: true }
     );
     const repeat = canScheduleShootRepeat(shoot)
       ? scheduleShootRepeat(
@@ -3608,7 +3658,7 @@ function createBrowserlessActionAdapter(options = {}) {
           target,
           decision?.action?.reason || decision?.reason || 'profit-afk-attack',
           shoot.cadenceMs,
-          { staminaMode, dynamicFire: options.afkAttackDynamicFireEnabled !== false }
+          { staminaMode, dynamicFire: options.afkAttackDynamicFireEnabled !== false, primaryTarget: true }
         )
       : null;
     return {
@@ -3618,10 +3668,11 @@ function createBrowserlessActionAdapter(options = {}) {
       movement: {
         ok: movement.ok,
         skipped: Boolean(movement.skipped),
-        reason: fullAttack ? 'profit-afk-attack-hold' : 'profit-afk-attack-approach',
+        reason: movementReason,
         command: movement.command || null,
         fullAttack,
         fullAttackRangeCm: Math.round(fullAttackRange),
+        profitKillRace,
         ...transportFailure(movement)
       },
       shoot: {
@@ -3637,10 +3688,12 @@ function createBrowserlessActionAdapter(options = {}) {
         retryAtMs: shoot.retryAtMs ?? null,
         retryInMs: shoot.retryInMs ?? null,
         firePolicy: shoot.firePolicy || null,
+        profitKillRace: shoot.profitKillRace || null,
         aimCorrelation: shoot.aimCorrelation || null,
         repeat,
         ...transportFailure(shoot)
       },
+      profitKillRace,
       target,
       ...transportFailure(movement, shoot)
     };
