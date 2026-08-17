@@ -46,6 +46,9 @@ function runCombatTargetFrameGapSelfTest() {
     distance: 3898,
     intent: 'profit',
     originIntent: 'defensive',
+    combatRole: 'secondary',
+    secondaryTarget: true,
+    whitelisted: true,
     reason: 'combat-live-realtime',
     lastInRangeAt: nowMs,
     self: { ...self }
@@ -233,9 +236,9 @@ function runCombatTargetFrameGapSelfTest() {
     pressureState(50),
     pressureOptions
   );
-  assert('retained secondary close timeout remains active at hp fifty',
+  assert('retained secondary exits unconditionally at hp fifty',
     lowHpSecondaryPressure.combat?.combatPhase?.exitRequired === true
-      && lowHpSecondaryPressure.combat?.exit?.reason === 'combat-miss-close-timeout-leave'
+      && lowHpSecondaryPressure.combat?.exit?.reason === 'combat-low-hp-secondary-leave'
       && lowHpSecondaryPressure.action?.shouldLeave === true);
 
   let velocitySends = 0;
@@ -264,13 +267,10 @@ function runCombatTargetFrameGapSelfTest() {
     decisionState,
     { ...options, nowMs: nowMs + 100 }
   );
-  assert('same defensive target resumes as secondary on the next visible frame',
-    restoredDecision.action?.kind === 'combat-live'
-      && restoredDecision.action?.reason === 'combat-live-realtime'
-      && restoredDecision.combat?.target?.userId === targetId
-      && restoredDecision.combat?.target?.combatIntent === 'secondary'
-      && restoredDecision.combat?.target?.combatRole === 'secondary'
-      && decisionState.combatTarget?.originIntent === 'defensive');
+  assert('visible high-hp target without bounded attack evidence releases the secondary',
+    restoredDecision.combat?.target === null
+      && restoredDecision.combat?.secondaryTargetRelease?.reason === 'secondary-defensive-evidence-cleared'
+      && decisionState.combatTarget === null);
 
   const sparseMetadataState = {};
   const metadataOptions = {
@@ -301,23 +301,35 @@ function runCombatTargetFrameGapSelfTest() {
       && sparseMetadataState.combatTarget?.dropKnown === true
       && sparseMetadataState.combatTarget?.name === 'metadata-target');
 
+  const absenceDecisionState = {
+    combatTarget: { ...rememberedTarget },
+    combatEngagements: { [String(targetId)]: { ...rememberedTarget } },
+    combatMetrics: {
+      targetId: String(targetId),
+      targetName: target.name,
+      startedAt: rememberedTarget.firstSeenAt,
+      acceptedShots: 0,
+      targetDamage: 0,
+      totalStaminaSpent: 0
+    }
+  };
   buildBrowserlessRealtimeControlDecision(
     frame(685282, nowMs + 149, []),
-    decisionState,
+    absenceDecisionState,
     { ...options, nowMs: nowMs + 149 }
   );
   const expiredDecision = buildBrowserlessRealtimeControlDecision(
     frame(685283, nowMs + 451, []),
-    decisionState,
+    absenceDecisionState,
     { ...options, nowMs: nowMs + 451 }
   );
   assert('sustained target absence releases after the bounded hold',
     expiredDecision.action === null
       && expiredDecision.combat?.targetFrameGapHold === null
       && expiredDecision.combat?.targetFrameGapReset?.reason === 'combat-target-frame-gap-reset'
-      && decisionState.combatTarget === null
-      && decisionState.combatMetrics === null
-      && !decisionState.combatEngagements[String(targetId)]);
+      && absenceDecisionState.combatTarget === null
+      && absenceDecisionState.combatMetrics === null
+      && !absenceDecisionState.combatEngagements[String(targetId)]);
 
   const reappearingState = {
     combatTarget: {

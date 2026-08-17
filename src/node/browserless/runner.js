@@ -1631,6 +1631,7 @@ function browserlessLoopPlan(result, config = {}) {
     'combat-critical-hp-leave',
     'combat-hp-disadvantage-leave',
     'combat-low-hp-disadvantage-leave',
+    'combat-low-hp-secondary-leave',
     'combat-miss-close-timeout-leave',
     'combat-no-damage-generation-limit-leave',
     'recovery-low-hp-active-threat-leave',
@@ -7536,9 +7537,9 @@ async function runBrowserlessRunnerSelfTest() {
     const realtimeLootSafetyArbitrationTest = {
       ok: healthyLootRealtimeDecision.kind === 'coin'
         && healthyLootRealtimeDecision.action?.target?.id === 5422
-        && lowHpLootRealtimeDecision.kind === 'flee'
-        && lowHpLootRealtimeDecision.reason === 'avoid-invulnerable-target'
-        && safeIncomingLootRealtimeDecision.kind === 'patrol'
+        && lowHpLootRealtimeDecision.kind === 'safety-exit'
+        && lowHpLootRealtimeDecision.reason === 'combat-low-hp-secondary-leave'
+        && safeIncomingLootRealtimeDecision.kind === 'combat-live'
         && safeIncomingLootRealtimeDecision.reason === 'post-kill-loot-safe-dodge'
         && safeIncomingLootRealtimeDecision.input?.loot?.mode === 'safe-dodge-toward-coin'
         && Number(safeIncomingLootRealtimeDecision.action?.dy || 0) > 0

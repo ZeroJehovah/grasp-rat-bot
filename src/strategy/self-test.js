@@ -226,6 +226,7 @@ const {
 const {
   combatEdgePressureDecisionCore,
   combatEscapeDecisionCore,
+  combatTargetAdmissionCore,
   checkProactiveActiveCombatGates,
   incomingBulletHasCollisionRiskCore,
   incomingBulletRequiresTargetSwitchCore,
@@ -297,6 +298,11 @@ function runStrategyModuleSelfTests() {
   const primaryRole = classifyCombatTargetRole({ user_id: 7 }, { targetId: 7 });
   const secondaryRole = classifyCombatTargetRole({ user_id: 8 }, { targetId: 7 });
   const whitelistRole = classifyCombatTargetRole({ user_id: 7, profitProtected: true }, { targetId: 7 });
+  const defensiveWithoutMissionRole = classifyCombatTargetRole({ user_id: 8 }, null);
+  const implicitProfitPrimaryRole = classifyCombatTargetRole({
+    user_id: 8,
+    profitPrimaryTarget: true
+  }, null);
   results.push({
     name: 'dual-target-role-primary-secondary-and-whitelist-boundaries',
     passed: primaryRole.role === 'primary'
@@ -305,6 +311,9 @@ function runStrategyModuleSelfTests() {
       && secondaryRole.primaryTargetId === '7'
       && whitelistRole.role === 'secondary'
       && whitelistRole.whitelisted === true
+      && defensiveWithoutMissionRole.role === 'secondary'
+      && implicitProfitPrimaryRole.role === 'primary'
+      && implicitProfitPrimaryRole.implicitProfitPrimary === true
   });
 
   const secondarySamples = [
@@ -425,13 +434,90 @@ function runStrategyModuleSelfTests() {
       && healthySecondaryExitPolicy.suppressMissCloseTimeout === true
       && healthySecondaryExitPolicy.suppressExchangeStopLoss === true
       && lowHpSecondaryExitPolicy.preserveLowHpExits === true
+      && lowHpSecondaryExitPolicy.lowHpUnconditionalExit === true
       && lowHpSecondaryExitPolicy.suppressClearHpGap === false
       && retainedSecondaryExitPolicy.targetSource === 'retained-phase-match'
       && retainedSecondaryExitPolicy.suppressMissCloseTimeout === true
       && mismatchedRetainedSecondaryExitPolicy.targetSource === 'none'
       && mismatchedRetainedSecondaryExitPolicy.suppressMissCloseTimeout === false
       && lowHpRetainedSecondaryExitPolicy.preserveLowHpExits === true
+      && lowHpRetainedSecondaryExitPolicy.lowHpUnconditionalExit === true
       && lowHpRetainedSecondaryExitPolicy.suppressMissCloseTimeout === false
+  });
+
+  const secondaryAdmissionTargetBase = {
+    alive: true,
+    authority: 'realtime',
+    user_id: 8,
+    hp: 100,
+    distance: 14500,
+    active: false,
+    current_join_mode: 'Passive',
+    firing: false,
+    drop: 0
+  };
+  const highHpNonPrimaryAdmission = combatTargetAdmissionCore({
+    ...secondaryAdmissionTargetBase,
+    active: true,
+    current_join_mode: 'Active',
+    drop: 90
+  }, {
+    selfHp: 100,
+    profitMissionTargetId: '42',
+    combatAttackRange: 14500,
+    selfStamina5s: 10000,
+    proactiveActiveCombatMinimumStamina5s: 5600,
+    opportunityStaminaBudget: 200000
+  });
+  const proactivePrimaryAdmission = combatTargetAdmissionCore({
+    ...secondaryAdmissionTargetBase,
+    active: true,
+    current_join_mode: 'Active',
+    drop: 90
+  }, {
+    selfHp: 100,
+    selectedProfitCombatTargetId: '8',
+    profitSelectionKnown: true,
+    combatAttackRange: 14500,
+    selfStamina5s: 10000,
+    proactiveActiveCombatMinimumStamina5s: 5600,
+    opportunityStaminaBudget: 200000
+  });
+  const mediumInsideAdmission = combatTargetAdmissionCore(secondaryAdmissionTargetBase, {
+    selfHp: 70,
+    profitMissionTargetId: '42',
+    combatAttackRange: 14500,
+    selfStamina5s: 1,
+    proactiveActiveCombatMinimumStamina5s: 5600,
+    opportunityStaminaBudget: 1
+  });
+  const mediumOutsideAdmission = combatTargetAdmissionCore({
+    ...secondaryAdmissionTargetBase,
+    distance: 14501
+  }, {
+    selfHp: 70,
+    profitMissionTargetId: '42',
+    combatAttackRange: 14500
+  });
+  const lowHpSecondaryAdmission = combatTargetAdmissionCore(secondaryAdmissionTargetBase, {
+    selfHp: 50,
+    profitMissionTargetId: '42',
+    combatAttackRange: 14500
+  });
+  results.push({
+    name: 'combat-admission-separates-selected-profit-primary-from-hp-segmented-secondary',
+    passed: highHpNonPrimaryAdmission.eligible === false
+      && highHpNonPrimaryAdmission.profitEligible === false
+      && proactivePrimaryAdmission.eligible === true
+      && proactivePrimaryAdmission.profitEligible === true
+      && proactivePrimaryAdmission.secondaryEligible === false
+      && mediumInsideAdmission.eligible === true
+      && mediumInsideAdmission.secondaryEligible === true
+      && mediumInsideAdmission.proximityEvidence === true
+      && mediumInsideAdmission.attackEvidence === false
+      && mediumOutsideAdmission.eligible === false
+      && lowHpSecondaryAdmission.lowHpSecondaryExit === true
+      && lowHpSecondaryAdmission.secondaryEligible === true
   });
 
   const playerProfitScoreBoundaries = [

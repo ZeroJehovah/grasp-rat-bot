@@ -770,6 +770,298 @@ function assertDualTargetRuntimeRules() {
   assert.strictEqual(raceSecond.combat?.shooting?.profitKillRace?.closerCompetitor?.id, '9');
 }
 
+function assertHpSegmentedSecondaryEngagementRules() {
+  const common = {
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    dynamicProfitThresholdEnabled: false,
+    singleCoinBaitEnabled: false,
+    finalActionArbitrationHoldMs: 0,
+    opportunitySwitchConfirmFrames: 1,
+    opportunitySwitchMargin: 0,
+    opportunitySwitchRelativeMargin: 0,
+    combatShootNoPressureDodgeReserveMs: 0,
+    combatShootDodgeReserveMs: 0
+  };
+  const player = (overrides = {}) => ({
+    entity_id: 2008,
+    user_id: 8,
+    name: 'ordinary-player',
+    x: 5000,
+    y: 0,
+    vx: 0,
+    vy: 0,
+    hp: 100,
+    max_hp: 100,
+    current_join_mode: 'Active',
+    active: true,
+    firing: false,
+    stamina_5s_remaining_milli: 10000,
+    stamina_5s_limit_milli: 10000,
+    drop: 10,
+    ...overrides
+  });
+  const primary = player({
+    entity_id: 2042,
+    user_id: 42,
+    name: 'selected-primary',
+    x: 6000,
+    vx: 10,
+    stamina_5s_remaining_milli: 5000,
+    drop: 100
+  });
+  const installMission = (adapter, missionTarget) => adapter.patchState({
+    profitMission: {
+      active: true,
+      key: `enemy:${missionTarget.user_id}`,
+      missionKey: `enemy:${missionTarget.user_id}`,
+      type: 'enemy',
+      subjectId: String(missionTarget.user_id),
+      targetId: String(missionTarget.user_id),
+      navigationTarget: { ...missionTarget },
+      choice: { type: 'enemy', id: missionTarget.user_id, sourceTarget: { ...missionTarget } },
+      highValue: true,
+      selectedAt: 500,
+      expiresAt: 200000
+    }
+  });
+  const installPrimaryMission = adapter => installMission(adapter, primary);
+
+  const profitable = decide(
+    createBrowserlessDecisionAdapter(common),
+    state(fullStaminaSelf({ hp: 100 }), [player({ vx: 10, stamina_5s_remaining_milli: 5000 })]),
+    1000,
+    null,
+    common
+  );
+  assert.strictEqual(profitable.combat?.target?.userId, 8);
+  assert.strictEqual(profitable.combat?.target?.combatRole, 'primary');
+  assert.strictEqual(profitable.combat?.target?.secondaryTarget, false);
+
+  const highHpNonPrimaryAdapter = createBrowserlessDecisionAdapter(common);
+  installPrimaryMission(highHpNonPrimaryAdapter);
+  const highHpNonPrimary = decide(
+    highHpNonPrimaryAdapter,
+    state(fullStaminaSelf({ hp: 100 }), [primary, player({
+      vx: 10,
+      stamina_5s_remaining_milli: 5000,
+      drop: 90
+    })]),
+    1100,
+    null,
+    common
+  );
+  assert.notStrictEqual(highHpNonPrimary.combat?.target?.userId, 8);
+  assert.strictEqual(highHpNonPrimary.stateful?.profitMission?.targetId, '42');
+
+  const lowDropAttacker = decide(
+    createBrowserlessDecisionAdapter(common),
+    state(fullStaminaSelf({ hp: 100 }), [player({ drop: 1, firing: true })]),
+    1200,
+    null,
+    common
+  );
+  assert.strictEqual(lowDropAttacker.combat?.target?.combatRole, 'secondary');
+  assert.strictEqual(lowDropAttacker.combat?.target?.primaryTargetId, '');
+  assert.strictEqual(lowDropAttacker.combat?.shooting?.wouldShoot, false);
+  assert.strictEqual(lowDropAttacker.combat?.shooting?.secondaryPolicy?.opponentShots, 0);
+  assert.strictEqual(lowDropAttacker.combat?.movement?.modifiers?.includes('close-in'), false);
+
+  const mediumContact = decide(
+    createBrowserlessDecisionAdapter(common),
+    state(fullStaminaSelf({ hp: 70, stamina_5s_remaining_milli: 10 }), [player({
+      x: 14500,
+      drop: 0,
+      active: false,
+      current_join_mode: 'Passive'
+    })]),
+    1300,
+    null,
+    common
+  );
+  assert.strictEqual(mediumContact.combat?.target?.combatRole, 'secondary');
+  assert.strictEqual(mediumContact.combat?.target?.combatIntent, 'secondary-proximity');
+  assert.strictEqual(mediumContact.combat?.shooting?.wouldShoot, false);
+  assert.strictEqual(mediumContact.combat?.shooting?.secondaryPolicy?.opponentShots, 0);
+  assert.strictEqual(mediumContact.combat?.movement?.dx, 0);
+  assert.strictEqual(mediumContact.combat?.movement?.dy, 0);
+
+  const outsideMedium = decide(
+    createBrowserlessDecisionAdapter(common),
+    state(fullStaminaSelf({ hp: 70 }), [player({
+      x: 14501,
+      drop: 0,
+      active: false,
+      current_join_mode: 'Passive'
+    })]),
+    1400,
+    null,
+    common
+  );
+  assert.strictEqual(outsideMedium.combat?.target, null);
+
+  for (const selfHp of [49, 50]) {
+    for (const targetHp of [40, 60]) {
+      const lowHpSecondary = decide(
+        createBrowserlessDecisionAdapter(common),
+        state(fullStaminaSelf({ hp: selfHp }), [player({
+          hp: targetHp,
+          drop: 0,
+          active: false,
+          current_join_mode: 'Passive'
+        })]),
+        1500 + selfHp + targetHp,
+        null,
+        common
+      );
+      assert.strictEqual(lowHpSecondary.combat?.target?.combatRole, 'secondary');
+      assert.strictEqual(lowHpSecondary.combat?.exit?.reason, 'combat-low-hp-secondary-leave');
+      assert.strictEqual(lowHpSecondary.action?.reason, 'combat-low-hp-secondary-leave');
+    }
+  }
+
+  const lowHpPrimaryAheadTarget = player({
+      hp: 40,
+      drop: 100,
+      vx: 10,
+      stamina_5s_remaining_milli: 5000
+  });
+  const lowHpPrimaryAheadAdapter = createBrowserlessDecisionAdapter(common);
+  installMission(lowHpPrimaryAheadAdapter, lowHpPrimaryAheadTarget);
+  const lowHpPrimaryAhead = decide(
+    lowHpPrimaryAheadAdapter,
+    state(fullStaminaSelf({ hp: 49 }), [lowHpPrimaryAheadTarget]),
+    1600,
+    null,
+    common
+  );
+  assert.strictEqual(lowHpPrimaryAhead.combat?.target?.combatRole, 'primary');
+  assert.notStrictEqual(lowHpPrimaryAhead.combat?.exit?.reason, 'combat-low-hp-secondary-leave');
+  assert.notStrictEqual(lowHpPrimaryAhead.action?.reason, 'combat-low-hp-secondary-leave');
+
+  const lowHpPrimaryBehindTarget = player({
+      hp: 60,
+      drop: 100,
+      vx: 10,
+      stamina_5s_remaining_milli: 5000
+  });
+  const lowHpPrimaryBehindAdapter = createBrowserlessDecisionAdapter(common);
+  installMission(lowHpPrimaryBehindAdapter, lowHpPrimaryBehindTarget);
+  const lowHpPrimaryBehind = decide(
+    lowHpPrimaryBehindAdapter,
+    state(fullStaminaSelf({ hp: 49 }), [lowHpPrimaryBehindTarget]),
+    1700,
+    null,
+    common
+  );
+  assert.strictEqual(lowHpPrimaryBehind.combat?.target?.combatRole, 'primary');
+  assert.strictEqual(lowHpPrimaryBehind.combat?.exit?.reason, 'combat-low-hp-disadvantage-leave');
+
+  const lowHpCrossfireAdapter = createBrowserlessDecisionAdapter(common);
+  installPrimaryMission(lowHpCrossfireAdapter);
+  const lowHpCrossfire = decide(
+    lowHpCrossfireAdapter,
+    state(fullStaminaSelf({ hp: 49 }), [primary, player({
+      drop: 0,
+      active: false,
+      current_join_mode: 'Passive'
+    })]),
+    1800,
+    null,
+    common
+  );
+  assert.strictEqual(lowHpCrossfire.combat?.target?.userId, 8);
+  assert.strictEqual(lowHpCrossfire.combat?.target?.combatRole, 'secondary');
+  assert.strictEqual(lowHpCrossfire.action?.reason, 'combat-low-hp-secondary-leave');
+  assert.strictEqual(lowHpCrossfire.stateful?.profitMission?.targetId, '42');
+
+  const retentionAdapter = createBrowserlessDecisionAdapter(common);
+  installPrimaryMission(retentionAdapter);
+  const entered = decide(
+    retentionAdapter,
+    state(fullStaminaSelf({ hp: 100 }), [primary, player({ drop: 1, firing: true })]),
+    2000,
+    null,
+    common
+  );
+  const retainedAtBoundary = decide(
+    retentionAdapter,
+    state(fullStaminaSelf({ hp: 100 }), [primary, player({ drop: 1, firing: false })]),
+    7000,
+    null,
+    common
+  );
+  const releasedAfterBoundary = decide(
+    retentionAdapter,
+    state(fullStaminaSelf({ hp: 100 }), [primary, player({ drop: 1, firing: false })]),
+    7001,
+    null,
+    common
+  );
+  assert.strictEqual(entered.combat?.target?.combatRole, 'secondary');
+  assert.strictEqual(retainedAtBoundary.combat?.target?.combatRole, 'secondary');
+  assert.strictEqual(retainedAtBoundary.combat?.secondaryRetention?.ageMs, 5000);
+  assert.strictEqual(releasedAfterBoundary.combat?.target?.userId, 42);
+  assert.strictEqual(releasedAfterBoundary.combat?.secondaryTargetRelease?.reason, 'secondary-defensive-evidence-cleared');
+  assert.strictEqual(releasedAfterBoundary.stateful?.profitMission?.targetId, '42');
+  assert.strictEqual(releasedAfterBoundary.stateful?.combatEngagements?.['8'], undefined);
+  assert.strictEqual(releasedAfterBoundary.stateful?.combatMetricsByTarget?.['8'], undefined);
+  assert.notStrictEqual(String(releasedAfterBoundary.stateful?.combatTarget?.id || ''), '8');
+  assert.notStrictEqual(String(releasedAfterBoundary.stateful?.combatAim?.targetId || ''), '8');
+  assert.strictEqual(releasedAfterBoundary.stateful?.combatHpObservationTargetId === '8', false);
+  assert.ok(releasedAfterBoundary.stateful?.combatTargetSwitchGate == null);
+  assert.ok(releasedAfterBoundary.stateful?.combatTargetSwitchHistory == null);
+  assert.strictEqual(releasedAfterBoundary.stateful?.profitEscortContinuity, null);
+  assert.strictEqual(
+    releasedAfterBoundary.stateful?.profitEscortContinuityLastRelease?.releaseReason,
+    'secondary-defensive-evidence-cleared'
+  );
+
+  const mediumReleaseAdapter = createBrowserlessDecisionAdapter(common);
+  const mediumEntered = decide(
+    mediumReleaseAdapter,
+    state(fullStaminaSelf({ hp: 70 }), [player({
+      drop: 0,
+      active: false,
+      current_join_mode: 'Passive',
+      firing: true
+    })]),
+    3000,
+    null,
+    common
+  );
+  const mediumOutsideAtBoundary = decide(
+    mediumReleaseAdapter,
+    state(fullStaminaSelf({ hp: 70 }), [player({
+      x: 14501,
+      drop: 0,
+      active: false,
+      current_join_mode: 'Passive',
+      firing: false
+    })]),
+    8000,
+    null,
+    common
+  );
+  const mediumReleased = decide(
+    mediumReleaseAdapter,
+    state(fullStaminaSelf({ hp: 70 }), [player({
+      x: 14501,
+      drop: 0,
+      active: false,
+      current_join_mode: 'Passive',
+      firing: false
+    })]),
+    8001,
+    null,
+    common
+  );
+  assert.strictEqual(mediumEntered.combat?.target?.combatRole, 'secondary');
+  assert.strictEqual(mediumOutsideAtBoundary.combat?.target?.combatRole, 'secondary');
+  assert.strictEqual(mediumReleased.combat?.target, null);
+}
+
 function escortCombatTarget(overrides = {}) {
   return {
     entity_id: 1008,
@@ -1817,6 +2109,7 @@ function runRemoteProfitDecisionSelfTest() {
   assertRemoteMissionDoesNotOverrideRealtimeProfit();
   assertProfitMissionContinuityRegressions();
   assertDualTargetRuntimeRules();
+  assertHpSegmentedSecondaryEngagementRules();
 
   const ordinaryAdapter = createBrowserlessDecisionAdapter({
     userId: 7,
@@ -2089,7 +2382,7 @@ function runRemoteProfitDecisionSelfTest() {
   assert.strictEqual(lowDropDecision.profit?.postKillCoinSuppression?.removedCount, 1);
   assert.strictEqual(lowDropDecision.stateful.profitMission?.targetId, '99');
 
-  return { ok: true, cases: 76 };
+  return { ok: true, cases: 77 };
 }
 
 if (require.main === module) {

@@ -4,7 +4,8 @@ const { performance } = require('perf_hooks');
 const { attackWorthTakingCore } = require('../../strategy/attack-worth');
 const {
   incomingBulletHasCollisionRiskCore,
-  isInvulnerableEntity
+  isInvulnerableEntity,
+  proactiveActiveProfitEligible
 } = require('../../strategy/combat-target-selection');
 const {
   canonicalInvulnerabilityMsFrom,
@@ -137,6 +138,7 @@ const {
   evaluateDynamicWhitelistContactCore
 } = require('../../strategy/dynamic-whitelist-safety');
 const {
+  previousActionWasRecoveryCore,
   updateRecoveryContactGuardCore
 } = require('../../strategy/recovery-contact-guard');
 const {
@@ -210,6 +212,7 @@ const DANGEROUS_COMBAT_EXIT_REASONS = new Set([
   'combat-critical-hp-leave',
   'combat-hp-disadvantage-leave',
   'combat-low-hp-disadvantage-leave',
+  'combat-low-hp-secondary-leave',
   'combat-predicted-leave-hp',
   'combat-miss-close-timeout-leave',
   'combat-no-damage-generation-limit-leave',
@@ -4315,10 +4318,17 @@ function pickHighValueVisibleCoin(input, combatDecision, options = {}) {
   const snapshotProfitSource = input.profitCoinSource === 'snapshot-fallback'
     || input.profitCoinSource === 'snapshot-player-drop';
   const snapshotCandidates = !realtimeCandidates.length && snapshotProfitSource
-    ? (input.profitCoins || []).filter(coin => coin.snapshotOnly)
+    ? Array.from(new Map([
+        ...(input.profitCoins || []).filter(coin => coin.snapshotOnly),
+        ...(input.selfKilledPlayerDropCoins || [])
+      ].map(coin => [coinDecisionKey(coin), coin])).values())
     : [];
   const usingSnapshotFallback = !realtimeCandidates.length && snapshotCandidates.length > 0;
-  if (usingSnapshotFallback && (combatDecision?.target || combatDecision?.dryRun?.target)) return null;
+  const combatTarget = combatDecision?.target || combatDecision?.dryRun?.target || null;
+  const secondaryCombatTarget = Boolean(
+    combatTarget?.combatRole === 'secondary' || combatTarget?.secondaryTarget === true
+  );
+  if (usingSnapshotFallback && combatTarget && !secondaryCombatTarget) return null;
   const candidates = realtimeCandidates.length ? realtimeCandidates : snapshotCandidates;
   if (!candidates.length) return null;
   const minAmount = highValueCoinPriorityAmount(options);
@@ -7300,8 +7310,32 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     .filter(target => !targetDangerousCooldownRecord(stateful, target, input.nowMs))
     .filter(target => !easyKillTargetSuppressed(stateful, target, input.nowMs))
     .filter(target => targetSafeFromOpportunityThreats(target, opportunityThreats, options));
+  const activeProfitRange = Math.max(0, Number(
+    options.combatAttackRange
+      ?? options.attackRange
+      ?? DEFAULT_ATTACK_RANGE
+  ));
+  const ordinaryActiveProfitTargets = (input.visibleTargets || [])
+    .filter(target => target?.authority === 'realtime')
+    // Profit admission requires the realtime protocol's Active mode. The
+    // broader `active` flag also covers movement and firing for safety logic;
+    // those signals alone must never create a profit mission.
+    .filter(target => target.joinModeActive === true && target.alive !== false)
+    .filter(target => !target.invulnerable)
+    .filter(target => !isWhitelistedTargetForOptions(target, options))
+    .filter(target => Number.isFinite(Number(target.distance)) && Number(target.distance) <= activeProfitRange)
+    .filter(target => !targetDangerousCooldownRecord(stateful, target, input.nowMs))
+    .filter(target => proactiveActiveProfitEligible(target, {
+      ...options,
+      selfStamina5s: input.self?.stamina5s
+        ?? input.self?.stamina_5s_remaining_milli
+        ?? input.self?.stamina5sRemainingMilli,
+      proactiveActiveCombatMinimumStamina5s: options.combatProactiveActiveMinStamina5s
+        ?? options.combatOpponentProbeReserveMs
+        ?? 5600
+    }));
   const enemyOpportunityTargets = Array.from(new Map(
-    [...afkOpportunityTargets, ...easyKillOpportunityTargets]
+    [...afkOpportunityTargets, ...easyKillOpportunityTargets, ...ordinaryActiveProfitTargets]
       .map(target => [String(target.user_id ?? target.userId ?? target.entity_id ?? target.entityId ?? ''), target])
       .filter(([id]) => id)
   ).values());
@@ -9674,7 +9708,8 @@ function attachIncomingCoverToLeaveDecision(action, assessment) {
 function dynamicWhitelistContactSupersedesLowHpExit(contactAction, exitAction) {
   return Boolean(
     contactAction?.shouldLeave
-      && exitAction?.reason === 'combat-low-hp-disadvantage-leave'
+      && ['combat-low-hp-disadvantage-leave', 'combat-low-hp-secondary-leave']
+        .includes(String(exitAction?.reason || ''))
   );
 }
 
@@ -10397,13 +10432,37 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
   const previousCombatTarget = stateful.combatTarget || null;
   const hadEasyKillPreferredTargetId = Object.prototype.hasOwnProperty.call(options, 'easyKillPreferredTargetId');
   const previousEasyKillPreferredTargetId = options.easyKillPreferredTargetId;
+  const hadSelectedProfitCombatTargetId = Object.prototype.hasOwnProperty.call(options, 'selectedProfitCombatTargetId');
+  const previousSelectedProfitCombatTargetId = options.selectedProfitCombatTargetId;
+  const hadProfitSelectionKnown = Object.prototype.hasOwnProperty.call(options, 'profitSelectionKnown');
+  const previousProfitSelectionKnown = options.profitSelectionKnown;
+  const hadRecoveryOwnsCurrentOpportunity = Object.prototype.hasOwnProperty.call(options, 'recoveryOwnsCurrentOpportunity');
+  const previousRecoveryOwnsCurrentOpportunity = options.recoveryOwnsCurrentOpportunity;
+  const plannerOpportunity = stateful.opportunityChoice || stateful.currentOpportunity || null;
+  const plannerRecoveryOwnsCurrentOpportunity = Boolean(
+    stateful.recoveryOwnsCurrentOpportunity?.active === true
+      || (plannerOpportunity && previousActionWasRecoveryCore(stateful.lastDecisionAction))
+  );
+  const plannerProfitCombatTargetId = !plannerRecoveryOwnsCurrentOpportunity
+    && String(plannerOpportunity?.type || '') === 'enemy'
+    ? opportunityChoiceTargetId(plannerOpportunity)
+    : '';
   options.easyKillPreferredTargetId = easyKillPreferredTargetIdFromOpportunity(null, stateful);
+  options.selectedProfitCombatTargetId = plannerProfitCombatTargetId;
+  options.profitSelectionKnown = Boolean(plannerOpportunity);
+  options.recoveryOwnsCurrentOpportunity = plannerRecoveryOwnsCurrentOpportunity;
   let combat;
   try {
     combat = buildCombatDecision(input, stateful, options);
   } finally {
     if (hadEasyKillPreferredTargetId) options.easyKillPreferredTargetId = previousEasyKillPreferredTargetId;
     else delete options.easyKillPreferredTargetId;
+    if (hadSelectedProfitCombatTargetId) options.selectedProfitCombatTargetId = previousSelectedProfitCombatTargetId;
+    else delete options.selectedProfitCombatTargetId;
+    if (hadProfitSelectionKnown) options.profitSelectionKnown = previousProfitSelectionKnown;
+    else delete options.profitSelectionKnown;
+    if (hadRecoveryOwnsCurrentOpportunity) options.recoveryOwnsCurrentOpportunity = previousRecoveryOwnsCurrentOpportunity;
+    else delete options.recoveryOwnsCurrentOpportunity;
   }
   let realtimeMarginalRoiStopLoss = null;
   let nonThreatEconomicStopLoss = evaluateNonThreatCombatEconomicStopLoss(
@@ -11015,6 +11074,8 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}, in
       kind: 'combat-live',
       band: 'combat',
       reason: 'post-kill-loot-safe-dodge',
+      dx: Number(safeDirection.dx || 0),
+      dy: Number(safeDirection.dy || 0),
       target: combat.target,
       lootTarget: summarizeCoin(coin),
       realtimeLootPriority: true,
@@ -12399,19 +12460,41 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const realtimeStale = Number.isFinite(frameAge) && frameAge > staleSelfExitMs;
   const profitThresholdContext = buildProfitThresholdContext(input, options);
   const profitSelectionInput = buildProfitSelectionInput(input, profitThresholdContext, options, stateful);
+  const retainedProfitMissionTargetId = profitMissionTargetId(stateful.profitMission);
   const opportunity = buildOpportunityDecision(input, stateful, {
     ...options,
     profitThresholdContext,
     includeAfkProfitTargets: nonCombatProfit ? false : options.includeAfkProfitTargets
   });
   const easyKillPreferredTargetId = easyKillPreferredTargetIdFromOpportunity(opportunity, stateful);
+  const recoveryWouldWinCurrentOpportunity = Boolean(
+    isRecoveringSelf(input.self)
+      && recoveryPriorityDecision(input.self, opportunity, { kind: 'recover' }, options).recoveryWins
+      && opportunity.choice?.sourceTarget?.easyKillProfitTarget !== true
+  );
+  const recoveryOwnsCurrentOpportunity = Boolean(
+    recoveryWouldWinCurrentOpportunity
+      && !(retainedProfitMissionTargetId
+        && opportunity.choice
+        && String(retainedProfitMissionTargetId) === String(opportunityChoiceTargetId(opportunity.choice)))
+  );
+  const selectedProfitCombatTargetId = !recoveryOwnsCurrentOpportunity
+    && String(opportunity.choice?.type || '') === 'enemy'
+    ? opportunityChoiceTargetId(opportunity.choice)
+    : '';
   const previousCombatTarget = cloneJson(stateful.combatTarget || null);
   const previousCombatMetrics = cloneJson(stateful.combatMetrics || null);
   const previousCombatTargetId = targetIdForAttackHistory(previousCombatTarget);
   const combat = buildCombatDecision(input, stateful, {
     ...options,
-    easyKillPreferredTargetId
+    easyKillPreferredTargetId,
+    recoveryOwnsCurrentOpportunity,
+    profitSelectionKnown: Boolean(recoveryOwnsCurrentOpportunity || selectedProfitCombatTargetId),
+    selectedProfitCombatTargetId
   });
+  stateful.recoveryOwnsCurrentOpportunity = recoveryOwnsCurrentOpportunity
+    ? { active: true, targetId: selectedProfitCombatTargetId || '', at: input.nowMs }
+    : null;
   const closePressureCombat = combatDecisionClosePressureActive(combat);
   const marginalRoiStopLoss = evaluateProactiveCombatMarginalRoi(
     input,
@@ -12876,7 +12959,18 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     reason = 'stale-realtime-self';
     action.reason = reason;
   } else {
-    const combatAction = combat.target && combatDecisionEnabled && combatActionEligible ? combat.action : null;
+    const secondaryCombatTarget = Boolean(
+      combat.target?.combatRole === 'secondary' || combat.target?.secondaryTarget === true
+    );
+    const highValueLootOverridesSecondaryCombat = Boolean(
+      healthyLootPriority && secondaryCombatTarget
+    );
+    const combatAction = combat.target
+      && combatDecisionEnabled
+      && combatActionEligible
+      && !highValueLootOverridesSecondaryCombat
+      ? combat.action
+      : null;
     const whitelistSafetyCombatAction = combatAction && whitelistSafetyCombat ? combatAction : null;
     const ordinaryCombatAction = whitelistSafetyCombat ? null : combatAction;
     const combatHardGate = Boolean(combatAction && (
@@ -13199,6 +13293,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       opportunityChoice: outputOpportunityChoice,
       switchLock: outputSwitchLock,
       profitMission: cloneJson(stateful.profitMission || null),
+      recoveryOwnsCurrentOpportunity: cloneJson(stateful.recoveryOwnsCurrentOpportunity || null),
       completedProfitTargets: cloneJson(stateful.completedProfitTargets || {}),
       profitEscortContinuity: cloneJson(stateful.profitEscortContinuity || null),
       profitEscortContinuityLastRelease: cloneJson(stateful.profitEscortContinuityLastRelease || null),
@@ -13513,6 +13608,9 @@ function createBrowserlessDecisionAdapter(options = {}) {
       decisionState.opportunityChoice = cloneJson(proposedChoice);
       decisionState.opportunitySwitchLock = cloneJson(plannerState.switchLock || null);
       decisionState.lastDecisionAction = cloneJson(plannerState.lastDecisionAction || decision?.action || null);
+      if (Object.prototype.hasOwnProperty.call(plannerState, 'recoveryOwnsCurrentOpportunity')) {
+        decisionState.recoveryOwnsCurrentOpportunity = cloneJson(plannerState.recoveryOwnsCurrentOpportunity || null);
+      }
       const currentGuardAt = Number(decisionState.recoveryContactGuard?.observedAt || 0);
       const plannerGuardAt = Number(plannerState.recoveryContactGuard?.observedAt || 0);
       if (plannerGuardAt >= currentGuardAt) {

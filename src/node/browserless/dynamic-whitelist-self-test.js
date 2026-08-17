@@ -519,9 +519,10 @@ async function runDynamicWhitelistSelfTest() {
     {
       const outside = buildBrowserlessDecision(decisionState({ hp: 60, targetDistance: 16000 }), {}, decisionOptions());
       assert.strictEqual(outside.reason, 'incoming-bullet-dodge');
-      assert.strictEqual(outside.combat.target, null);
+      assert.strictEqual(outside.combat.target.combatRole, 'secondary');
+      assert.strictEqual(outside.combat.target.combatIntent, 'defensive');
       assert.strictEqual(outside.action.kind, 'flee');
-      cases.push('outside-range-incoming-is-dodge-only');
+      cases.push('outside-range-incoming-retains-secondary-and-dodges');
     }
 
     {
@@ -587,7 +588,7 @@ async function runDynamicWhitelistSelfTest() {
         decisionOptions()
       );
       assert.strictEqual(released.reason, 'incoming-bullet-dodge');
-      assert.strictEqual(released.combat.target, null);
+      assert.strictEqual(released.combat.target.combatRole, 'secondary');
       assert.strictEqual(released.whitelistSafety.incoming.combatMovementCovered, false);
       cases.push('released-target-does-not-erase-surviving-bullet');
     }

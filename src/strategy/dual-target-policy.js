@@ -27,14 +27,25 @@ function classifyCombatTargetRole(target = null, mission = null) {
   const targetId = idOf(target);
   const primaryId = missionTargetId(mission);
   const whitelisted = isWhitelistTarget(target);
-  const secondary = whitelisted || Boolean(primaryId && targetId && primaryId !== targetId);
+  const sameAsProfitMission = Boolean(primaryId && targetId && primaryId === targetId);
+  const implicitProfitPrimary = Boolean(
+    !primaryId
+      && targetId
+      && !whitelisted
+      && (target?.profitPrimaryTarget === true
+        || target?.combatAdmission?.profitEligible === true
+        || target?.combatRoleHint === 'primary')
+  );
+  const primary = Boolean(!whitelisted && (sameAsProfitMission || implicitProfitPrimary));
+  const secondary = Boolean(targetId && !primary);
   return {
-    role: secondary ? 'secondary' : (primaryId && targetId && primaryId === targetId ? 'primary' : 'single'),
+    role: targetId ? (primary ? 'primary' : 'secondary') : '',
     primaryTargetId: primaryId,
     targetId,
     secondaryTarget: secondary,
     whitelisted,
-    sameAsProfitMission: Boolean(primaryId && targetId && primaryId === targetId)
+    sameAsProfitMission,
+    implicitProfitPrimary
   };
 }
 
@@ -47,6 +58,7 @@ function secondaryCombatExitPolicy(target = null, selfHp = null, context = {}) {
   const secondary = effectiveTarget?.combatRole === 'secondary' || effectiveTarget?.secondaryTarget === true;
   const hp = Number(selfHp);
   const healthy = secondary && Number.isFinite(hp) && hp > 50;
+  const lowHpUnconditionalExit = secondary && Number.isFinite(hp) && hp <= 50;
   return {
     secondary,
     healthy,
@@ -56,7 +68,8 @@ function secondaryCombatExitPolicy(target = null, selfHp = null, context = {}) {
     suppressClearHpGap: healthy,
     suppressMissCloseTimeout: healthy,
     suppressExchangeStopLoss: healthy,
-    preserveLowHpExits: secondary && Number.isFinite(hp) && hp <= 50
+    preserveLowHpExits: lowHpUnconditionalExit,
+    lowHpUnconditionalExit
   };
 }
 

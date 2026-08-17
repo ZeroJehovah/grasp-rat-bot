@@ -3,6 +3,7 @@
 const {
   calculateCombatTargetPriority,
   applyCombatTargetSwitchHysteresisCore,
+  combatTargetAdmissionCore,
   combatTargetIncomingThreatEvidenceCore,
   combatTargetThreatensSelf,
   combatEscapeDecisionCore,
@@ -944,6 +945,16 @@ function clearBrowserlessCombatEngagementState(stateful, targetId, reason, detai
   // arbitration state.
   stateful.combatTargetSwitchGate = null;
   stateful.combatTargetSwitchHistory = null;
+  if (String(reason || '') === 'secondary-defensive-evidence-cleared'
+    && String(stateful.profitEscortContinuity?.combatTargetId ?? '') === id) {
+    stateful.profitEscortContinuityLastRelease = {
+      ...stateful.profitEscortContinuity,
+      active: false,
+      releasedAt: Number(detail.at || Date.now()),
+      releaseReason: String(reason || 'combat-target-released')
+    };
+    stateful.profitEscortContinuity = null;
+  }
   return {
     active: true,
     reason: String(reason || 'combat-target-released'),
@@ -4357,12 +4368,35 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   const retainedSecondaryTargetId = secondaryRetention.retained
     ? String(stateful?.combatTarget?.id ?? '')
     : '';
-  const profitMission = stateful?.profitMission || options.profitMission || null;
+  const profitMission = options.recoveryOwnsCurrentOpportunity === true
+    ? null
+    : (stateful?.profitMission || options.profitMission || null);
   const profitMissionTargetId = missionTargetId(profitMission);
   const establishedCombatTargetId = stateful?.combatTarget?.id
     ?? stateful?.combatTarget?.userId
     ?? stateful?.combatTarget?.user_id
     ?? '';
+  const establishedCombatOriginIntent = String(
+    stateful?.combatTarget?.originIntent || stateful?.combatTarget?.intent || ''
+  );
+  const establishedVisibleTarget = establishedCombatTargetId
+    ? targets.find(target => String(combatTargetId(target) || '') === String(establishedCombatTargetId)) || null
+    : null;
+  const establishedCombatDrop = Math.max(
+    0,
+    Number(stateful?.combatTarget?.drop || 0),
+    Number(entityDropValue(establishedVisibleTarget) || 0)
+  );
+  const explicitEstablishedCombatRole = String(stateful?.combatTarget?.combatRole || '');
+  const establishedCombatRole = ['primary', 'secondary'].includes(explicitEstablishedCombatRole)
+    ? explicitEstablishedCombatRole
+    : (establishedCombatTargetId
+        && establishedCombatOriginIntent !== 'defensive'
+        && (establishedCombatOriginIntent === 'profit'
+          || establishedCombatDrop > COMBAT_CONSTANTS.LOW_VALUE_ACTIVE_DROP_MAX)
+        ? 'primary'
+        : (establishedCombatTargetId ? 'secondary' : ''));
+  const combatAttackRange = Math.max(0, Number(options.combatAttackRange || options.attackRange || COMBAT_CONSTANTS.ATTACK_RANGE));
   const secondaryTargetIds = new Set(targets
     .filter(target => {
       const targetId = String(combatTargetId(target) || '');
@@ -4383,7 +4417,15 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     easyKillPreferredTargetId: options.easyKillPreferredTargetId,
     defensiveEngagementTargetId: establishedDefensiveTargetId || retainedSecondaryTargetId,
     establishedCombatTargetId,
+    establishedCombatRole,
+    profitMissionTargetId,
+    profitSelectionKnown: options.profitSelectionKnown === true,
+    selectedProfitCombatTargetId: String(options.selectedProfitCombatTargetId || ''),
     secondaryTargetIds,
+    selfHp,
+    lowHpThreshold,
+    healthySecondaryMaxHp: Number(options.combatHealthySecondaryMaxHp ?? 80),
+    combatAttackRange,
     recoveringSelf: Boolean(
       self
         && selfHp !== null
@@ -4407,7 +4449,6 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
         || targetIsWhitelisted(target, configuredTargetWhitelist)
     )
   };
-  const combatAttackRange = Math.max(0, Number(options.combatAttackRange || options.attackRange || COMBAT_CONSTANTS.ATTACK_RANGE));
   const afkProfitCommitment = withOptionOverrides(options, {
       nowMs: options.nowMs,
       combatAttackRange
@@ -4424,20 +4465,25 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     pendingVelocityCommands: state?.command?.movement?.pendingVelocityCommands || options.pendingVelocityCommands
   }, mergedOptions => updateContactEntryGuard(stateful, self, targets, bullets, mergedOptions));
   const candidates = targets
-    .filter(target => isCombatEligibleThreat(target, context))
-    .filter(target => {
-      const distance = Number(target.distance);
+    .map(target => ({ target, admission: combatTargetAdmissionCore(target, context) }))
+    .filter(item => item.admission.eligible)
+    .filter(item => {
+      const distance = Number(item.target.distance);
       if (!Number.isFinite(distance)) return false;
+      if (item.admission.secondaryEligible) {
+        return item.admission.attackEvidence || item.admission.proximityEvidence;
+      }
       if (distance <= combatAttackRange) return true;
-      if (target.dynamicWhitelistMember || target.creatorProtected || target.legacyWhitelistProtected) return false;
       return incomingBullet
         && incomingBullet.ownerId !== null
         && incomingBullet.ownerId !== undefined
-        && String(incomingBullet.ownerId) === String(target.user_id)
+        && String(incomingBullet.ownerId) === String(item.target.user_id)
         && distance <= combatDodgeRange;
     })
-    .map(target => ({
+    .map(({ target, admission }) => ({
       ...target,
+      combatAdmission: admission,
+      profitPrimaryTarget: admission.profitEligible,
       combatScore: calculateCombatTargetPriority(self, target, context)
     }))
     .sort((a, b) => Number(b.combatScore || 0) - Number(a.combatScore || 0));
@@ -4459,7 +4505,10 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     ? null
     : candidates.find(candidate => candidate.easyKillProfitTarget === true
       && String(combatTargetId(candidate)) === String(preferredEasyTargetId)) || null;
-  const unprotectedProposedTarget = defensiveTargetOverridesEngagedCore(engagedTarget, defensiveTarget, options)
+  const lowHpSecondaryOverride = defensiveTarget?.combatAdmission?.lowHpSecondaryExit === true;
+  const unprotectedProposedTarget = lowHpSecondaryOverride
+    ? defensiveTarget
+    : defensiveTargetOverridesEngagedCore(engagedTarget, defensiveTarget, options)
     ? defensiveTarget
     : (engagedTarget
         || (defensiveTarget?.combatIntent === 'defensive' ? defensiveTarget : null)
@@ -4479,10 +4528,15 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     ? targets.find(item => String(combatTargetId(item) || '') === currentTargetId) || null
     : null;
   const currentVisibleHp = currentVisibleTarget?.hp ?? currentVisibleTarget?.knownHp ?? currentVisibleTarget?.displayHp;
-  const currentRole = classifyCombatTargetRoleWithOptions(currentVisibleTarget, profitMission, options);
+  const currentRole = classifyCombatTargetRoleWithOptions(
+    currentVisibleTarget && establishedCombatRole
+      ? { ...currentVisibleTarget, combatRoleHint: establishedCombatRole }
+      : currentVisibleTarget,
+    profitMission,
+    options
+  );
   const currentSecondaryDefensive = Boolean(
     currentRole.secondaryTarget
-      && Number(currentVisibleTarget?.distance) <= combatAttackRange
       && isCombatEligibleThreat(currentVisibleTarget, context)
   );
   const currentInvalid = Boolean(
@@ -4565,7 +4619,9 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
         ...targetRole,
         combatRole: targetRole.role,
         combatIntent: targetRole.secondaryTarget
-          ? (targetRole.whitelisted ? 'secondary' : (rawTarget.combatIntent || 'secondary'))
+          ? (targetRole.whitelisted && rawTarget.combatIntent === 'profit'
+              ? 'secondary'
+              : (rawTarget.combatIntent || 'secondary'))
           : rawTarget.combatIntent
       }
     : null;
@@ -5159,6 +5215,20 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   let exitDecision = contactEntryOnly && exitEvaluation.exit?.rule !== 'critical-hp'
     ? null
     : exitEvaluation.exit;
+  if (secondaryExitPolicy.lowHpUnconditionalExit && exitDecision?.rule !== 'critical-hp') {
+    exitDecision = {
+      shouldLeave: true,
+      policy: 'low-hp-secondary-contact',
+      rule: 'low-hp-secondary-unconditional',
+      reason: 'combat-low-hp-secondary-leave',
+      stopMotion: false,
+      secondaryTarget: {
+        targetId: secondaryExitPolicy.targetId,
+        targetSource: secondaryExitPolicy.targetSource,
+        admission: cloneJson(target?.combatAdmission || null)
+      }
+    };
+  }
   if (!exitDecision && !contactEntryOnly && !secondaryHealthy && combatPhase?.exitRequired) {
     exitDecision = {
       shouldLeave: true,

@@ -1333,6 +1333,7 @@ function renderBrowserlessWebPanel() {
       'combat-pressure-disadvantage-leave': '遭到持续火力压制，我方血量处于劣势，主动退出',
       'combat-hp-disadvantage-leave': '与敌人交战时血量差距过大，主动退出',
       'combat-low-hp-disadvantage-leave': '战斗中我方低血且落后，主动退出',
+      'combat-low-hp-secondary-leave': '低血量遭遇副目标，无条件主动退出',
       'combat-low-hp-no-damage-leave': '战斗中我方低血且久攻未造成伤害，主动退出',
       'combat-critical-hp-leave': '战斗中我方血量进入危险线，紧急退出',
       'cloudflare-challenge': 'Cloudflare 挑战已确认，自动登录已停止',

@@ -268,6 +268,14 @@ function activeCombatRequiresThreatEvidence(entity, context = {}) {
     || proactiveActiveCombatImmediateStaminaBlocked(context);
 }
 
+function proactiveActiveProfitEligible(entity, context = {}) {
+  if (!entity || !isActiveCombatMode(entity)) return false;
+  if (isPreferredEasyKillTarget(entity, context)) return true;
+  return combatDropValue(entity) > lowValueActiveDropMax(context)
+    && !proactiveActiveCombatBudgetBlocked(context)
+    && !proactiveActiveCombatImmediateStaminaBlocked(context);
+}
+
 function combatTargetThreatensSelf(entity, context = {}) {
   const defensiveEngagementTargetId = context.defensiveEngagementTargetId;
   const entityId = targetId(entity);
@@ -280,6 +288,137 @@ function combatTargetThreatensSelf(entity, context = {}) {
   if (recentInjuryMatchesTarget(entity, context)) return true;
   if (context.unknownIncoming && isActiveCombatMode(entity) && isFiringCombatEntity(entity)) return true;
   return isFiringCombatEntity(entity);
+}
+
+function combatTargetAdmissionCore(entity, context = {}) {
+  if (!entity || entity.alive === false) {
+    return {
+      eligible: false,
+      reason: !entity ? 'missing-target' : 'target-not-alive'
+    };
+  }
+  if (entity.authority && entity.authority !== 'realtime') {
+    return { eligible: false, reason: 'non-realtime-authority' };
+  }
+
+  const entityId = targetId(entity);
+  const dynamicPolicy = entity.whitelistContactPolicy || null;
+  const dynamicWhitelistMember = Boolean(entity.dynamicWhitelistMember || dynamicPolicy?.dynamicWhitelistMember);
+  const creatorProtected = Boolean(entity.creatorProtected || dynamicPolicy?.creatorProtected);
+  const legacyWhitelistProtected = Boolean(
+    entity.legacyWhitelistProtected
+      || dynamicPolicy?.legacyWhitelistProtected
+      || (!dynamicWhitelistMember && context.whitelistCheck && context.whitelistCheck(entity))
+  );
+  const whitelisted = Boolean(
+    dynamicWhitelistMember
+      || creatorProtected
+      || legacyWhitelistProtected
+      || entity.profitProtected
+      || entity.whitelisted
+  );
+  const incomingBullet = incomingBulletForTarget(entity, context);
+  const incomingOverride = dynamicWhitelistIncomingOverrideCore(entity, incomingBullet, {}, context);
+  const recentInjury = recentInjuryMatchesTarget(entity, context);
+  const defensiveEngagement = Boolean(
+    context.defensiveEngagementTargetId !== null
+      && context.defensiveEngagementTargetId !== undefined
+      && context.defensiveEngagementTargetId !== ''
+      && entityId
+      && String(context.defensiveEngagementTargetId) === entityId
+  );
+  const attackEvidence = Boolean(
+    incomingOverride.defensiveTargetEligible
+      || incomingOwnerMatchesTarget(entity, context)
+      || recentInjury
+      || defensiveEngagement
+      || isFiringCombatEntity(entity)
+  );
+  const missionPrimaryTargetId = String(context.profitMissionTargetId || '');
+  const selectedProfitCombatTargetId = String(context.selectedProfitCombatTargetId || '');
+  const primaryTargetId = missionPrimaryTargetId || selectedProfitCombatTargetId;
+  const sameAsProfitMission = Boolean(primaryTargetId && entityId && primaryTargetId === entityId);
+  const establishedPrimary = Boolean(
+    !primaryTargetId
+      && entityId
+      && String(context.establishedCombatTargetId || '') === entityId
+      && String(context.establishedCombatRole || '') === 'primary'
+  );
+  const selectedMissionCombatEligible = Boolean(
+    sameAsProfitMission
+      && (isActiveCombatMode(entity)
+        || entity.active === true
+        || isFiringCombatEntity(entity)
+        || establishedPrimary)
+  );
+  const profitEligible = Boolean(
+    !whitelisted
+      && (selectedMissionCombatEligible
+        || establishedPrimary)
+  );
+  const selfHp = numberOrNull(context.selfHp);
+  const lowHpThreshold = Math.max(0, Number(context.lowHpThreshold ?? COMBAT_CONSTANTS.LOW_HP_THRESHOLD));
+  const healthySecondaryMaxHp = Math.max(
+    lowHpThreshold,
+    Number(context.healthySecondaryMaxHp ?? context.combatHealthySecondaryMaxHp ?? 80)
+  );
+  const attackRange = Math.max(0, Number(context.combatAttackRange || context.attackRange || COMBAT_CONSTANTS.ATTACK_RANGE));
+  const distance = combatDistanceValue(entity);
+  const lowHp = selfHp !== null && selfHp <= lowHpThreshold;
+  const mediumHp = selfHp !== null && selfHp > lowHpThreshold && selfHp <= healthySecondaryMaxHp;
+  const ordinaryProximity = Boolean(
+    !whitelisted
+      && (mediumHp || lowHp)
+      && distance !== null
+      && attackRange > 0
+      && distance <= attackRange
+  );
+  const dynamicProximity = Boolean(
+    dynamicWhitelistMember
+      && (dynamicPolicy?.proactiveCombatEligible === true
+        || (lowHp && dynamicPolicy?.lowHpSafetyExit === true))
+  );
+  const proximityEvidence = Boolean(ordinaryProximity || dynamicProximity);
+  const secondaryEligible = Boolean(!profitEligible && (attackEvidence || proximityEvidence));
+  const lowHpSecondaryExit = Boolean(lowHp && secondaryEligible);
+  const eligible = Boolean(profitEligible || secondaryEligible);
+  return {
+    eligible,
+    reason: profitEligible
+      ? (selectedMissionCombatEligible ? 'selected-profit-primary' : 'proactive-profit-primary')
+      : (lowHpSecondaryExit
+          ? 'low-hp-secondary-exit'
+          : (attackEvidence
+              ? 'secondary-attack-evidence'
+              : (proximityEvidence ? 'secondary-proximity-evidence' : 'non-primary-without-defensive-evidence'))),
+    entityId,
+    primaryTargetId,
+    missionPrimaryTargetId,
+    selectedProfitCombatTargetId,
+    sameAsProfitMission,
+    selectedMissionCombatEligible,
+    profitEligible,
+    secondaryEligible,
+    lowHpSecondaryExit,
+    attackEvidence,
+    proximityEvidence,
+    ordinaryProximity,
+    dynamicProximity,
+    whitelisted,
+    dynamicWhitelistMember,
+    creatorProtected,
+    legacyWhitelistProtected,
+    selfHp,
+    lowHp,
+    mediumHp,
+    lowHpThreshold,
+    healthySecondaryMaxHp,
+    attackRange,
+    distance,
+    incomingBullet,
+    recentInjury,
+    defensiveEngagement
+  };
 }
 
 function recentAfkAttackCommitmentCore(previousAction, entities = [], options = {}) {
@@ -322,83 +461,7 @@ function recentAfkAttackCommitmentCore(previousAction, entities = [], options = 
 }
 
 function isCombatEligibleThreat(entity, options = {}) {
-  if (!entity) return false;
-
-  if (entity.alive === false) return false;
-  if (entity.authority && entity.authority !== 'realtime') return false;
-
-  const incomingBullet = incomingBulletForTarget(entity, options);
-  const incomingOverride = dynamicWhitelistIncomingOverrideCore(entity, incomingBullet, {}, options);
-  const recentInjury = recentInjuryMatchesTarget(entity, options);
-  const dynamicPolicy = entity.whitelistContactPolicy || null;
-  const dynamicWhitelistMember = Boolean(entity.dynamicWhitelistMember || dynamicPolicy?.dynamicWhitelistMember);
-  const defensiveEngagement = Boolean(
-    options.defensiveEngagementTargetId !== null
-      && options.defensiveEngagementTargetId !== undefined
-      && options.defensiveEngagementTargetId !== ''
-      && String(targetId(entity) || '') === String(options.defensiveEngagementTargetId)
-  );
-  const creatorProtected = Boolean(entity.creatorProtected || dynamicPolicy?.creatorProtected);
-  const legacyWhitelistProtected = Boolean(
-    entity.legacyWhitelistProtected
-      || dynamicPolicy?.legacyWhitelistProtected
-      || (!dynamicWhitelistMember && options.whitelistCheck && options.whitelistCheck(entity))
-  );
-  const entityKey = targetId(entity);
-  const secondaryTarget = Boolean(
-    options.secondaryTargetIds instanceof Set
-      ? options.secondaryTargetIds.has(entityKey)
-      : options.secondaryTargetId && String(options.secondaryTargetId) === entityKey
-  ) || dynamicWhitelistMember || creatorProtected || legacyWhitelistProtected || Boolean(entity.profitProtected || entity.whitelisted);
-  const proximityEvidence = Boolean(
-    dynamicWhitelistMember && dynamicPolicy?.proactiveCombatEligible === true
-  );
-  const establishedCombat = Boolean(
-    options.establishedCombatTargetId !== null
-      && options.establishedCombatTargetId !== undefined
-      && options.establishedCombatTargetId !== ''
-      && String(options.establishedCombatTargetId) === String(entityKey)
-  );
-  const defensiveEvidence = Boolean(
-    incomingOverride.defensiveTargetEligible
-      || incomingOwnerMatchesTarget(entity, options)
-      || recentInjury
-      || defensiveEngagement
-      || proximityEvidence
-      || (!secondaryTarget && establishedCombat)
-      || isFiringCombatEntity(entity)
-  );
-
-  // Whitelist identities are never profit targets. They can only be retained
-  // as a secondary contact through realtime defensive evidence or the
-  // dynamic-whitelist HP-scaled proximity policy.
-  if (isInvulnerableEntity(entity)) return secondaryTarget && defensiveEvidence;
-  if (creatorProtected || legacyWhitelistProtected) return secondaryTarget && defensiveEvidence;
-
-  // Realtime collision-path fire and recent attributable injury outrank the
-  // dynamic whitelist distance guard and the easy-kill trust exemption.
-  if (incomingOverride.defensiveTargetEligible || recentInjury || defensiveEngagement) return true;
-
-  if (secondaryTarget) return defensiveEvidence;
-
-  // A recently killed player stays outside ordinary defensive combat until it
-  // has actually damaged self. A deliberately selected easy-kill profit target
-  // may still be fought while health is above the ordinary low-HP exit line.
-  if (easyKillThreatExempt(entity, options)) return false;
-
-  if (incomingOwnerMatchesTarget(entity, options) || recentInjury) return true;
-
-  // Match the browser runtime's split between defensive/proactive Active combat
-  // and ordinary Passive/AFK profit. Moving or Drop value alone should not make
-  // a Passive target a combat target; those belong to profit arbitration.
-  if (isActiveCombatMode(entity)) {
-    if (options.healthyRecoveryCombat === true) return true;
-    return activeCombatRequiresThreatEvidence(entity, options)
-      ? combatTargetThreatensSelf(entity, options)
-      : true;
-  }
-
-  return isFiringCombatEntity(entity);
+  return combatTargetAdmissionCore(entity, options).eligible;
 }
 
 /**
@@ -519,21 +582,42 @@ function checkProactiveActiveCombatGates(self, target, context = {}) {
 function selectBestCombatTarget(self, candidates, context = {}) {
   if (!candidates || !candidates.length) return null;
 
-  const incomingShooter = candidates.find(target => isCombatEligibleThreat(target, context) && incomingOwnerMatchesTarget(target, context));
+  const assessed = candidates
+    .map(target => ({ target, admission: combatTargetAdmissionCore(target, context) }))
+    .filter(item => item.admission.eligible);
+  if (!assessed.length) return null;
+
+  const lowHpSecondary = assessed
+    .filter(item => item.admission.lowHpSecondaryExit)
+    .sort((left, right) => (
+      Number(right.admission.attackEvidence) - Number(left.admission.attackEvidence)
+        || Number(left.admission.distance ?? Infinity) - Number(right.admission.distance ?? Infinity)
+    ))[0] || null;
+  if (lowHpSecondary) {
+    return {
+      ...lowHpSecondary.target,
+      combatAdmission: lowHpSecondary.admission,
+      combatIntent: 'defensive',
+      profitPrimaryTarget: false
+    };
+  }
+
+  const incomingShooter = assessed.find(item => incomingOwnerMatchesTarget(item.target, context));
   if (incomingShooter) {
     return {
-      ...incomingShooter,
-      incomingBullet: incomingBulletForTarget(incomingShooter, context),
-      combatIntent: 'defensive'
+      ...incomingShooter.target,
+      incomingBullet: incomingBulletForTarget(incomingShooter.target, context),
+      combatAdmission: incomingShooter.admission,
+      combatIntent: 'defensive',
+      profitPrimaryTarget: incomingShooter.admission.profitEligible
     };
   }
 
   // Filter and score candidates
-  const scored = candidates
-    .filter(target => isCombatEligibleThreat(target, context))
-    .map(target => ({
-      target,
-      score: calculateCombatTargetPriority(self, target, context)
+  const scored = assessed
+    .map(item => ({
+      ...item,
+      score: calculateCombatTargetPriority(self, item.target, context)
     }))
     .filter(item => Number.isFinite(item.score));
 
@@ -543,15 +627,17 @@ function selectBestCombatTarget(self, candidates, context = {}) {
   scored.sort((a, b) => b.score - a.score);
 
   // Return highest priority target
+  const selected = scored[0];
+  const admission = selected.admission;
   return {
-    ...scored[0].target,
-    combatIntent: combatTargetThreatensSelf(scored[0].target, context)
+    ...selected.target,
+    combatAdmission: admission,
+    profitPrimaryTarget: admission.profitEligible,
+    combatIntent: admission.attackEvidence
       ? 'defensive'
-      : (scored[0].target?.whitelistContactPolicy?.proactiveCombatEligible === true
+      : (admission.dynamicProximity
           ? 'whitelist-proximity'
-          : (context.healthyRecoveryCombat === true && isActiveCombatMode(scored[0].target)
-              ? 'recovery-contact'
-              : 'profit'))
+          : (admission.proximityEvidence ? 'secondary-proximity' : 'profit'))
   };
 }
 
@@ -844,7 +930,16 @@ function applyCombatTargetSwitchHysteresisCore(input = {}, previousGate = null, 
 function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bullets = [], state = {}, options = {}) {
   const engaged = state?.combatTarget || null;
   if (!engaged?.id) return null;
-  const engagedSecondary = engaged.combatRole === 'secondary' || engaged.secondaryTarget === true;
+  const id = String(engaged.id);
+  const explicitEngagedRole = ['primary', 'secondary'].includes(String(engaged.combatRole || ''))
+    ? String(engaged.combatRole)
+    : '';
+  const establishedRole = String(options.establishedCombatTargetId || '') === id
+    && ['primary', 'secondary'].includes(String(options.establishedCombatRole || ''))
+    ? String(options.establishedCombatRole)
+    : '';
+  const retainedRole = explicitEngagedRole || establishedRole;
+  const engagedSecondary = retainedRole === 'secondary' || engaged.secondaryTarget === true;
   const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
   const closePressure = engaged.combatPhase === 'close-pressure'
     || engaged.closePressure?.active === true;
@@ -853,7 +948,6 @@ function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bu
     Number(options.combatEngageStickMs || 0)
   );
   const ageMs = Math.max(0, nowMs - Number(engaged.at || 0));
-  const id = String(engaged.id);
   const target = (combatTargets || []).find(item => combatTargetId(item) === id);
   const raw = (entities || []).find(item => combatTargetId(item) === id);
   const visibleTarget = target || raw;
@@ -911,6 +1005,7 @@ function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bu
     const outOfRangeMs = Math.max(0, nowMs - lastInRangeAt);
     return {
       ...visibleTarget,
+      combatRoleHint: retainedRole || visibleTarget.combatRoleHint,
       combatIntent: 'reengage',
       combatEngagement: {
         ageMs: Math.round(ageMs),
@@ -944,6 +1039,7 @@ function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bu
   if (target && !isInvulnerableEntity(target) && isCombatEligibleThreat(target, context)) {
     return {
       ...target,
+      combatRoleHint: retainedRole || target.combatRoleHint,
       combatIntent: 'engaged',
       combatEngagement: {
         ageMs: Math.round(ageMs),
@@ -1020,6 +1116,7 @@ function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bu
   }
   return {
     ...raw,
+    combatRoleHint: retainedRole || raw.combatRoleHint,
     combatIntent: engagedRealtimeHold ? 'engaged' : 'reengage',
     combatEngagement: {
       ageMs: Math.round(ageMs),
@@ -1062,6 +1159,7 @@ module.exports = {
   calculateCombatTargetPriority,
   checkProactiveActiveCombatGates,
   combatTargetThreatensSelf,
+  combatTargetAdmissionCore,
   combatTargetId,
   combatTargetIncomingThreatEvidenceCore,
   combatTargetThreatAdvantageCore,
@@ -1072,6 +1170,7 @@ module.exports = {
   isActiveCombatMode,
   isFiringCombatEntity,
   pickEngagedCombatTargetCore,
+  proactiveActiveProfitEligible,
   proactiveActiveCombatImmediateStaminaBlocked,
   recentAfkAttackCommitmentCore,
   selectBestCombatTarget,

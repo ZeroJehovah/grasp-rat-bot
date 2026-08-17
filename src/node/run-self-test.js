@@ -8455,7 +8455,7 @@ async function runSelfTest() {
           decision.input.dataGaps.includes('snapshot-fallback-blocked:active-threat-visible')
         ].join('|');
       })(),
-      want: 'combat-candidate|combat|8|realtime|true|100|true|true'
+      want: 'combat-candidate|combat|8|realtime|false|100|true|true'
     },
     {
       name: 'browserless decision adapter enriches missing self stamina from fresh snapshot',
@@ -8755,7 +8755,7 @@ async function runSelfTest() {
           row?.[7]
         ].join('|');
       })(),
-      want: 'flee|safety|avoid-invulnerable-target||true|1250|9600|true|snapshot|9600|1250|1|Passive'
+      want: 'flee|safety|avoid-invulnerable-target|8|true|1250|9600|true|snapshot|9600|1250|1|Passive'
     },
     {
       name: 'browserless invulnerability ticks use the 50ms server clock for early AFK approach and panel',
@@ -9116,7 +9116,7 @@ async function runSelfTest() {
           decision.input.dataGaps.includes('snapshot-fallback-blocked:realtime-profit-present')
         ].join('|');
       })(),
-      want: 'coin|profit|native-coin|realtime|true|realtime||true'
+      want: 'coin|profit|native-coin|realtime|true|realtime|8|true'
     },
     {
       name: 'browserless non-combat profit blocks snapshot fallback near active threat',
@@ -9152,7 +9152,7 @@ async function runSelfTest() {
           decision.combat.target.userId
         ].join('|');
       })(),
-      want: 'wait|no-profitable-candidate|none|false|active-threat-visible|8'
+      want: 'profit-candidate|best-opportunity|none|false|active-threat-visible|8'
     },
     {
       name: 'browserless profit live targets AFK but fights an active attacker when combat is enabled',
@@ -9330,7 +9330,7 @@ async function runSelfTest() {
       want: '6|true|true|true|false|true|true|4|false|true|true|true|true|false|2'
     },
     {
-      name: 'browserless stationary full-stamina active can be AFK profit but non-full active is ignored when not attacking',
+      name: 'browserless realtime Active players remain profit-eligible regardless of opponent stamina',
       got: (() => {
         const choose = target => {
           const store = createBrowserlessStateStore({ userId: 7 });
@@ -9361,7 +9361,7 @@ async function runSelfTest() {
           nonFullActive.profit.best === null
         ].join('|');
       })(),
-      want: 'profit-candidate|8|false||wait|wait||true'
+      want: 'profit-candidate|8|false||profit-candidate|profit|8|false'
     },
     {
       name: 'browserless profit live skips whitelisted AFK targets',
@@ -10884,7 +10884,7 @@ async function runSelfTest() {
           `${integratedOutside.kind}:${integratedOutside.reason}`
         ].join('|');
       })(),
-      want: '30000:true|none|15000:true|none|none|none|31000:true|none|none|recover:wait-for-full-stamina-and-hp:none|none:none:none|recover:wait-for-full-stamina-and-hp'
+      want: '30000:true|none|15000:true|none|none|none|31000:true|none|none|recover:wait-for-full-stamina-and-hp:none|combat-live:combat-live-realtime:none|recover:wait-for-full-stamina-and-hp'
     },
     {
       name: 'browserless recovery threat annulus yields in-range incidents to combat policy',
@@ -10961,7 +10961,7 @@ async function runSelfTest() {
       want: 'combat-live-realtime:combat-live-realtime|combat-live-realtime:combat-live-realtime|combat-live-realtime:combat-live-realtime|combat-critical-hp-leave:combat-critical-hp-leave|recovery-low-hp-active-threat-leave:14500:16500'
     },
     {
-      name: 'browserless low-hp recovery radius keeps whitelist and undamaged easy-kill exemptions',
+      name: 'browserless low-hp recovery keeps whitelist distance exemption but applies main-target critical exit',
       got: (() => {
         const decide = extra => {
           const self = {
@@ -11014,7 +11014,7 @@ async function runSelfTest() {
           easyKill.reason
         ].join('|');
       })(),
-      want: 'recover|wait-for-full-stamina-and-hp|recover|wait-for-full-stamina-and-hp'
+      want: 'recover|wait-for-full-stamina-and-hp|safety-exit|combat-critical-hp-leave'
     },
     {
       name: 'browserless profit live damaged self can take recovery foot coin',
@@ -12057,7 +12057,7 @@ async function runSelfTest() {
       want: 'combat-live|combat-live-realtime|true|true|8|true'
     },
     {
-      name: 'browserless combat disadvantage leave marks target dangerous',
+      name: 'browserless medium-hp non-primary attacker stays defensive secondary without hp-gap exit',
       got: (() => {
         const stateful = {};
         const decision = buildBrowserlessDecision({
@@ -12088,14 +12088,13 @@ async function runSelfTest() {
         return [
           decision.kind,
           decision.reason,
-          decision.action.shouldLeave,
-          decision.combat.dangerousTargetCooldown.reason,
-          decision.combat.dangerousTargetCooldown.targetId,
-          stateful.dangerousCombatTargets?.['8']?.reason || '',
-          stateful.dangerousCombatTargets?.['8']?.until - 1200
+          decision.action.shouldLeave === true,
+          decision.combat.target?.combatRole,
+          decision.combat.dangerousTargetCooldown === null,
+          !stateful.dangerousCombatTargets?.['8']
         ].join('|');
       })(),
-      want: 'safety-exit|combat-hp-disadvantage-leave|true|combat-hp-disadvantage-leave|8|combat-hp-disadvantage-leave|900000'
+      want: 'combat-live|combat-live-realtime|false|secondary|true|true'
     },
     {
       name: 'browserless severe low-target cumulative reversal exits and remembers target for five minutes',
@@ -12170,8 +12169,10 @@ async function runSelfTest() {
           decision.combat.exchangeStopLoss.severeCumulativeReversal,
           decision.combat.exchangeStopLoss.severePoorExchangeRule,
           decision.combat.exchangeStopLoss.cumulativeDamageRatio,
-          decision.combat.dangerousTargetCooldown.reason,
-          stateful.dangerousCombatTargets?.['8']?.until - 62001
+          decision.combat.dangerousTargetCooldown?.reason || '',
+          stateful.dangerousCombatTargets?.['8']
+            ? stateful.dangerousCombatTargets['8'].until - 62001
+            : ''
         ].join('|');
       })(),
       want: 'safety-exit|combat-exit-poor-exchange|true|true|true|severe-cumulative-reversal|3.5|combat-exit-poor-exchange|300000'
@@ -12822,7 +12823,7 @@ async function runSelfTest() {
           syncedDecision.combat?.contactEntryGuard?.movementOnly === true
         ].join('|');
       })(),
-      want: 'true|recent-afk-attack-commitment|19677|true|0|19677|defensive|false|true|true'
+      want: 'true|recent-afk-attack-commitment||true|0|19677|defensive|false|true|true'
     },
     {
       name: 'browserless established close pressure keeps combat priority over realtime high-value loot',
@@ -13823,7 +13824,7 @@ async function runSelfTest() {
       want: 'post-attack-drop-wait|post-attack-drop-wait-position|9667|32'
     },
     {
-      name: 'browserless accepted first shot keeps a live target in combat instead of waiting for a drop',
+      name: 'browserless old accepted shot cannot override the current higher-value profit selection',
       got: (() => {
         const stateful = {
           attackHistory: [{
@@ -13908,7 +13909,7 @@ async function runSelfTest() {
           decision.action.reason !== 'post-attack-drop-wait-position'
         ].join('|');
       })(),
-      want: 'combat-live|Wbh|true|true|true'
+      want: 'coin||false|false|true'
     },
     {
       name: 'browserless realtime post-kill settlement suppresses ordinary profit gap',
@@ -15974,7 +15975,7 @@ async function runSelfTest() {
           highValueAdapter.getState().singleCoinBait.phase
         ].join('|');
       })(),
-      want: 'combat-live|combat|9|hold|wait|single-coin-bait-hold|bait|true|hold|wait||hold'
+      want: 'combat-live|combat|9|hold|wait|single-coin-bait-hold|bait|true|hold|coin||release'
     },
     {
       name: 'browserless final arbitration holds previous profit action',
@@ -17294,7 +17295,7 @@ async function runSelfTest() {
       want: 'wait|wait|no-profitable-candidate|false|true||false|false|false'
     },
     {
-      name: 'browserless profit live fights realtime moving target regardless of snapshot mode metadata',
+      name: 'browserless profit live does not use movement or snapshot mode as combat admission',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
@@ -17327,14 +17328,14 @@ async function runSelfTest() {
           decision.kind,
           decision.band,
           decision.reason,
-          decision.action.target.userId,
+          decision.action.target?.userId || '',
           decision.combat.target?.userId || '',
           decision.combat.actionEligible,
           Boolean(decision.action.shouldLeave),
           decision.input.dataGaps.includes('snapshot-active-threat-visible')
         ].join('|');
       })(),
-      want: 'combat-live|combat|combat-live-realtime|8|8|true|false|false'
+      want: 'wait|wait|no-profitable-candidate|||false|false|false'
     },
     {
       name: 'browserless profit live keeps the logged Wbh engagement through a stationary realtime frame',
@@ -17395,7 +17396,7 @@ async function runSelfTest() {
           Boolean(decision.action.shouldLeave)
         ].join('|');
       })(),
-      want: 'combat-live|combat|combat-live-realtime|2889|engaged|true|true|true|false'
+      want: 'combat-live|combat|combat-live-realtime|2889|engaged|false|true|true|false'
     },
     {
       name: 'browserless profit live keeps engaged realtime combat over snapshot-active same target',
@@ -18092,7 +18093,10 @@ async function runSelfTest() {
           coin_drops: [],
           messages: []
         }, { receivedAtMs: 1100 });
-        const combat = buildBrowserlessCombatDryRun(store.getState(1200), { nowMs: 1200 });
+        const combat = buildBrowserlessCombatDryRun(store.getState(1200), {
+          nowMs: 1200,
+          selectedProfitCombatTargetId: '8'
+        });
         return [
           combat.dryRun,
           combat.authority,
@@ -18877,7 +18881,7 @@ async function runSelfTest() {
           stateful.combatTarget.seenTargetRealBulletAt
         ].join('|');
       })(),
-      want: '8||false|8|0'
+      want: '8|secondary|false|8|0'
     },
     {
       name: 'browserless off-lane enemy bullet does not override engaged combat target',
@@ -19018,7 +19022,7 @@ async function runSelfTest() {
           combat.shooting.reason
         ].join('|');
       })(),
-      want: '8|unavoidable-current-shot|true|true|true|target-pressure-fire'
+      want: '8|unavoidable-current-shot|true|false|true|target-pressure-fire'
     },
     {
       name: 'browserless combat movement closes passive runner engagement',
@@ -19479,7 +19483,7 @@ async function runSelfTest() {
           firing.contactEntryGuard.movementOnly
         ].join('|');
       })(),
-      want: 'true|trusted-target-no-fire|true|target-firing|contact-entry-pre-dodge|false|true'
+      want: 'true|trusted-target-no-fire|true|target-firing|contact-entry-pre-dodge|false|false'
     },
     {
       name: 'browserless first-contact guard uses trusted target real bullet trajectory during recovery without firing',
@@ -19539,7 +19543,7 @@ async function runSelfTest() {
           result.exit === null
         ].join('|');
       })(),
-      want: 'true|target-real-bullet|true|true|tangent-dodge|tangent-dodge|0,1|false|true'
+      want: 'true|target-real-bullet|true|false|tangent-dodge|tangent-dodge|0,1|false|true'
     },
     {
       name: 'browserless first-contact guard ignores off-lane owner fire and keeps collision-path takeover',
@@ -21144,7 +21148,7 @@ async function runSelfTest() {
           aboveFloor.reason
         ].join('|');
       })(),
-      want: 'safety-exit|combat-critical-hp-leave|true|30|combat-live|combat-live-realtime'
+      want: 'safety-exit|combat-critical-hp-leave|true|30|safety-exit|combat-low-hp-secondary-leave'
     },
     {
       name: 'browserless production emergency hp floor overrides easy-kill trust',
@@ -21283,11 +21287,11 @@ async function runSelfTest() {
           decision.band,
           decision.reason,
           decision.action.shouldLeave,
-          decision.action.target.userId,
+          decision.action.target?.userId || 'no-action-target',
           decision.combat.target?.userId || 'no-target'
         ].join('|');
       })(),
-      want: 'safety-exit|safety|combat-critical-hp-leave|true|8|no-target'
+      want: 'safety-exit|safety|combat-critical-hp-leave|true|no-action-target|8'
     },
     {
       name: 'browserless profit live critical hp exits on unknown incoming pressure',
@@ -21382,7 +21386,7 @@ async function runSelfTest() {
           stateful.browserlessLeaveRisk.engagedTargetHp
         ].join('|');
       })(),
-      want: 'flee|incoming-bullet-dodge|8|73|no-target|true|80'
+      want: 'combat-live|combat-live-realtime|8|73|8|true|80'
     },
     {
       name: 'browserless multi-attacker pressure uses mean enemy hp instead of unconditional third-party exit',
@@ -21615,7 +21619,7 @@ async function runSelfTest() {
           decision.combat.target?.userId || 'no-target'
         ].join('|');
       })(),
-      want: 'flee|incoming-bullet-dodge|94|46|no-target'
+      want: 'flee|incoming-bullet-dodge|94|64|8'
     },
     {
       name: 'browserless recent injury keeps Eason metrics instead of switching to unrelated mango',
@@ -21914,22 +21918,22 @@ async function runSelfTest() {
         return [
           decision.kind,
           decision.reason,
-          decision.action.injury?.episodeStartedAt,
-          decision.action.injury?.startHp,
-          decision.action.injury?.previousHp,
-          decision.action.injury?.currentHp,
-          decision.action.injury?.hpDrop,
-          decision.action.injury?.totalHpDrop,
-          decision.action.injury?.hitCount,
+          stateful.browserlessInjury?.episodeStartedAt,
+          stateful.browserlessInjury?.startHp,
+          stateful.browserlessInjury?.previousHp,
+          stateful.browserlessInjury?.currentHp,
+          stateful.browserlessInjury?.hpDrop,
+          stateful.browserlessInjury?.totalHpDrop,
+          stateful.browserlessInjury?.hitCount,
           healedStateful.browserlessInjury?.startHp,
           healedStateful.browserlessInjury?.totalHpDrop,
           healedStateful.browserlessInjury?.hitCount
         ].join('|');
       })(),
-      want: 'safety-exit|combat-hp-disadvantage-leave|1100|100|82|79|3|21|7|98|3|1'
+      want: 'combat-live|combat-live-realtime|1100|100|82|79|3|21|7|98|3|1'
     },
     {
-      name: 'browserless recent injury fallback still exits on clear hp gap',
+      name: 'browserless recent injury fallback does not apply primary hp-gap exit to secondary attacker',
       got: (() => {
         const stateful = {
           browserlessLastSelf: { key: '7', hp: 80, at: 1000 },
@@ -21966,20 +21970,16 @@ async function runSelfTest() {
           combatCriticalHp: 20,
           combatHighHpDisadvantageGap: 20
         });
-        const safety = evaluateBrowserlessSafety({}, { decision, nowMs: 2000 });
         return [
           decision.kind,
           decision.reason,
-          decision.action.combatExit.rule,
-          decision.action.combatExit.selfHp,
-          decision.action.combatExit.targetHp,
-          decision.action.combatExit.targetHpSource,
-          safety.detail.decision.combat.exit.rule,
-          safety.detail.decision.combat.exit.targetHp,
-          decision.combat.target?.userId || 'no-target'
+          decision.action?.shouldLeave === true,
+          decision.combat.target?.combatRole || 'no-role',
+          decision.combat.target?.userId || 'no-target',
+          decision.combat.exit?.rule || 'no-exit'
         ].join('|');
       })(),
-      want: 'safety-exit|combat-hp-disadvantage-leave|clear-hp-gap|65|100|recent-realtime-combat-metrics|clear-hp-gap|100|no-target'
+      want: 'flee|incoming-bullet-dodge|false|secondary|8|no-exit'
     },
     {
       name: 'browserless profit live exits after sustained active invulnerable pursuit',
@@ -22260,7 +22260,7 @@ async function runSelfTest() {
           stateful.combatTarget.exchangeRetreatSinceAt > 0
         ].join('|');
       })(),
-      want: 'close-pressure|false|true|contact-entry-pre-dodge||close-pressure|false||false'
+      want: 'close-pressure|false|false|contact-entry-pre-dodge||close-pressure|false||false'
     },
     {
       name: 'browserless combat low hp behind exits regardless no-damage window',
@@ -22461,7 +22461,7 @@ async function runSelfTest() {
           combat.shooting.wouldShoot
         ].join('|');
       })(),
-      want: 'true|false|1|0|true'
+      want: 'true|false|1|0|false'
     },
     {
       name: 'browserless combat exits after confirmed exact 20 hp disadvantage boundary',
@@ -22481,6 +22481,7 @@ async function runSelfTest() {
         });
         const options = {
           decisionState: stateful,
+          selectedProfitCombatTargetId: '8',
           combatAttackRange: 11000,
           combatLowHpLeaveThreshold: 60,
           combatHighHpDisadvantageGap: 20,
@@ -22518,6 +22519,7 @@ async function runSelfTest() {
           }
         }, {
           nowMs: 5000,
+          selectedProfitCombatTargetId: '8',
           combatAttackRange: 11000,
           combatLowHpLeaveThreshold: 50
         });
@@ -22547,6 +22549,7 @@ async function runSelfTest() {
           }
         }, {
           nowMs: 5000,
+          selectedProfitCombatTargetId: '8',
           combatAttackRange: 11000,
           combatCriticalHp: 20
         });
@@ -22601,6 +22604,7 @@ async function runSelfTest() {
         const stateful = {};
         const options = {
           nowMs: 1000,
+          selectedProfitCombatTargetId: '8',
           decisionState: stateful,
           liveCombatEnabled: true,
           combatAttackRange: 14500,
@@ -22684,7 +22688,13 @@ async function runSelfTest() {
             ],
             bullets: []
           }
-        }, { nowMs: 1500, combatAttackRange: 11000, combatFinishLowThreatHp: 75, combatFinishLowThreatMinSelfHp: 60 });
+        }, {
+          nowMs: 1500,
+          selectedProfitCombatTargetId: '8',
+          combatAttackRange: 11000,
+          combatFinishLowThreatHp: 75,
+          combatFinishLowThreatMinSelfHp: 60
+        });
         return [
           combat.exit === null,
           combat.shooting.state,
@@ -22755,7 +22765,7 @@ async function runSelfTest() {
             ],
             bullets: []
           }
-        }, { nowMs: 1500, combatAttackRange: 11000 });
+        }, { nowMs: 1500, selectedProfitCombatTargetId: '8', combatAttackRange: 11000 });
         return [
           combat.shooting.state,
           combat.shooting.reason,
@@ -22820,16 +22830,21 @@ async function runSelfTest() {
           realtime: {
             tick: 63,
             frameAgeMs: 100,
-            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 90, stamina_5s_remaining_milli: 5000 },
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 5000 },
             entities: [
-              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 90, stamina_5s_remaining_milli: 5000 },
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 5000 },
               { entity_id: 2, user_id: 8, name: 'active', x: 1000, y: 0, hp: 80, current_join_mode: 'Active', firing: true, drop: 8 }
             ],
             bullets: [],
             coinDrops: []
           },
           fallback: { coinDrops: [] }
-        }, {}, { nowMs: 1200, controlMode: 'combat-dry-run' });
+        }, {}, {
+          nowMs: 1200,
+          controlMode: 'combat-dry-run',
+          combatProactiveActiveMinStamina5s: 0,
+          selectedProfitCombatTargetId: '8'
+        });
         return [
           decision.kind,
           decision.action.kind,
@@ -22850,16 +22865,22 @@ async function runSelfTest() {
           realtime: {
             tick: 64,
             frameAgeMs: 100,
-            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 90, stamina_5s_remaining_milli: 5000 },
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 5000 },
             entities: [
-              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 90, stamina_5s_remaining_milli: 5000 },
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 5000 },
               { entity_id: 2, user_id: 8, name: 'active', x: 1000, y: 0, hp: 80, current_join_mode: 'Active', firing: true, drop: 8 }
             ],
             bullets: [],
             coinDrops: []
           },
           fallback: { coinDrops: [] }
-        }, {}, { nowMs: 1200, controlMode: 'combat-live', combatEnabled: false });
+        }, {}, {
+          nowMs: 1200,
+          controlMode: 'combat-live',
+          combatEnabled: false,
+          combatProactiveActiveMinStamina5s: 0,
+          selectedProfitCombatTargetId: '8'
+        });
         return [
           decision.kind,
           decision.action.kind,
@@ -26881,7 +26902,7 @@ async function runSelfTest() {
       want: '1,0|leave-pending-overlap-escape|true|0'
     },
     {
-      name: 'browserless hp disadvantage starts leave pending immediately',
+      name: 'browserless low-hp secondary starts leave pending immediately',
       got: () => (async () => {
         let t = Date.UTC(2026, 6, 16, 0, 23, 0);
         let wsOptions = null;
@@ -26899,8 +26920,8 @@ async function runSelfTest() {
         });
         const frames = [
           makeFrame(62, 100, { bullet_id: 101, owner_user_id: 8, start_x: 5000, start_y: 0, target_x: 0, target_y: 0, created_tick: 61, expire_tick: 91, speed_per_tick: 500 }),
-          makeFrame(63, 70, { bullet_id: 102, owner_user_id: 8, start_x: 0, start_y: 5000, target_x: 0, target_y: 0, created_tick: 62, expire_tick: 92, speed_per_tick: 500 }),
-          makeFrame(64, 70, { bullet_id: 103, owner_user_id: 8, start_x: 0, start_y: 4500, target_x: 0, target_y: 0, created_tick: 63, expire_tick: 93, speed_per_tick: 500 })
+          makeFrame(63, 50, { bullet_id: 102, owner_user_id: 8, start_x: 0, start_y: 5000, target_x: 0, target_y: 0, created_tick: 62, expire_tick: 92, speed_per_tick: 500 }),
+          makeFrame(64, 50, { bullet_id: 103, owner_user_id: 8, start_x: 0, start_y: 4500, target_x: 0, target_y: 0, created_tick: 63, expire_tick: 93, speed_per_tick: 500 })
         ];
         const result = await runReadOnlyCanary({
           gameOrigin: 'https://grasp-rat-game.h-e.top',
@@ -26949,14 +26970,13 @@ async function runSelfTest() {
           pending.coverRecomputeCount >= 2,
           pending.dynamicCoverCount >= 1,
           pending.observedHpLoss,
-          commands.length >= 2
-            && commands.some(command => command !== '0,0' && command !== 'vel 0 0'),
+          commands.some(command => command !== '0,0' && command !== 'vel 0 0'),
           commands.every(command => command !== '0,0' && command !== 'vel 0 0'),
           result.decisions.realtimeControlCount,
           result.hotPath.tasks['ws-message'].maxMs < 50
         ].join('|');
       })(),
-      want: 'combat-hp-disadvantage-leave|true|true|false|false|true|true|0|true|false|2|true'
+      want: 'combat-low-hp-secondary-leave|true|true|false|false|true|true|0|true|true|2|true'
     },
     {
       name: 'browserless read-only canary runs snapshot ws frames and verified leave',
@@ -27620,7 +27640,7 @@ async function runSelfTest() {
           type: 'pos',
           tick: 30,
           entities: [
-            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 90, stamina_5s_remaining_milli: 6000 },
+            { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 6000 },
             { entity_id: 2, user_id: 8, name: 'active', x: 1000, y: 0, hp: 80, current_join_mode: 'Active', firing: true, drop: 8 }
           ],
           bullets: []
@@ -27637,6 +27657,19 @@ async function runSelfTest() {
           speed_per_tick: 500,
           created_tick: 31,
           expire_tick: 60
+        });
+        const decisionAdapter = createBrowserlessDecisionAdapter({
+          userId: 7,
+          controlMode: 'combat-live',
+          combatEnabled: true,
+          combatShootMinIntervalMs: 1
+        });
+        decisionAdapter.syncPlannerDecision({
+          action: { kind: 'combat-live', band: 'combat', target: { userId: 8 } },
+          stateful: {
+            opportunityChoice: { type: 'enemy', id: 8, key: 'enemy:8' },
+            switchLock: null
+          }
         });
         const result = await runReadOnlyCanary({
           gameOrigin: 'https://grasp-rat-game.h-e.top',
@@ -27655,11 +27688,13 @@ async function runSelfTest() {
           sessionToken: 'combat-token'
         }, {
           now: () => t,
+          decisionAdapter,
           sleep: async ms => {
             t += ms;
             sleepCount += 1;
             if (sleepCount === 1) wsOptions.onMessage(posFrame);
-            if (sleepCount === 2) wsOptions.onMessage(ackFrame);
+            if (sleepCount === 2) wsOptions.onMessage(posFrame);
+            if (sleepCount === 3) wsOptions.onMessage(ackFrame);
           },
           persistedState: {
             loginPointSafety: { point: { x: 0, y: 0, hp: 79, source: 'test' } }
@@ -27668,7 +27703,7 @@ async function runSelfTest() {
             body: {
               type: 'snapshot',
               tick: 29,
-              entities: [{ entity_id: 1, user_id: 7, x: 0, y: 0, hp: 90 }],
+              entities: [{ entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100 }],
               bullets: [],
               coin_drops: [],
               messages: []
@@ -28710,7 +28745,7 @@ async function runSelfTest() {
           ['coin', 'seek-coin', 'patrol'].includes(missing.action?.kind)
         ].join('|');
       })(),
-      want: 'patrol|post-kill-loot-safe-dodge|safe-dodge-toward-coin|true|true|coin|post-kill-drop-priority|damage-commit|true|true|false|coin|damage-commit|true|incoming-bullet-dodge|combat-critical-hp-leave|true|true|false'
+      want: 'combat-live|post-kill-loot-safe-dodge|safe-dodge-toward-coin|true|false|coin|post-kill-drop-priority|damage-commit|true|true|false|coin|damage-commit|true|combat-low-hp-secondary-leave|combat-critical-hp-leave|true|true|false'
     },
     {
       name: 'browserless healthy post-injury coin priority defers hp-gap exit',
@@ -28757,7 +28792,7 @@ async function runSelfTest() {
           decision.action?.shouldLeave === true
         ].join('|');
       })(),
-      want: 'coin|high-value-visible-coin-priority||combat-hp-disadvantage-leave|false'
+      want: 'coin|high-value-visible-coin-priority|||false'
     },
     {
       name: 'browserless coin priority still yields at hp threshold',
@@ -28795,7 +28830,7 @@ async function runSelfTest() {
         });
         return [decision.action?.kind, decision.action?.reason, decision.action?.shouldLeave === true].join('|');
       })(),
-      want: 'safety-exit|combat-hp-disadvantage-leave|true'
+      want: 'safety-exit|combat-low-hp-secondary-leave|true'
     },
     {
       name: 'browserless realtime nearby snapshot rows stay bounded without pinning distant high-value coins',
@@ -28902,7 +28937,7 @@ async function runSelfTest() {
           lowHp.action?.reason || 'none'
         ].join('|');
       })(),
-      want: '|high-value-visible-coin-priority|5|self-hp-below-loot-threshold|none'
+      want: '|high-value-visible-coin-priority|5|self-hp-below-loot-threshold|combat-low-hp-secondary-leave'
     },
     {
       name: 'browserless snapshot self-kill evidence uses stable ids and kill ticks',
@@ -45282,7 +45317,7 @@ async function runSelfTest() {
 	      want: 'recover|wait-for-full-stamina-and-hp|true|true|combat-hp-disadvantage-leave|clear-hp-gap|false'
 	    },
 	    {
-	      name: 'browserless easy-kill invulnerability avoidance starts only after damage',
+	      name: 'browserless invulnerable easy-kill firing is dodge-only before damage',
 	      got: (() => {
 	        const state = {
 	          userId: 7,
@@ -45317,7 +45352,7 @@ async function runSelfTest() {
 	          damaged.profit.easyKill.trustedVisibleCount
 	        ].join('|');
 	      })(),
-	      want: 'wait|no-profitable-candidate|1|flee|avoid-invulnerable-target|0'
+	      want: 'combat-live|combat-live-realtime|1|flee|avoid-invulnerable-target|0'
 	    },
 	    {
 	      name: 'browserless login safety ignores undamaging easy-kill players and restores damage actors',

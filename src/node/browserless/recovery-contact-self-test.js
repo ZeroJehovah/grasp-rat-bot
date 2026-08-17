@@ -180,11 +180,11 @@ function runRecoveryContactSelfTest() {
     );
     assert.strictEqual(outside.reason, 'wait-for-full-stamina-and-hp');
     assert.notStrictEqual(outside.action.kind, 'flee');
-    assert.strictEqual(decision.reason, 'combat-live-realtime');
-    assert.strictEqual(decision.combat.target.combatIntent, 'recovery-contact');
+    assert.strictEqual(decision.reason, 'wait-for-full-stamina-and-hp');
+    assert.strictEqual(decision.combat.target, null);
     assert.notStrictEqual(decision.reason, 'recovery-low-hp-contact-leave');
     assert.strictEqual(stateful.recoveryContactGuard, null);
-    cases.push('healthy-recovery-waits-for-attack-range-then-enters-combat');
+    cases.push('high-hp-recovery-contact-without-attack-evidence-keeps-waiting');
   }
 
   {
