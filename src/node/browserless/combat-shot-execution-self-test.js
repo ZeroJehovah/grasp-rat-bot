@@ -318,6 +318,7 @@ function runCombatShotExecutionSelfTest() {
 
   let actionNow = 5000;
   let wireDispatches = 0;
+  const wireTargets = [];
   const executionEvents = [];
   const actionStore = createBrowserlessStateStore({ userId: 1, now: () => actionNow });
   const actionControl = actionStore.beginControlGeneration('ws-open');
@@ -329,14 +330,17 @@ function runCombatShotExecutionSelfTest() {
     maxPendingShootCommands: 20,
     getSegmentGeneration: context => (
       context.controlGeneration === actionControl
-        && context.engagementGeneration === 'execution-generation'
+        && Boolean(context.engagementGeneration)
         && String(context.targetId) === '8'
         ? 'segment:execution-current'
         : ''
     ),
     transport: {
       sendVelocity() {},
-      sendShoot() { wireDispatches += 1; }
+      sendShoot(x, y) {
+        wireDispatches += 1;
+        wireTargets.push({ x, y });
+      }
     },
     onShootRequest: request => actionStore.recordShootRequest(request),
     onShootExecution: event => {
@@ -405,6 +409,52 @@ function runCombatShotExecutionSelfTest() {
   );
   const secondaryGeneration = secondaryStateful.combatMetrics.engagementGeneration;
   actionNow += 160;
+  const primaryFireTarget = {
+    ...combatTarget(42, 4200),
+    combatRole: 'primary',
+    secondaryTarget: false
+  };
+  const primaryDispatch = adapter.applyDecision(stateSnapshot, combatDecision(
+    secondaryGeneration,
+    'mixed/unknown',
+    160,
+    1000,
+    {
+      controlGeneration: actionControl,
+      tick: 39,
+      target: secondaryTarget,
+      shooting: {
+        target: primaryFireTarget,
+        targetRole: 'primary',
+        aim: { x: 4200, y: 0, mode: 'exact' }
+      }
+    }
+  ));
+  const primaryCommandState = actionStore.getCommandState(actionNow);
+  const syncedPrimaryEvents = syncCombatShotExecutionEvents(
+    secondaryStateful,
+    { command: primaryCommandState },
+    secondaryTarget
+  );
+  check('primary fire uses the primary wire target', primaryDispatch.shoot?.skipped === false
+    && primaryDispatch.fireTarget?.user_id === 42
+    && wireTargets.at(-1)?.x === 4200
+    && primaryDispatch.shoot?.execution?.targetId === '42');
+  check('primary fire retains the secondary engagement segment',
+    primaryDispatch.shoot?.execution?.segmentGeneration === 'segment:execution-current');
+  check('primary fire is synchronized as cross-target execution', syncedPrimaryEvents >= 1
+    && secondaryStateful.combatMetrics.crossTargetDispatchCount === 1
+    && secondaryStateful.combatExecutionLedger.dispatchTimesByTarget['42'].length === 1);
+  check('primary fire does not enter the secondary dispatch window',
+    secondaryStateful.combatTarget.secondaryDispatchTimes.length === 0);
+  assert.strictEqual(
+    Number(secondaryStateful.combatMetrics.actualShots || 0),
+    0,
+    'primary fire does not increment secondary actual shots'
+  );
+  cases.push('primary fire does not increment secondary actual shots');
+
+  actionNow += 160;
   const secondaryDispatch = adapter.applyDecision(stateSnapshot, combatDecision(
     secondaryGeneration,
     'mixed/unknown',
@@ -458,7 +508,7 @@ function runCombatShotExecutionSelfTest() {
   ));
   check('Dodge reserve remains an explicit hard fire-state boundary', reserveBlocked.shoot?.skipped === true
     && reserveBlocked.shoot?.reason === 'dodge-reserve'
-    && wireDispatches === modes.length + 1);
+    && wireDispatches === modes.length + 2);
 
   const safetyStop = adapter.sealShooting('safety-trigger:test-exit', {
     observedTick: 22,
@@ -479,7 +529,7 @@ function runCombatShotExecutionSelfTest() {
     && safetyStop.engagementGeneration === 'execution-generation'
     && staleAfterSafety.shoot?.skipped === true
     && staleAfterSafety.shoot?.reason === 'safety-trigger:test-exit'
-    && wireDispatches === modes.length + 1);
+    && wireDispatches === modes.length + 2);
   check('safety shot stop and stale skip remain structured and generation-bound', executionEvents.some(event => (
     event.type === 'shoot-stop'
     && event.executionClass === 'safety'

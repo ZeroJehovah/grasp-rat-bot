@@ -2694,7 +2694,7 @@ function createBrowserlessActionAdapter(options = {}) {
           atMs,
           controlGeneration,
           engagementGeneration: shotMeta.engagementGeneration,
-          targetId: targetRepeatKey(target)
+          targetId: shotMeta.engagementTargetId ?? targetRepeatKey(target)
         }) || shotMeta.segmentGeneration || '')
       : String(shotMeta.segmentGeneration || '');
     const executionContext = {
@@ -3739,14 +3739,15 @@ function createBrowserlessActionAdapter(options = {}) {
       combat.target,
       { repeatSummary: false }
     );
-    const shooting = combat.shooting || {};
+      const shooting = combat.shooting || {};
+      const fireTarget = shooting.target || combat.fireTarget || combat.target;
     let shoot = {
       ok: true,
       skipped: true,
       reason: shooting.commandSuppressed ? (shooting.reason || 'shoot-command-suppressed') : 'shoot-not-requested'
     };
     if (shooting.wouldShoot && !shooting.commandSuppressed) {
-      const aim = combat.aim || {};
+      const aim = shooting.aim || combat.fireAim || combat.aim || {};
       const startX = numberOrNull(self?.x ?? combat.self?.x);
       const startY = numberOrNull(self?.y ?? combat.self?.y);
       const targetX = numberOrNull(aim.x);
@@ -3766,7 +3767,7 @@ function createBrowserlessActionAdapter(options = {}) {
           ok: false,
           skipped: true,
           reason: 'missing-shoot-coordinates',
-          execution: skippedShootExecution('missing-shoot-coordinates', combat.target, shotMeta)
+          execution: skippedShootExecution('missing-shoot-coordinates', fireTarget, shotMeta)
         };
       } else {
         shoot = sendShoot(
@@ -3775,12 +3776,13 @@ function createBrowserlessActionAdapter(options = {}) {
           startX,
           startY,
           shooting.reason || 'combat-live-shoot',
-          combat.target,
+          fireTarget,
           shooting.executionCadenceMs || shooting.cadenceMs,
           {
             observedTick: combat.timing?.observedTick ?? combat.tick,
             executionClass: SHOOT_EXECUTION_CLASSES.COMBAT,
             engagementGeneration: combat.metrics?.engagementGeneration,
+            engagementTargetId: targetRepeatKey(combat.target),
             baseCadenceMs: shooting.cadenceMs,
             executionCadenceMs: shooting.executionCadenceMs || shooting.cadenceMs,
             advisoryCadenceMs: shooting.advisoryCadenceMs,
@@ -3813,6 +3815,7 @@ function createBrowserlessActionAdapter(options = {}) {
           ...transportFailure(shoot)
         },
         target: combat.target,
+        fireTarget,
         ...transportFailure(velocity, shoot)
       };
     } finally {

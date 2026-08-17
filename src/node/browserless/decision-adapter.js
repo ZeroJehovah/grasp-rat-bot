@@ -2020,32 +2020,56 @@ function selectRealtimeLootCandidate(input, stateful = {}, options = {}) {
     : highValueRange;
   const hysteresisDistanceCm = realtimeLootDistanceHysteresisCm(options);
   const hysteresisHoldMs = realtimeLootDistanceHysteresisHoldMs(options);
-  const pendingSelfKillTargetIds = new Set(
-    Object.values(stateful.postKillSettlements || {})
-      .filter(settlement => settlement && settlement.active !== false
-        && ['drop-pending', 'drop-visible', 'unconfirmed-tail'].includes(String(settlement.phase || '')))
-      .map(settlement => String(settlement.targetId ?? ''))
-      .filter(Boolean)
-  );
+  const activeSettlements = Object.entries(stateful.postKillSettlements || {})
+    .filter(([, settlement]) => settlement && settlement.active !== false
+      && ['drop-pending', 'drop-visible', 'unconfirmed-tail'].includes(String(settlement.phase || '')));
+  const pendingPrimarySettlements = new Map(activeSettlements
+    .filter(([key, settlement]) => key.startsWith('primary:') || settlement.primaryTargetDropPriority === true)
+    .map(([, settlement]) => [String(settlement.targetId ?? ''), settlement])
+    .filter(([id]) => Boolean(id)));
+  const pendingSelfKillTargetIds = new Set(activeSettlements
+    .filter(([key, settlement]) => !key.startsWith('primary:') && settlement.primaryTargetDropPriority !== true)
+    .map(([, settlement]) => String(settlement.targetId ?? ''))
+    .filter(Boolean));
   if (stateful.postKillSettlement?.active !== false && stateful.postKillSettlement?.targetId) {
-    pendingSelfKillTargetIds.add(String(stateful.postKillSettlement.targetId));
+    const settlementId = String(stateful.postKillSettlement.targetId);
+    if (stateful.postKillSettlement.primaryTargetDropPriority === true) {
+      pendingPrimarySettlements.set(settlementId, stateful.postKillSettlement);
+    } else {
+      pendingSelfKillTargetIds.add(settlementId);
+    }
   }
   const observedCoins = realtimeObservationCoins(observation, input?.self).map(coin => {
     const sourceUserId = coin?.source_user_id ?? coin?.sourceUserId
       ?? coin?.owner_user_id ?? coin?.ownerUserId;
-    if (!sourceUserId || !pendingSelfKillTargetIds.has(String(sourceUserId))) return coin;
+    if (!sourceUserId) return coin;
+    const sourceId = String(sourceUserId);
+    const primarySettlement = pendingPrimarySettlements.get(sourceId) || null;
+    if (pendingSelfKillTargetIds.has(sourceId)) {
+      return {
+        ...coin,
+        selfKilledPlayerDrop: true,
+        primaryTargetDropPriority: Boolean(primarySettlement),
+        killAttribution: 'self',
+        playerDropPriority: true
+      };
+    }
+    if (!primarySettlement) return coin;
     return {
       ...coin,
-      selfKilledPlayerDrop: true,
+      selfKilledPlayerDrop: false,
+      primaryTargetDropPriority: true,
+      killAttribution: String(primarySettlement.killAttribution || 'external-or-unknown'),
       playerDropPriority: true
     };
   });
   const candidates = ageMs <= maxAgeMs
     ? observedCoins
-      .filter(coin => Number(coin.amount || 0) >= minAmount)
+      .filter(coin => coin.primaryTargetDropPriority === true || Number(coin.amount || 0) >= minAmount)
       .filter(coin => Number.isFinite(Number(coin.distance)) && (!maxDistance || Number(coin.distance) <= maxDistance))
       .filter(coin => opportunityStaminaAffordable(input?.self, opportunityCoinStaminaCost(coin, options), options))
-      .sort((a, b) => Number(Boolean(b.selfKilledPlayerDrop)) - Number(Boolean(a.selfKilledPlayerDrop))
+      .sort((a, b) => Number(Boolean(b.primaryTargetDropPriority)) - Number(Boolean(a.primaryTargetDropPriority))
+        || Number(Boolean(b.selfKilledPlayerDrop)) - Number(Boolean(a.selfKilledPlayerDrop))
         || Number(b.amount || 0) - Number(a.amount || 0)
         || Number(a.distance || Infinity) - Number(b.distance || Infinity))
     : [];
@@ -2065,7 +2089,7 @@ function selectRealtimeLootCandidate(input, stateful = {}, options = {}) {
     : null;
   const retainedBoundaryIntent = Boolean(
     heldCandidate
-      && Number(heldCandidate.amount || 0) >= minAmount
+      && (heldCandidate.primaryTargetDropPriority === true || Number(heldCandidate.amount || 0) >= minAmount)
       && Number.isFinite(Number(heldCandidate.distance))
       && (!maxDistance || Number(heldCandidate.distance) <= maxDistance + hysteresisDistanceCm)
       && opportunityStaminaAffordable(
@@ -2099,6 +2123,8 @@ function selectRealtimeLootCandidate(input, stateful = {}, options = {}) {
     y: selected.y,
     sourceUserId: selected.source_user_id,
     selfKilledPlayerDrop: Boolean(selected.selfKilledPlayerDrop),
+    primaryTargetDropPriority: Boolean(selected.primaryTargetDropPriority),
+    killAttribution: String(selected.killAttribution || ''),
     startedAt: same ? Number(previousIntent.startedAt || nowMs) : nowMs,
     // A boundary hold may only bridge a short gap after the last strict
     // in-range observation. Do not refresh this timestamp while the coin is
@@ -2121,8 +2147,45 @@ function selectRealtimeLootCandidate(input, stateful = {}, options = {}) {
     candidateCount: candidates.length,
     reason: retainedBoundaryIntent
       ? 'high-value-coin-boundary-hold'
-      : (selected.selfKilledPlayerDrop ? 'confirmed-self-kill-drop' : 'high-value-visible-coin')
+      : (selected.primaryTargetDropPriority
+          ? 'primary-target-drop-priority'
+          : (selected.selfKilledPlayerDrop ? 'confirmed-self-kill-drop' : 'high-value-visible-coin'))
   };
+}
+
+function decoratePrimaryTargetDropCoins(input, stateful = {}) {
+  const primarySettlements = new Map(Object.entries(stateful.postKillSettlements || {})
+    .filter(([key, settlement]) => settlement && settlement.active !== false
+      && (key.startsWith('primary:') || settlement.primaryTargetDropPriority === true)
+      && ['drop-pending', 'drop-visible'].includes(String(settlement.phase || '')))
+    .map(([, settlement]) => [String(settlement.targetId ?? ''), settlement])
+    .filter(([id]) => Boolean(id)));
+  if (!primarySettlements.size) return 0;
+  let decoratedCount = 0;
+  const decorate = coin => {
+    const sourceId = String(coin?.source_user_id ?? coin?.sourceUserId
+      ?? coin?.owner_user_id ?? coin?.ownerUserId ?? '');
+    const settlement = primarySettlements.get(sourceId);
+    if (!settlement) return coin;
+    decoratedCount += 1;
+    return {
+      ...coin,
+      selfKilledPlayerDrop: false,
+      primaryTargetDropPriority: true,
+      killAttribution: String(settlement.killAttribution || 'external-or-unknown'),
+      playerDropPriority: true
+    };
+  };
+  for (const field of [
+    'profitCoins',
+    'panelProfitCoins',
+    'realtimeCoins',
+    'snapshotCoins',
+    'snapshotVisibleCoins'
+  ]) {
+    if (Array.isArray(input?.[field])) input[field] = input[field].map(decorate);
+  }
+  return decoratedCount;
 }
 
 function safeLootDodgeDirection(combat, self, coin, incomingAssessment = null) {
@@ -2227,7 +2290,8 @@ function buildHealthyHighValueLootPressureAction(
   const selfHp = hpValue(input.self);
   const healthyHp = highValueCoinPriorityHealthyHp(options);
   if (selfHp === null || selfHp <= healthyHp) return action;
-  if (Number(action.target.amount || 0) < highValueCoinPriorityAmount(options)) return action;
+  if (action.target.primaryTargetDropPriority !== true
+    && Number(action.target.amount || 0) < highValueCoinPriorityAmount(options)) return action;
   const pressure = highValueLootPressureEvidence(input, stateful, incomingAssessment, options);
   if (!pressure.active) return action;
   const safeDirection = safeLootDodgeDirection(combat, input.self, action.target, incomingAssessment);
@@ -2414,6 +2478,8 @@ function summarizeCoin(coin) {
     snapshotOnly: Boolean(coin.snapshotOnly),
     sourceUserId,
     selfKilledPlayerDrop: Boolean(coin.selfKilledPlayerDrop),
+    primaryTargetDropPriority: Boolean(coin.primaryTargetDropPriority),
+    killAttribution: String(coin.killAttribution || ''),
     playerDropPriority: Boolean(coin.playerDropPriority),
     ...(profitScoreMultiplier !== 1 || coin.profitScoreReason ? {
       profitScoreMultiplier,
@@ -4346,11 +4412,14 @@ function pickHighValueVisibleCoin(input, combatDecision, options = {}) {
     if (threats.some(threat => highValueThreatBlocksLowHpCoin(threat, options))) return null;
   }
   return candidates
-    .filter(coin => Number(coin.amount || 0) >= minAmount)
+    .filter(coin => coin.primaryTargetDropPriority === true || Number(coin.amount || 0) >= minAmount)
     .filter(coin => Number(coin.distance || Infinity) <= maxDistance)
     .filter(coin => opportunityStaminaAffordable(input.self, opportunityCoinStaminaCost(coin, options), options))
     .filter(coin => healthy || coinSafeFromThreats(coin, threats, options))
     .sort((a, b) => {
+      const primaryDropDiff = Number(Boolean(b.primaryTargetDropPriority))
+        - Number(Boolean(a.primaryTargetDropPriority));
+      if (primaryDropDiff) return primaryDropDiff;
       const scoreDiff = scoreCoinOpportunity(b, options) - scoreCoinOpportunity(a, options);
       if (scoreDiff) return scoreDiff;
       return Number(b.amount || 0) - Number(a.amount || 0)
@@ -4360,6 +4429,7 @@ function pickHighValueVisibleCoin(input, combatDecision, options = {}) {
 
 function highValueVisibleCoinPriorityNeeded(input, combatDecision, options = {}) {
   if (!input?.self) return false;
+  if ((input.profitCoins || []).some(coin => coin.primaryTargetDropPriority === true)) return true;
   if (isRecoveringSelf(input.self)) return true;
   if (combatDecision?.target || combatDecision?.dryRun?.target) return true;
   if ((input.avoidanceThreats || input.activeThreats || []).length || (input.snapshotActiveThreats || []).length) return true;
@@ -4376,7 +4446,10 @@ function buildHighValueVisibleCoinPriorityDecision(input, combatDecision, option
       ? 'coin'
       : 'seek-coin',
     band: 'profit',
-    reason: 'high-value-visible-coin-priority',
+    reason: coin.primaryTargetDropPriority
+      ? 'primary-target-drop-priority'
+      : 'high-value-visible-coin-priority',
+    commitmentRank: coin.primaryTargetDropPriority ? 100 : 0,
     ignoreReturnBlock: true,
     reward: effectiveCoinProfitReward(coin),
     staminaCost: opportunityCoinStaminaCost(coin, options),
@@ -8442,6 +8515,7 @@ function reconcilePostKillSettlement(input, stateful = {}, combat = {}, previous
     targetMemory,
     snapshotTick: input?.fallback?.tick ?? observation?.tick ?? null,
     disappearanceKillPlausible,
+    primaryTargetSettlementEvidence: stateful.primaryTargetSettlementEvidence || null,
     seenEvidenceKeys: stateful.postKillEvidenceSeen || {}
   }, {
     unconfirmedMs: options.postKillUnconfirmedTailMs
@@ -8457,6 +8531,14 @@ function reconcilePostKillSettlement(input, stateful = {}, combat = {}, previous
   observeDropRaceLifecycles(input, stateful, previousSettlements, result.states || {}, options);
   stateful.postKillSettlements = result.states || {};
   stateful.postKillEvidenceSeen = result.seenEvidenceKeys || {};
+  if (stateful.primaryTargetSettlementEvidence
+    && stateful.primaryTargetSettlementEvidence.active !== false) {
+    stateful.primaryTargetSettlementEvidence = {
+      ...stateful.primaryTargetSettlementEvidence,
+      published: true,
+      publishedAtMs: Number(input?.nowMs || Date.now())
+    };
+  }
   stateful.postKillSettlement = result.selected ? settlementSummary(result.selected, input?.nowMs) : null;
   releaseProfitMissionForExplicitSelfKill(stateful);
   return settlementSummary(stateful.postKillSettlement, input?.nowMs);
@@ -8527,7 +8609,9 @@ function buildPostKillSettlementWaitDecision(input, stateful = {}, combat = null
   if (!input?.self || !settlement || settlement.phase === 'drop-visible') return null;
   if (postKillSettlementYieldedToProfitMission(input, stateful, settlement)) return null;
   const currentCombatTarget = combat?.target || combat?.dryRun?.target || null;
-  if (currentCombatTarget && settlement.reason === 'self-kill-evidence-observed') return null;
+  if (currentCombatTarget
+    && (settlement.reason === 'self-kill-evidence-observed'
+      || settlement.primaryTargetDropPriority === true)) return null;
   return {
     kind: 'post-attack-drop-wait',
     band: 'profit',
@@ -10529,6 +10613,7 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
   stageStarted = performance.now();
   rememberBrowserlessInjury(input, stateful, options);
   const postKillSettlement = reconcilePostKillSettlement(input, stateful, combat, previousCombatTarget, options);
+  decoratePrimaryTargetDropCoins(input, stateful);
   const postKillSettlementWaitAction = buildPostKillSettlementWaitDecision(input, stateful, combat);
   const combatActionEligible = isCombatActionEligibleForDecision(combat, options) && !realtimeEconomicSuppression;
   const reuseSafetyContextOptions = options?.[INTERNAL_REALTIME_OPTIONS] === true;
@@ -10827,6 +10912,8 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}, in
       distance: Math.round(Number(coin.distance || 0)),
       sourceUserId: numberOrNull(coin.source_user_id),
       selfKilledPlayerDrop: Boolean(coin.selfKilledPlayerDrop),
+      primaryTargetDropPriority: Boolean(coin.primaryTargetDropPriority),
+      killAttribution: String(coin.killAttribution || ''),
       authority: 'snapshot'
     } : null
   };
@@ -10871,7 +10958,7 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}, in
   const closePressureActive = combatDecisionClosePressureActive(combat);
   const closePressurePhase = combat?.dryRun?.combatPhase || combat?.combatPhase || null;
   const ordinaryProfitClosePressure = closePressureActive && closePressurePhase?.ordinaryProfit === true;
-  if (closePressureActive && !ordinaryProfitClosePressure) {
+  if (closePressureActive && !ordinaryProfitClosePressure && coin.primaryTargetDropPriority !== true) {
     return {
       action: null,
       combat: null,
@@ -10887,9 +10974,9 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}, in
   }
   const pressure = highValueLootPressureEvidence(input, stateful, incomingAssessment, options);
   const incomingCount = Number(pressure.collisionBulletCount || 0);
-  const reason = coin.selfKilledPlayerDrop
-    ? 'post-kill-drop-priority'
-    : 'high-value-visible-coin-priority';
+  const reason = coin.primaryTargetDropPriority
+    ? 'primary-target-drop-priority'
+    : (coin.selfKilledPlayerDrop ? 'post-kill-drop-priority' : 'high-value-visible-coin-priority');
   const directActionBase = {
     kind: Number(coin.distance || Infinity) <= Number(options.coinMaxDistance ?? BROWSER_RUNTIME_DEFAULTS.coinMaxDistance)
       ? 'coin'
@@ -11116,6 +11203,7 @@ function establishedCombatLootPriority(combat, coin, stateful = {}, options = {}
   const target = combat?.target || combat?.dryRun?.target || null;
   const result = (blocked, reason, detail = {}) => ({ blocked, reason, ...detail });
   if (!coin || !target) return result(false, 'missing-coin-or-combat-target');
+  if (coin.primaryTargetDropPriority) return result(false, 'primary-target-drop-protected');
   if (coin.selfKilledPlayerDrop) return result(false, 'self-kill-drop-protected');
   if (target.alive === false || target.invulnerable === true) return result(false, 'combat-target-invalid');
 
@@ -12465,7 +12553,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const frameAge = Number(input.realtime.frameAgeMs);
   const realtimeStale = Number.isFinite(frameAge) && frameAge > staleSelfExitMs;
   const profitThresholdContext = buildProfitThresholdContext(input, options);
-  const profitSelectionInput = buildProfitSelectionInput(input, profitThresholdContext, options, stateful);
+  let profitSelectionInput = buildProfitSelectionInput(input, profitThresholdContext, options, stateful);
   const retainedProfitMissionTargetId = profitMissionTargetId(stateful.profitMission);
   const opportunity = buildOpportunityDecision(input, stateful, {
     ...options,
@@ -12536,6 +12624,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const combatTarget = combat?.target || null;
   const whitelistSafetyCombat = combatDecisionIsWhitelistSafetyCombat(combat, stateful);
   const postKillSettlement = reconcilePostKillSettlement(input, stateful, combat, previousCombatTarget, options);
+  decoratePrimaryTargetDropCoins(input, stateful);
+  profitSelectionInput = buildProfitSelectionInput(input, profitThresholdContext, options, stateful);
   const postAttackSettlement = reconcilePostAttackSettlements(input, stateful, options, combat);
   const combatTargetId = targetIdForAttackHistory(combatTarget);
   const continuingPreviousCombatTarget = previousCombatTargetId !== null
@@ -12666,6 +12756,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     incomingThreatAssessment,
     safetyContextOptions
   );
+  const primaryTargetDropPriorityAction = committedHighValueCoinPriorityAction?.target?.primaryTargetDropPriority === true;
   const healthyLootPriority = Boolean(
     committedHighValueCoinPriorityAction
       && hpValue(input.self) > highValueCoinPriorityHealthyHp(options)
@@ -13020,7 +13111,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
         riskScore: combat.dryRun?.behavior?.mode === 'pressure-shooter' ? 70 : 40
       }),
       candidate(
-        committedHighValueCoinPriorityAction && !singleCoinBaitReleaseAction
+        committedHighValueCoinPriorityAction
+          && (primaryTargetDropPriorityAction || !singleCoinBaitReleaseAction)
           ? committedHighValueCoinPriorityAction
           : null,
         70,
@@ -13789,6 +13881,7 @@ module.exports = {
   buildBrowserlessRuntimeDefaults,
   buildBrowserlessStrategyInput,
   currentProfitThresholdEligibility,
+  decoratePrimaryTargetDropCoins,
   clearIneligibleFinalProfitHold,
   buildLowHpRecoveryThreatExitDecision,
   buildRecoveryContactGuardDecision,

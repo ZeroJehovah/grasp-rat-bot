@@ -102,7 +102,9 @@ const {
 const { lootRacePositioningCore } = require('../../strategy/loot-race-positioning');
 const {
   classifyCombatTargetRole,
+  dualTargetFireArbitration,
   missionTargetId,
+  primaryRewardSurvivalRacePolicy,
   secondaryCombatExitPolicy,
   secondaryFirePolicy,
   secondaryRetentionPolicy
@@ -825,13 +827,16 @@ function syncCombatShotExecutionEvents(stateful, state = {}, target = null) {
   const ledger = stateful.combatExecutionLedger
     && String(stateful.combatExecutionLedger.engagementGeneration || '') === engagementGeneration
     ? stateful.combatExecutionLedger
-    : { engagementGeneration, eventIds: [] };
+    : { engagementGeneration, eventIds: [], dispatchTimesByTarget: {} };
   const seen = new Set((ledger.eventIds || []).map(String));
+  ledger.dispatchTimesByTarget = ledger.dispatchTimesByTarget
+    && typeof ledger.dispatchTimesByTarget === 'object'
+    ? ledger.dispatchTimesByTarget
+    : {};
   let added = 0;
   for (const event of state?.command?.shooting?.executionEvents || []) {
     if (String(event?.controlGeneration || '') !== controlGeneration) continue;
     if (String(event?.engagementGeneration || '') !== engagementGeneration) continue;
-    if (event?.targetId !== null && event?.targetId !== undefined && String(event.targetId) !== targetId) continue;
     const eventId = `${controlGeneration}|${Number(event?.sequence || 0)}|${String(event?.type || '')}`;
     if (seen.has(eventId)) continue;
     seen.add(eventId);
@@ -841,13 +846,33 @@ function syncCombatShotExecutionEvents(stateful, state = {}, target = null) {
       Number(event?.sequence || 0)
     );
     const atMs = numberOrNull(event.atMs);
+    const eventTargetId = event?.targetId === null || event?.targetId === undefined
+      ? ''
+      : String(event.targetId);
+    const eventTargetsEngagementTarget = !eventTargetId || eventTargetId === targetId;
     if (event.type === 'shoot-dispatch') {
-      metrics.wireRequestCount = Number(metrics.wireRequestCount || 0) + 1;
-      metrics.requestedShots = metrics.wireRequestCount;
-      metrics.actualShots = metrics.wireRequestCount;
-      if (metrics.firstDispatchAt === null || metrics.firstDispatchAt === undefined) metrics.firstDispatchAt = atMs;
-      if (atMs !== null) metrics.lastDispatchAt = atMs;
-      if (target.combatRole === 'secondary' || target.secondaryTarget === true) {
+      if (eventTargetId && atMs !== null) {
+        const targetDispatchTimes = Array.isArray(ledger.dispatchTimesByTarget[eventTargetId])
+          ? ledger.dispatchTimesByTarget[eventTargetId]
+          : [];
+        targetDispatchTimes.push(atMs);
+        ledger.dispatchTimesByTarget[eventTargetId] = targetDispatchTimes
+          .filter(value => atMs - Number(value || 0) <= 30000)
+          .slice(-128);
+      }
+      if (eventTargetsEngagementTarget) {
+        metrics.wireRequestCount = Number(metrics.wireRequestCount || 0) + 1;
+        metrics.requestedShots = metrics.wireRequestCount;
+        metrics.actualShots = metrics.wireRequestCount;
+        if (metrics.firstDispatchAt === null || metrics.firstDispatchAt === undefined) metrics.firstDispatchAt = atMs;
+        if (atMs !== null) metrics.lastDispatchAt = atMs;
+      } else {
+        metrics.crossTargetDispatchCount = Number(metrics.crossTargetDispatchCount || 0) + 1;
+        metrics.lastCrossTargetId = eventTargetId;
+        metrics.lastCrossTargetDispatchAt = atMs;
+      }
+      if (eventTargetsEngagementTarget
+        && (target.combatRole === 'secondary' || target.secondaryTarget === true)) {
         const secondaryDispatchTimes = Array.isArray(stateful.combatTarget?.secondaryDispatchTimes)
           ? stateful.combatTarget.secondaryDispatchTimes
           : [];
@@ -860,7 +885,8 @@ function syncCombatShotExecutionEvents(stateful, state = {}, target = null) {
       if (metrics.stopDispatchAt === null || metrics.stopDispatchAt === undefined) {
         metrics.stopDispatchAt = atMs;
       }
-    } else if (event.type === 'shoot-skip' || event.type === 'shoot-transport-rejected') {
+    } else if (eventTargetsEngagementTarget
+      && (event.type === 'shoot-skip' || event.type === 'shoot-transport-rejected')) {
       metrics.executionSkipCount = Number(metrics.executionSkipCount || 0) + 1;
       const reason = String(event.skipReason || event.outcome || 'unknown').slice(0, 64);
       metrics.executionSkipReasons = metrics.executionSkipReasons && typeof metrics.executionSkipReasons === 'object'
@@ -897,6 +923,114 @@ function entityDropKnown(entity) {
     entity?.death_reward_preview,
     entity?.death_drop_coins
   ].some(value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)));
+}
+
+function observeDualTargetPrimary(stateful, primaryTargetId, visibleTarget, secondaryActive, options = {}) {
+  if (!stateful || typeof stateful !== 'object') return null;
+  const id = String(primaryTargetId || '');
+  if (!secondaryActive || !id) {
+    stateful.primaryTargetObservation = null;
+    return null;
+  }
+  const nowMs = Number(options.nowMs || Date.now());
+  const tick = numberOrNull(options.currentTick);
+  const previous = stateful.primaryTargetObservation
+    && String(stateful.primaryTargetObservation.targetId || '') === id
+    ? stateful.primaryTargetObservation
+    : null;
+  const visibleHp = hpValue(visibleTarget);
+  const visiblyAlive = Boolean(
+    visibleTarget
+      && visibleTarget.alive !== false
+      && (visibleHp === null || visibleHp > 0)
+  );
+  if (visiblyAlive) {
+    const previousSamples = Array.isArray(previous?.samples) ? previous.samples : [];
+    const samples = previousSamples
+      .filter(sample => nowMs - Number(sample?.at || 0) <= 10000)
+      .slice(-127);
+    samples.push({
+      at: nowMs,
+      tick,
+      hp: visibleHp,
+      x: numberOrNull(visibleTarget.x),
+      y: numberOrNull(visibleTarget.y)
+    });
+    stateful.primaryTargetObservation = {
+      targetId: id,
+      targetName: String(visibleTarget.name || previous?.targetName || ''),
+      x: numberOrNull(visibleTarget.x),
+      y: numberOrNull(visibleTarget.y),
+      hp: visibleHp,
+      drop: entityDropKnown(visibleTarget)
+        ? entityDropValue(visibleTarget)
+        : numberOrNull(previous?.drop),
+      dropKnown: entityDropKnown(visibleTarget) || previous?.dropKnown === true,
+      dropAuthority: String(visibleTarget.dropAuthority || previous?.dropAuthority || ''),
+      firstAliveAt: Number(previous?.firstAliveAt || nowMs),
+      lastAliveAt: nowMs,
+      aliveObservationCount: Math.max(0, Number(previous?.aliveObservationCount || 0)) + 1,
+      lastObservationTick: tick,
+      missingSince: 0,
+      missingObservationCount: 0,
+      settledAt: 0,
+      samples
+    };
+    if (stateful.primaryTargetSettlementEvidence
+      && String(stateful.primaryTargetSettlementEvidence.targetId || '') === id) {
+      stateful.primaryTargetSettlementEvidence = null;
+    }
+    return stateful.primaryTargetObservation;
+  }
+  if (!previous || Number(previous.aliveObservationCount || 0) < 2) return previous;
+  const explicitDeath = Boolean(
+    visibleTarget
+      && (visibleTarget.alive === false || (visibleHp !== null && visibleHp <= 0))
+  );
+  const observationAdvanced = tick === null
+    || numberOrNull(previous.lastObservationTick) === null
+    || tick > Number(previous.lastObservationTick);
+  const missingSince = Number(previous.missingSince || nowMs);
+  const missingObservationCount = Math.max(0, Number(previous.missingObservationCount || 0))
+    + (observationAdvanced ? 1 : 0);
+  const confirmMs = Math.max(0, Number(options.secondaryTargetMissingConfirmMs ?? 300));
+  const confirmFrames = Math.max(1, Math.round(Number(options.secondaryTargetMissingConfirmFrames ?? 3)));
+  const confirmedMissing = nowMs - missingSince >= confirmMs && missingObservationCount >= confirmFrames;
+  const settledAt = Number(previous.settledAt || 0)
+    || (explicitDeath || confirmedMissing ? nowMs : 0);
+  stateful.primaryTargetObservation = {
+    ...previous,
+    hp: explicitDeath ? visibleHp : previous.hp,
+    lastObservationTick: observationAdvanced ? tick : previous.lastObservationTick,
+    missingSince,
+    missingObservationCount,
+    settledAt
+  };
+  if (settledAt > 0 && !stateful.primaryTargetSettlementEvidence) {
+    stateful.primaryTargetSettlementEvidence = {
+      active: true,
+      targetId: id,
+      targetName: String(previous.targetName || ''),
+      x: numberOrNull(previous.x),
+      y: numberOrNull(previous.y),
+      hp: explicitDeath ? visibleHp : numberOrNull(previous.hp),
+      drop: numberOrNull(previous.drop),
+      dropKnown: previous.dropKnown === true,
+      dropAuthority: String(previous.dropAuthority || ''),
+      observedAtMs: settledAt,
+      tick,
+      explicitDeath,
+      confirmedMissing,
+      primaryTargetDropPriority: true,
+      killAttribution: 'external-or-unknown',
+      authority: 'realtime',
+      published: false,
+      reason: explicitDeath
+        ? 'dual-target-primary-death-observed'
+        : 'dual-target-primary-disappearance-confirmed'
+    };
+  }
+  return stateful.primaryTargetObservation;
 }
 
 function combatTargetFrameGapHoldLimit(options = {}) {
@@ -5696,14 +5830,61 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   const primaryTargetDistance = primaryTargetVisible
     ? distanceBetween(self, primaryTargetVisible)
     : Infinity;
-  const primaryCanAttack = Boolean(
-    primaryTargetVisible
-      && primaryTargetVisible.alive !== false
-      && !isInvulnerableEntity(primaryTargetVisible)
+  const primaryTargetObservation = observeDualTargetPrimary(
+    stateful,
+    primaryTargetId,
+    primaryTargetVisible,
+    secondaryTargetActive,
+    { ...options, currentTick: realtime.tick }
+  );
+  const primaryFireTarget = primaryTargetVisible ? {
+    ...primaryTargetVisible,
+    combatRole: 'primary',
+    role: 'primary',
+    primaryTargetId,
+    secondaryTarget: false,
+    profitPrimaryTarget: true
+  } : null;
+  const primaryAim = primaryFireTarget ? estimateAim(self, primaryFireTarget, {
+    ...options,
+    combatTargetState: primaryTargetObservation ? {
+      motionSamples: primaryTargetObservation.samples || []
+    } : null,
+    observedTick: realtime.tick,
+    realtimeStateObservedAtMs: realtime.receivedAtMs,
+    executionTiming: state?.command?.shooting?.timing || options.executionTiming,
+    latestConfirmedShot: null,
+    shooterOriginErrorSummary: null,
+    actualShots: 0
+  }) : { ok: false, reason: 'missing-primary-target' };
+  const primaryInRange = Boolean(
+    primaryFireTarget
       && Number.isFinite(primaryTargetDistance)
       && primaryTargetDistance <= Math.max(0, Number(options.attackRange || COMBAT_CONSTANTS.ATTACK_RANGE))
-      && hpValue(primaryTargetVisible) !== 0
   );
+  const primaryFireState = primaryFireTarget ? determineCombatFireState(self || {}, primaryFireTarget, {
+    targetPressureFire: false,
+    closePressure: false,
+    closePressureAttack: false,
+    hardReserveMs: runtimeHardReserveMs,
+    dodgeReserveMs: runtimeDodgeReserveMs,
+    pressureReserveMs: runtimePressureReserveMs,
+    opponentProbeReserveMs: options.combatOpponentProbeReserveMs ?? COMBAT_CONSTANTS.OPPONENT_PROBE_RESERVE_MS,
+    opponentProbeEveryMs: options.combatOpponentProbeEveryMs ?? COMBAT_CONSTANTS.OPPONENT_PROBE_EVERY_MS,
+    finishReserveMs: options.combatShootFinishLowThreatDodgeReserveMs ?? COMBAT_CONSTANTS.FINISH_LOW_THREAT_RESERVE_MS,
+    passiveReserveMs: options.combatShootPassiveRunnerDodgeReserveMs ?? COMBAT_CONSTANTS.PASSIVE_RUNNER_DODGE_RESERVE_MS,
+    shotCostMs: options.combatShotStaminaCostMs ?? 500,
+    dodgeActionCostMs,
+    passiveRunner: false,
+    finishLowThreat: false
+  }) : { state: 'disabled', cadenceMs: Infinity, reserve: null, reason: 'no-primary-target' };
+  const primaryProfitKillRace = primaryFireTarget ? profitKillRacePolicy({
+    self,
+    target: primaryFireTarget,
+    primaryTarget: true,
+    realtimeTargets: targets,
+    nowMs: options.nowMs
+  }, options) : { active: false, fireAllowed: false, reason: 'missing-primary-target' };
   const secondaryDispatchTimes = Array.isArray(stateful?.combatTarget?.secondaryDispatchTimes)
     ? stateful.combatTarget.secondaryDispatchTimes
     : [];
@@ -5714,11 +5895,10 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
         dispatchTimes: secondaryDispatchTimes,
         nowMs: Number(options.nowMs || Date.now()),
         lastShotAt: secondaryDispatchTimes.at(-1) || 0,
-        primaryCanAttack,
         invulnerable: isInvulnerableEntity(target)
       }, options)
     : null;
-  const effectiveExecutionCadenceMs = secondaryPolicy && executionCadenceMs !== null
+  let effectiveExecutionCadenceMs = secondaryPolicy && executionCadenceMs !== null
     ? Math.max(executionCadenceMs, Number(secondaryPolicy.cadenceMs || 0))
     : executionCadenceMs;
   const advisoryBaseCadenceMs = Number.isFinite(Number(lowConfidence.cadenceMs)) && lowConfidence.throttle
@@ -5774,22 +5954,93 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     fireState,
     contactEntryOnly
   });
-  let resolvedWouldShoot = fireAuthorization.wouldShoot;
-  let resolvedFinalFireBlocker = fireAuthorization.finalFireBlocker;
-  let resolvedFireAuthorizationClass = fireAuthorization.fireAuthorizationClass;
-  if (resolvedWouldShoot && secondaryPolicy && !secondaryPolicy.allowed) {
+  const primaryFireAuthorization = resolveEstablishedCombatFireAuthorizationCore({
+    targetPresent: Boolean(primaryFireTarget),
+    aim: primaryAim,
+    aimOk: primaryAim.ok,
+    inRange: primaryInRange,
+    fireState: primaryFireState,
+    contactEntryOnly: false
+  });
+  let primaryAuthorized = Boolean(
+    primaryFireAuthorization.wouldShoot
+      && primaryFireTarget?.alive !== false
+      && !isInvulnerableEntity(primaryFireTarget)
+      && hpValue(primaryFireTarget) !== null
+      && hpValue(primaryFireTarget) > 0
+  );
+  let primaryFinalFireBlocker = primaryFireAuthorization.finalFireBlocker;
+  let primaryFireAuthorizationClass = primaryFireAuthorization.fireAuthorizationClass;
+  if (primaryFireTarget && isInvulnerableEntity(primaryFireTarget)) {
+    primaryAuthorized = false;
+    primaryFinalFireBlocker = 'primary-target-invulnerable';
+    primaryFireAuthorizationClass = 'primary-target-invulnerable';
+  } else if (primaryFireTarget && (primaryFireTarget.alive === false || hpValue(primaryFireTarget) === 0)) {
+    primaryAuthorized = false;
+    primaryFinalFireBlocker = 'primary-target-dead';
+    primaryFireAuthorizationClass = 'primary-target-dead';
+  }
+  if (primaryAuthorized && primaryProfitKillRace.active && !primaryProfitKillRace.fireAllowed) {
+    primaryAuthorized = false;
+    primaryFinalFireBlocker = `profit-kill-race:${primaryProfitKillRace.reason}`;
+    primaryFireAuthorizationClass = 'profit-target-competition-position-blocked';
+  }
+  const primaryRewardSurvivalRace = primaryRewardSurvivalRacePolicy({
+    selfHp: hpValue(self),
+    primaryHp: hpValue(primaryFireTarget),
+    primaryDistanceCm: primaryTargetDistance,
+    primaryTarget: primaryFireTarget,
+    secondarySamples: combatTargetState?.motionSamples || [],
+    primarySamples: primaryTargetObservation?.samples || [],
+    closePressure: secondaryPolicy?.closePressure,
+    nowMs: Number(options.nowMs || Date.now())
+  }, options);
+  const dualTargetArbitration = dualTargetFireArbitration({
+    secondaryActive: secondaryTargetActive,
+    primaryAuthorized,
+    closePressure: secondaryPolicy?.closePressure,
+    rewardRace: primaryRewardSurvivalRace
+  });
+  const primarySelected = dualTargetArbitration.primarySelected === true;
+  const selectedFireTarget = primarySelected ? primaryFireTarget : target;
+  const selectedAim = primarySelected ? primaryAim : aim;
+  const selectedFireState = primarySelected ? primaryFireState : fireState;
+  const selectedInRange = primarySelected ? primaryInRange : inRange;
+  const fireTargetRole = primarySelected
+    ? 'primary'
+    : (secondaryTargetActive ? 'secondary' : 'current');
+  let resolvedWouldShoot = primarySelected
+    ? primaryAuthorized
+    : fireAuthorization.wouldShoot;
+  let resolvedFinalFireBlocker = primarySelected
+    ? primaryFinalFireBlocker
+    : fireAuthorization.finalFireBlocker;
+  let resolvedFireAuthorizationClass = primarySelected
+    ? primaryFireAuthorizationClass
+    : fireAuthorization.fireAuthorizationClass;
+  if (!primarySelected && resolvedWouldShoot && secondaryPolicy && !secondaryPolicy.allowed) {
     resolvedWouldShoot = false;
     resolvedFinalFireBlocker = `secondary:${secondaryPolicy.reason}`;
     resolvedFireAuthorizationClass = 'secondary-defensive-policy-blocked';
   }
-  const effectiveProfitKillRace = movement?.profitKillRace || profitKillRacePolicy({
-    self,
-    target,
-    primaryTarget: target?.combatRole === 'primary',
-    realtimeTargets: targets,
-    nowMs: options.nowMs
-  }, options);
-  if (resolvedWouldShoot && effectiveProfitKillRace.active && !effectiveProfitKillRace.fireAllowed) {
+  if (primarySelected) {
+    effectiveExecutionCadenceMs = Number.isFinite(Number(primaryFireState.cadenceMs))
+      ? Number(primaryFireState.cadenceMs)
+      : null;
+  }
+  const effectiveProfitKillRace = primarySelected
+    ? primaryProfitKillRace
+    : (movement?.profitKillRace || profitKillRacePolicy({
+        self,
+        target,
+        primaryTarget: target?.combatRole === 'primary',
+        realtimeTargets: targets,
+        nowMs: options.nowMs
+      }, options));
+  if (resolvedWouldShoot
+    && !primarySelected
+    && effectiveProfitKillRace.active
+    && !effectiveProfitKillRace.fireAllowed) {
     resolvedWouldShoot = false;
     resolvedFinalFireBlocker = `profit-kill-race:${effectiveProfitKillRace.reason}`;
     resolvedFireAuthorizationClass = 'profit-target-competition-position-blocked';
@@ -5810,13 +6061,25 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     }
   }
   const commandSuppressed = Boolean(!liveCombatEnabled || !resolvedWouldShoot);
+  const dispatchWindowMs = Math.max(1000, Number(
+    secondaryPolicy?.windowMs || options.secondaryTargetWindowMs || 5000
+  ));
+  const dispatchCutoff = Number(options.nowMs || Date.now()) - dispatchWindowMs;
+  const fireDispatchTimesByTarget = stateful?.combatExecutionLedger?.dispatchTimesByTarget || {};
+  const selectedFireTargetId = String(combatTargetId(selectedFireTarget) || '');
+  const primaryDispatchTimes = primaryTargetId && Array.isArray(fireDispatchTimesByTarget[primaryTargetId])
+    ? fireDispatchTimesByTarget[primaryTargetId]
+    : [];
+  const selectedDispatchTimes = selectedFireTargetId && Array.isArray(fireDispatchTimesByTarget[selectedFireTargetId])
+    ? fireDispatchTimesByTarget[selectedFireTargetId]
+    : [];
   const result = {
     ok: Boolean(self),
     dryRun: !liveCombatEnabled,
     liveEnabled: liveCombatEnabled,
     authority: 'realtime',
     tick: realtime.tick ?? null,
-    timing: aim.ok ? aim.timing : {
+    timing: selectedAim.ok ? selectedAim.timing : {
       observedTick: realtime.tick ?? null,
       createdTickEstimate: null,
       executionDelayTicks: null,
@@ -5827,6 +6090,9 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     movementDistance: combatMovementDistance,
     self: summarizeCombatTarget(self),
     target: summarizeCombatTarget(target),
+    fireTarget: summarizeCombatTarget(selectedFireTarget),
+    fireTargetRole,
+    fireMode: dualTargetArbitration.mode,
     candidates: (contactEntryOnly ? [target, ...candidates] : candidates).slice(0, 5).map(summarizeCombatTarget),
     contactEntryGuard: {
       ...contactEntryGuard,
@@ -5860,7 +6126,10 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
         : ''
     } : null,
     movement,
-    aim: aim.ok ? aim : null,
+    aim: selectedAim.ok ? selectedAim : null,
+    fireAim: selectedAim.ok ? selectedAim : null,
+    defensiveAim: aim.ok ? aim : null,
+    primaryAim: primaryAim.ok ? primaryAim : null,
     evasiveAimExperiment: combatTargetState?.evasiveAimExperiment || null,
     behavior: behaviorState ? {
       mode: behaviorState.mode,
@@ -5896,17 +6165,21 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       dryRunOnly: !liveCombatEnabled,
       wouldShoot: resolvedWouldShoot,
       commandSuppressed,
-      inRange,
-      state: fireState.state,
-      reason: fireState.reason,
-      cadenceMs: Number.isFinite(Number(fireState.cadenceMs)) ? Number(fireState.cadenceMs) : null,
-      reserve: numberOrNull(fireState.reserve),
-      stamina5s: fireState.stamina5s === null ? null : numberOrNull(fireState.stamina5s),
-      requiredStaminaMs: numberOrNull(fireState.requiredStaminaMs),
-      hardReserveMs: numberOrNull(fireState.hardReserve),
-      dodgeReserveMs: numberOrNull(fireState.dodgeReserve),
-      shotCostMs: numberOrNull(fireState.shotCostMs),
-      dodgeActionCostMs: numberOrNull(fireState.dodgeActionCostMs),
+      target: summarizeCombatTarget(selectedFireTarget),
+      targetRole: fireTargetRole,
+      mode: dualTargetArbitration.mode,
+      aim: selectedAim.ok ? selectedAim : null,
+      inRange: selectedInRange,
+      state: selectedFireState.state,
+      reason: selectedFireState.reason,
+      cadenceMs: Number.isFinite(Number(selectedFireState.cadenceMs)) ? Number(selectedFireState.cadenceMs) : null,
+      reserve: numberOrNull(selectedFireState.reserve),
+      stamina5s: selectedFireState.stamina5s === null ? null : numberOrNull(selectedFireState.stamina5s),
+      requiredStaminaMs: numberOrNull(selectedFireState.requiredStaminaMs),
+      hardReserveMs: numberOrNull(selectedFireState.hardReserve),
+      dodgeReserveMs: numberOrNull(selectedFireState.dodgeReserve),
+      shotCostMs: numberOrNull(selectedFireState.shotCostMs),
+      dodgeActionCostMs: numberOrNull(selectedFireState.dodgeActionCostMs),
       movementDodgeApplied,
       lowConfidenceThrottle: Boolean(lowConfidence.throttle),
       behaviorSuppressed: behaviorSuppressFire,
@@ -5922,20 +6195,32 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       responsePolicyShadow,
       fireAuthorizationClass: resolvedFireAuthorizationClass,
       finalFireBlocker: resolvedFinalFireBlocker,
+      dualTargetArbitration,
+      primaryFireAuthorization: {
+        ...primaryFireAuthorization,
+        authorized: primaryAuthorized,
+        finalFireBlocker: primaryFinalFireBlocker,
+        fireAuthorizationClass: primaryFireAuthorizationClass
+      },
+      primaryRewardSurvivalRace,
+      secondaryFocusActive: dualTargetArbitration.secondaryFocusActive === true,
       secondaryPolicy: secondaryPolicy ? {
         ...secondaryPolicy,
         primaryTargetId,
-        primaryCanAttack,
-        dispatchCount: secondaryDispatchTimes.length
+        primaryAuthorized,
+        dispatchCount: secondaryDispatchTimes.length,
+        dispatchCountInWindow: secondaryDispatchTimes.filter(at => Number(at) >= dispatchCutoff).length,
+        primaryDispatchCountInWindow: primaryDispatchTimes.filter(at => Number(at) >= dispatchCutoff).length,
+        selectedDispatchCountInWindow: selectedDispatchTimes.filter(at => Number(at) >= dispatchCutoff).length
       } : null,
       profitKillRace: effectiveProfitKillRace,
       highEntropyFireGate: executionHighEntropyFireGate,
       probePhase: probeState,
-      fireRiskClassification: aim.fireRiskClassification || combatTargetState?.fireRiskClassification || null,
-      trajectoryCoverage: aim.trajectoryCoverage || null,
+      fireRiskClassification: selectedAim.fireRiskClassification || combatTargetState?.fireRiskClassification || null,
+      trajectoryCoverage: selectedAim.trajectoryCoverage || null,
       expectedHitProbability,
       selectedRouteProbability,
-      evasiveAim: aim.evasiveAim || null,
+      evasiveAim: selectedAim.evasiveAim || null,
       recentAcceptedHitRate: recentHitSummary.hitRate,
       recentAcceptedShotCount: recentHitSummary.shotCount,
       noProgressAcceptedShots,

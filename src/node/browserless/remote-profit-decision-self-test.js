@@ -670,7 +670,7 @@ function assertDualTargetRuntimeRules() {
     entity_id: 2042,
     user_id: 42,
     name: 'primary-profit',
-    x: 5000,
+    x: -5000,
     y: 0,
     vx: 0,
     vy: 0,
@@ -701,9 +701,24 @@ function assertDualTargetRuntimeRules() {
     drop: 1
   };
   const dualAdapter = createBrowserlessDecisionAdapter(common);
+  const defensiveFrame = state(
+    fullStaminaSelf({ hp: 70 }),
+    [{ ...primary, invulnerable: true, invulnerable_remaining_ms: 5000 }, secondary]
+  );
+  defensiveFrame.realtime.bullets = [{
+    bullet_id: 'secondary-defensive-shot',
+    owner_user_id: 8,
+    x: 8000,
+    y: 10000,
+    target_x: 0,
+    target_y: 10000,
+    speed_per_tick: 500,
+    created_tick: 1,
+    expire_tick: 30
+  }];
   const dual = decide(
     dualAdapter,
-    state(fullStaminaSelf({ hp: 70 }), [primary, secondary]),
+    defensiveFrame,
     1000,
     null,
     common
@@ -711,9 +726,173 @@ function assertDualTargetRuntimeRules() {
   assert.strictEqual(dual.action?.kind, 'combat-live');
   assert.strictEqual(dual.combat?.target?.combatRole, 'secondary');
   assert.strictEqual(dual.combat?.target?.primaryTargetId, '42');
-  assert.strictEqual(dual.combat?.shooting?.wouldShoot, false);
-  assert.strictEqual(dual.combat?.shooting?.secondaryPolicy?.reason, 'primary-target-fire-available');
+  assert.strictEqual(dual.combat?.fireTarget?.userId, 8);
+  assert.strictEqual(dual.combat?.shooting?.wouldShoot, true);
+  assert.strictEqual(dual.combat?.shooting?.mode, 'secondary-defensive');
+  assert.strictEqual(dual.combat?.shooting?.secondaryPolicy?.opponentShots, 1);
   assert.strictEqual(dual.combat?.exit, null);
+
+  const primaryFrame = state(fullStaminaSelf({ hp: 70 }), [primary, secondary]);
+  primaryFrame.realtime.tick = 2;
+  const primarySelected = decide(dualAdapter, primaryFrame, 1100, null, common);
+  assert.strictEqual(primarySelected.combat?.target?.userId, 8);
+  assert.strictEqual(primarySelected.combat?.fireTarget?.userId, 42);
+  assert.strictEqual(primarySelected.combat?.shooting?.targetRole, 'primary');
+  assert.strictEqual(primarySelected.combat?.shooting?.mode, 'primary-profit');
+  assert.strictEqual(primarySelected.combat?.shooting?.wouldShoot, true);
+
+  let missingPrimaryDecision = null;
+  for (const [tick, nowMs] of [[3, 1200], [4, 1350], [5, 1500]]) {
+    const missingPrimaryFrame = state(fullStaminaSelf({ hp: 80 }), [secondary]);
+    missingPrimaryFrame.realtime.tick = tick;
+    missingPrimaryFrame.realtime.receivedAtMs = nowMs;
+    missingPrimaryDecision = decide(dualAdapter, missingPrimaryFrame, nowMs, null, common);
+  }
+  const missingPrimaryState = dualAdapter.getState();
+  const primarySettlement = Object.values(missingPrimaryState.postKillSettlements || {})
+    .find(settlement => settlement?.primaryTargetDropPriority === true);
+  assert.strictEqual(primarySettlement?.targetId, '42');
+  assert.strictEqual(primarySettlement?.x, -5000);
+  assert.strictEqual(primarySettlement?.authority, 'realtime');
+  assert.strictEqual(primarySettlement?.killAttribution, 'external-or-unknown');
+  assert.strictEqual(missingPrimaryState.primaryTargetSettlementEvidence?.published, true);
+
+  const reappearanceAdapter = createBrowserlessDecisionAdapter(common);
+  const replayPrimaryPresence = (entities, tick, nowMs) => {
+    const frame = state(fullStaminaSelf({ hp: 80 }), entities);
+    frame.realtime.tick = tick;
+    frame.realtime.receivedAtMs = nowMs;
+    return decide(reappearanceAdapter, frame, nowMs, null, common);
+  };
+  replayPrimaryPresence([primary, secondary], 20, 5000);
+  replayPrimaryPresence([primary, secondary], 21, 5050);
+  replayPrimaryPresence([secondary], 22, 5100);
+  replayPrimaryPresence([secondary], 23, 5250);
+  replayPrimaryPresence([secondary], 24, 5400);
+  const firstDisappearanceEvidence = {
+    ...reappearanceAdapter.getState().primaryTargetSettlementEvidence
+  };
+  assert.strictEqual(firstDisappearanceEvidence.targetId, '42');
+  assert.strictEqual(firstDisappearanceEvidence.published, true);
+  assert.strictEqual(firstDisappearanceEvidence.observedAtMs, 5400);
+
+  replayPrimaryPresence([primary, secondary], 25, 5450);
+  const reappearedState = reappearanceAdapter.getState();
+  assert.strictEqual(reappearedState.primaryTargetSettlementEvidence, null);
+  assert.ok(Object.values(reappearedState.postKillSettlements || {}).some(settlement => (
+    settlement?.targetId === '42'
+      && settlement?.terminalReason === 'target-reappeared-alive'
+      && settlement?.active === false
+  )));
+
+  replayPrimaryPresence([primary, secondary], 26, 5500);
+  replayPrimaryPresence([secondary], 27, 5550);
+  replayPrimaryPresence([secondary], 28, 5700);
+  replayPrimaryPresence([secondary], 29, 5850);
+  const secondDisappearanceState = reappearanceAdapter.getState();
+  assert.strictEqual(secondDisappearanceState.primaryTargetSettlementEvidence?.targetId, '42');
+  assert.strictEqual(secondDisappearanceState.primaryTargetSettlementEvidence?.published, true);
+  assert.strictEqual(secondDisappearanceState.primaryTargetSettlementEvidence?.observedAtMs, 5850);
+  assert.ok(Object.values(secondDisappearanceState.postKillSettlements || {}).some(settlement => (
+    settlement?.targetId === '42'
+      && settlement?.primaryTargetDropPriority === true
+      && settlement?.active !== false
+      && settlement?.startedAt === 5850
+  )));
+
+  const pressureBullet = (id, tick) => ({
+    bullet_id: id,
+    owner_user_id: 8,
+    x: 1000,
+    y: 5000,
+    target_x: 0,
+    target_y: 5000,
+    speed_per_tick: 500,
+    created_tick: tick,
+    expire_tick: tick + 30
+  });
+  const pressureDecision = (adapter, primaryTarget, tick, nowMs, bullets, selfHp = 70) => {
+    const pressureSecondary = { ...secondary, x: 1000, y: 0 };
+    const current = state(fullStaminaSelf({ hp: selfHp }), [primaryTarget, pressureSecondary]);
+    current.realtime.tick = tick;
+    current.realtime.receivedAtMs = nowMs;
+    current.realtime.bullets = bullets;
+    return decide(adapter, current, nowMs, null, common);
+  };
+  const unsafePressureAdapter = createBrowserlessDecisionAdapter(common);
+  pressureDecision(
+    unsafePressureAdapter,
+    { ...primary, x: -5000, hp: 100 },
+    10,
+    2000,
+    [pressureBullet('pressure-1', 10)]
+  );
+  const unsafePressure = pressureDecision(
+    unsafePressureAdapter,
+    { ...primary, x: -5000, hp: 100 },
+    11,
+    2100,
+    [pressureBullet('pressure-1', 10), pressureBullet('pressure-2', 11)]
+  );
+  assert.strictEqual(unsafePressure.combat?.shooting?.secondaryPolicy?.closePressure?.active, true);
+  assert.strictEqual(unsafePressure.combat?.shooting?.mode, 'secondary-focus');
+  assert.strictEqual(unsafePressure.combat?.shooting?.secondaryFocusActive, true);
+  assert.strictEqual(unsafePressure.combat?.fireTarget?.userId, 8);
+  assert.strictEqual(unsafePressure.combat?.shooting?.secondaryPolicy?.throttleExempt, true);
+  assert.strictEqual(unsafePressure.combat?.movement?.secondaryTarget?.direction?.dx, -1);
+
+  const safePressureAdapter = createBrowserlessDecisionAdapter(common);
+  pressureDecision(
+    safePressureAdapter,
+    { ...primary, x: -500, hp: 1 },
+    20,
+    3000,
+    [pressureBullet('safe-pressure-1', 20)],
+    100
+  );
+  const safePressure = pressureDecision(
+    safePressureAdapter,
+    { ...primary, x: -500, hp: 1 },
+    21,
+    3100,
+    [pressureBullet('safe-pressure-1', 20), pressureBullet('safe-pressure-2', 21)],
+    100
+  );
+  assert.strictEqual(safePressure.combat?.shooting?.secondaryPolicy?.closePressure?.active, true);
+  assert.strictEqual(safePressure.combat?.shooting?.mode, 'primary-profit');
+  assert.strictEqual(safePressure.combat?.fireTarget?.userId, 42);
+  assert.strictEqual(safePressure.combat?.shooting?.primaryRewardSurvivalRace?.continuePrimary, true);
+
+  const primaryDrop = {
+    drop_id: 'primary-drop',
+    source_user_id: 42,
+    amount: 1,
+    x: -5000,
+    y: 0,
+    authority: 'realtime'
+  };
+  const primaryDropDecision = decide(
+    dualAdapter,
+    state(fullStaminaSelf({ hp: 80 }), [secondary], [primaryDrop], true),
+    1550,
+    null,
+    common
+  );
+  assert.strictEqual(primaryDropDecision.action?.reason, 'primary-target-drop-priority');
+  assert.strictEqual(primaryDropDecision.action?.target?.primaryTargetDropPriority, true);
+  assert.strictEqual(primaryDropDecision.action?.target?.selfKilledPlayerDrop, false);
+  assert.strictEqual(primaryDropDecision.action?.target?.killAttribution, 'external-or-unknown');
+
+  const lowHpPrimaryDropDecision = decide(
+    dualAdapter,
+    state(fullStaminaSelf({ hp: 50 }), [secondary], [primaryDrop], true),
+    1600,
+    null,
+    common
+  );
+  assert.strictEqual(lowHpPrimaryDropDecision.action?.shouldLeave, true);
+  assert.notStrictEqual(lowHpPrimaryDropDecision.action?.reason, 'primary-target-drop-priority');
+  assert.strictEqual(lowHpPrimaryDropDecision.action?.finalCandidate?.hardGate, true);
 
   const raceAdapter = createBrowserlessDecisionAdapter({
     ...common,

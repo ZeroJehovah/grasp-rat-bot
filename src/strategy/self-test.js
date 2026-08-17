@@ -64,8 +64,11 @@ const {
 } = require('./recovery-profit-priority');
 const {
   classifyCombatTargetRole,
+  dualTargetFireArbitration,
+  primaryRewardSurvivalRacePolicy,
   secondaryCadenceMs,
   secondaryCombatExitPolicy,
+  secondaryClosePressurePolicy,
   secondaryFirePolicy,
   secondaryRetentionPolicy
 } = require('./dual-target-policy');
@@ -317,8 +320,8 @@ function runStrategyModuleSelfTests() {
   });
 
   const secondarySamples = [
-    { at: 7000, newBulletCount: 1 },
-    { at: 9000, newBulletCount: 1 }
+    { at: 7000, newBulletCount: 1, selfHp: 70 },
+    { at: 9000, newBulletCount: 1, selfHp: 67 }
   ];
   const secondaryAllowed = secondaryFirePolicy({
     nowMs: 10000,
@@ -332,11 +335,22 @@ function runStrategyModuleSelfTests() {
     dispatchTimes: [6000, 8000],
     lastShotAt: 8000
   });
-  const secondaryPrimaryBlocked = secondaryFirePolicy({
+  const secondaryCloseExempt = secondaryFirePolicy({
     nowMs: 10000,
-    combatTargetState: { motionSamples: secondarySamples },
-    dispatchTimes: [],
-    primaryCanAttack: true
+    target: { distance: 1000 },
+    combatTargetState: {
+      motionSamples: [
+        { at: 9500, newBulletCount: 1 },
+        { at: 9900, newBulletCount: 1 }
+      ]
+    },
+    dispatchTimes: [9600, 9700, 9800, 9900],
+    lastShotAt: 9900
+  });
+  const secondaryCloseNotSustained = secondaryClosePressurePolicy({
+    nowMs: 10000,
+    target: { distance: 1000 },
+    combatTargetState: { motionSamples: [{ at: 9900, newBulletCount: 1 }] }
   });
   const secondaryInvulnerableBlocked = secondaryFirePolicy({
     nowMs: 10000,
@@ -358,20 +372,84 @@ function runStrategyModuleSelfTests() {
     combatRole: 'secondary'
   }, 12000);
   results.push({
-    name: 'secondary-fire-cadence-quota-primary-and-invulnerable-gates',
-    passed: secondaryCadenceMs(0) === 600
-      && secondaryCadenceMs(10000) === 1100
+    name: 'secondary-fire-cadence-quota-close-pressure-and-invulnerable-gates',
+    passed: secondaryCadenceMs(0) === 160
+      && secondaryCadenceMs(10000) === 160
       && secondaryAllowed.allowed === true
       && secondaryAllowed.ownShots === 1
       && secondaryAllowed.opponentShots === 2
       && secondaryQuotaBlocked.allowed === false
       && secondaryQuotaBlocked.reason === 'secondary-five-second-shot-quota'
-      && secondaryPrimaryBlocked.reason === 'primary-target-fire-available'
+      && secondaryCloseExempt.allowed === true
+      && secondaryCloseExempt.throttleExempt === true
+      && secondaryCloseExempt.reason === 'secondary-close-pressure-normal-fire'
+      && secondaryCloseNotSustained.active === false
+      && secondaryCloseNotSustained.sustainedAttack === false
       && secondaryInvulnerableBlocked.reason === 'secondary-invulnerable-dodge-only'
       && retainedSecondaryThreat.retained === true
       && retainedSecondaryThreat.ageMs === 5000
       && expiredSecondaryThreat.retained === false
       && proximityOnlySecondary.retained === false
+  });
+
+  const unsafePrimaryRace = primaryRewardSurvivalRacePolicy({
+    nowMs: 10000,
+    selfHp: 67,
+    primaryHp: 100,
+    primaryDistanceCm: 5000,
+    secondarySamples,
+    closePressure: { active: true }
+  });
+  const safePrimaryRace = primaryRewardSurvivalRacePolicy({
+    nowMs: 10000,
+    selfHp: 100,
+    primaryHp: 1,
+    primaryDistanceCm: 100,
+    secondarySamples,
+    closePressure: { active: true }
+  });
+  const equalEtaRace = primaryRewardSurvivalRacePolicy({
+    nowMs: 10000,
+    selfHp: 53,
+    primaryHp: 1,
+    primaryDistanceCm: 100,
+    secondarySamples: [
+      { at: 9000, newBulletCount: 1, selfHp: 56 },
+      { at: 10000, newBulletCount: 1, selfHp: 53 }
+    ],
+    closePressure: { active: true }
+  }, {
+    secondaryTargetRacePrimaryOwnDamageRateHpPerSec: 1,
+    secondaryTargetRacePickupConfirmMs: 0,
+    secondaryTargetRaceSafetyMarginMs: 0
+  });
+  const primaryArbitration = dualTargetFireArbitration({
+    secondaryActive: true,
+    primaryAuthorized: true,
+    closePressure: { active: false },
+    rewardRace: safePrimaryRace
+  });
+  const defensiveArbitration = dualTargetFireArbitration({
+    secondaryActive: true,
+    primaryAuthorized: false,
+    closePressure: { active: false }
+  });
+  const focusArbitration = dualTargetFireArbitration({
+    secondaryActive: true,
+    primaryAuthorized: true,
+    closePressure: { active: true },
+    rewardRace: unsafePrimaryRace
+  });
+  results.push({
+    name: 'dual-target-primary-reward-survival-race-and-fire-arbitration',
+    passed: unsafePrimaryRace.evaluated === true
+      && unsafePrimaryRace.shouldFocusSecondary === true
+      && safePrimaryRace.continuePrimary === true
+      && equalEtaRace.primaryRewardEtaMs === equalEtaRace.selfHp50EtaMs
+      && equalEtaRace.shouldFocusSecondary === true
+      && primaryArbitration.mode === 'primary-profit'
+      && defensiveArbitration.mode === 'secondary-defensive'
+      && focusArbitration.mode === 'secondary-focus'
   });
 
   const killRaceBlocked = profitKillRacePolicy({

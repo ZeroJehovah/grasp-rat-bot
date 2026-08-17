@@ -1087,16 +1087,24 @@ function buildBattleSummary(battle, reason, finalizeMs) {
     ? { ...battle.lastMetrics }
     : {};
   const executionEvents = Array.isArray(battle.shotExecutionEvents) ? battle.shotExecutionEvents : [];
+  const metricsTargetId = String(metrics.targetId ?? battle.targetId ?? '');
+  const executionTargetsBattle = event => event?.targetId === null
+    || event?.targetId === undefined
+    || String(event.targetId) === ''
+    || String(event.targetId) === metricsTargetId;
   const lastExecutionSequence = Math.max(0, Number(metrics.lastExecutionSequence || 0));
   const unsyncedDispatches = executionEvents.filter(event => event.type === 'shoot-dispatch'
+    && executionTargetsBattle(event)
     && Number(event.sequence || 0) > lastExecutionSequence);
   if (unsyncedDispatches.length) {
     metrics.wireRequestCount = Math.max(0, Number(metrics.wireRequestCount || 0)) + unsyncedDispatches.length;
     metrics.requestedShots = metrics.wireRequestCount;
     metrics.actualShots = metrics.wireRequestCount;
   }
-  const dispatchEvents = executionEvents.filter(event => event.type === 'shoot-dispatch');
-  const stopEvent = executionEvents.find(event => event.type === 'shoot-stop') || null;
+  const dispatchEvents = executionEvents.filter(event => event.type === 'shoot-dispatch'
+    && executionTargetsBattle(event));
+  const stopEvent = executionEvents.find(event => event.type === 'shoot-stop'
+    && executionTargetsBattle(event)) || null;
   if (dispatchEvents.length) {
     metrics.firstDispatchAt = numberOrNull(metrics.firstDispatchAt) ?? numberOrNull(dispatchEvents[0].atMs);
     metrics.lastDispatchAt = numberOrNull(dispatchEvents.at(-1)?.atMs) ?? numberOrNull(metrics.lastDispatchAt);
@@ -1700,7 +1708,11 @@ function createCombatBattleLog(options = {}) {
     let origin = requestConflict
       ? { status: 'ambiguous-request' }
       : (explicitRequestOrigin || generationOrigin || null);
+    const eventHasTargetId = event.targetId !== null
+      && event.targetId !== undefined
+      && String(event.targetId) !== '';
     const eventTargetMatchesActive = active && String(event.targetId ?? '') === activeTargetId;
+    const eventTargetsActiveBattle = !eventHasTargetId || eventTargetMatchesActive;
     const eventControlMatchesActive = active && (!event.controlGeneration
       || !activeControlGeneration
       || event.controlGeneration === activeControlGeneration);
@@ -1800,6 +1812,7 @@ function createCombatBattleLog(options = {}) {
     );
     event.currentSegmentId = active?.segmentId || null;
     event.currentSegmentFile = active ? path.basename(active.gzFile) : null;
+    if (active && !eventTargetsActiveBattle) event.crossTargetWithinEngagement = true;
     if (requestConflict) event.ownershipDisposition = 'ambiguous-request';
     else if (['shoot-ack-accepted', 'shoot-ack-late'].includes(event.type)
       && active && origin?.segmentId && String(origin.segmentId) !== String(active.segmentId)) {
@@ -1824,8 +1837,10 @@ function createCombatBattleLog(options = {}) {
     if (activeOrigin) {
       io.appendFrame(active.rawFile, atMs, 'shoot-execution', event);
       active.shotExecutionEvents.push(event);
-      active.physicalLedger = recordPhysicalExecution(active.physicalLedger, event);
-      active.combatAudit = observeCombatAuditExecution(active.combatAudit, event);
+      if (eventTargetsActiveBattle) {
+        active.physicalLedger = recordPhysicalExecution(active.physicalLedger, event);
+        active.combatAudit = observeCombatAuditExecution(active.combatAudit, event);
+      }
       active.shotExecutionEvents = active.shotExecutionEvents.slice(-256);
       active.frames += 1;
       active.lastFrameAtMs = Math.max(active.lastFrameAtMs, atMs);
@@ -2745,6 +2760,64 @@ function runCombatBattleLogSelfTest() {
       && ownershipRows[1].combatAudit.leaveDispatchCount === 1);
     assert('combatAudit mismatch summary remains below eight KiB',
       Buffer.byteLength(JSON.stringify(ownershipRows[1]), 'utf8') <= MAX_INDEX_LINE_BYTES);
+
+    const crossTargetRoot = path.join(root, 'cross-target');
+    const crossTargetDayDir = path.join(crossTargetRoot, utc8DayKey(nowMs), BATTLES_DIR);
+    const crossTargetLog = createCombatBattleLog({
+      logDir: crossTargetRoot,
+      now: () => nowMs,
+      idleFinalizeMs: 15000
+    });
+    crossTargetLog.record('combat-live', frame('8:8000', {
+      controlGeneration: 'control:cross-target',
+      engagementGeneration: 'control:cross-target:8',
+      lastObservedAt: nowMs
+    }, {
+      ...physicalEntities(8, 100, 80),
+      combatAudit: ownershipAudit('secondary-defensive', 'dual-target', 8)
+    }));
+    for (const [sequence, type, requestId, targetId] of [
+      [1, 'shoot-dispatch', 'primary-shot', 42],
+      [2, 'shoot-ack-accepted', 'primary-shot', 42],
+      [3, 'shoot-dispatch', 'secondary-shot', 8],
+      [4, 'shoot-ack-accepted', 'secondary-shot', 8]
+    ]) {
+      nowMs += 1;
+      crossTargetLog.recordShotExecution({
+        sequence,
+        requestSequence: targetId === 42 ? 1 : 2,
+        type,
+        atMs: nowMs,
+        requestId,
+        controlGeneration: 'control:cross-target',
+        engagementGeneration: 'control:cross-target:8',
+        segmentGeneration: '8:8000#1',
+        ownerSelfId: 7,
+        targetId: String(targetId),
+        wireTarget: { x: targetId === 42 ? 4200 : 8000, y: 0 },
+        outcome: type === 'shoot-dispatch' ? 'transport-accepted' : 'accepted',
+        ...(type === 'shoot-ack-accepted'
+          ? { ack: { bullet_id: `${requestId}-bullet`, owner_user_id: 7 } }
+          : {})
+      });
+    }
+    crossTargetLog.flush('cross-target-test');
+    const crossTargetRow = fs.readFileSync(path.join(crossTargetDayDir, INDEX_FILE), 'utf8')
+      .trim().split('\n').filter(Boolean).map(JSON.parse)[0];
+    const crossTargetEvents = zlibSync.gunzipSync(
+      fs.readFileSync(path.join(crossTargetDayDir, crossTargetRow.file))
+    ).toString('utf8').trim().split('\n').filter(Boolean).map(JSON.parse)
+      .filter(entry => entry.type === 'shoot-execution')
+      .map(entry => entry.detail);
+    assert('cross-target fire stays in raw evidence without inflating secondary shot totals',
+      crossTargetRow.segmentRequestedShots === 1
+        && crossTargetRow.segmentAcceptedShots === 1
+        && crossTargetRow.combatAudit?.dispatchCount === 1
+        && crossTargetRow.combatAudit?.acceptedAckCount === 1
+        && crossTargetRow.shotOwnershipInvariantOk === true
+        && crossTargetEvents.filter(event => event.targetId === '42').length === 2
+        && crossTargetEvents.filter(event => event.targetId === '42')
+          .every(event => event.crossTargetWithinEngagement === true));
 
     // requestSequence restarts at one for every control generation. A later
     // generation must therefore keep its first dispatch/ACK physical even

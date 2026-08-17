@@ -5,6 +5,10 @@ const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
 const { combatPressurePhaseCore } = require('../src/strategy/combat-pressure');
+const {
+  DEFAULT_SECONDARY_CLOSE_DISTANCE_CM,
+  dualTargetFireArbitration
+} = require('../src/strategy/dual-target-policy');
 
 const DEFAULTS = {
   hitRadiusCm: 90,
@@ -444,6 +448,9 @@ function normalizeBrowserlessCombatLiveEntry(entry, state = {}) {
   const aim = detail.aim && typeof detail.aim === 'object' ? detail.aim : {};
   const shooting = detail.shooting && typeof detail.shooting === 'object' ? detail.shooting : {};
   const metrics = detail.metrics && typeof detail.metrics === 'object' ? detail.metrics : {};
+  const primarySource = detail.profitMission?.navigationTarget || null;
+  const primaryId = primarySource?.userId ?? primarySource?.user_id
+    ?? detail.profitMission?.targetId ?? detail.profitMission?.subjectId ?? null;
   return {
     type: 'combat-frame',
     sourceType: 'combat-live',
@@ -463,6 +470,25 @@ function normalizeBrowserlessCombatLiveEntry(entry, state = {}) {
     combatMetrics: metrics,
     control: detail.control || null,
     incomingBullet: detail.incomingBullet || null,
+    dualTargetReplay: primaryId === null || primaryId === undefined || primaryId === ''
+      ? null
+      : {
+          primaryTarget: {
+            user_id: primaryId,
+            name: String(primarySource?.name || ''),
+            x: numberOrNull(primarySource?.x),
+            y: numberOrNull(primarySource?.y),
+            hp: numberOrNull(primarySource?.hp),
+            alive: primarySource?.alive !== false,
+            invulnerable: primarySource?.invulnerable === true,
+            distance: numberOrNull(primarySource?.distance)
+          },
+          secondaryTargetId: target.user_id ?? null,
+          secondaryDistanceCm: numberOrNull(target.distance),
+          primaryCanAttack: shooting.secondaryPolicy?.primaryCanAttack === true,
+          wouldShoot: shooting.wouldShoot === true,
+          finalFireBlocker: String(shooting.finalFireBlocker || '')
+        },
     decision: {
       self,
       target,
@@ -484,6 +510,7 @@ function loadFrames(options) {
   const requestedEnd = Number(options.endLine || 0);
   const end = requestedEnd > 0 ? requestedEnd : Infinity;
   const frames = [];
+  const sourceEvents = [];
   const foundTypes = new Set();
   const browserlessState = { acceptedByEngagement: new Map() };
   let inferredSelfId = options.selfId;
@@ -500,6 +527,21 @@ function loadFrames(options) {
     }
     const sourceType = String(sourceEntry.type || '');
     if (sourceType) foundTypes.add(sourceType);
+    if (sourceType === 'shoot-execution') {
+      const detail = sourceEntry.detail && typeof sourceEntry.detail === 'object'
+        ? sourceEntry.detail
+        : {};
+      sourceEvents.push({
+        lineNo,
+        at: entryAtMs(sourceEntry.at ?? detail.atMs),
+        type: sourceType,
+        detail: {
+          type: String(detail.type || ''),
+          targetId: String(detail.targetId ?? ''),
+          outcome: String(detail.outcome || '')
+        }
+      });
+    }
     const entry = sourceType === 'combat-frame'
       ? sourceEntry
       : (sourceType === 'combat-live' ? normalizeBrowserlessCombatLiveEntry(sourceEntry, browserlessState) : null);
@@ -581,7 +623,8 @@ function loadFrames(options) {
     frames,
     selfId: inferredSelfId || options.selfId,
     targetId: inferredTargetId || options.targetId,
-    targetName: inferredTargetName || options.targetName
+    targetName: inferredTargetName || options.targetName,
+    sourceEvents
   };
 }
 
@@ -609,15 +652,30 @@ function runLoadFramesSelfTest() {
       && legacy.selfId === '7' && legacy.targetId === '8');
 
     const liveFile = path.join(root, 'browserless.jsonl.gz');
+    const primaryTarget = {
+      userId: '9',
+      name: 'primary',
+      x: 4500,
+      y: 0,
+      hp: 100,
+      alive: true,
+      invulnerable: true,
+      distance: 4500
+    };
     const liveEntries = [
       {
         at: '2026-07-29T00:00:00.000Z',
         type: 'combat-live',
         detail: {
           self: { userId: '7', x: 0, y: 0, hp: 100, stamina5s: 9000 },
-          target: { userId: '8', name: 'target', x: 5000, y: 0, hp: 100, vx: 20, vy: 0 },
+          target: { userId: '8', name: 'target', x: 5000, y: 0, hp: 100, vx: 20, vy: 0, distance: 5000 },
           aim: { x: 5100, y: 0, noDamageMs: 0 },
-          shooting: { reason: 'normal-cadence' },
+          shooting: {
+            reason: 'normal-cadence',
+            wouldShoot: true,
+            secondaryPolicy: { primaryCanAttack: false }
+          },
+          profitMission: { targetId: '9', navigationTarget: primaryTarget },
           metrics: { engagementId: '8:1', acceptedShots: 0, confirmedHits: 0 }
         }
       },
@@ -626,20 +684,45 @@ function runLoadFramesSelfTest() {
         type: 'combat-live',
         detail: {
           self: { userId: '7', x: 0, y: 0, hp: 100, stamina5s: 8500 },
-          target: { userId: '8', name: 'target', x: 5010, y: 0, hp: 100, vx: 20, vy: 0 },
+          target: { userId: '8', name: 'target', x: 5010, y: 0, hp: 100, vx: 20, vy: 0, distance: 5010 },
           aim: { x: 5110, y: 0, noDamageMs: 50 },
-          shooting: { reason: 'normal-cadence' },
+          shooting: {
+            reason: 'normal-cadence',
+            wouldShoot: false,
+            finalFireBlocker: 'secondary:primary-target-fire-available',
+            secondaryPolicy: { primaryCanAttack: true }
+          },
+          profitMission: {
+            targetId: '9',
+            navigationTarget: { ...primaryTarget, invulnerable: false }
+          },
           metrics: { engagementId: '8:1', acceptedShots: 1, confirmedHits: 0 }
+        }
+      },
+      {
+        at: '2026-07-29T00:00:00.025Z',
+        type: 'shoot-execution',
+        detail: {
+          type: 'shoot-dispatch',
+          targetId: '8',
+          outcome: 'transport-accepted'
         }
       }
     ];
     fs.writeFileSync(liveFile, zlib.gzipSync(Buffer.from(liveEntries.map(JSON.stringify).join('\n') + '\n')));
-    const live = loadFrames({ file: liveFile, startLine: 1, endLine: 2, selfId: '', targetId: '', targetName: '' });
+    const live = loadFrames({ file: liveFile, startLine: 1, endLine: 3, selfId: '', targetId: '', targetName: '' });
     assert('gzip browserless combat-live normalizes ids and ISO time', live.frames.length === 2
       && live.selfId === '7' && live.targetId === '8'
       && Number.isFinite(live.frames[0].at) && live.frames[0].at < live.frames[1].at);
     assert('browserless accepted-shot deltas normalize to synthetic replay bullets',
       Array.isArray(live.frames[1].entry.bullets) && live.frames[1].entry.bullets.length === 1);
+    const dualTarget = runDualTargetFireArbitrationReplay(live.frames, live.sourceEvents);
+    assert('browserless dual-target replay preserves pre-unlock defense and corrects post-unlock selection',
+      dualTarget?.preservedSecondarySelectionFrames === 1
+        && dualTarget?.correctedPrimarySelectionFrames === 1
+        && dualTarget?.loggedDispatches?.primary === 0
+        && dualTarget?.loggedDispatches?.secondaryBeforePrimaryAuthorization === 1
+        && dualTarget?.improved === true);
 
     const invalidFile = path.join(root, 'invalid.jsonl');
     fs.writeFileSync(invalidFile, JSON.stringify({ type: 'other', at: 1 }) + '\n');
@@ -1996,6 +2079,95 @@ function formatTime(ms) {
   return new Date(ms).toLocaleTimeString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' });
 }
 
+function runDualTargetFireArbitrationReplay(frames = [], sourceEvents = []) {
+  const candidates = frames.filter(frame => {
+    const replay = frame.entry?.dualTargetReplay;
+    const primaryId = String(replay?.primaryTarget?.user_id ?? '');
+    const secondaryId = String(replay?.secondaryTargetId ?? '');
+    return Boolean(primaryId && secondaryId && primaryId !== secondaryId);
+  });
+  if (!candidates.length) return null;
+
+  const primaryTarget = candidates[0].entry.dualTargetReplay.primaryTarget;
+  const primaryId = String(primaryTarget.user_id);
+  const secondaryId = String(candidates[0].entry.dualTargetReplay.secondaryTargetId);
+  const firstPrimaryAuthorization = candidates.find(frame => (
+    frame.entry.dualTargetReplay.primaryCanAttack === true
+  )) || null;
+  const firstPrimaryAuthorizationAt = firstPrimaryAuthorization?.at ?? Infinity;
+  let preservedSecondarySelectionFrames = 0;
+  let correctedPrimarySelectionFrames = 0;
+  let loggedNoFireFramesCorrected = 0;
+  let firstCorrectedFrame = null;
+
+  for (const frame of candidates) {
+    const replay = frame.entry.dualTargetReplay;
+    const primaryAuthorized = replay.primaryCanAttack === true;
+    const secondaryDistanceCm = Number(replay.secondaryDistanceCm);
+    const outsideClosePressureRange = Number.isFinite(secondaryDistanceCm)
+      && secondaryDistanceCm > DEFAULT_SECONDARY_CLOSE_DISTANCE_CM;
+    const arbitration = dualTargetFireArbitration({
+      secondaryActive: true,
+      primaryAuthorized,
+      closePressure: { active: false },
+      rewardRace: { evaluated: false, continuePrimary: true, shouldFocusSecondary: false }
+    });
+    if (!primaryAuthorized && arbitration.fireTargetRole === 'secondary') {
+      preservedSecondarySelectionFrames += 1;
+    }
+    if (!primaryAuthorized || !outsideClosePressureRange || !arbitration.primarySelected) continue;
+    correctedPrimarySelectionFrames += 1;
+    if (replay.wouldShoot !== true) loggedNoFireFramesCorrected += 1;
+    if (!firstCorrectedFrame) firstCorrectedFrame = frame;
+  }
+
+  const dispatches = sourceEvents.filter(event => event.detail?.type === 'shoot-dispatch');
+  const loggedPrimaryDispatches = dispatches.filter(event => (
+    String(event.detail?.targetId || '') === primaryId
+  )).length;
+  const loggedSecondaryBeforePrimaryAuthorization = dispatches.filter(event => (
+    String(event.detail?.targetId || '') === secondaryId
+      && Number(event.at) < firstPrimaryAuthorizationAt
+  )).length;
+  const loggedSecondaryAfterPrimaryAuthorization = dispatches.filter(event => (
+    String(event.detail?.targetId || '') === secondaryId
+      && Number(event.at) >= firstPrimaryAuthorizationAt
+  )).length;
+  const firstReplay = firstCorrectedFrame?.entry?.dualTargetReplay || null;
+  return {
+    primaryTargetId: primaryId,
+    primaryTargetName: String(primaryTarget.name || ''),
+    secondaryTargetId: secondaryId,
+    closePressureDistanceCm: DEFAULT_SECONDARY_CLOSE_DISTANCE_CM,
+    preservedSecondarySelectionFrames,
+    correctedPrimarySelectionFrames,
+    loggedNoFireFramesCorrected,
+    loggedDispatches: {
+      primary: loggedPrimaryDispatches,
+      secondaryBeforePrimaryAuthorization: loggedSecondaryBeforePrimaryAuthorization,
+      secondaryAfterPrimaryAuthorization: loggedSecondaryAfterPrimaryAuthorization
+    },
+    firstPrimaryAuthorization: firstPrimaryAuthorization ? {
+      line: firstPrimaryAuthorization.lineNo,
+      time: formatTime(firstPrimaryAuthorization.at),
+      atMs: firstPrimaryAuthorization.at
+    } : null,
+    firstCorrectedSelection: firstCorrectedFrame ? {
+      line: firstCorrectedFrame.lineNo,
+      time: formatTime(firstCorrectedFrame.at),
+      atMs: firstCorrectedFrame.at,
+      selfHp: firstCorrectedFrame.selfHp,
+      primaryHp: firstReplay?.primaryTarget?.hp ?? null,
+      secondaryDistanceCm: firstReplay?.secondaryDistanceCm ?? null,
+      loggedFinalFireBlocker: firstReplay?.finalFireBlocker || ''
+    } : null,
+    improved: loggedPrimaryDispatches === 0 && correctedPrimarySelectionFrames > 0,
+    reason: loggedPrimaryDispatches === 0 && correctedPrimarySelectionFrames > 0
+      ? 'restored-primary-fire-selection-after-authorization'
+      : 'no-demonstrated-primary-selection-improvement'
+  };
+}
+
 function replay(options) {
   const loaded = loadFrames(options);
   const frames = loaded.frames;
@@ -2056,6 +2228,7 @@ function replay(options) {
     .filter(Number.isFinite)
     .sort((a, b) => a - b);
   const targetHpValues = Array.from(new Set(frames.map(frame => frame.targetHp).filter(Number.isFinite))).sort((a, b) => a - b);
+  const dualTargetFire = runDualTargetFireArbitrationReplay(frames, loaded.sourceEvents);
   return {
     file: loaded.file,
     lineRange: [frames[0].lineNo, frames[frames.length - 1].lineNo],
@@ -2068,6 +2241,7 @@ function replay(options) {
     finishPressureShots: finishPressureShots.length,
     selfHp: [frames[0].selfHp, frames[frames.length - 1].selfHp],
     targetHpValues,
+    dualTargetFire,
     coordinateDivergence: {
       samples: divergences.length,
       over10m: divergences.filter(value => value > 1000).length,
@@ -2105,6 +2279,14 @@ function printReport(result) {
   console.log(`Target ${result.targetName || '-'} (${result.targetId || '-'}) ${result.timeRange[0]}-${result.timeRange[1]}, frames=${result.frames}, shots=${result.shots}, finishPressureShots=${result.finishPressureShots}`);
   console.log(`HP self ${result.selfHp[0]} -> ${result.selfHp[1]}, target HP values ${result.targetHpValues.join(',') || '-'}`);
   console.log(`Coordinate divergence median=${result.coordinateDivergence.medianCm}cm max=${result.coordinateDivergence.maxCm}cm over10m=${result.coordinateDivergence.over10m}/${result.coordinateDivergence.samples}`);
+  if (result.dualTargetFire) {
+    const dual = result.dualTargetFire;
+    console.log(`Dual-target replay primary ${dual.primaryTargetName || '-'} (${dual.primaryTargetId}) vs secondary ${dual.secondaryTargetId}: logged dispatches primary=${dual.loggedDispatches.primary}, secondary before/after authorization=${dual.loggedDispatches.secondaryBeforePrimaryAuthorization}/${dual.loggedDispatches.secondaryAfterPrimaryAuthorization}`);
+    console.log(`Dual-target policy selections preservedSecondary=${dual.preservedSecondarySelectionFrames}, correctedPrimaryOutside${dual.closePressureDistanceCm}cm=${dual.correctedPrimarySelectionFrames}, correctedLoggedNoFire=${dual.loggedNoFireFramesCorrected}, improved=${dual.improved}`);
+    if (dual.firstCorrectedSelection) {
+      console.log(`First corrected primary selection line ${dual.firstCorrectedSelection.line} at ${dual.firstCorrectedSelection.time}, HP self/primary=${dual.firstCorrectedSelection.selfHp}/${dual.firstCorrectedSelection.primaryHp}, secondaryDistance=${dual.firstCorrectedSelection.secondaryDistanceCm}cm, loggedBlocker=${dual.firstCorrectedSelection.loggedFinalFireBlocker || '-'}`);
+    }
+  }
   if (result.dynamicStart) {
     console.log(`Dynamic precision starts line ${result.dynamicStart.line} at ${result.dynamicStart.time}, reason=${result.dynamicStart.divergence.active ? 'coordinate-divergence' : 'fallback'}, noDamage=${result.dynamicStart.noDamageMs}ms`);
   }
@@ -2509,5 +2691,6 @@ module.exports = {
   DEFAULTS,
   loadFrames,
   replay,
+  runDualTargetFireArbitrationReplay,
   runLoadFramesSelfTest
 };

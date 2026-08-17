@@ -138,6 +138,9 @@ function settlementSummary(state, nowMs = Date.now()) {
     evidenceMinTick: finiteNumber(state.evidenceMinTick),
     evidenceMinAtMs: Number(state.evidenceMinAtMs || 0),
     confirmedEvidenceTick: finiteNumber(state.confirmedEvidenceTick),
+    primaryTargetDropPriority: state.primaryTargetDropPriority === true,
+    killAttribution: state.killAttribution || '',
+    authority: state.authority || '',
     reason: state.reason || ''
   };
 }
@@ -366,6 +369,45 @@ function explicitPostKillSettlement(evidence, context, options = {}) {
   };
 }
 
+function primaryTargetPostKillSettlement(evidence, context, options = {}) {
+  const id = valueId(evidence?.targetId ?? evidence?.target_id);
+  if (!id || evidence?.authority !== 'realtime') return null;
+  const nowMs = Number.isFinite(Number(context?.nowMs)) ? Number(context.nowMs) : Date.now();
+  const confirmedMs = Math.max(250, Number(options.confirmedMs ?? 5000));
+  const observedTick = snapshotTick(context);
+  const eventTick = evidenceTick(evidence);
+  const eventAtMs = evidenceAtMs(evidence) || nowMs;
+  const knownDrop = evidence.dropKnown === true && finiteNumber(evidence.drop) !== null;
+  return {
+    active: true,
+    phase: 'drop-pending',
+    targetId: id,
+    targetName: String(evidence.targetName || evidence.target_name || ''),
+    targetDrop: knownDrop ? Math.max(0, Number(evidence.drop)) : null,
+    targetDropKnown: knownDrop,
+    x: finiteNumber(evidence.x),
+    y: finiteNumber(evidence.y),
+    startedAt: nowMs,
+    confirmedAt: nowMs,
+    expiresAt: nowMs + confirmedMs,
+    matchedCoinKey: '',
+    matchedCoinAmount: null,
+    matchedCoinCreatedTick: null,
+    matchedCoinAuthority: '',
+    matchedCoinObservedAtMs: 0,
+    evidenceKey: `primary:${id}:${eventTick !== null ? `tick:${eventTick}` : `at:${eventAtMs}`}`,
+    lastSnapshotTick: observedTick,
+    evidenceMinTick: eventTick,
+    evidenceMinAtMs: eventAtMs,
+    confirmedEvidenceTick: eventTick,
+    primaryTargetDropPriority: true,
+    killAttribution: String(evidence.killAttribution || 'external-or-unknown'),
+    authority: 'realtime',
+    reason: String(evidence.reason || 'dual-target-primary-settlement-observed'),
+    updatedAt: nowMs
+  };
+}
+
 function terminalPostKillSettlement(state, nowMs, phase, reason) {
   return {
     ...state,
@@ -387,6 +429,12 @@ function updateExplicitPostKillSettlement(state, context, options = {}) {
   if (visibleDrop.known) {
     state.targetDrop = visibleDrop.value;
     state.targetDropKnown = true;
+  }
+  if (state.primaryTargetDropPriority === true
+    && visible
+    && visible.alive !== false
+    && Number(visible.hp ?? 1) > 0) {
+    return terminalPostKillSettlement(state, nowMs, 'settled', 'target-reappeared-alive');
   }
   // A self-kill message is stronger than a one-frame stale realtime entity.
   // Keep the evidence-bound settlement alive until the drop window closes;
@@ -454,11 +502,25 @@ function updatePostKillSettlementsCore(previous = {}, context = {}, options = {}
   }
 
   for (const [key, state] of Object.entries(states)) {
-    if (!key.startsWith('evidence:') || !settlementStateIsActive(state)) continue;
+    if ((!key.startsWith('evidence:') && !key.startsWith('primary:'))
+      || !settlementStateIsActive(state)) continue;
     states[key] = updateExplicitPostKillSettlement(state, context, {
       confirmedMs,
       pickupMs
     });
+  }
+
+  const primaryEvidence = context.primaryTargetSettlementEvidence;
+  if (primaryEvidence?.active !== false && primaryEvidence?.authority === 'realtime') {
+    const created = primaryTargetPostKillSettlement(primaryEvidence, context, { confirmedMs });
+    const key = created?.evidenceKey || '';
+    if (created && key && !Object.prototype.hasOwnProperty.call(seenEvidenceKeys, key)) {
+      seenEvidenceKeys[key] = nowMs;
+      states[key] = updateExplicitPostKillSettlement(created, context, {
+        confirmedMs,
+        pickupMs
+      });
+    }
   }
 
   const evidence = Array.isArray(context.selfKillEvidence) ? context.selfKillEvidence : [];
@@ -515,6 +577,8 @@ function updatePostKillSettlementsCore(previous = {}, context = {}, options = {}
       const leftActive = Number(settlementStateIsActive(leftState));
       const rightActive = Number(settlementStateIsActive(rightState));
       return rightActive - leftActive
+        || Number(rightState?.primaryTargetDropPriority === true)
+          - Number(leftState?.primaryTargetDropPriority === true)
         || Number(rightState?.phase === 'drop-visible') - Number(leftState?.phase === 'drop-visible')
         || Number(rightState?.matchedCoinAmount || rightState?.targetDrop || 0)
           - Number(leftState?.matchedCoinAmount || leftState?.targetDrop || 0)
@@ -525,7 +589,8 @@ function updatePostKillSettlementsCore(previous = {}, context = {}, options = {}
   const active = Object.values(boundedStates)
     .filter(settlementStateIsActive)
     .sort((left, right) => (
-      Number(right.phase === 'drop-visible') - Number(left.phase === 'drop-visible')
+      Number(right.primaryTargetDropPriority === true) - Number(left.primaryTargetDropPriority === true)
+        || Number(right.phase === 'drop-visible') - Number(left.phase === 'drop-visible')
         || Number(right.matchedCoinAmount || right.targetDrop || 0)
           - Number(left.matchedCoinAmount || left.targetDrop || 0)
         || Number(right.updatedAt || right.startedAt || 0)
@@ -544,6 +609,7 @@ function updatePostKillSettlementsCore(previous = {}, context = {}, options = {}
 }
 
 module.exports = {
+  primaryTargetPostKillSettlement,
   settlementSummary,
   updatePostKillSettlementCore,
   updatePostKillSettlementsCore,
