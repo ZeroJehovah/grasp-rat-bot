@@ -14187,6 +14187,50 @@ async function runSelfTest() {
       want: 'false|captured-combat-commitment-active|19677|34|false|true|abandonable-idle-task|false|true'
     },
     {
+      name: 'browserless restart drain retains captured player profit through defensive and synthetic actions',
+      got: (() => {
+        const mission = {
+          active: true,
+          type: 'enemy',
+          key: 'enemy:895',
+          targetId: '895',
+          highValue: true,
+          navigationTarget: { userId: 895, name: 'captured-profit-target', drop: 41 }
+        };
+        const syntheticWait = evaluateRestartReadiness({
+          online: true,
+          commitmentKey: 'player:895',
+          decision: { action: { kind: 'wait', band: 'wait', reason: 'restart-drain-new-commitment-blocked' } },
+          decisionState: { profitMission: mission }
+        });
+        const defensiveCombat = evaluateRestartReadiness({
+          online: true,
+          commitmentKey: 'player:895',
+          decision: {
+            action: { kind: 'combat-live', band: 'combat', target: { userId: 32551, combatIntent: 'defensive' } }
+          },
+          decisionState: { combatTarget: { id: 32551, hp: 100 }, profitMission: mission }
+        });
+        const released = evaluateRestartReadiness({
+          online: true,
+          commitmentKey: 'player:895',
+          decision: { action: { kind: 'wait', band: 'wait', reason: 'restart-drain-new-commitment-blocked' } },
+          decisionState: { profitMission: null }
+        });
+        return [
+          syntheticWait.ready,
+          syntheticWait.reason,
+          syntheticWait.blocker?.targetId,
+          syntheticWait.blocker?.targetDrop,
+          defensiveCombat.ready,
+          defensiveCombat.reason,
+          released.ready,
+          released.reason
+        ].join('|');
+      })(),
+      want: 'false|captured-profit-commitment-active|895|41|false|captured-profit-commitment-active|true|abandonable-idle-task'
+    },
+    {
       name: 'browserless shutdown signals escalate from drain to verified stop to emergency exit',
       got: (() => {
         const signal = 'browserless-self-test-signal';
@@ -15294,7 +15338,7 @@ async function runSelfTest() {
         const released = adapter.decide(stateFor(2, coinDrops), { nowMs: nowMs + 1000 });
         const alternateRoute = released.profit.candidates.find(candidate => candidate.coin?.coinRoute);
         const alternateEvaluation = released.profit.singleCoinBaitOpportunityEvaluations
-          .find(candidate => candidate.reward === 4);
+          .find(candidate => candidate.originId === 'bait');
         const afterPickupSelf = { ...baseSelf, x: 11102, y: 67324 };
         const afterPickup = adapter.decide(
           stateFor(3, coinDrops.slice(1), afterPickupSelf),
@@ -15330,7 +15374,7 @@ async function runSelfTest() {
           adapter.getState().singleCoinBait === null
         ].join('|');
       })(),
-      want: 'single-coin-bait-hold|bait|snapshot-fallback|isolated|false|single-coin-bait-release|bait|snapshot-fallback|release|bait|6|5|1|isolated,cluster-a,cluster-b,cluster-c|4|29998|true|bait|29838|true|best-opportunity-coin-route|isolated|snapshot-fallback|isolated,cluster-a,cluster-b,cluster-c|4|true|true'
+      want: 'single-coin-bait-hold|bait|snapshot-fallback|isolated|false|single-coin-bait-release|bait|snapshot-fallback|release|bait|6|5|1|isolated,cluster-a,cluster-b,cluster-c,cluster-d|5|33726|true|bait|33566|true|best-opportunity-coin-route|isolated|snapshot-fallback|isolated,cluster-a,cluster-b,cluster-c,cluster-d|5|true|true'
     },
     {
       name: 'browserless bait follow-up uses the same ordinary coin threat source',

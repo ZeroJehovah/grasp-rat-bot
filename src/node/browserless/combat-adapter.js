@@ -5141,7 +5141,10 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     stateful.combatTarget.exchangeRetreatSelfDamageBaseline = exitEvaluation.exchangeStopLoss.retreatSelfDamageBaseline;
     stateful.combatTarget.exchangeRetreatTargetDamageBaseline = exitEvaluation.exchangeStopLoss.retreatTargetDamageBaseline;
   }
-  const secondaryExitPolicy = secondaryCombatExitPolicy(target, hpValue(self));
+  const secondaryExitPolicy = secondaryCombatExitPolicy(target, hpValue(self), {
+    retainedTarget: retainedCombatTargetState,
+    combatPhaseTargetId: combatPhase?.targetId
+  });
   const secondaryHealthy = secondaryExitPolicy.healthy;
   if (!contactEntryOnly && !secondaryHealthy && exitEvaluation.exchangeStopLoss?.disengage) {
     movement = buildCombatExchangeRetreatMovement(

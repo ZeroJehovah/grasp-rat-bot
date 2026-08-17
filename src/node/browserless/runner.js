@@ -6787,6 +6787,46 @@ async function runBrowserlessRunnerSelfTest() {
       online: true,
       decision: { action: { kind: 'coin', band: 'profit', target: { id: 7293, amount: 1 } } }
     });
+    const retainedDrop41Mission = {
+      active: true,
+      type: 'enemy',
+      key: 'enemy:895',
+      targetId: '895',
+      subjectId: '895',
+      highValue: true,
+      navigationTarget: { userId: 895, name: 'captured-profit-target', drop: 41 }
+    };
+    const capturedProfitWait = evaluateRestartReadiness({
+      online: true,
+      commitmentKey: 'player:895',
+      decision: {
+        action: { kind: 'wait', band: 'wait', reason: 'restart-drain-new-commitment-blocked' }
+      },
+      decisionState: { profitMission: retainedDrop41Mission }
+    });
+    const capturedProfitDefensiveCombat = evaluateRestartReadiness({
+      online: true,
+      commitmentKey: 'player:895',
+      decision: {
+        action: {
+          kind: 'combat-live',
+          band: 'combat',
+          target: { userId: 32551, combatIntent: 'defensive', firing: true }
+        }
+      },
+      decisionState: {
+        combatTarget: { id: 32551, hp: 100 },
+        profitMission: retainedDrop41Mission
+      }
+    });
+    const capturedProfitReleased = evaluateRestartReadiness({
+      online: true,
+      commitmentKey: 'player:895',
+      decision: {
+        action: { kind: 'wait', band: 'wait', reason: 'restart-drain-new-commitment-blocked' }
+      },
+      decisionState: { profitMission: null }
+    });
     restartDrain.observe(restartDrainIdle);
     drainNowMs = 1500;
     restartDrain.observe(restartDrainIdle);
@@ -8809,6 +8849,13 @@ async function runBrowserlessRunnerSelfTest() {
         && forcedStatusConnectionsClosed
         && restartDrainCombat.ready === false
         && restartDrainIdle.ready === true
+        && capturedProfitWait.ready === false
+        && capturedProfitWait.reason === 'captured-profit-commitment-active'
+        && capturedProfitWait.blocker?.targetId === '895'
+        && capturedProfitWait.blocker?.targetDrop === 41
+        && capturedProfitDefensiveCombat.ready === false
+        && capturedProfitDefensiveCombat.reason === 'captured-profit-commitment-active'
+        && capturedProfitReleased.ready === true
         && restartDrainStatus.ready === true
         && restartDrainOfflineLifecycle.snapshotWait === true
         && restartDrainOfflineLifecycle.loginAttempt === false
@@ -8902,6 +8949,9 @@ async function runBrowserlessRunnerSelfTest() {
       restartDrainSafetyReason,
       forcedStatusConnectionsClosed,
       restartDrainStatus,
+      capturedProfitWait,
+      capturedProfitDefensiveCombat,
+      capturedProfitReleased,
       restartDrainOfflineLifecycle,
       committedDropAllowed,
       unrelatedDropBlocked,

@@ -116,6 +116,51 @@ function defaultAdapter(overrides = {}) {
   });
 }
 
+function assertDynamicThresholdLinkedCoinRoute() {
+  const nowMs = Date.parse('2026-08-17T01:31:00.594Z');
+  const self = fullStaminaSelf({
+    x: -104126,
+    y: 10103,
+    stamina_5s_remaining_milli: 10000,
+    stamina_5s_limit_milli: 10000,
+    stamina_1h_remaining_milli: 2606523,
+    stamina_1h_limit_milli: 3000000,
+    stamina_1d_remaining_milli: 11706605,
+    stamina_1d_limit_milli: 20000000
+  });
+  const currentState = state(self);
+  currentState.realtime.tick = 675693;
+  currentState.fallback = {
+    tick: 675685,
+    frameAgeMs: 401,
+    entities: [],
+    messages: [],
+    coinDropsObserved: true,
+    coinDrops: [
+      { drop_id: 4184, amount: 1, x: -92685, y: -11301 },
+      { drop_id: 4294, amount: 1, x: -85583, y: -12894 },
+      { drop_id: 4279, amount: 1, x: -82084, y: -11115 },
+      { drop_id: 4231, amount: 1, x: -77892, y: -21587 },
+      { drop_id: 4263, amount: 1, x: -96176, y: -20828 },
+      { drop_id: 4302, amount: 1, x: -84374, y: -26098 },
+      { drop_id: 4254, amount: 1, x: -82741, y: -28864 },
+      { drop_id: 4248, amount: 1, x: -77029, y: -26431 }
+    ]
+  };
+  const decision = decide(defaultAdapter(), currentState, nowMs, null, {
+    dynamicProfitThresholdEnabled: true,
+    profitThresholdCoinsPer10Stamina: 1,
+    profitThresholdHourlyStaminaLimit: 3000,
+    profitThresholdResetReserveMs: 4 * 60 * 60 * 1000
+  });
+  assert.strictEqual(decision.action?.reason, 'best-opportunity-coin-route');
+  assert.notStrictEqual(decision.action?.kind, 'wait');
+  assert.strictEqual(decision.profit?.best?.profitThresholdEligible, true);
+  assert.ok(Number(decision.profit?.best?.reward || 0) >= 6);
+  assert.ok(Number(decision.profit?.best?.staminaCost || Infinity) <= 60000);
+  assert.ok((decision.action?.target?.coinRoute?.ids || []).length >= 6);
+}
+
 function assertImmediateRemoteRelease(nextBatch, firstNowMs = 2000, nextNowMs = 2100) {
   const adapter = createBrowserlessDecisionAdapter({
     userId: 7,
@@ -1720,6 +1765,7 @@ function runRemoteProfitDecisionSelfTest() {
   assertImmediateRemoteRelease(batch(remoteCandidate(), { generation: 4, candidates: [] }));
   assertImmediateRemoteRelease(batch(remoteCandidate(), { missSuppressedIds: ['99'] }));
   assertImmediateRemoteRelease(remoteBatch, 210900, 211000);
+  assertDynamicThresholdLinkedCoinRoute();
   assertRealtimeSupersededMissionContinuity();
   assertSelfKillReleasesSupersededMission();
   assertRemoteMissionDoesNotOverrideRealtimeProfit();
@@ -1997,7 +2043,7 @@ function runRemoteProfitDecisionSelfTest() {
   assert.strictEqual(lowDropDecision.profit?.postKillCoinSuppression?.removedCount, 1);
   assert.strictEqual(lowDropDecision.stateful.profitMission?.targetId, '99');
 
-  return { ok: true, cases: 75 };
+  return { ok: true, cases: 76 };
 }
 
 if (require.main === module) {

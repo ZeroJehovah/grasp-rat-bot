@@ -67,6 +67,36 @@ function capturedCombatCommitmentBlocker(context = {}) {
   };
 }
 
+function capturedProfitCommitmentBlocker(context = {}) {
+  const commitmentKey = valueId(context.commitmentKey ?? context.restartDrain?.commitmentKey);
+  if (!commitmentKey.startsWith('player:')) return null;
+  const targetId = commitmentKey.slice('player:'.length);
+  if (!targetId) return null;
+  const mission = context.decisionState?.profitMission || null;
+  if (!mission || mission.active === false) return null;
+  if (!['enemy', 'remote-player-navigation'].includes(String(mission.type || ''))) return null;
+  const missionTargetId = valueId(
+    mission.targetId
+      ?? mission.subjectId
+      ?? mission.target?.userId
+      ?? mission.target?.user_id
+      ?? mission.navigationTarget?.userId
+      ?? mission.navigationTarget?.user_id
+  );
+  if (missionTargetId !== targetId) return null;
+  return {
+    commitmentKey,
+    targetId,
+    targetName: String(mission.navigationTarget?.name || mission.target?.name || ''),
+    targetDrop: Number.isFinite(Number(mission.navigationTarget?.drop ?? mission.target?.drop))
+      ? Number(mission.navigationTarget?.drop ?? mission.target?.drop)
+      : null,
+    missionType: String(mission.type || ''),
+    missionKey: String(mission.key || mission.missionKey || ''),
+    highValue: mission.highValue === true
+  };
+}
+
 function evaluateRestartReadiness(context = {}, options = {}) {
   if (context.online === false) return { ready: true, reason: 'offline', blocker: null };
   if (context.leavePending?.active) return { ready: false, reason: 'leave-pending', blocker: context.leavePending };
@@ -77,6 +107,10 @@ function evaluateRestartReadiness(context = {}, options = {}) {
   const capturedCombatBlocker = capturedCombatCommitmentBlocker(context);
   if (capturedCombatBlocker) {
     return { ready: false, reason: 'captured-combat-commitment-active', blocker: capturedCombatBlocker };
+  }
+  const capturedProfitBlocker = capturedProfitCommitmentBlocker(context);
+  if (capturedProfitBlocker) {
+    return { ready: false, reason: 'captured-profit-commitment-active', blocker: capturedProfitBlocker };
   }
 
   const decision = context.decision || {};
@@ -228,6 +262,7 @@ module.exports = {
   DEFAULT_IDLE_STABLE_MS,
   actionTargetKey,
   capturedCombatCommitmentBlocker,
+  capturedProfitCommitmentBlocker,
   createRestartDrainCoordinator,
   evaluateRestartReadiness,
   restartDrainAllowsDecision,

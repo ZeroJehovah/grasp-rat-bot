@@ -6017,6 +6017,11 @@ function currentHeldCoinRouteChoice(stateful = {}, nowMs = 0) {
 
 function coinRouteCoreOptions(input, stateful = {}, options = {}) {
   const self = input?.self || null;
+  const maxPointsDense = options.coinRouteMaxPointsDense ?? BROWSER_RUNTIME_DEFAULTS.coinRouteMaxPointsDense;
+  const configuredMaxPointsMid = options.coinRouteMaxPointsMid ?? BROWSER_RUNTIME_DEFAULTS.coinRouteMaxPointsMid;
+  const maxPointsMid = options.profitThresholdContext?.active
+    ? Math.max(Number(configuredMaxPointsMid), Number(maxPointsDense))
+    : configuredMaxPointsMid;
   const routeEligible = options.profitThresholdContext?.active
     ? route => profitRouteThresholdEligible(route, options.profitThresholdContext)
     : undefined;
@@ -6032,8 +6037,8 @@ function coinRouteCoreOptions(input, stateful = {}, options = {}) {
     threatDangerRadius: threat => coinThreatDangerRadius(threat, options),
     coinBlockedByThreat: (origin, coin, threat) => coinBlockedByThreat(origin, coin, threat, options),
     clusterRadius: options.coinRouteClusterRadius ?? BROWSER_RUNTIME_DEFAULTS.coinRouteClusterRadius,
-    maxPointsDense: options.coinRouteMaxPointsDense ?? BROWSER_RUNTIME_DEFAULTS.coinRouteMaxPointsDense,
-    maxPointsMid: options.coinRouteMaxPointsMid ?? BROWSER_RUNTIME_DEFAULTS.coinRouteMaxPointsMid,
+    maxPointsDense,
+    maxPointsMid,
     maxPointsSparse: options.coinRouteMaxPointsSparse ?? BROWSER_RUNTIME_DEFAULTS.coinRouteMaxPointsSparse,
     linkDistance: options.coinRouteLinkDistance ?? BROWSER_RUNTIME_DEFAULTS.coinRouteLinkDistance,
     maxLinkDistance: options.coinRouteMaxLinkDistance ?? BROWSER_RUNTIME_DEFAULTS.coinRouteMaxLinkDistance,

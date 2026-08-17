@@ -133,6 +133,111 @@ function runCombatTargetFrameGapSelfTest() {
     missingDecision.combat?.aim === null
       && missingDecision.combat?.shooting?.wouldShoot === false);
 
+  const pressureNowMs = nowMs + 100000;
+  const pressureState = hp => {
+    const retained = {
+      id: targetId,
+      at: pressureNowMs - 49,
+      firstSeenAt: pressureNowMs - 60000,
+      name: target.name,
+      x: target.x,
+      y: target.y,
+      hp: 100,
+      firstHp: 100,
+      minHp: 100,
+      drop: 3817,
+      distance: 14486,
+      intent: 'secondary',
+      originIntent: 'defensive',
+      combatRole: 'secondary',
+      secondaryTarget: true,
+      whitelisted: true,
+      combatPhase: 'close-pressure',
+      phaseStartedAt: pressureNowMs - 2000,
+      damageProgressAt: pressureNowMs - 60000,
+      lastDamageAt: pressureNowMs - 60000,
+      acceptedShotsSinceDamage: 0,
+      combatEfficiency: {
+        startedAt: pressureNowMs - 2000,
+        startDamageTotal: 0,
+        startStaminaMilli: 0,
+        staminaKnown: false
+      },
+      closePressure: {
+        active: true,
+        stepIndex: 1,
+        stepStartedAt: pressureNowMs - 2000,
+        stepStartDistanceCm: 14486,
+        goalDistanceCm: 3704,
+        bestDistanceCm: 14486,
+        closerTimeMs: 0,
+        lastObservedAt: pressureNowMs - 49,
+        withinGoal: false
+      },
+      self: { ...self, hp }
+    };
+    return {
+      combatTarget: retained,
+      combatEngagements: { [String(targetId)]: { ...retained } },
+      combatMetrics: {
+        targetId: String(targetId),
+        targetName: target.name,
+        startedAt: retained.firstSeenAt,
+        acceptedShots: 0,
+        targetDamage: 0,
+        staminaSpentKnown: false
+      },
+      combatMetricsByTarget: {
+        [String(targetId)]: { targetDamage: 0, staminaSpentKnown: false }
+      }
+    };
+  };
+  const pressureFrame = hp => {
+    const pressureSelf = { ...self, hp };
+    return {
+      userId: pressureSelf.user_id,
+      realtime: {
+        tick: 685400,
+        receivedAtMs: pressureNowMs,
+        frameAgeMs: 0,
+        self: pressureSelf,
+        entities: [pressureSelf],
+        bullets: []
+      },
+      fallback: {
+        tick: 685399,
+        receivedAtMs: pressureNowMs - 50,
+        frameAgeMs: 50,
+        entities: [],
+        coinDrops: []
+      }
+    };
+  };
+  const pressureOptions = {
+    ...options,
+    nowMs: pressureNowMs,
+    combatEfficiencyWindowMs: 1000,
+    combatEfficiencyMinimumWindowMs: 1000
+  };
+  const healthySecondaryPressure = buildBrowserlessRealtimeControlDecision(
+    pressureFrame(100),
+    pressureState(100),
+    pressureOptions
+  );
+  assert('matching retained healthy secondary suppresses missing-target close timeout',
+    healthySecondaryPressure.combat?.combatPhase?.exitRequired === true
+      && healthySecondaryPressure.combat?.exit === null
+      && healthySecondaryPressure.action?.reason === 'combat-target-frame-gap-hold');
+  const lowHpSecondaryPressure = buildBrowserlessRealtimeControlDecision(
+    pressureFrame(50),
+    pressureState(50),
+    pressureOptions
+  );
+  assert('retained secondary close timeout remains active at hp fifty',
+    lowHpSecondaryPressure.combat?.combatPhase?.exitRequired === true
+      && lowHpSecondaryPressure.combat?.exit?.reason === 'combat-miss-close-timeout-leave'
+      && lowHpSecondaryPressure.action?.shouldLeave === true);
+
   let velocitySends = 0;
   let shootSends = 0;
   const actionAdapter = createBrowserlessActionAdapter({

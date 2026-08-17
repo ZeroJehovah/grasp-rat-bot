@@ -38,13 +38,21 @@ function classifyCombatTargetRole(target = null, mission = null) {
   };
 }
 
-function secondaryCombatExitPolicy(target = null, selfHp = null) {
-  const secondary = target?.combatRole === 'secondary' || target?.secondaryTarget === true;
+function secondaryCombatExitPolicy(target = null, selfHp = null, context = {}) {
+  const retainedTarget = context.retainedTarget || context.retainedCombatTarget || null;
+  const phaseTargetId = idOf({ targetId: context.combatPhaseTargetId ?? context.combatPhase?.targetId });
+  const retainedTargetId = idOf(retainedTarget);
+  const retainedMatch = Boolean(!target && phaseTargetId && retainedTargetId === phaseTargetId);
+  const effectiveTarget = target || (retainedMatch ? retainedTarget : null);
+  const secondary = effectiveTarget?.combatRole === 'secondary' || effectiveTarget?.secondaryTarget === true;
   const hp = Number(selfHp);
   const healthy = secondary && Number.isFinite(hp) && hp > 50;
   return {
     secondary,
     healthy,
+    targetSource: target ? 'current' : (retainedMatch ? 'retained-phase-match' : 'none'),
+    targetId: idOf(effectiveTarget),
+    retainedMatch,
     suppressClearHpGap: healthy,
     suppressMissCloseTimeout: healthy,
     suppressExchangeStopLoss: healthy,

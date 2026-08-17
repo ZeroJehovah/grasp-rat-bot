@@ -389,13 +389,31 @@ function runStrategyModuleSelfTests() {
     { combatRole: 'secondary', secondaryTarget: true },
     50
   );
+  const retainedSecondaryExitPolicy = secondaryCombatExitPolicy(null, 80, {
+    retainedTarget: { id: 32551, combatRole: 'secondary', secondaryTarget: true },
+    combatPhaseTargetId: '32551'
+  });
+  const mismatchedRetainedSecondaryExitPolicy = secondaryCombatExitPolicy(null, 80, {
+    retainedTarget: { id: 32551, combatRole: 'secondary', secondaryTarget: true },
+    combatPhaseTargetId: '895'
+  });
+  const lowHpRetainedSecondaryExitPolicy = secondaryCombatExitPolicy(null, 50, {
+    retainedTarget: { id: 32551, combatRole: 'secondary', secondaryTarget: true },
+    combatPhaseTargetId: '32551'
+  });
   results.push({
-    name: 'secondary-exit-suppression-stops-at-hp-fifty',
+    name: 'secondary-exit-suppression-uses-matching-retained-role-and-stops-at-hp-fifty',
     passed: healthySecondaryExitPolicy.suppressClearHpGap === true
       && healthySecondaryExitPolicy.suppressMissCloseTimeout === true
       && healthySecondaryExitPolicy.suppressExchangeStopLoss === true
       && lowHpSecondaryExitPolicy.preserveLowHpExits === true
       && lowHpSecondaryExitPolicy.suppressClearHpGap === false
+      && retainedSecondaryExitPolicy.targetSource === 'retained-phase-match'
+      && retainedSecondaryExitPolicy.suppressMissCloseTimeout === true
+      && mismatchedRetainedSecondaryExitPolicy.targetSource === 'none'
+      && mismatchedRetainedSecondaryExitPolicy.suppressMissCloseTimeout === false
+      && lowHpRetainedSecondaryExitPolicy.preserveLowHpExits === true
+      && lowHpRetainedSecondaryExitPolicy.suppressMissCloseTimeout === false
   });
 
   const playerProfitScoreBoundaries = [
