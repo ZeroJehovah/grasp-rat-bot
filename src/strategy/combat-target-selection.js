@@ -350,20 +350,28 @@ function isCombatEligibleThreat(entity, options = {}) {
       ? options.secondaryTargetIds.has(entityKey)
       : options.secondaryTargetId && String(options.secondaryTargetId) === entityKey
   ) || dynamicWhitelistMember || creatorProtected || legacyWhitelistProtected || Boolean(entity.profitProtected || entity.whitelisted);
+  const proximityEvidence = Boolean(
+    dynamicWhitelistMember && dynamicPolicy?.proactiveCombatEligible === true
+  );
+  const establishedCombat = Boolean(
+    options.establishedCombatTargetId !== null
+      && options.establishedCombatTargetId !== undefined
+      && options.establishedCombatTargetId !== ''
+      && String(options.establishedCombatTargetId) === String(entityKey)
+  );
   const defensiveEvidence = Boolean(
     incomingOverride.defensiveTargetEligible
       || incomingOwnerMatchesTarget(entity, options)
       || recentInjury
       || defensiveEngagement
-      || (options.establishedCombatTargetId !== null
-        && options.establishedCombatTargetId !== undefined
-        && options.establishedCombatTargetId !== ''
-        && String(options.establishedCombatTargetId) === String(entityKey))
+      || proximityEvidence
+      || (!secondaryTarget && establishedCombat)
       || isFiringCombatEntity(entity)
   );
 
   // Whitelist identities are never profit targets. They can only be retained
-  // as a defensive secondary contact when realtime threat evidence exists.
+  // as a secondary contact through realtime defensive evidence or the
+  // dynamic-whitelist HP-scaled proximity policy.
   if (isInvulnerableEntity(entity)) return secondaryTarget && defensiveEvidence;
   if (creatorProtected || legacyWhitelistProtected) return secondaryTarget && defensiveEvidence;
 
@@ -836,6 +844,7 @@ function applyCombatTargetSwitchHysteresisCore(input = {}, previousGate = null, 
 function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bullets = [], state = {}, options = {}) {
   const engaged = state?.combatTarget || null;
   if (!engaged?.id) return null;
+  const engagedSecondary = engaged.combatRole === 'secondary' || engaged.secondaryTarget === true;
   const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
   const closePressure = engaged.combatPhase === 'close-pressure'
     || engaged.closePressure?.active === true;
@@ -880,6 +889,8 @@ function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bu
     recentInjury: recentInjuryMatchesTarget(visibleTarget, context),
     defensiveEngagement: [engaged.intent, engaged.originIntent]
       .some(intent => String(intent || '') === 'defensive')
+      || (engagedSecondary
+        && String(options.defensiveEngagementTargetId || '') === id)
   })) {
     if (state && typeof state === 'object') state.combatTarget = null;
     return null;
@@ -888,7 +899,7 @@ function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bu
   // target for the bounded distance-control window. Releasing it at the old
   // disengage radius would prevent both the required close attempt and its
   // stop-loss assessment.
-  if (closePressure && visibleTarget && !isInvulnerableEntity(visibleTarget)
+  if (!engagedSecondary && closePressure && visibleTarget && !isInvulnerableEntity(visibleTarget)
     && !visibleTargetDead
     && !(typeof options.whitelistCheck === 'function'
       && options.whitelistCheck(visibleTarget)
@@ -986,6 +997,7 @@ function pickEngagedCombatTargetCore(self, combatTargets = [], entities = [], bu
   }
   const afkProfitSeed = String(engaged.originIntent || '') === 'afk-profit';
   const engagedRealtimeHold = Number.isFinite(distance)
+    && !engagedSecondary
     && attackRange > 0
     && distance <= attackRange
     && maxAgeMs > 0

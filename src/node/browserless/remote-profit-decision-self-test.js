@@ -1456,7 +1456,7 @@ function runRemoteProfitDecisionSelfTest() {
   assert.strictEqual(escortReleased.action?.kind, 'seek-remote-player');
   assert.strictEqual(escortReleased.profit?.mission?.type, 'remote-player-navigation');
 
-  const pursuitAdapter = createBrowserlessDecisionAdapter({
+  const movementOnlyAdapter = createBrowserlessDecisionAdapter({
     userId: 7,
     controlMode: 'profit-live',
     combatEnabled: true,
@@ -1465,14 +1465,14 @@ function runRemoteProfitDecisionSelfTest() {
     opportunitySwitchMargin: 0,
     opportunitySwitchRelativeMargin: 0
   });
-  const directPursuitTarget = {
+  const movementOnlyTarget = {
     ...defensiveCrossingTarget,
     x: 8000,
     firing: false
   };
-  const directPursuitFirst = decide(
-    pursuitAdapter,
-    state(fullStaminaSelf(), [directPursuitTarget]),
+  const movementOnlyFirst = decide(
+    movementOnlyAdapter,
+    state(fullStaminaSelf(), [movementOnlyTarget]),
     2000,
     remoteBatch,
     {
@@ -1482,10 +1482,11 @@ function runRemoteProfitDecisionSelfTest() {
       dynamicWhitelistEnabledUserIds: [8]
     }
   );
-  assert.strictEqual(directPursuitFirst.action?.kind, 'combat-live');
-  const directPursuitSecond = decide(
-    pursuitAdapter,
-    state(fullStaminaSelf(), [{ ...directPursuitTarget, x: 7000 }]),
+  assert.strictEqual(movementOnlyFirst.action?.kind, 'seek-remote-player');
+  assert.strictEqual(movementOnlyFirst.combat?.target, null);
+  const movementOnlySecond = decide(
+    movementOnlyAdapter,
+    state(fullStaminaSelf(), [{ ...movementOnlyTarget, x: 7000 }]),
     2050,
     remoteBatch,
     {
@@ -1495,19 +1496,64 @@ function runRemoteProfitDecisionSelfTest() {
       dynamicWhitelistEnabledUserIds: [8]
     }
   );
-  assert.strictEqual(directPursuitSecond.action?.kind, 'combat-live');
-  assert.strictEqual(directPursuitSecond.combat?.target?.userId, 8);
-  assert.strictEqual(directPursuitSecond.combat?.target?.combatIntent, 'secondary');
-  assert.strictEqual(directPursuitSecond.combat?.target?.combatRole, 'secondary');
-  assert.strictEqual(directPursuitSecond.combat?.shooting?.wouldShoot, false);
+  assert.strictEqual(movementOnlySecond.action?.kind, 'seek-remote-player');
+  assert.strictEqual(movementOnlySecond.combat?.target, null);
+  assert.strictEqual(movementOnlySecond.combat?.contactEntryGuard?.active, false);
   assert.strictEqual(
-    directPursuitSecond.combat?.shooting?.secondaryPolicy?.reason,
-    'secondary-five-second-shot-quota'
+    movementOnlySecond.combat?.contactEntryGuard?.assessment?.blockedReason,
+    'dynamic-whitelist-movement-authority-disabled'
   );
-  assert.strictEqual(directPursuitSecond.combat?.movement?.secondaryTarget?.active, true);
-  assert.strictEqual(directPursuitSecond.combat?.movement?.reason, 'secondary-follow-primary-target');
-  assert.strictEqual(directPursuitSecond.combat?.movement?.dx, 1);
-  assert.strictEqual(directPursuitSecond.profit?.mission?.targetId, '99');
+  assert.strictEqual(movementOnlySecond.profit?.mission?.targetId, '99');
+
+  const boundedDefenseAdapter = createBrowserlessDecisionAdapter({
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    finalActionArbitrationHoldMs: 0,
+    opportunitySwitchConfirmFrames: 1,
+    opportunitySwitchMargin: 0,
+    opportunitySwitchRelativeMargin: 0
+  });
+  const boundedDefenseOptions = {
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    dynamicWhitelistMemberUserIds: [8],
+    dynamicWhitelistEnabledUserIds: [8]
+  };
+  const boundedDefenseEntered = decide(
+    boundedDefenseAdapter,
+    state(fullStaminaSelf(), [{ ...defensiveCrossingTarget, x: 8000, vx: 0, firing: true }]),
+    3000,
+    remoteBatch,
+    boundedDefenseOptions
+  );
+  const boundedDefenseRetained = decide(
+    boundedDefenseAdapter,
+    state(fullStaminaSelf(), [{ ...defensiveCrossingTarget, x: 8000, vx: 0, firing: false }]),
+    3050,
+    remoteBatch,
+    boundedDefenseOptions
+  );
+  const boundedDefenseReleased = decide(
+    boundedDefenseAdapter,
+    state(fullStaminaSelf(), [{ ...defensiveCrossingTarget, x: 8000, vx: 0, firing: false }]),
+    8101,
+    remoteBatch,
+    boundedDefenseOptions
+  );
+  assert.strictEqual(boundedDefenseEntered.action?.kind, 'combat-live');
+  assert.strictEqual(boundedDefenseEntered.combat?.target?.combatRole, 'secondary');
+  assert.strictEqual(boundedDefenseRetained.action?.kind, 'combat-live');
+  assert.strictEqual(boundedDefenseRetained.combat?.secondaryRetention?.retained, true);
+  assert.strictEqual(boundedDefenseRetained.combat?.profitEscortContinuity?.maintained, true);
+  assert.strictEqual(boundedDefenseReleased.action?.kind, 'seek-remote-player');
+  assert.strictEqual(boundedDefenseReleased.combat?.target, null);
+  assert.strictEqual(
+    boundedDefenseReleased.combat?.secondaryTargetRelease?.reason,
+    'secondary-defensive-evidence-cleared'
+  );
+  assert.strictEqual(boundedDefenseReleased.profit?.mission?.targetId, '99');
+  assert.strictEqual(boundedDefenseReleased.profit?.profitEscortContinuity, null);
 
   const invulnerableRemoteAdapter = createBrowserlessDecisionAdapter({
     userId: 7,

@@ -116,6 +116,36 @@ function secondaryFirePolicy(input = {}, options = {}) {
   };
 }
 
+function secondaryRetentionPolicy(combatTargetState = null, nowMs = Date.now(), options = {}) {
+  const secondary = combatTargetState?.combatRole === 'secondary'
+    || combatTargetState?.secondaryTarget === true;
+  const windowMs = Math.max(1000, Number(
+    options.secondaryTargetWindowMs ?? DEFAULT_SECONDARY_WINDOW_MS
+  ));
+  const evidence = [
+    ['target-firing', combatTargetState?.lastFiringAt],
+    ['collision-path-bullet', combatTargetState?.lastThreatAt],
+    ['incoming-bullet', combatTargetState?.lastIncomingBulletAt]
+  ]
+    .map(([type, at]) => ({ type, at: Number(at || 0) }))
+    .filter(item => item.at > 0)
+    .sort((left, right) => right.at - left.at);
+  const latest = evidence[0] || null;
+  const ageMs = latest ? Math.max(0, Number(nowMs) - latest.at) : null;
+  const retained = Boolean(secondary && latest && ageMs <= windowMs);
+  return {
+    secondary,
+    retained,
+    windowMs,
+    latestEvidenceAt: latest?.at || null,
+    latestEvidenceType: latest?.type || '',
+    ageMs,
+    reason: retained
+      ? 'secondary-defensive-evidence-grace'
+      : (secondary ? 'secondary-defensive-evidence-expired' : 'not-secondary')
+  };
+}
+
 module.exports = {
   DEFAULT_SECONDARY_BASE_CADENCE_MS,
   DEFAULT_SECONDARY_MAX_CADENCE_MS,
@@ -129,5 +159,6 @@ module.exports = {
   ownDispatchCountInWindow,
   secondaryCombatExitPolicy,
   secondaryCadenceMs,
-  secondaryFirePolicy
+  secondaryFirePolicy,
+  secondaryRetentionPolicy
 };

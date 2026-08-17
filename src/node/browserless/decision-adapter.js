@@ -11094,10 +11094,12 @@ function isCombatActionEligibleForDecision(combatDecision, options = {}) {
   const target = combatDecision?.target || combatDecision?.dryRun?.target || null;
   if (!target) return false;
   if (options.controlMode !== 'profit-live') return true;
+  if (combatDecision?.dryRun?.secondaryRetention?.retained === true) return true;
   if (target.combatEngagement) return true;
   if (target.combatIntent === 'defensive') return true;
   if (target.combatIntent === 'recovery-contact') return true;
   if (target.combatIntent === 'whitelist-proximity') return true;
+  if (target.whitelistContactPolicy?.proactiveCombatEligible === true) return true;
   return Boolean(target.active || target.firing);
 }
 

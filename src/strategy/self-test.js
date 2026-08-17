@@ -66,7 +66,8 @@ const {
   classifyCombatTargetRole,
   secondaryCadenceMs,
   secondaryCombatExitPolicy,
-  secondaryFirePolicy
+  secondaryFirePolicy,
+  secondaryRetentionPolicy
 } = require('./dual-target-policy');
 const { profitKillRacePolicy } = require('./profit-kill-race');
 const { runCombatHpLossAttributionSelfTest } = require('./combat-hp-loss-attribution');
@@ -334,6 +335,19 @@ function runStrategyModuleSelfTests() {
     combatTargetState: { motionSamples: secondarySamples },
     dispatchTimes: []
   });
+  const retainedSecondaryThreat = secondaryRetentionPolicy({
+    combatRole: 'secondary',
+    lastFiringAt: 7000,
+    lastThreatAt: 6000
+  }, 12000);
+  const expiredSecondaryThreat = secondaryRetentionPolicy({
+    combatRole: 'secondary',
+    lastFiringAt: 6999,
+    lastThreatAt: 6000
+  }, 12000);
+  const proximityOnlySecondary = secondaryRetentionPolicy({
+    combatRole: 'secondary'
+  }, 12000);
   results.push({
     name: 'secondary-fire-cadence-quota-primary-and-invulnerable-gates',
     passed: secondaryCadenceMs(0) === 600
@@ -345,6 +359,10 @@ function runStrategyModuleSelfTests() {
       && secondaryQuotaBlocked.reason === 'secondary-five-second-shot-quota'
       && secondaryPrimaryBlocked.reason === 'primary-target-fire-available'
       && secondaryInvulnerableBlocked.reason === 'secondary-invulnerable-dodge-only'
+      && retainedSecondaryThreat.retained === true
+      && retainedSecondaryThreat.ageMs === 5000
+      && expiredSecondaryThreat.retained === false
+      && proximityOnlySecondary.retained === false
   });
 
   const killRaceBlocked = profitKillRacePolicy({

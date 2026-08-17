@@ -13515,7 +13515,7 @@ async function runSelfTest() {
       want: 'velocity|profit-invulnerable-target-approach|vel 1 0|velocity|profit-invulnerable-target-approach|vel 1 0|true'
     },
     {
-      name: 'browserless profit live hands moving AFK attack target to combat',
+      name: 'browserless profit live releases non-attacking former AFK target for better primary profit',
       got: (() => {
         const decisionAdapter = createBrowserlessDecisionAdapter({
           userId: 7,
@@ -13563,12 +13563,12 @@ async function runSelfTest() {
           second.kind,
           second.band,
           second.action.target.userId,
-          second.combat.target.combatIntent,
-          second.combat.target.combatEngagement?.reengage,
+          second.combat.target?.combatIntent,
+          second.combat.target?.combatEngagement?.reengage,
           second.profit.best?.target?.userId
         ].join('|');
       })(),
-      want: 'profit-candidate|profit-attack|true|combat-live|combat|8|engaged||9'
+      want: 'profit-candidate|profit-attack|true|profit-candidate|profit|9|||'
     },
     {
       name: 'browserless stationary AFK attack seed keeps approaching until full attack range',
