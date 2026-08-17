@@ -13516,6 +13516,77 @@ async function runSelfTest() {
       want: 'velocity|profit-invulnerable-target-approach|vel 1 0|velocity|profit-invulnerable-target-approach|vel 1 0|true'
     },
     {
+      name: 'browserless action adapter preserves snapshot invulnerability when realtime profit target omits protection fields',
+      got: (() => {
+        let t = 1000;
+        const commands = [];
+        const adapter = createBrowserlessActionAdapter({
+          now: () => t,
+          commandIntervalMs: 1,
+          attackRangeCm: 14500,
+          shootRepeatEnabled: false,
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`),
+            sendShoot: () => commands.push('shoot')
+          }
+        });
+        const self = { user_id: 7, x: 0, y: 0, stamina_5s_remaining_milli: 10000 };
+        const protectedTarget = {
+          type: 'enemy',
+          userId: 8,
+          x: 5000,
+          y: 0,
+          active: false,
+          invulnerable: true,
+          invulnerableRemainingMs: 5550,
+          invulnerableMetadataAuthority: 'snapshot',
+          invulnerableApproachDistanceCm: 6000
+        };
+        const decision = {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: { kind: 'attack', band: 'profit', target: protectedTarget }
+        };
+        const protectedResult = adapter.applyDecision({
+          realtime: {
+            self,
+            entities: [self, realtimePassiveAfk({ user_id: 8, x: 5000, y: 0, hp: 80 })],
+            tick: 1
+          }
+        }, decision);
+        const protectedShootCount = commands.filter(item => item === 'shoot').length;
+        t = 2000;
+        const releasedResult = adapter.applyDecision({
+          realtime: {
+            self,
+            entities: [self, realtimePassiveAfk({
+              user_id: 8,
+              x: 5000,
+              y: 0,
+              hp: 80,
+              invulnerable: false,
+              invulnerableRemainingMs: 0
+            })],
+            tick: 2
+          }
+        }, decision);
+        return [
+          protectedResult.kind,
+          protectedResult.reason,
+          protectedResult.target?.invulnerable,
+          protectedResult.target?.invulnerableRemainingMs,
+          protectedResult.target?.invulnerableMetadataAuthority,
+          protectedShootCount,
+          releasedResult.kind,
+          releasedResult.target?.invulnerable,
+          releasedResult.target?.invulnerableRemainingMs,
+          releasedResult.target?.invulnerableMetadataAuthority,
+          commands.filter(item => item === 'shoot').length
+        ].join('|');
+      })(),
+      want: 'stop|profit-invulnerable-target-close-wait|true|5550|snapshot|0|profit-attack|false|0|realtime|1'
+    },
+    {
       name: 'browserless profit live releases non-attacking former AFK target for better primary profit',
       got: (() => {
         const decisionAdapter = createBrowserlessDecisionAdapter({
@@ -26180,6 +26251,69 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'profit-attack|1|0|2|0|shoot-repeat-target-active|vel 0 0,shoot 1000 0 0 0'
+    },
+    {
+      name: 'browserless action adapter cancels AFK shot repeat when invulnerability appears',
+      got: (() => {
+        let t = 1000;
+        const commands = [];
+        const timers = [];
+        const self = { x: 0, y: 0, stamina_5s_remaining_milli: 10000 };
+        const target = realtimePassiveAfk({ type: 'enemy', userId: 8, user_id: 8, x: 1000, y: 0, active: false });
+        const adapter = createBrowserlessActionAdapter({
+          now: () => t,
+          commandIntervalMs: 1,
+          decisionIntervalMs: 1000,
+          combatShootMinIntervalMs: 160,
+          shootRepeatEnabled: true,
+          attackRangeCm: 14500,
+          setTimeout: (fn, ms) => {
+            const timer = { fn, ms, canceled: false };
+            timers.push(timer);
+            return timer;
+          },
+          clearTimeout: timer => {
+            if (timer) timer.canceled = true;
+          },
+          transport: {
+            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`),
+            sendShoot: (targetX, targetY, startX, startY) => commands.push(`shoot ${targetX} ${targetY} ${startX} ${startY}`)
+          }
+        });
+        const action = adapter.applyDecision({
+          realtime: { self, entities: [target], tick: 1 }
+        }, {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: { kind: 'attack', band: 'profit', target }
+        });
+        adapter.observeState({
+          realtime: {
+            self,
+            tick: 2,
+            entities: [{ ...target, invulnerable: true, invulnerableRemainingMs: 5000 }]
+          }
+        });
+        let guard = 0;
+        while (timers.length && guard < 20) {
+          guard += 1;
+          const timer = timers.shift();
+          if (!timer || timer.canceled) continue;
+          t += timer.ms;
+          timer.fn();
+        }
+        const state = adapter.getState();
+        return [
+          action.kind,
+          state.shootSentCount,
+          state.shootRepeatSentCount,
+          commands.length,
+          state.shootRepeatUntilMs,
+          state.lastShootRepeatError || 'none',
+          commands.join(',')
+        ].join('|');
+      })(),
+      want: 'profit-attack|1|0|2|0|none|vel 0 0,shoot 1000 0 0 0'
     },
     {
       name: 'browserless opportunistic shot attaches to coin action',
@@ -46326,6 +46460,84 @@ async function runSelfTest() {
 	        return [result.kind, result.reason, result.easyKillApproach, commands.join(','), commands.includes('shoot')].join('|');
 	      })(),
 	      want: 'velocity|profit-easy-kill-seek|true|vel 1 0|false'
+	    },
+	    {
+	      name: 'browserless action adapter preserves snapshot invulnerability when realtime easy active target omits protection fields',
+	      got: (() => {
+	        let t = 1000;
+	        const commands = [];
+	        const adapter = createBrowserlessActionAdapter({
+	          now: () => t,
+	          commandIntervalMs: 1,
+	          attackRangeCm: 14500,
+	          transport: {
+	            sendVelocity: (dx, dy) => commands.push(`vel ${dx} ${dy}`),
+	            sendShoot: () => commands.push('shoot')
+	          }
+	        });
+	        const self = { user_id: 7, x: 0, y: 0 };
+	        const protectedTarget = {
+	          type: 'enemy',
+	          userId: 8,
+	          x: 5000,
+	          y: 0,
+	          active: true,
+	          invulnerable: true,
+	          invulnerableRemainingMs: 5550,
+	          invulnerableMetadataAuthority: 'snapshot',
+	          invulnerableApproachDistanceCm: 10000,
+	          easyKillKnown: true,
+	          easyKillProfitTarget: true,
+	          easyKillInvulnerableApproachEligible: true
+	        };
+	        const decision = {
+	          kind: 'profit-candidate',
+	          band: 'profit',
+	          action: {
+	            kind: 'seek-enemy',
+	            band: 'profit',
+	            reason: 'easy-kill-active-profit',
+	            target: protectedTarget
+	          }
+	        };
+	        const protectedResult = adapter.applyDecision({
+	          realtime: {
+	            self,
+	            entities: [self, { user_id: 8, x: 5000, y: 0, hp: 80, current_join_mode: 'Active' }],
+	            tick: 1
+	          }
+	        }, decision);
+	        t = 2000;
+	        const releasedResult = adapter.applyDecision({
+	          realtime: {
+	            self,
+	            entities: [self, {
+	              user_id: 8,
+	              x: 5000,
+	              y: 0,
+	              hp: 80,
+	              current_join_mode: 'Active',
+	              invulnerable: false,
+	              invulnerableRemainingMs: 0
+	            }],
+	            tick: 2
+	          }
+	        }, decision);
+	        return [
+	          protectedResult.kind,
+	          protectedResult.reason,
+	          protectedResult.target?.invulnerable,
+	          protectedResult.target?.invulnerableRemainingMs,
+	          protectedResult.target?.invulnerableMetadataAuthority,
+	          releasedResult.kind,
+	          releasedResult.reason,
+	          releasedResult.target?.invulnerable,
+	          releasedResult.target?.invulnerableRemainingMs,
+	          releasedResult.target?.invulnerableMetadataAuthority,
+	          commands.includes('shoot')
+	        ].join('|');
+	      })(),
+	      want: 'stop|profit-easy-kill-invulnerable-close-wait|true|5550|snapshot|stop|profit-easy-kill-combat-handoff|false|0|realtime|false'
 	    },
 	    {
 	      name: 'browserless easy-kill approach stops after eight-second low-closing window',

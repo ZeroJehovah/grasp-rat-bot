@@ -54,6 +54,43 @@ const DEFAULT_NEAR_COIN_CONTINUATION_LEASE_SLACK_MS = 125;
 const DEFAULT_NEAR_COIN_CONTINUATION_MIN_LEASE_MS = 250;
 const DEFAULT_NEAR_COIN_CONTINUATION_STOP_SPEED_TOLERANCE = 1;
 const DEFAULT_NEAR_COIN_CONTINUATION_SNAPSHOT_MAX_AGE_MS = 5000;
+const INVULNERABILITY_METADATA_FIELDS = Object.freeze([
+  'invulnerable_remaining_ticks',
+  'invincible_remaining_ticks',
+  'invulnerability_remaining_ticks',
+  'invulnerableTicks',
+  'invulnerableRemainingTicks',
+  'invincibleRemainingTicks',
+  'invulnerabilityRemainingTicks',
+  'invulnerable_ticks',
+  'invincible_ticks',
+  'invulnerability_ticks',
+  'invulnerable_tick',
+  'invincible_tick',
+  'invulnerability_tick',
+  'invulnerable_remaining_ms',
+  'invincible_remaining_ms',
+  'invulnerability_remaining_ms',
+  'invulnerableRemainingMs',
+  'invincibleRemainingMs',
+  'invulnerabilityRemainingMs',
+  'invulnerable_ms',
+  'invincible_ms',
+  'invulnerability_ms',
+  'immune_remaining_ms',
+  'immuneRemainingMs',
+  'invulnerable_remaining',
+  'invincible_remaining',
+  'invulnerability_remaining',
+  'invulnerableRemaining',
+  'invincibleRemaining',
+  'invulnerabilityRemaining',
+  'invulnerable',
+  'is_invulnerable',
+  'isInvulnerable',
+  'immune',
+  'is_immune'
+]);
 const SHOOT_EXECUTION_CLASSES = Object.freeze({
   COMBAT: 'combat',
   PROFIT_OPPORTUNITY: 'profit-opportunity',
@@ -120,6 +157,33 @@ function mergeRealtimeSelfStaminaMetadata(realtimeSelf, metadataSelf) {
   }
   if (merged.staminaMetadataDistance === undefined && metadataSelf.staminaMetadataDistance !== undefined) {
     merged.staminaMetadataDistance = metadataSelf.staminaMetadataDistance;
+  }
+  return merged;
+}
+
+function hasOwnInvulnerabilityMetadata(entity) {
+  if (!entity || typeof entity !== 'object') return false;
+  return INVULNERABILITY_METADATA_FIELDS.some(field => {
+    if (!Object.prototype.hasOwnProperty.call(entity, field)) return false;
+    const value = entity[field];
+    return value !== undefined && value !== null && value !== '';
+  });
+}
+
+function mergeRealtimeTargetInvulnerability(metadataTarget, realtimeTarget) {
+  if (!realtimeTarget || typeof realtimeTarget !== 'object') return metadataTarget || null;
+  if (!metadataTarget || typeof metadataTarget !== 'object') return realtimeTarget;
+
+  const realtimeAuthoritative = hasOwnInvulnerabilityMetadata(realtimeTarget);
+  const merged = { ...metadataTarget, ...realtimeTarget };
+  if (realtimeAuthoritative) {
+    for (const field of INVULNERABILITY_METADATA_FIELDS) {
+      if (!Object.prototype.hasOwnProperty.call(realtimeTarget, field)) delete merged[field];
+    }
+    merged.invulnerable = isInvulnerableEntity(realtimeTarget);
+    merged.invulnerableMetadataAuthority = 'realtime';
+  } else {
+    merged.invulnerable = isInvulnerableEntity(metadataTarget);
   }
   return merged;
 }
@@ -2090,6 +2154,7 @@ function createBrowserlessActionAdapter(options = {}) {
     const key = targetRepeatKey(target);
     const entity = findRealtimeEntity(stateSnapshot, key);
     if (!entity) return { ok: false, reason: 'afk-fire-missing-realtime-target', target: null };
+    const mergedTarget = mergeRealtimeTargetInvulnerability(target, entity);
     const hp = numberOrNull(entity.hp);
     const x = numberOrNull(entity.x);
     const y = numberOrNull(entity.y);
@@ -2097,7 +2162,7 @@ function createBrowserlessActionAdapter(options = {}) {
       return { ok: false, reason: 'afk-fire-missing-realtime-hp-or-distance', target: null };
     }
     if (entityActiveLike(entity)) return { ok: false, reason: 'afk-fire-target-active', target: null };
-    if (isInvulnerableEntity(entity)) return { ok: false, reason: 'afk-fire-invulnerable', target: null };
+    if (isInvulnerableEntity(mergedTarget)) return { ok: false, reason: 'afk-fire-invulnerable', target: null };
     if (hp <= 0 || entity.alive === false || entity.dead === true) {
       return { ok: false, reason: 'afk-fire-target-dead', target: null };
     }
@@ -2105,12 +2170,10 @@ function createBrowserlessActionAdapter(options = {}) {
       ok: true,
       reason: 'afk-fire-realtime-target',
       target: {
-        ...target,
-        ...entity,
+        ...mergedTarget,
         hp,
         x,
         y,
-        invulnerable: false,
         authority: 'realtime'
       }
     };
@@ -2249,7 +2312,8 @@ function createBrowserlessActionAdapter(options = {}) {
         cancelShootRepeat('shoot-repeat-target-active', { error: true });
         return false;
       }
-      if (isInvulnerableEntity(entity)) {
+      const mergedTarget = mergeRealtimeTargetInvulnerability(repeat.target, entity);
+      if (isInvulnerableEntity(mergedTarget)) {
         cancelShootRepeat('shoot-repeat-target-invulnerable');
         return false;
       }
@@ -2257,7 +2321,7 @@ function createBrowserlessActionAdapter(options = {}) {
         cancelShootRepeat('shoot-repeat-target-missing-realtime-state', { error: true });
         return false;
       }
-      repeat.target = { ...repeat.target, ...entity };
+      repeat.target = mergedTarget;
     }
     repeat.self = mergeRealtimeSelfStaminaMetadata(realtime.self, repeat.self);
     repeat.commandShooting = stateSnapshot?.command?.shooting || repeat.commandShooting || null;
@@ -3353,10 +3417,8 @@ function createBrowserlessActionAdapter(options = {}) {
     }
     if (rawRealtimeTarget) {
       target = {
-        ...target,
-        ...rawRealtimeTarget,
+        ...mergeRealtimeTargetInvulnerability(target, rawRealtimeTarget),
         authority: 'realtime',
-        invulnerable: isInvulnerableEntity(rawRealtimeTarget),
         active: entityActiveLike(rawRealtimeTarget)
       };
     }
