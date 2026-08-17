@@ -199,6 +199,7 @@ const DEFAULT_EASY_KILL_APPROACH_WINDOW_MS = BROWSER_RUNTIME_DEFAULTS.browserles
 const DEFAULT_EASY_KILL_APPROACH_MIN_CLOSING_CM = BROWSER_RUNTIME_DEFAULTS.browserlessEasyKillApproachMinClosingCm ?? 1000;
 const DEFAULT_PROFIT_MISSION_TTL_MS = 180000;
 const DEFAULT_COMPLETED_PROFIT_TARGET_TTL_MS = 210000;
+const DEFAULT_PROFIT_TICK_REGRESSION_TOLERANCE = 5;
 const DEFAULT_ACTIVE_COIN_COMPETITION_MIN_SELF_DISTANCE_CM = BROWSER_RUNTIME_DEFAULTS.activeCoinCompetitionMinSelfDistanceCm ?? 18000;
 const DEFAULT_ACTIVE_COIN_COMPETITION_NEAR_COIN_DISTANCE_CM = BROWSER_RUNTIME_DEFAULTS.activeCoinCompetitionNearCoinDistanceCm ?? 8000;
 const DEFAULT_ACTIVE_COIN_COMPETITION_MIN_LEAD_DISTANCE_CM = BROWSER_RUNTIME_DEFAULTS.activeCoinCompetitionMinLeadDistanceCm ?? 4000;
@@ -1652,15 +1653,156 @@ function summarizeSelfKillEvidence(selfKillTargetTicks) {
     .filter(item => item.targetUserId !== null);
 }
 
+function filterSelfKillTargetTicksForObservedTick(selfKillTargetTicks, observedTick) {
+  const tick = numberOrNull(observedTick);
+  const filtered = new Map();
+  if (tick === null || tick <= 0) return filtered;
+  for (const [targetUserId, item] of (selfKillTargetTicks || new Map()).entries()) {
+    const eventTick = numberOrNull(item?.tick);
+    // Snapshot messages are evidence only for the tick of the snapshot that
+    // carried them. A future event tick is a historical/other-epoch message,
+    // not a fresh kill in the current server-tick stream.
+    if (eventTick === null || eventTick <= 0 || eventTick > tick) continue;
+    filtered.set(targetUserId, item);
+  }
+  return filtered;
+}
+
 function snapshotSelfKillEvidence(snapshot, userId) {
-  return summarizeSelfKillEvidence(selfKillTargetTicksFromMessages(
-    Array.isArray(snapshot?.messages) ? snapshot.messages : [],
-    userId
+  const observedTick = numberOrNull(snapshot?.tick);
+  return summarizeSelfKillEvidence(filterSelfKillTargetTicksForObservedTick(
+    selfKillTargetTicksFromMessages(
+      Array.isArray(snapshot?.messages) ? snapshot.messages : [],
+      userId
+    ),
+    observedTick
   ));
 }
 
 function coinSourceUserId(coin) {
   return numberOrNull(coin?.source_user_id ?? coin?.sourceUserId ?? coin?.owner_user_id ?? coin?.ownerUserId);
+}
+
+function currentProfitTickEpoch(stateful = {}) {
+  return Math.max(0, Number(stateful?.profitTickEpoch || 0) || 0);
+}
+
+function advanceProfitTickEpoch(stateful = {}, realtimeTick, options = {}) {
+  if (!stateful || typeof stateful !== 'object') return 0;
+  const tick = numberOrNull(realtimeTick);
+  if (tick === null) return currentProfitTickEpoch(stateful);
+  const tolerance = Math.max(0, Number(
+    options.profitTickRegressionTolerance
+      ?? DEFAULT_PROFIT_TICK_REGRESSION_TOLERANCE
+  ));
+  const previousTick = numberOrNull(stateful.profitLastRealtimeTick);
+  if (previousTick !== null && tick < previousTick - tolerance) {
+    stateful.profitTickEpoch = currentProfitTickEpoch(stateful) + 1;
+    // A completion watermark belongs to exactly one realtime tick epoch.
+    // Discarding it here prevents an old planner/worker snapshot from being
+    // resurrected after the server's daily tick reset.
+    stateful.completedProfitTargets = {};
+    stateful.completedProfitKillEvidence = {};
+  }
+  if (previousTick === null || tick > previousTick || tick < previousTick) {
+    stateful.profitLastRealtimeTick = tick;
+  }
+  if (!Number.isFinite(Number(stateful.profitTickEpoch))) stateful.profitTickEpoch = 0;
+  return currentProfitTickEpoch(stateful);
+}
+
+function completionObservationTick(input = {}, item = null, kind = '') {
+  const explicit = numberOrNull(
+    item?.observedTick
+      ?? item?.observationTick
+      ?? item?.snapshotTick
+      ?? item?.observed_tick
+  );
+  if (explicit !== null) return explicit;
+  if (kind === 'coin') {
+    const authority = String(item?.authority || '').toLowerCase();
+    if (item?.snapshotOnly === true || authority === 'snapshot') {
+      return numberOrNull(input?.fallback?.tick
+        ?? input?.realtimeSnapshotObservation?.tick
+        ?? input?.snapshotTick);
+    }
+    if (authority === 'realtime' || authority === 'native' || item?.native === true) {
+      return numberOrNull(input?.realtime?.tick);
+    }
+  }
+  return numberOrNull(
+    input?.selfKillEvidenceObservedTick
+      ?? input?.fallback?.tick
+      ?? input?.realtimeSnapshotObservation?.tick
+      ?? input?.snapshotTick
+      ?? input?.realtime?.tick
+  );
+}
+
+function positiveTick(value) {
+  const tick = numberOrNull(value);
+  return tick !== null && tick > 0 ? tick : null;
+}
+
+function completionEventTick(item, observedTick, kind) {
+  const eventTick = positiveTick(
+    kind === 'coin'
+      ? (item?.created_tick ?? item?.createdTick ?? item?.tick)
+      : (item?.tick ?? item?.created_tick ?? item?.createdTick)
+  );
+  // A source-owned coin without creation metadata is still tied to the
+  // snapshot/realtime observation that carried it. Kill messages, however,
+  // must carry their own positive event tick.
+  return eventTick !== null ? eventTick : (kind === 'coin' ? positiveTick(observedTick) : null);
+}
+
+function validCompletionTick(eventTick, observedTick) {
+  return eventTick !== null && observedTick !== null && eventTick <= observedTick;
+}
+
+function completionRecordRank(record = {}) {
+  return [
+    Math.max(0, Number(record.tickEpoch || 0) || 0),
+    numberOrNull(record.observedTick) ?? -1,
+    numberOrNull(record.eventTick ?? record.killTick) ?? -1,
+    Number(record.lastObservedAt || record.observedAt || 0) || 0
+  ];
+}
+
+function compareCompletionRecordRank(left, right) {
+  const leftRank = completionRecordRank(left);
+  const rightRank = completionRecordRank(right);
+  for (let index = 0; index < leftRank.length; index += 1) {
+    if (leftRank[index] !== rightRank[index]) return leftRank[index] - rightRank[index];
+  }
+  return 0;
+}
+
+function mergeCompletedProfitTargetRecord(previous = {}, next = {}) {
+  const preferred = compareCompletionRecordRank(next, previous) >= 0 ? next : previous;
+  const merged = {
+    ...previous,
+    ...preferred,
+    observedAt: Math.min(Number(previous.observedAt || next.observedAt || Date.now()), Number(next.observedAt || previous.observedAt || Date.now())),
+    lastObservedAt: Math.max(Number(previous.lastObservedAt || 0), Number(next.lastObservedAt || 0)),
+    until: Math.max(Number(previous.until || 0), Number(next.until || 0)),
+    amount: Math.max(Number(previous.amount || 0), Number(next.amount || 0))
+  };
+  if (next.coinKey && compareCompletionRecordRank(next, previous) >= 0) merged.coinKey = String(next.coinKey);
+  if (!merged.reason) merged.reason = String(next.reason || previous.reason || '');
+  return merged;
+}
+
+function completionBlocksRemoteBatch(completed, batchTick, tickEpoch) {
+  const completionEpoch = numberOrNull(completed?.tickEpoch);
+  const completionObservedTick = positiveTick(completed?.observedTick);
+  const candidateTick = positiveTick(batchTick);
+  return Boolean(completed
+    && completionEpoch !== null
+    && completionEpoch === currentProfitTickEpoch({ profitTickEpoch: tickEpoch })
+    && completionObservedTick !== null
+    && candidateTick !== null
+    && candidateTick <= completionObservedTick);
 }
 
 function ensureCompletedProfitTargets(stateful = {}, nowMs = Date.now(), options = {}) {
@@ -1670,11 +1812,12 @@ function ensureCompletedProfitTargets(stateful = {}, nowMs = Date.now(), options
     || Array.isArray(stateful.completedProfitTargets)) {
     stateful.completedProfitTargets = {};
   }
-  for (const [id, record] of Object.entries(stateful.completedProfitTargets)) {
-    if (Number(record?.until || 0) <= Number(nowMs || 0)) delete stateful.completedProfitTargets[id];
-  }
   const entries = Object.entries(stateful.completedProfitTargets)
-    .sort((left, right) => Number(right[1]?.observedAt || 0) - Number(left[1]?.observedAt || 0))
+    .filter(([, record]) => {
+      const epoch = numberOrNull(record?.tickEpoch);
+      return epoch === null || epoch >= currentProfitTickEpoch(stateful);
+    })
+    .sort((left, right) => compareCompletionRecordRank(right[1], left[1]))
     .slice(0, Math.max(16, Number(options.completedProfitTargetMaxEntries || 128)));
   stateful.completedProfitTargets = Object.fromEntries(entries);
   return stateful.completedProfitTargets;
@@ -1688,12 +1831,14 @@ function completedProfitTargetRecordById(stateful = {}, userId, nowMs = Date.now
 function observeCompletedProfitTargets(input = {}, stateful = {}, options = {}) {
   if (!stateful || typeof stateful !== 'object') return {};
   const nowMs = Number.isFinite(Number(input?.nowMs)) ? Number(input.nowMs) : Date.now();
+  advanceProfitTickEpoch(stateful, input?.realtime?.tick, options);
   const records = ensureCompletedProfitTargets(stateful, nowMs, options);
   const ttlMs = Math.max(5000, Number(
     options.completedProfitTargetTtlMs
       ?? options.remoteProfitTargetCompletionTtlMs
       ?? DEFAULT_COMPLETED_PROFIT_TARGET_TTL_MS
   ));
+  const epoch = currentProfitTickEpoch(stateful);
   const killEvidence = Array.isArray(input?.selfKillEvidence) ? input.selfKillEvidence : [];
   stateful.completedProfitKillEvidence = stateful.completedProfitKillEvidence
     && typeof stateful.completedProfitKillEvidence === 'object'
@@ -1703,46 +1848,70 @@ function observeCompletedProfitTargets(input = {}, stateful = {}, options = {}) 
   for (const evidence of killEvidence) {
     const targetUserId = numberOrNull(evidence?.targetUserId ?? evidence?.target_user_id ?? evidence?.targetId ?? evidence?.target_id);
     if (targetUserId === null) continue;
-    const tick = numberOrNull(evidence?.tick) ?? 0;
+    const observedTick = positiveTick(completionObservationTick(input, evidence, 'kill'));
+    const eventTick = completionEventTick(evidence, observedTick, 'kill');
+    if (!validCompletionTick(eventTick, observedTick)) continue;
+    const tick = eventTick;
     const evidenceKey = `${targetUserId}:${tick}`;
     if (!stateful.completedProfitKillEvidence[evidenceKey]) {
-      stateful.completedProfitKillEvidence[evidenceKey] = { observedAt: nowMs, targetUserId, tick };
+      stateful.completedProfitKillEvidence[evidenceKey] = {
+        observedAt: nowMs,
+        targetUserId,
+        tick,
+        eventTick: tick,
+        observedTick,
+        tickEpoch: epoch
+      };
       const id = String(targetUserId);
       const previous = records[id] || {};
-      records[id] = {
-        observedAt: Math.min(Number(previous.observedAt || nowMs), nowMs),
-        lastObservedAt: Math.max(Number(previous.lastObservedAt || 0), nowMs),
-        until: Math.max(Number(previous.until || 0), nowMs + ttlMs),
+      records[id] = mergeCompletedProfitTargetRecord(previous, {
+        observedAt: nowMs,
+        lastObservedAt: nowMs,
+        until: nowMs + ttlMs,
+        tickEpoch: epoch,
+        eventTick: tick,
+        observedTick,
+        evidenceKey: `kill:${id}:tick:${tick}`,
         reason: 'self-kill-evidence',
         killTick: tick,
         coinKey: String(previous.coinKey || ''),
-        amount: Math.max(Number(previous.amount || 0), Number(evidence.amount || 0))
-      };
+        amount: Math.max(0, Number(evidence.amount || 0))
+      });
     }
   }
   const evidenceEntries = Object.entries(stateful.completedProfitKillEvidence)
     .sort((left, right) => Number(right[1]?.observedAt || 0) - Number(left[1]?.observedAt || 0))
     .slice(0, evidenceMaxEntries);
   stateful.completedProfitKillEvidence = Object.fromEntries(evidenceEntries);
-  const coins = [
-    ...(input?.realtimeObservedCoins || []),
-    ...(input?.snapshotObservedCoins || []),
-    ...(input?.profitCoins || [])
+  const coinSources = [
+    ['realtime', input?.realtimeObservedCoins || []],
+    ['snapshot', input?.snapshotObservedCoins || []],
+    ['profit', input?.profitCoins || []]
   ];
-  for (const coin of coins) {
-    const sourceUserId = coinSourceUserId(coin);
-    const amount = Number(coin?.amount || 0);
-    if (sourceUserId === null || !(amount > 0)) continue;
-    const id = String(sourceUserId);
-    const previous = records[id] || {};
-    records[id] = {
-      observedAt: Math.min(Number(previous.observedAt || nowMs), nowMs),
-      lastObservedAt: Math.max(Number(previous.lastObservedAt || 0), nowMs),
-      until: Math.max(Number(previous.until || 0), nowMs + ttlMs),
-      reason: String(previous.reason || 'source-player-drop-observed'),
-      coinKey: String(coin?.key || profitCoinKey(coin) || coin?.id || coin?.drop_id || ''),
-      amount: Math.max(Number(previous.amount || 0), amount)
-    };
+  for (const [, coins] of coinSources) {
+    for (const coin of coins || []) {
+      const sourceUserId = coinSourceUserId(coin);
+      const amount = Number(coin?.amount || 0);
+      if (sourceUserId === null || !(amount > 0)) continue;
+      const observedTick = positiveTick(completionObservationTick(input, coin, 'coin'));
+      const eventTick = completionEventTick(coin, observedTick, 'coin');
+      if (!validCompletionTick(eventTick, observedTick)) continue;
+      const id = String(sourceUserId);
+      const coinKey = String(coin?.key || profitCoinKey(coin) || coin?.id || coin?.drop_id || '');
+      const previous = records[id] || {};
+      records[id] = mergeCompletedProfitTargetRecord(previous, {
+        observedAt: nowMs,
+        lastObservedAt: nowMs,
+        until: nowMs + ttlMs,
+        tickEpoch: epoch,
+        eventTick,
+        observedTick,
+        evidenceKey: `coin:${id}:${coinKey || 'unknown'}:tick:${observedTick}`,
+        reason: String(previous.reason || 'source-player-drop-observed'),
+        coinKey,
+        amount
+      });
+    }
   }
   return ensureCompletedProfitTargets(stateful, nowMs, options);
 }
@@ -1781,9 +1950,12 @@ function refreshRealtimeSnapshotObservation(state, self, stateful = {}, options 
   const visibleRange = Math.max(0, Number(options.globalCoinMaxDistance ?? DEFAULT_GLOBAL_COIN_MAX_DISTANCE));
   const highValueAmount = Math.max(1, highValueCoinPriorityAmount(options));
   const highValueRange = highValueCoinPriorityRange(options);
-  const selfKillTargetTicks = selfKillTargetTicksFromMessages(
-    Array.isArray(fallback.messages) ? fallback.messages : [],
-    selfUserId
+  const selfKillTargetTicks = filterSelfKillTargetTicksForObservedTick(
+    selfKillTargetTicksFromMessages(
+      Array.isArray(fallback.messages) ? fallback.messages : [],
+      selfUserId
+    ),
+    fallback.tick
   );
   const nearbyCoins = [];
   const coins = [];
@@ -3623,6 +3795,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const fallback = state?.fallback || state?.snapshot || {};
   const normalizationOptions = { ...options, rawProtocolFields: true };
   const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  advanceProfitTickEpoch(stateful, realtime.tick, options);
   const dataGaps = [];
   const snapshotFrameAgeMs = numberOrNull(fallback.frameAgeMs);
   const snapshotMaxAgeMs = Math.max(1000, Number(options.snapshotCoinFallbackMaxAgeMs || 5000));
@@ -3714,7 +3887,10 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     markAfkAttackContinuation(entity, afkAttackCommitment, options)
     || (hasFull5sStamina(entity, options) && !afkTargetBlockedByRecentActivity(entity, options))
   ));
-  const selfKillTargetTicks = selfKillTargetTicksFromMessages(Array.isArray(fallback.messages) ? fallback.messages : [], selfUserId);
+  const selfKillTargetTicks = filterSelfKillTargetTicksForObservedTick(
+    selfKillTargetTicksFromMessages(Array.isArray(fallback.messages) ? fallback.messages : [], selfUserId),
+    fallback.tick
+  );
   const selfKillTargetIds = Array.from(selfKillTargetTicks.keys());
   const selfKillEvidence = summarizeSelfKillEvidence(selfKillTargetTicks);
   const realtimeCoinsRaw = buildNativeCoinSnapshotCore(Array.isArray(realtime.coinDrops) ? realtime.coinDrops : [], { nowMs })
@@ -3840,6 +4016,8 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     selfKilledPlayerDropCoins,
     selfKillTargetIds,
     selfKillEvidence,
+    profitTickEpoch: currentProfitTickEpoch(stateful),
+    profitObservationTick: positiveTick(fallback.tick),
     profitCoins,
     panelProfitCoins,
     profitCoinSource,
@@ -3881,6 +4059,7 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
   const realtime = state?.realtime || {};
   const fallback = state?.fallback || state?.snapshot || {};
   const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  advanceProfitTickEpoch(stateful, realtime.tick, options);
   const whitelistIdentityContext = buildWhitelistSafetyIdentityContext(options, nowMs);
   const snapshotFrameAgeMs = numberOrNull(fallback.frameAgeMs);
   const snapshotMaxAgeMs = Math.max(1000, Number(options.snapshotCoinFallbackMaxAgeMs || 5000));
@@ -4079,6 +4258,8 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
     realtimeObservedCoins,
     snapshotObservedCoins: realtimeObservedCoins,
     selfKillEvidence: [],
+    profitTickEpoch: currentProfitTickEpoch(stateful),
+    profitObservationTick: positiveTick(realtimeSnapshotObservation?.tick),
     realtimeSnapshotObservation,
     bullets: Array.isArray(realtime.bullets) ? realtime.bullets : [],
     dataGaps: enrichedSelf.staminaMerged ? ['self-stamina-from-snapshot'] : []
@@ -6488,6 +6669,8 @@ function remoteProfitCandidateInput(input, options = {}, stateful = {}) {
   const result = {
     enabled: options.browserlessRemoteProfitTargetsEnabled !== false,
     generation: Number(batch?.generation || 0),
+    snapshotTick: positiveTick(batch?.tick),
+    tickEpoch: currentProfitTickEpoch(stateful),
     snapshotAt: batch?.observedAtMs ? new Date(Number(batch.observedAtMs)).toISOString() : '',
     candidates: [],
     realtimeSupersededIds: [],
@@ -6530,6 +6713,8 @@ function remoteProfitCandidateInput(input, options = {}, stateful = {}) {
   const missSuppressed = new Set((batch.missSuppressedIds || []).map(String));
   const currentWhitelistIds = remoteProfitCurrentWhitelistIds(options);
   const completedProfitTargets = observeCompletedProfitTargets(input, stateful, options);
+  const batchTick = positiveTick(batch?.tick);
+  const tickEpoch = currentProfitTickEpoch(stateful);
   for (const id of visibleIds) {
     if (candidateIds.has(id)) superseded.add(id);
   }
@@ -6547,7 +6732,10 @@ function remoteProfitCandidateInput(input, options = {}, stateful = {}) {
     }
     const id = String(userId);
     const completed = completedProfitTargets[id];
-    if (completed && Number(completed.until || 0) > Number(input.nowMs || 0)) {
+    // A completion tombstone suppresses only the same snapshot (or an older
+    // one) in the same realtime tick epoch.  It is deliberately independent
+    // of `until`: the next newer batch is the freshness proof.
+    if (completionBlocksRemoteBatch(completed, batchTick, tickEpoch)) {
       result.invalidatedIds.push(id);
       reject('target-drop-observed');
       continue;
@@ -6822,7 +7010,8 @@ function profitMissionRemoteState(input = {}, mission = {}, nowMs = Date.now(), 
   }
   const id = profitMissionTargetId(mission);
   const completed = completedProfitTargetRecordById(stateful, id, nowMs);
-  if (completed) return {
+  const batchTick = positiveTick(batch?.tick ?? remoteProfit?.snapshotTick);
+  if (completionBlocksRemoteBatch(completed, batchTick, currentProfitTickEpoch(stateful))) return {
     ...state,
     invalidated: true,
     reason: 'remote-target-drop-observed',
@@ -13399,6 +13588,9 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       profitMission: cloneJson(stateful.profitMission || null),
       recoveryOwnsCurrentOpportunity: cloneJson(stateful.recoveryOwnsCurrentOpportunity || null),
       completedProfitTargets: cloneJson(stateful.completedProfitTargets || {}),
+      completedProfitKillEvidence: cloneJson(stateful.completedProfitKillEvidence || {}),
+      profitTickEpoch: currentProfitTickEpoch(stateful),
+      profitLastRealtimeTick: numberOrNull(stateful.profitLastRealtimeTick),
       profitEscortContinuity: cloneJson(stateful.profitEscortContinuity || null),
       profitEscortContinuityLastRelease: cloneJson(stateful.profitEscortContinuityLastRelease || null),
       legacyStateMigration: cloneJson(stateful.legacyStateMigration || null),
@@ -13655,22 +13847,43 @@ function createBrowserlessDecisionAdapter(options = {}) {
         const incoming = plannerState.completedProfitTargets && typeof plannerState.completedProfitTargets === 'object'
           ? plannerState.completedProfitTargets
           : {};
-        const merged = { ...(decisionState.completedProfitTargets || {}) };
-        for (const [id, record] of Object.entries(incoming)) {
-          const current = merged[id] || {};
-          if (Number(record?.until || 0) >= Number(current.until || 0)) merged[id] = cloneJson(record);
+        const incomingEpoch = numberOrNull(plannerState.profitTickEpoch);
+        const currentEpoch = currentProfitTickEpoch(decisionState);
+        if (incomingEpoch !== null && incomingEpoch > currentEpoch) {
+          decisionState.profitTickEpoch = incomingEpoch;
+          decisionState.profitLastRealtimeTick = numberOrNull(plannerState.profitLastRealtimeTick);
+          decisionState.completedProfitTargets = cloneJson(incoming);
+          decisionState.completedProfitKillEvidence = {};
+        } else if (incomingEpoch === null || incomingEpoch === currentEpoch) {
+          const merged = { ...(decisionState.completedProfitTargets || {}) };
+          for (const [id, record] of Object.entries(incoming)) {
+            merged[id] = mergeCompletedProfitTargetRecord(merged[id] || {}, cloneJson(record));
+          }
+          decisionState.completedProfitTargets = merged;
+          const incomingLastTick = numberOrNull(plannerState.profitLastRealtimeTick);
+          const currentLastTick = numberOrNull(decisionState.profitLastRealtimeTick);
+          if (incomingLastTick !== null
+            && (currentLastTick === null || incomingLastTick > currentLastTick)) {
+            decisionState.profitLastRealtimeTick = incomingLastTick;
+          }
         }
-        decisionState.completedProfitTargets = merged;
         ensureCompletedProfitTargets(decisionState, Date.now(), options);
       }
       if (Object.prototype.hasOwnProperty.call(plannerState, 'completedProfitKillEvidence')) {
         const incomingEvidence = plannerState.completedProfitKillEvidence && typeof plannerState.completedProfitKillEvidence === 'object'
           ? plannerState.completedProfitKillEvidence
           : {};
-        const mergedEvidence = { ...(decisionState.completedProfitKillEvidence || {}) };
-        for (const [key, record] of Object.entries(incomingEvidence)) {
-          if (Number(record?.observedAt || 0) >= Number(mergedEvidence[key]?.observedAt || 0)) {
-            mergedEvidence[key] = cloneJson(record);
+        const incomingEpoch = numberOrNull(plannerState.profitTickEpoch);
+        const currentEpoch = currentProfitTickEpoch(decisionState);
+        const mergedEvidence = incomingEpoch !== null && incomingEpoch > currentEpoch
+          ? {}
+          : { ...(decisionState.completedProfitKillEvidence || {}) };
+        if (incomingEpoch === null || incomingEpoch >= currentEpoch) {
+          for (const [key, record] of Object.entries(incomingEvidence)) {
+            const current = mergedEvidence[key];
+            if (!current || Number(record?.observedAt || 0) >= Number(current?.observedAt || 0)) {
+              mergedEvidence[key] = cloneJson(record);
+            }
           }
         }
         decisionState.completedProfitKillEvidence = Object.fromEntries(Object.entries(mergedEvidence)
@@ -13790,6 +14003,8 @@ function createBrowserlessDecisionAdapter(options = {}) {
         profitMission: decisionState.profitMission || null,
         completedProfitTargets: decisionState.completedProfitTargets || {},
         completedProfitKillEvidence: decisionState.completedProfitKillEvidence || {},
+        profitTickEpoch: currentProfitTickEpoch(decisionState),
+        profitLastRealtimeTick: numberOrNull(decisionState.profitLastRealtimeTick),
         profitEscortContinuity: decisionState.profitEscortContinuity || null,
         profitEscortContinuityLastRelease: decisionState.profitEscortContinuityLastRelease || null,
         legacyStateMigration: decisionState.legacyStateMigration || null,

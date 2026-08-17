@@ -632,7 +632,7 @@ function assertProfitMissionContinuityRegressions() {
   );
 
   const killReplayAdapter = createBrowserlessDecisionAdapter(common);
-  const killReplayBatch = batch(remoteCandidate({ userId: 701, drop: 90, expectedReward: 90 }));
+  const killReplayBatch = batch(remoteCandidate({ userId: 701, drop: 90, expectedReward: 90 }), { tick: 8000 });
   decide(killReplayAdapter, state(fullStaminaSelf()), 4000, killReplayBatch, common);
   const killMessage = {
     kind: 'kill',
@@ -642,14 +642,209 @@ function assertProfitMissionContinuityRegressions() {
     tick: 8000
   };
   const firstKillFrame = state(fullStaminaSelf());
+  firstKillFrame.realtime.tick = 8000;
+  firstKillFrame.fallback.tick = 8000;
   firstKillFrame.fallback.messages = [killMessage];
   decide(killReplayAdapter, firstKillFrame, 4100, killReplayBatch, common);
   const firstUntil = killReplayAdapter.getState().completedProfitTargets?.['701']?.until;
   const replayedKillFrame = state(fullStaminaSelf());
+  replayedKillFrame.realtime.tick = 8000;
+  replayedKillFrame.fallback.tick = 8000;
   replayedKillFrame.fallback.messages = [killMessage];
   decide(killReplayAdapter, replayedKillFrame, 5000, killReplayBatch, common);
   assert.strictEqual(killReplayAdapter.getState().completedProfitTargets?.['701']?.until, firstUntil);
   assert.strictEqual(Object.keys(killReplayAdapter.getState().completedProfitKillEvidence || {}).length, 1);
+}
+
+function assertTickWatermarkedCompletionRegressions() {
+  const common = {
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    dynamicProfitThresholdEnabled: false,
+    singleCoinBaitEnabled: false,
+    finalActionArbitrationHoldMs: 0,
+    opportunitySwitchConfirmFrames: 1,
+    opportunitySwitchMargin: 0,
+    opportunitySwitchRelativeMargin: 0
+  };
+  const mango = remoteCandidate({
+    userId: 31361,
+    name: 'mango',
+    drop: 227,
+    expectedReward: 227,
+    adjustedScore: 900000
+  });
+  const crossDayAdapter = createBrowserlessDecisionAdapter(common);
+  const oldBatch = batch(mango, { generation: 1, tick: 1682100 });
+  const oldFrame = state(fullStaminaSelf());
+  oldFrame.realtime.tick = 1682100;
+  oldFrame.fallback.tick = 1682100;
+  decide(crossDayAdapter, oldFrame, 1000, oldBatch, common);
+  const crossDayFrame = state(fullStaminaSelf());
+  crossDayFrame.realtime.tick = 73;
+  crossDayFrame.fallback.tick = 73;
+  crossDayFrame.fallback.messages = [{
+    kind: 'kill',
+    user_id: 7,
+    target_user_id: 31361,
+    target_name: 'mango',
+    tick: 1682100
+  }];
+  const crossDay = decide(
+    crossDayAdapter,
+    crossDayFrame,
+    2000,
+    batch(mango, { generation: 2, tick: 73 }),
+    common
+  );
+  assert.strictEqual(crossDayAdapter.getState().completedProfitTargets?.['31361'], undefined);
+  assert.strictEqual(crossDayAdapter.getState().completedProfitKillEvidence?.['31361:1682100'], undefined);
+  assert.strictEqual(crossDay.profit?.remoteProfit?.filtered?.['target-drop-observed'], undefined);
+  assert.strictEqual(crossDay.profit?.remoteProfit?.selected?.userId, 31361);
+  assert.strictEqual(crossDay.input?.postKillSettlement, null);
+
+  const sameSnapshotAdapter = createBrowserlessDecisionAdapter(common);
+  const sameSnapshotBatch = batch(mango, { generation: 3, tick: 6268 });
+  const sameSnapshotFrame = state(fullStaminaSelf(), [], [{
+    drop_id: 'mango-drop',
+    source_user_id: 31361,
+    amount: 227,
+    x: 90000,
+    y: 0
+  }], true);
+  sameSnapshotFrame.realtime.tick = 6268;
+  sameSnapshotFrame.fallback.tick = 6268;
+  const sameSnapshot = decide(sameSnapshotAdapter, sameSnapshotFrame, 3000, sameSnapshotBatch, common);
+  assert.strictEqual(sameSnapshot.profit?.remoteProfit?.filtered?.['target-drop-observed'], 1);
+  assert.strictEqual(sameSnapshotAdapter.getState().completedProfitTargets?.['31361']?.observedTick, 6268);
+  const newerSnapshotFrame = state(fullStaminaSelf());
+  newerSnapshotFrame.realtime.tick = 6290;
+  newerSnapshotFrame.fallback.tick = 6290;
+  const newerSnapshot = decide(
+    sameSnapshotAdapter,
+    newerSnapshotFrame,
+    3100,
+    batch(mango, { generation: 4, tick: 6290 }),
+    common
+  );
+  assert.strictEqual(newerSnapshot.profit?.remoteProfit?.filtered?.['target-drop-observed'], undefined);
+  assert.strictEqual(newerSnapshot.profit?.remoteProfit?.selected?.userId, 31361);
+
+  const persistentCoinAdapter = createBrowserlessDecisionAdapter(common);
+  const persistentCoinBatch = batch(mango, { generation: 5, tick: 6268 });
+  const persistentCoinFirst = state(fullStaminaSelf(), [], [{
+    drop_id: 'mango-drop',
+    source_user_id: 31361,
+    amount: 227,
+    x: 90000,
+    y: 0
+  }], true);
+  persistentCoinFirst.realtime.tick = 6268;
+  persistentCoinFirst.fallback.tick = 6268;
+  decide(persistentCoinAdapter, persistentCoinFirst, 4000, persistentCoinBatch, common);
+  const persistentCoinSame = state(fullStaminaSelf(), [], [{
+    drop_id: 'mango-drop',
+    source_user_id: 31361,
+    amount: 227,
+    x: 90000,
+    y: 0
+  }], true);
+  persistentCoinSame.realtime.tick = 6290;
+  persistentCoinSame.fallback.tick = 6290;
+  const persistent = decide(
+    persistentCoinAdapter,
+    persistentCoinSame,
+    4100,
+    batch(mango, { generation: 6, tick: 6290 }),
+    common
+  );
+  assert.strictEqual(persistent.profit?.remoteProfit?.filtered?.['target-drop-observed'], 1);
+  assert.strictEqual(persistentCoinAdapter.getState().completedProfitTargets?.['31361']?.observedTick, 6290);
+  const persistentCoinGone = state(fullStaminaSelf());
+  persistentCoinGone.realtime.tick = 6310;
+  persistentCoinGone.fallback.tick = 6310;
+  const released = decide(
+    persistentCoinAdapter,
+    persistentCoinGone,
+    4200,
+    batch(mango, { generation: 7, tick: 6310 }),
+    common
+  );
+  assert.strictEqual(released.profit?.remoteProfit?.filtered?.['target-drop-observed'], undefined);
+  assert.strictEqual(released.profit?.remoteProfit?.selected?.userId, 31361);
+
+  const noTickAdapter = createBrowserlessDecisionAdapter(common);
+  const noTickFrame = state(fullStaminaSelf());
+  noTickFrame.realtime.tick = 73;
+  noTickFrame.fallback.tick = 73;
+  noTickFrame.fallback.messages = [{
+    kind: 'kill',
+    user_id: 7,
+    target_user_id: 31361,
+    target_name: 'mango'
+  }];
+  const noTick = decide(
+    noTickAdapter,
+    noTickFrame,
+    5000,
+    batch(mango, { generation: 8, tick: 73 }),
+    common
+  );
+  assert.strictEqual(noTickAdapter.getState().completedProfitTargets?.['31361'], undefined);
+  assert.strictEqual(noTick.profit?.remoteProfit?.filtered?.['target-drop-observed'], undefined);
+  assert.strictEqual(noTick.profit?.remoteProfit?.selected?.userId, 31361);
+
+  const syncAdapter = createBrowserlessDecisionAdapter(common);
+  syncAdapter.patchState({
+    profitTickEpoch: 2,
+    profitLastRealtimeTick: 73,
+    completedProfitTargets: {
+      '31361': {
+        tickEpoch: 2,
+        eventTick: 70,
+        observedTick: 73,
+        observedAt: 7000,
+        until: 999999999
+      }
+    }
+  });
+  syncAdapter.syncPlannerDecision({
+    stateful: {
+      profitTickEpoch: 1,
+      profitLastRealtimeTick: 1682100,
+      completedProfitTargets: {
+        '31361': {
+          tickEpoch: 1,
+          eventTick: 1682100,
+          observedTick: 1682100,
+          observedAt: 9000,
+          until: 999999999
+        }
+      },
+      completedProfitKillEvidence: {}
+    }
+  });
+  assert.strictEqual(syncAdapter.getState().profitTickEpoch, 2);
+  assert.strictEqual(syncAdapter.getState().completedProfitTargets?.['31361']?.observedTick, 73);
+  syncAdapter.syncPlannerDecision({
+    stateful: {
+      profitTickEpoch: 3,
+      profitLastRealtimeTick: 90,
+      completedProfitTargets: {
+        '31361': {
+          tickEpoch: 3,
+          eventTick: 88,
+          observedTick: 90,
+          observedAt: 10000,
+          until: 999999999
+        }
+      },
+      completedProfitKillEvidence: {}
+    }
+  });
+  assert.strictEqual(syncAdapter.getState().profitTickEpoch, 3);
+  assert.strictEqual(syncAdapter.getState().completedProfitTargets?.['31361']?.observedTick, 90);
 }
 
 function assertDualTargetRuntimeRules() {
@@ -1899,7 +2094,7 @@ function runRemoteProfitDecisionSelfTest() {
     opportunitySwitchRelativeMargin: 0
   });
   const candidate = remoteCandidate();
-  const remoteBatch = batch(candidate);
+  const remoteBatch = batch(candidate, { tick: 1 });
   const first = decide(adapter, state(fullStaminaSelf()), 2000, remoteBatch);
   assert.strictEqual(first.action?.kind, 'seek-remote-player');
   assert.strictEqual(first.action?.reason, 'remote-snapshot-profit-target');
@@ -2332,6 +2527,7 @@ function runRemoteProfitDecisionSelfTest() {
   assertSelfKillReleasesSupersededMission();
   assertRemoteMissionDoesNotOverrideRealtimeProfit();
   assertProfitMissionContinuityRegressions();
+  assertTickWatermarkedCompletionRegressions();
   assertDualTargetRuntimeRules();
   assertHpSegmentedSecondaryEngagementRules();
 
@@ -2606,7 +2802,7 @@ function runRemoteProfitDecisionSelfTest() {
   assert.strictEqual(lowDropDecision.profit?.postKillCoinSuppression?.removedCount, 1);
   assert.strictEqual(lowDropDecision.stateful.profitMission?.targetId, '99');
 
-  return { ok: true, cases: 77 };
+  return { ok: true, cases: 78 };
 }
 
 if (require.main === module) {

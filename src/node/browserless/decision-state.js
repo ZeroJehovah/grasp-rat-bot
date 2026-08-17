@@ -87,6 +87,13 @@ function createInitialDecisionState(options = {}) {
     profitMission: cloneJson(options.profitMission || null),
     completedProfitTargets: asRecord(options.completedProfitTargets),
     completedProfitKillEvidence: asRecord(options.completedProfitKillEvidence),
+    // Profit completion tombstones are versioned by the realtime server tick
+    // stream.  A realtime tick regression starts a new bounded epoch; wall
+    // clock expiry must never be the authority for target freshness.
+    profitTickEpoch: Math.max(0, Number(options.profitTickEpoch || 0) || 0),
+    profitLastRealtimeTick: Number.isFinite(Number(options.profitLastRealtimeTick))
+      ? Number(options.profitLastRealtimeTick)
+      : null,
     profitEscortContinuity: cloneJson(options.profitEscortContinuity || null),
     profitEscortContinuityLastRelease: cloneJson(options.profitEscortContinuityLastRelease || null),
     legacyStateMigration: cloneJson(options.legacyStateMigration || (legacyInvulnerableProfitApproach ? {
@@ -206,6 +213,12 @@ function summarizeBrowserlessDecisionState(state, options = {}) {
       profitMission: redactBoundedValue(state.profitMission || null),
       completedProfitTargets: recordEntries(state.completedProfitTargets || {}, limit),
       completedProfitKillEvidence: recordEntries(state.completedProfitKillEvidence || {}, limit),
+      tickWatermark: {
+        epoch: Math.max(0, Number(state.profitTickEpoch || 0) || 0),
+        lastRealtimeTick: Number.isFinite(Number(state.profitLastRealtimeTick))
+          ? Number(state.profitLastRealtimeTick)
+          : null
+      },
       profitEscortContinuity: redactBoundedValue(state.profitEscortContinuity || null),
       profitEscortContinuityLastRelease: redactBoundedValue(state.profitEscortContinuityLastRelease || null),
       legacyStateMigration: redactBoundedValue(state.legacyStateMigration || null)

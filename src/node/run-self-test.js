@@ -29077,6 +29077,7 @@ async function runSelfTest() {
       name: 'browserless snapshot self-kill evidence uses stable ids and kill ticks',
       got: (() => {
         const evidence = snapshotSelfKillEvidence({
+          tick: 1287800,
           messages: [
             { kind: 'kill', user_id: 7, target_user_id: 34711, tick: 1287800, target_name: 'xuanze00' },
             { kind: 'kill', user_id: 9, target_user_id: 10, tick: 1287801 }

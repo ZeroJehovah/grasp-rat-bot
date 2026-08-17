@@ -76,7 +76,8 @@ function timestampMs(value) {
 }
 
 function evidenceTick(value) {
-  return finiteNumber(value?.tick ?? value?.created_tick ?? value?.createdTick);
+  const tick = finiteNumber(value?.tick ?? value?.created_tick ?? value?.createdTick);
+  return tick !== null && tick > 0 ? tick : null;
 }
 
 function evidenceAtMs(value) {
@@ -100,7 +101,9 @@ function matchingVisibleTarget(context, id) {
 function matchingKillEvidence(context, state) {
   const id = valueId(state?.targetId);
   return (context.selfKillEvidence || []).find(item => (
-    evidenceTargetId(item) === id && evidenceIsCurrent(item, state)
+    evidenceTargetId(item) === id
+      && evidenceIsCurrent(item, state)
+      && postKillEvidenceIsFresh(item, context)
   )) || null;
 }
 
@@ -108,6 +111,9 @@ function matchingDropCoin(context, state) {
   const id = valueId(state?.targetId);
   return (context.playerDropCoins || context.coins || []).find(item => {
     if (coinSourceId(item) !== id) return false;
+    const currentTick = snapshotTick(context);
+    const createdTick = evidenceTick(item);
+    if (currentTick > 0 && createdTick !== null && createdTick > currentTick) return false;
     if (evidenceIsCurrent(item, state)) return true;
     return Number(state?.confirmedAt || 0) > 0 && evidenceTick(item) === null && evidenceAtMs(item) === 0;
   }) || null;
@@ -310,25 +316,24 @@ function matchingTargetMemory(context, id) {
 }
 
 function postKillEvidenceIsFresh(evidence, context, options = {}) {
-  const nowMs = Number.isFinite(Number(context?.nowMs)) ? Number(context.nowMs) : Date.now();
   const confirmedMs = Math.max(250, Number(options.confirmedMs ?? 5000));
   const maxAgeMs = Math.max(
     confirmedMs + 5000,
     Number(options.evidenceBootstrapMaxAgeMs ?? 12000)
   );
-  const eventAtMs = evidenceAtMs(evidence);
-  if (eventAtMs > 0 && nowMs - eventAtMs > maxAgeMs) return false;
   const currentTick = snapshotTick(context);
   const eventTick = evidenceTick(evidence);
-  if (currentTick > 0 && eventTick !== null) {
-    const tickMs = Math.max(1, Number(options.tickMs || 50));
-    const maxAgeTicks = Math.max(
-      Math.ceil(maxAgeMs / tickMs),
-      Number(options.evidenceBootstrapMaxAgeTicks || 0)
-    );
-    if (currentTick - eventTick > maxAgeTicks) return false;
-  }
-  return true;
+  // A kill message without a positive server tick cannot establish a
+  // reliable post-kill settlement.  In particular, do not fall back to a
+  // wall-clock TTL for historical messages retained in the snapshot.
+  if (eventTick === null || currentTick <= 0) return false;
+  if (eventTick > currentTick) return false;
+  const tickMs = Math.max(1, Number(options.tickMs || 50));
+  const maxAgeTicks = Math.max(
+    Math.ceil(maxAgeMs / tickMs),
+    Number(options.evidenceBootstrapMaxAgeTicks || 0)
+  );
+  return currentTick - eventTick <= maxAgeTicks;
 }
 
 function explicitPostKillSettlement(evidence, context, options = {}) {
