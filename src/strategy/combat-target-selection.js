@@ -366,8 +366,13 @@ function combatTargetAdmissionCore(entity, context = {}) {
   const distance = combatDistanceValue(entity);
   const lowHp = selfHp !== null && selfHp <= lowHpThreshold;
   const mediumHp = selfHp !== null && selfHp > lowHpThreshold && selfHp <= healthySecondaryMaxHp;
+  const realtimeActive = isActiveCombatMode(entity);
+  // Distance-only defensive admission is for an actually active ordinary
+  // player. Passive/AFK ordinary players remain profit/navigation candidates;
+  // current attack evidence below can still establish a defensive secondary.
   const ordinaryProximity = Boolean(
     !whitelisted
+      && realtimeActive
       && (mediumHp || lowHp)
       && distance !== null
       && attackRange > 0
@@ -411,6 +416,7 @@ function combatTargetAdmissionCore(entity, context = {}) {
     selfHp,
     lowHp,
     mediumHp,
+    realtimeActive,
     lowHpThreshold,
     healthySecondaryMaxHp,
     attackRange,

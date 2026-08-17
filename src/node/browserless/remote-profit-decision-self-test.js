@@ -1065,8 +1065,9 @@ function assertHpSegmentedSecondaryEngagementRules() {
     state(fullStaminaSelf({ hp: 70, stamina_5s_remaining_milli: 10 }), [player({
       x: 14500,
       drop: 0,
-      active: false,
-      current_join_mode: 'Passive'
+      active: true,
+      current_join_mode: 'Active',
+      stamina_5s_remaining_milli: 5000
     })]),
     1300,
     null,
@@ -1078,6 +1079,21 @@ function assertHpSegmentedSecondaryEngagementRules() {
   assert.strictEqual(mediumContact.combat?.shooting?.secondaryPolicy?.opponentShots, 0);
   assert.strictEqual(mediumContact.combat?.movement?.dx, 0);
   assert.strictEqual(mediumContact.combat?.movement?.dy, 0);
+
+  const mediumPassiveIgnored = decide(
+    createBrowserlessDecisionAdapter(common),
+    state(fullStaminaSelf({ hp: 70 }), [player({
+      x: 14500,
+      drop: 0,
+      active: false,
+      current_join_mode: 'Passive'
+    })]),
+    1350,
+    null,
+    common
+  );
+  assert.strictEqual(mediumPassiveIgnored.combat?.target, null);
+  assert.notStrictEqual(mediumPassiveIgnored.action?.reason, 'combat-low-hp-secondary-leave');
 
   const outsideMedium = decide(
     createBrowserlessDecisionAdapter(common),
@@ -1093,6 +1109,20 @@ function assertHpSegmentedSecondaryEngagementRules() {
   );
   assert.strictEqual(outsideMedium.combat?.target, null);
 
+  const lowHpPassiveIgnored = decide(
+    createBrowserlessDecisionAdapter(common),
+    state(fullStaminaSelf({ hp: 50 }), [player({
+      drop: 0,
+      active: false,
+      current_join_mode: 'Passive'
+    })]),
+    1450,
+    null,
+    common
+  );
+  assert.strictEqual(lowHpPassiveIgnored.combat?.target, null);
+  assert.notStrictEqual(lowHpPassiveIgnored.action?.reason, 'combat-low-hp-secondary-leave');
+
   for (const selfHp of [49, 50]) {
     for (const targetHp of [40, 60]) {
       const lowHpSecondary = decide(
@@ -1100,8 +1130,9 @@ function assertHpSegmentedSecondaryEngagementRules() {
         state(fullStaminaSelf({ hp: selfHp }), [player({
           hp: targetHp,
           drop: 0,
-          active: false,
-          current_join_mode: 'Passive'
+          active: true,
+          current_join_mode: 'Active',
+          stamina_5s_remaining_milli: 5000
         })]),
         1500 + selfHp + targetHp,
         null,
@@ -1156,8 +1187,9 @@ function assertHpSegmentedSecondaryEngagementRules() {
     lowHpCrossfireAdapter,
     state(fullStaminaSelf({ hp: 49 }), [primary, player({
       drop: 0,
-      active: false,
-      current_join_mode: 'Passive'
+      active: true,
+      current_join_mode: 'Active',
+      stamina_5s_remaining_milli: 5000
     })]),
     1800,
     null,

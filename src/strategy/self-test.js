@@ -611,6 +611,18 @@ function runStrategyModuleSelfTests() {
     proactiveActiveCombatMinimumStamina5s: 5600,
     opportunityStaminaBudget: 1
   });
+  const mediumActiveInsideAdmission = combatTargetAdmissionCore({
+    ...secondaryAdmissionTargetBase,
+    active: true,
+    current_join_mode: 'Active'
+  }, {
+    selfHp: 70,
+    profitMissionTargetId: '42',
+    combatAttackRange: 14500,
+    selfStamina5s: 1,
+    proactiveActiveCombatMinimumStamina5s: 5600,
+    opportunityStaminaBudget: 1
+  });
   const mediumOutsideAdmission = combatTargetAdmissionCore({
     ...secondaryAdmissionTargetBase,
     distance: 14501
@@ -624,20 +636,45 @@ function runStrategyModuleSelfTests() {
     profitMissionTargetId: '42',
     combatAttackRange: 14500
   });
+  const lowHpActiveSecondaryAdmission = combatTargetAdmissionCore({
+    ...secondaryAdmissionTargetBase,
+    active: true,
+    current_join_mode: 'Active'
+  }, {
+    selfHp: 50,
+    profitMissionTargetId: '42',
+    combatAttackRange: 14500
+  });
+  const lowHpFiringSecondaryAdmission = combatTargetAdmissionCore({
+    ...secondaryAdmissionTargetBase,
+    firing: true
+  }, {
+    selfHp: 50,
+    profitMissionTargetId: '42',
+    combatAttackRange: 14500
+  });
   results.push({
-    name: 'combat-admission-separates-selected-profit-primary-from-hp-segmented-secondary',
+    name: 'combat-admission-requires-active-distance-secondary-or-attack-evidence',
     passed: highHpNonPrimaryAdmission.eligible === false
       && highHpNonPrimaryAdmission.profitEligible === false
       && proactivePrimaryAdmission.eligible === true
       && proactivePrimaryAdmission.profitEligible === true
       && proactivePrimaryAdmission.secondaryEligible === false
-      && mediumInsideAdmission.eligible === true
-      && mediumInsideAdmission.secondaryEligible === true
-      && mediumInsideAdmission.proximityEvidence === true
-      && mediumInsideAdmission.attackEvidence === false
+      && mediumInsideAdmission.eligible === false
+      && mediumInsideAdmission.secondaryEligible === false
+      && mediumInsideAdmission.proximityEvidence === false
+      && mediumActiveInsideAdmission.eligible === true
+      && mediumActiveInsideAdmission.secondaryEligible === true
+      && mediumActiveInsideAdmission.proximityEvidence === true
+      && mediumActiveInsideAdmission.attackEvidence === false
       && mediumOutsideAdmission.eligible === false
-      && lowHpSecondaryAdmission.lowHpSecondaryExit === true
-      && lowHpSecondaryAdmission.secondaryEligible === true
+      && lowHpSecondaryAdmission.lowHpSecondaryExit === false
+      && lowHpSecondaryAdmission.secondaryEligible === false
+      && lowHpActiveSecondaryAdmission.lowHpSecondaryExit === true
+      && lowHpActiveSecondaryAdmission.secondaryEligible === true
+      && lowHpFiringSecondaryAdmission.lowHpSecondaryExit === true
+      && lowHpFiringSecondaryAdmission.secondaryEligible === true
+      && lowHpFiringSecondaryAdmission.attackEvidence === true
   });
 
   const playerProfitScoreBoundaries = [
