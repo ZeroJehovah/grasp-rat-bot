@@ -37214,7 +37214,7 @@ async function runSelfTest() {
           panelScript.includes("if (String(reason).includes('bait')) return '正在蹲守1金币诱饵'"),
           panelScript.includes("'single-coin-bait-hold': '当日时间充裕，动态收益门槛生效，守着 1 金币等待捡币脚本'"),
           panelScript.includes("'single-coin-bait-release': '发现新收益，先捡掉 1 金币诱饵'"),
-          panelScript.includes("if (kind === 'seek-enemy') return '正在靠近高Drop挂机玩家'"),
+          panelScript.includes("if (kind === 'seek-enemy') return '正在靠近高Drop' + remoteTargetActivityText(target);"),
           panelScript.includes("'best-opportunity': '综合收益最高'"),
           panelScript.includes("reason === 'best-opportunity' || reason === 'best-opportunity-coin'")
         ].every(Boolean));
@@ -45216,7 +45216,7 @@ async function runSelfTest() {
 	          fs.rmSync(dir, { recursive: true, force: true });
 	        }
 	      })(),
-	      want: 'true|true|undefined|true|false|1|0|1|1|1'
+		      want: 'true|true|undefined|true|false|1|0|1|1|2'
 	    },
 	    {
 	      name: 'browserless dynamic whitelist defers likely crossfire but temporarily disables after over 10 HP in 60 seconds',

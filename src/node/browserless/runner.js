@@ -35,7 +35,9 @@ const {
   highDropSortValueCore,
   isStaminaExhaustionExitReasonCore,
   lastExitPanelVisibleCore,
-  mapRemoteTargetPositionCore
+  mapRemoteTargetPositionCore,
+  panelTargetRolesCore,
+  remoteTargetActivityTextCore
 } = require('./web-panel');
 const {
   createMapTrailTracker,
@@ -8152,6 +8154,82 @@ async function runBrowserlessRunnerSelfTest() {
         }
       }
     }, {});
+    const panelDualTargetState = {
+      session: { userId: 7, sessionToken: 'panel-dual-target-self-test-token' },
+      runner: { running: true, currentAction: {
+        kind: 'combat-live',
+        target: {
+          userId: 8,
+          name: 'defender',
+          combatRole: 'secondary',
+          secondaryTarget: true,
+          primaryTargetId: '9',
+          authority: 'realtime',
+          distance: 12000,
+          hp: 90,
+          drop: 200,
+          active: true,
+          moving: true,
+          firing: true
+        }
+      } },
+      current: {
+        self: { userId: 7, name: 'self', hp: 100, maxHp: 100 },
+        decision: {
+          kind: 'combat-live',
+          band: 'combat',
+          action: { kind: 'combat-live', target: {
+            userId: 8,
+            name: 'defender',
+            combatRole: 'secondary',
+            secondaryTarget: true,
+            primaryTargetId: '9',
+            authority: 'realtime'
+          } }
+        },
+        combatSummary: {
+          target: {
+            userId: 8,
+            name: 'defender',
+            combatRole: 'secondary',
+            secondaryTarget: true,
+            primaryTargetId: '9',
+            authority: 'realtime',
+            distance: 12000,
+            hp: 90,
+            drop: 200,
+            active: true,
+            moving: true,
+            firing: true,
+            combatIntent: 'whitelist-proximity'
+          },
+          fireTarget: { userId: 8, name: 'defender', combatRole: 'secondary', secondaryTarget: true },
+          fireTargetRole: 'secondary',
+          profitMission: {
+            active: true,
+            targetId: '9',
+            type: 'enemy',
+            currentDistanceCm: 3000,
+            navigationTarget: {
+              userId: 9,
+              name: 'jackpot',
+              authority: 'realtime',
+              distance: 3000,
+              hp: 30,
+              drop: 300,
+              active: false,
+              moving: false,
+              firing: false
+            }
+          }
+        }
+      }
+    };
+    const panelDualTargetCompact = buildCompactBrowserlessStatus(
+      browserlessCompactStatusSource(panelDualTargetState),
+      {}
+    );
+    const panelDualTargetRoles = panelTargetRolesCore(panelDualTargetCompact);
     const panelAfkPresentationInitial = browserlessBattlePresentation(null, {
       kind: 'attack',
       band: 'profit',
@@ -8419,7 +8497,17 @@ async function runBrowserlessRunnerSelfTest() {
         && pageHtml.includes("addRow(rowsOut, '单人阻挡', singleBlocker)");
       const panelDetailTest = {
         ok: Boolean(
-          pageHtml.includes('>Drop排行</h2>')
+          panelDualTargetCompact.targets?.mode === 'dual'
+          && panelDualTargetCompact.targets.primary?.userId === 9
+          && panelDualTargetCompact.targets.secondary?.userId === 8
+          && panelDualTargetCompact.combat?.primaryTarget?.userId === 9
+          && panelDualTargetCompact.combat?.secondaryTarget?.userId === 8
+          && panelDualTargetRoles.mode === 'dual'
+          && panelDualTargetRoles.primary?.userId === 9
+          && panelDualTargetRoles.secondary?.userId === 8
+          && remoteTargetActivityTextCore({ active: true }) === '活动玩家'
+          && remoteTargetActivityTextCore({ active: false, moving: false, firing: false }) === '挂机玩家'
+          && pageHtml.includes('>Drop排行</h2>')
           && pageHtml.includes('grid-template-columns:minmax(100px,1.8fr) minmax(48px,.42fr) minmax(66px,.52fr) minmax(64px,.5fr)')
           && pageHtml.includes('id="transportHealthMode"')
           && pageHtml.includes('id="transportLatency"')
@@ -8446,7 +8534,12 @@ async function runBrowserlessRunnerSelfTest() {
           && pageHtml.includes("+ (self ? ' self' : '')")
           && pageHtml.includes("if (reason === 'single-coin-bait-hold') return '正在等待'")
           && pageHtml.includes("'realtime-control-released': '当前没有需要实时接管的战斗或避险动作，等待常规规划'")
-          && pageHtml.includes("if (kind === 'seek-enemy') return '正在靠近高Drop挂机玩家'")
+          && pageHtml.includes("if (kind === 'seek-enemy') return '正在靠近高Drop' + remoteTargetActivityText(target);")
+          && pageHtml.includes("'easy-kill-active-profit': '历史战斗记录判定为低风险活动收益目标'")
+          && pageHtml.includes("function targetDecisionBasisText(status, targetRoles)")
+          && pageHtml.includes("addRow(rowsOut, '主目标', targetLabel(targetRoles.primary))")
+          && pageHtml.includes("addRow(rowsOut, '副目标', targetLabel(targetRoles.secondary))")
+          && pageHtml.includes("const panelTargetRoles =")
           && pageHtml.includes("'remote-snapshot-profit-target': '远程快照收益目标'")
           && pageHtml.includes("'seek-remote-player': '靠近远程收益玩家'")
           && pageHtml.includes("if (kind === 'seek-remote-player') return remoteSnapshotProfitTargetTitle(target);")

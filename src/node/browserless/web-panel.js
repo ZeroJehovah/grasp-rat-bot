@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.17.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.18.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -179,6 +179,22 @@ function panelSessionFlagsCore(status = {}) {
   return {
     online,
     realtimeOnline: Boolean(status?.game?.inGame && online)
+  };
+}
+
+function panelTargetRolesCore(status = {}) {
+  const explicit = status?.targets && typeof status.targets === 'object' ? status.targets : {};
+  let primary = explicit.primary || status?.combat?.primaryTarget || status?.profit?.mission?.navigationTarget || null;
+  let secondary = explicit.secondary || status?.combat?.secondaryTarget || null;
+  const action = status?.action || status?.decision?.action || {};
+  const actionTarget = action?.target || null;
+  const actionIsSecondary = actionTarget?.combatRole === 'secondary' || actionTarget?.secondaryTarget === true;
+  if (!primary && actionTarget && !actionIsSecondary) primary = actionTarget;
+  if (!secondary && actionTarget && actionIsSecondary) secondary = actionTarget;
+  return {
+    mode: primary && secondary ? 'dual' : (primary ? 'primary-only' : (secondary ? 'secondary-only' : 'none')),
+    primary,
+    secondary
   };
 }
 
@@ -770,6 +786,7 @@ function renderBrowserlessWebPanel() {
     const spentStaminaUnit = ${formatSpentStaminaCore.toString()};
     const estimatedHighDropQuota = ${estimatedHighDropQuotaCore.toString()};
     const panelSessionFlags = ${panelSessionFlagsCore.toString()};
+    const panelTargetRoles = ${panelTargetRolesCore.toString()};
     const lastExitPanelVisible = ${lastExitPanelVisibleCore.toString().replace('panelSessionFlagsCore', 'panelSessionFlags')};
     const missCloseExitReasonText = ${missCloseExitReasonTextCore.toString()};
     const recoveryContactExitReasonText = ${recoveryContactExitReasonTextCore.toString()};
@@ -1323,6 +1340,8 @@ function renderBrowserlessWebPanel() {
       'best-opportunity': '综合收益最高',
       'best-opportunity-drop-target': '选择收益最高的目标',
       'best-opportunity-afk-drop-target': '攻击不动且有掉落的目标',
+      'easy-kill-active-profit': '历史战斗记录判定为低风险活动收益目标',
+      'profit-afk-seek': '当前收益评分选中的挂机收益目标',
       'remote-snapshot-profit-target': '远程快照收益目标',
       'approach-profitable-drop-target': '靠近高收益目标',
       'opportunistic-afk-drop-shot': '顺手打不动的目标',
@@ -1485,7 +1504,7 @@ function renderBrowserlessWebPanel() {
       idle: '空闲'
     };
     const reasonWordMap = {
-      active: '危险玩家',
+      active: '活动',
       action: '动作',
       afk: '不动目标',
       after: '之后',
@@ -1594,7 +1613,7 @@ function renderBrowserlessWebPanel() {
       if (/coin/i.test(text)) return '正在找金币';
       if (/leave/i.test(text)) return '正在退出游戏';
       if (/combat/i.test(text)) return '正在处理打架';
-      if (/active|threat|danger/i.test(text)) return '附近有危险';
+      if (/(?:^|[-_])(?:threat|danger)(?:$|[-_])/i.test(text)) return '附近有危险';
       if (/wait/i.test(text)) return '等待中';
       if (/stop/i.test(text)) return '已停止';
       if (/403|forbidden|unauthorized|not logged in/i.test(text)) return '登录信息可能失效，需要重新授权';
@@ -1955,7 +1974,7 @@ function renderBrowserlessWebPanel() {
       if (kind === 'coin') return '捡金币 ' + targetLabel(target);
       if (kind === 'seek-coin') return '去捡金币 ' + targetLabel(target);
       if (kind === 'profit-candidate') return '选择金币目标 ' + targetLabel(target);
-      if (kind === 'seek-enemy') return '靠近高Drop挂机玩家 ' + targetLabel(target);
+      if (kind === 'seek-enemy') return '靠近高Drop' + remoteTargetActivityText(target) + ' ' + targetLabel(target);
       if (kind === 'seek-remote-player') return '靠近高Drop' + remoteTargetActivityText(target) + ' ' + targetLabel(target);
       if (kind === 'attack' || kind === 'combat-live') return '打目标 ' + targetLabel(target);
       return kindText(kind);
@@ -1977,7 +1996,7 @@ function renderBrowserlessWebPanel() {
         return amount !== null && amount <= 1 ? '正在移动前往小额金币' : '正在移动前往大额金币';
       }
       if (kind === 'seek-remote-player') return remoteSnapshotProfitTargetTitle(target);
-      if (kind === 'seek-enemy') return '正在靠近高Drop挂机玩家';
+      if (kind === 'seek-enemy') return '正在靠近高Drop' + remoteTargetActivityText(target);
       if (kind === 'attack') {
         const afk = target && target.active !== true && target.firing !== true && target.moving !== true;
         return afk ? '正在攻击高Drop挂机玩家' : '正在攻击玩家';
@@ -3120,6 +3139,68 @@ function renderBrowserlessWebPanel() {
         target.firing === null || target.firing === undefined ? '--' : '开火 ' + bool(target.firing)
       ]);
     }
+    function targetEvidenceText(target) {
+      if (!target) return '--';
+      return joinNonBlank([
+        target.distance === null || target.distance === undefined ? '' : '距离 ' + distance(target.distance),
+        target.active === null || target.active === undefined ? '' : '活动 ' + bool(target.active),
+        target.moving === null || target.moving === undefined ? '' : '移动 ' + bool(target.moving),
+        target.firing === null || target.firing === undefined ? '' : '开火 ' + bool(target.firing),
+        target.recentlyActive ? '近期有活动' : '',
+        target.recentlyMoved ? '近期有移动' : ''
+      ]);
+    }
+    function targetPolicyEvidenceText(target) {
+      const policy = target?.whitelistContactPolicy || null;
+      if (!policy) return '--';
+      if (policy.reason === 'dynamic-whitelist-distance-guard') {
+        return joinNonBlank([
+          '动态白名单距离保护',
+          policy.distanceCm === null || policy.distanceCm === undefined ? '' : '当前 ' + distance(policy.distanceCm),
+          policy.proactiveCombatRangeCm === null || policy.proactiveCombatRangeCm === undefined
+            ? ''
+            : '阈值 ' + distance(policy.proactiveCombatRangeCm)
+        ]);
+      }
+      return reasonText(policy.reason);
+    }
+    function targetDecisionBasisText(status, targetRoles) {
+      const action = status.action || status.decision?.action || {};
+      const reason = String(action.reason || status.decision?.reason || '');
+      const primary = targetRoles?.primary || null;
+      const secondary = targetRoles?.secondary || null;
+      if (reason === 'easy-kill-active-profit') {
+        return joinNonBlank([
+          '收益依据：历史战斗记录判定为低风险活动收益目标',
+          primary?.easyKillScore === null || primary?.easyKillScore === undefined
+            ? ''
+            : '低风险记录 ' + integer(primary.easyKillScore) + ' 次',
+          targetEvidenceText(primary)
+        ]);
+      }
+      if (reason === 'profit-afk-seek' || /afk.*(?:profit|seek)|(?:profit|seek).*afk/i.test(reason)) {
+        return joinNonBlank([
+          '收益依据：当前收益评分选中的挂机收益目标',
+          targetEvidenceText(primary)
+        ]);
+      }
+      const dangerReason = /(?:^|[-_])(?:threat|danger)(?:$|[-_])|incoming|pursuit|injury/i.test(reason);
+      if (dangerReason) {
+        return joinNonBlank([
+          '危险依据：' + reasonText(reason),
+          targetPolicyEvidenceText(secondary || primary),
+          targetEvidenceText(secondary || primary)
+        ]);
+      }
+      if (secondary) {
+        return joinNonBlank([
+          '副目标依据：' + reasonText(secondary.combatIntent || reason),
+          targetPolicyEvidenceText(secondary),
+          targetEvidenceText(secondary)
+        ]);
+      }
+      return joinNonBlank([kindText(action.kind || status.decision?.kind || ''), reasonText(reason)]);
+    }
     function actionReasonText(status) {
       const reason = status.action?.reason || status.decision?.reason || status.recentExit?.reason;
       return dangerousPlayerExitReasonText(status, reason);
@@ -3139,6 +3220,7 @@ function renderBrowserlessWebPanel() {
       const kind = action.kind || decision.kind || 'wait';
       const currentReason = action.reason || decision.reason || '';
       const target = activeTarget(status);
+      const targetRoles = panelTargetRoles(status);
       const currentSession = status.stats?.currentSession || {};
       const { online, realtimeOnline } = panelSessionFlags(status);
       const reason = currentReason;
@@ -3186,21 +3268,15 @@ function renderBrowserlessWebPanel() {
           : '未调用 leave');
       }
       if (online && !liveCombat) addRow(rowsOut, '原因', actionReasonDisplay(status), true);
-      const decisionText = joinNonBlank([kindText(kind), actionReasonText(status)]);
-      const statusText = actionText(status);
-      const reasonDisplay = online ? actionReasonDisplay(status) : dangerousPlayerExitReasonText(status, reason);
-      if (online
-        && !liveCombat
-        && decisionText !== '--'
-        && decisionText !== statusText
-        && decisionText !== reasonDisplay
-        && decisionText !== joinNonBlank([statusText, reasonDisplay])) {
-        addRow(rowsOut, '判断', decisionText);
-      }
-      if (online && !liveCombat) {
-        addRow(rowsOut, '目标', targetLabel(target));
-        addRow(rowsOut, '来源', sourceText(target?.authority, target));
-        addRow(rowsOut, '目标状态', targetStateText(target));
+      const decisionText = targetDecisionBasisText(status, targetRoles);
+      if (online && decisionText !== '--') addRow(rowsOut, '判断', decisionText);
+      if (online) {
+        addRow(rowsOut, '主目标', targetLabel(targetRoles.primary));
+        addRow(rowsOut, '主目标来源', sourceText(targetRoles.primary?.authority, targetRoles.primary));
+        addRow(rowsOut, '主目标状态', targetStateText(targetRoles.primary));
+        addRow(rowsOut, '副目标', targetLabel(targetRoles.secondary));
+        addRow(rowsOut, '副目标来源', sourceText(targetRoles.secondary?.authority, targetRoles.secondary));
+        addRow(rowsOut, '副目标状态', targetStateText(targetRoles.secondary));
       }
       const dataGapSummary = dataGapsText(decision);
       if (online && dataGapSummary !== '--') addRow(rowsOut, '数据缺口', dataGapSummary);
@@ -3890,6 +3966,7 @@ module.exports = {
   remoteTargetActivityTextCore,
   nearbyCoinIconCore,
   panelSessionFlagsCore,
+  panelTargetRolesCore,
   restartDrainBlockedReasonTextCore,
   targetAuthoritySourceTextCore,
   transportMetricValueClassCore,

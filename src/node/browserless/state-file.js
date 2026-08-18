@@ -1858,6 +1858,32 @@ function compactLoginPointSafetyDetail(loginPointSafety, normalized) {
   };
 }
 
+function compactWhitelistContactPolicy(value) {
+  if (!value || typeof value !== 'object') return null;
+  return {
+    membershipSource: compactString(value.membershipSource, 48),
+    profitProtected: compactBoolean(value.profitProtected),
+    creatorProtected: compactBoolean(value.creatorProtected),
+    dynamicWhitelistMember: compactBoolean(value.dynamicWhitelistMember),
+    dynamicWhitelistEnabled: compactBoolean(value.dynamicWhitelistEnabled),
+    damagedSelfToday: compactBoolean(value.damagedSelfToday),
+    legacyWhitelistProtected: compactBoolean(value.legacyWhitelistProtected),
+    proactiveCombatEligible: compactBoolean(value.proactiveCombatEligible),
+    proactiveCombatHpEligible: compactBoolean(value.proactiveCombatHpEligible),
+    proactiveCombatHpThreshold: compactNumber(value.proactiveCombatHpThreshold),
+    proactiveCombatRangeCm: compactNumber(value.proactiveCombatRangeCm),
+    incomingDodgeRequired: compactBoolean(value.incomingDodgeRequired),
+    lowHpSafetyExit: compactBoolean(value.lowHpSafetyExit),
+    dodgeOnly: compactBoolean(value.dodgeOnly),
+    selfHp: compactNumber(value.selfHp),
+    maxHp: compactNumber(value.maxHp),
+    distanceCm: compactNumber(value.distanceCm),
+    recoveryRadiusCm: compactNumber(value.recoveryRadiusCm),
+    lowHpSafetyRadiusCm: compactNumber(value.lowHpSafetyRadiusCm),
+    reason: compactString(value.reason, 120)
+  };
+}
+
 function compactTarget(value) {
   if (!value || typeof value !== 'object') return null;
   return {
@@ -1870,6 +1896,7 @@ function compactTarget(value) {
     remoteNavigationOnly: value.remoteNavigationOnly === undefined || value.remoteNavigationOnly === null
       ? null
       : Boolean(value.remoteNavigationOnly),
+    cachedNavigationOnly: compactBoolean(value.cachedNavigationOnly),
     x: compactNumber(value.x),
     y: compactNumber(value.y),
     vx: compactNumber(value.vx),
@@ -1894,10 +1921,54 @@ function compactTarget(value) {
     recentlyActive: compactBoolean(value.recentlyActive),
     recentlyMoved: compactBoolean(value.recentlyMoved),
     easyKillKnown: compactBoolean(value.easyKillKnown),
+    easyKillScore: compactNumber(value.easyKillScore),
     easyKillDamagedToday: compactBoolean(value.easyKillDamagedToday),
     easyKillThreatExempt: compactBoolean(value.easyKillThreatExempt),
+    easyKillProfitTarget: compactBoolean(value.easyKillProfitTarget),
+    whitelisted: compactBoolean(value.whitelisted),
+    creatorProtected: compactBoolean(value.creatorProtected),
+    dynamicWhitelistMember: compactBoolean(value.dynamicWhitelistMember),
+    dynamicWhitelistEnabled: compactBoolean(value.dynamicWhitelistEnabled),
+    damagedSelfToday: compactBoolean(value.damagedSelfToday),
+    legacyWhitelistProtected: compactBoolean(value.legacyWhitelistProtected),
+    profitProtected: compactBoolean(value.profitProtected),
+    whitelistContactPolicy: compactWhitelistContactPolicy(value.whitelistContactPolicy),
+    combatIntent: compactString(value.combatIntent, 48),
+    combatRole: compactString(value.combatRole || value.role, 24),
+    primaryTargetId: value.primaryTargetId === null || value.primaryTargetId === undefined || value.primaryTargetId === ''
+      ? ''
+      : compactString(value.primaryTargetId, 80),
+    secondaryTarget: compactBoolean(value.secondaryTarget),
+    sameAsProfitMission: compactBoolean(value.sameAsProfitMission),
     profitMetadataMode: compactString(value.profitMetadataMode, 48),
     profitMetadataActive: compactBoolean(value.profitMetadataActive)
+  };
+}
+
+function compactProfitMission(value) {
+  if (!value || typeof value !== 'object') return null;
+  const navigationTarget = compactTarget(
+    value.navigationTarget || value.target || value.sourceTarget || value.choice?.sourceTarget
+  );
+  const currentDistanceCm = compactNumber(value.currentDistanceCm);
+  return {
+    active: compactBoolean(value.active),
+    key: compactString(value.key || value.missionKey, 128),
+    type: compactString(value.type, 48),
+    targetId: value.targetId === null || value.targetId === undefined || value.targetId === ''
+      ? compactString(value.subjectId, 80)
+      : compactString(value.targetId, 80),
+    navigationAuthority: compactString(value.navigationAuthority, 48),
+    navigationTarget: navigationTarget
+      ? {
+          ...navigationTarget,
+          distance: currentDistanceCm ?? navigationTarget.distance
+        }
+      : null,
+    highValue: compactBoolean(value.highValue),
+    currentDistanceCm,
+    selectedAt: compactNumber(value.selectedAt),
+    expiresAt: compactNumber(value.expiresAt)
   };
 }
 
@@ -2200,6 +2271,7 @@ function compactProfit(profit) {
   const best = profit.best && typeof profit.best === 'object' ? profit.best : null;
   const candidates = Array.isArray(profit.candidates) ? profit.candidates : [];
   return {
+    mission: compactProfitMission(profit.mission || profit.profitMission),
     best: best
       ? {
           type: compactString(best.type, 48),
@@ -2234,6 +2306,29 @@ function compactCombat(combat) {
   if (!combat || typeof combat !== 'object') return null;
   const candidates = Array.isArray(combat.candidates) ? combat.candidates : [];
   const dataGaps = Array.isArray(combat.dataGaps) ? combat.dataGaps : [];
+  const target = compactTarget(combat.target);
+  const fireTarget = compactTarget(combat.fireTarget || combat.shooting?.target);
+  const profitMission = compactProfitMission(combat.profitMission);
+  const primaryTargetId = String(
+    target?.primaryTargetId
+      || fireTarget?.primaryTargetId
+      || profitMission?.targetId
+      || ''
+  );
+  const candidatePrimary = primaryTargetId
+    ? candidates.find(candidate => String(
+        candidate?.userId ?? candidate?.user_id ?? candidate?.entityId ?? candidate?.entity_id ?? ''
+      ) === primaryTargetId) || null
+    : null;
+  const targetIsSecondary = target?.combatRole === 'secondary' || target?.secondaryTarget === true;
+  const targetIsPrimary = target?.combatRole === 'primary' || target?.sameAsProfitMission === true;
+  const fireTargetIsSecondary = fireTarget?.combatRole === 'secondary' || fireTarget?.secondaryTarget === true;
+  const primaryTarget = targetIsPrimary
+    ? target
+    : (compactTarget(candidatePrimary) || profitMission?.navigationTarget || null);
+  const secondaryTarget = targetIsSecondary
+    ? target
+    : (fireTargetIsSecondary ? fireTarget : null);
   return {
     ok: compactBoolean(combat.ok),
     actionEligible: compactBoolean(combat.actionEligible),
@@ -2245,7 +2340,14 @@ function compactCombat(combat) {
     durationMs: compactNumber(combat.durationMs),
     movementDistance: compactNumber(combat.movementDistance),
     self: compactTarget(combat.self),
-    target: compactTarget(combat.target),
+    target,
+    fireTarget,
+    fireTargetRole: compactString(combat.fireTargetRole || combat.shooting?.targetRole, 24),
+    combatRole: compactString(target?.combatRole, 24),
+    primaryTargetId,
+    primaryTarget,
+    secondaryTarget,
+    profitMission,
     candidateCount: compactNumber(combat.candidateCount) ?? candidates.length,
     movement: combat.movement && typeof combat.movement === 'object'
       ? {
@@ -2278,6 +2380,30 @@ function compactCombat(combat) {
       : null,
     dataGaps: dataGaps.slice(0, 5).map(item => compactString(item, 80)),
     dataGapCount: dataGaps.length
+  };
+}
+
+function compactStatusTargets(action, combat, profit) {
+  const actionTarget = compactTarget(action?.target);
+  const actionIsSecondary = actionTarget?.combatRole === 'secondary'
+    || actionTarget?.secondaryTarget === true;
+  let primary = compactTarget(combat?.primaryTarget)
+    || compactTarget(profit?.mission?.navigationTarget)
+    || null;
+  let secondary = compactTarget(combat?.secondaryTarget) || null;
+  if (!actionIsSecondary && !primary && actionTarget) primary = actionTarget;
+  if (actionIsSecondary && !secondary) secondary = actionTarget;
+
+  const primaryId = String(primary?.userId ?? primary?.entityId ?? primary?.id ?? '');
+  const secondaryId = String(secondary?.userId ?? secondary?.entityId ?? secondary?.id ?? '');
+  if (primaryId && secondaryId && primaryId === secondaryId) {
+    if (actionIsSecondary) primary = null;
+    else secondary = null;
+  }
+  return {
+    mode: primary && secondary ? 'dual' : (primary ? 'primary-only' : (secondary ? 'secondary-only' : 'none')),
+    primary,
+    secondary
   };
 }
 
@@ -3366,6 +3492,7 @@ function compactProfitSource(profit) {
   const compact = compactProfit(profit);
   const threshold = profit.threshold && typeof profit.threshold === 'object' ? profit.threshold : null;
   return compact ? {
+    mission: compact.mission,
     best: compact.best,
     candidateCount: compact.candidateCount,
     threshold: threshold ? {
@@ -3594,8 +3721,10 @@ function buildCompactBrowserlessStatus(state, config = {}) {
     ? {
         ...(combat || {}),
         target: recentExit.battle.target
-      }
+    }
     : combat;
+  const displayProfit = compactProfit(current.profit || current.decision?.profit);
+  const targets = compactStatusTargets(action, displayCombat, displayProfit);
   const compactState = {
     schemaVersion: normalized.schemaVersion,
     compact: true,
@@ -3630,8 +3759,9 @@ function buildCompactBrowserlessStatus(state, config = {}) {
     lastKnown,
     decision,
     action,
-    profit: compactProfit(current.profit || current.decision?.profit),
+    profit: displayProfit,
     combat: displayCombat,
+    targets,
     battle: compactBattleStatus(normalized, game, action, decision, displayCombat, config),
     nearby: compactNearby(current.decision?.input?.nearby),
     mapTrails: compactMapTrails(normalized.mapTrails),

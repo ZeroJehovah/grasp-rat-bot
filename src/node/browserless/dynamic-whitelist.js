@@ -5,7 +5,7 @@ const path = require('path');
 const { COMBAT_CONSTANTS } = require('../../strategy/combat-constants');
 const { isInvulnerableEntity } = require('../../strategy/combat-target-selection');
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const DEFAULT_DAMAGE_WINDOW_MS = 60 * 1000;
 const DEFAULT_DAMAGE_THRESHOLD_HP = 10;
 const DEFAULT_CROSSFIRE_CONE_HALF_ANGLE_DEG = 30;
@@ -114,6 +114,7 @@ function normalize(value) {
       userId,
       name: playerName(raw, `#${userId}`),
       nameUpdatedAt: String(raw?.nameUpdatedAt || raw?.addedAt || ''),
+      nameObservedAt: String(raw?.nameObservedAt || raw?.nameUpdatedAt || raw?.addedAt || ''),
       nameObservedTick: numberOrNull(raw?.nameObservedTick),
       addedAt: String(raw?.addedAt || '')
     };
@@ -180,6 +181,7 @@ function createDynamicWhitelist(options = {}) {
       userId: id,
       name,
       nameUpdatedAt: existing?.name === name ? String(existing.nameUpdatedAt || existing.addedAt || at) : at,
+      nameObservedAt: at,
       nameObservedTick: numberOrNull(target?.lastObservedTick ?? target?.nameObservedTick ?? target?.tick)
         ?? numberOrNull(existing?.nameObservedTick),
       addedAt: existing?.addedAt || at
@@ -201,8 +203,20 @@ function createDynamicWhitelist(options = {}) {
       const name = playerName(target);
       if (!name) continue;
       const tick = numberOrNull(target?.tick) ?? sourceTick;
+      const observedAtMs = Number.isFinite(Date.parse(String(target?.nameObservedAt || '')))
+        ? Date.parse(String(target.nameObservedAt))
+        : atMs;
+      const previousObservedAtMs = Date.parse(String(
+        existing.nameObservedAt || existing.nameUpdatedAt || existing.addedAt || ''
+      ));
       const previousTick = numberOrNull(existing.nameObservedTick);
-      if (tick !== null && previousTick !== null && tick < previousTick) continue;
+      if (Number.isFinite(previousObservedAtMs) && observedAtMs < previousObservedAtMs) continue;
+      if (Number.isFinite(previousObservedAtMs)
+        && observedAtMs === previousObservedAtMs
+        && tick !== null
+        && previousTick !== null
+        && tick < previousTick) continue;
+      existing.nameObservedAt = new Date(observedAtMs).toISOString();
       if (tick !== null) existing.nameObservedTick = tick;
       if (existing.name === name) continue;
       const oldName = existing.name;
