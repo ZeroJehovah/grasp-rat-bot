@@ -6395,7 +6395,7 @@ async function runSelfTest() {
         const result = runDropRaceObservabilitySelfTest();
         return `${result.ok}:${result.cases}:${result.maxCompetitors}`;
       })(),
-      want: 'true:3:8'
+      want: 'true:8:8'
     },
     {
       name: 'shared GRZ frame parser decodes gzip pos summaries',

@@ -5,10 +5,11 @@
 // ordinary profit evidence, but they must never create a race record.
 
 const MAX_COMPETITORS = 8;
-const CLASSIFICATIONS = new Set(['confirmed', 'strong-inference', 'unresolved']);
 const EVENT_TYPES = new Set(['kill', 'drop-visible', 'settled', 'expired']);
 
 function finite(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string' && value.trim() === '') return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
@@ -101,10 +102,12 @@ function movementSummary(input = {}, action = {}, stateful = {}) {
 
 function classify(detail = {}) {
   const picker = detail?.disappearance?.picker;
-  if (picker?.id || picker?.source) return 'confirmed';
-  if (detail?.disappearance?.selfDropDelta !== null
+  const event = String(detail?.event || '');
+  if (picker?.id && picker?.authority === 'server') return 'confirmed';
+  if (!['settled', 'expired'].includes(event)) return 'unresolved';
+  if (Number(detail?.disappearance?.selfDropDelta) > 0
     || (Array.isArray(detail?.disappearance?.competitorDropDeltas)
-      && detail.disappearance.competitorDropDeltas.some(item => item?.delta > 0))) {
+      && detail.disappearance.competitorDropDeltas.some(item => Number(item?.delta) > 0))) {
     return 'strong-inference';
   }
   return 'unresolved';
@@ -175,9 +178,7 @@ function sanitizeDropRaceLifecycle(detail = {}) {
     requestId: identifier(source.requestId),
     exitAttemptId: identifier(source.exitAttemptId)
   };
-  output.classification = CLASSIFICATIONS.has(String(source.classification || ''))
-    ? String(source.classification)
-    : classify(output);
+  output.classification = classify(output);
   return output;
 }
 
@@ -223,6 +224,73 @@ module.exports = {
     }) !== null) {
       throw new Error('drop-race snapshot rejection self-test failed');
     }
-    return { ok: true, cases: 3, maxCompetitors: realtime.competitors.length };
+    const base = {
+      targetId: 'target-1',
+      realtimeAuthority: 'realtime',
+      dropPoint: { x: 100, y: 200 }
+    };
+    const missing = sanitizeDropRaceLifecycle({
+      ...base,
+      event: 'settled',
+      coinAmount: '',
+      tDropMs: null,
+      disappearance: { selfDropDelta: undefined, competitorDropDeltas: [] }
+    });
+    if (missing?.coinAmount !== null
+      || missing?.tDropMs !== null
+      || missing?.disappearance?.selfDropDelta !== null
+      || missing?.classification !== 'unresolved') {
+      throw new Error('drop-race missing numeric evidence self-test failed');
+    }
+    const explicitZero = sanitizeDropRaceLifecycle({
+      ...base,
+      event: 'settled',
+      coinAmount: 0,
+      tDropMs: 0,
+      disappearance: { selfDropDelta: 0, competitorDropDeltas: [{ id: 'other', delta: 0 }] }
+    });
+    if (explicitZero?.coinAmount !== 0
+      || explicitZero?.tDropMs !== 0
+      || explicitZero?.disappearance?.selfDropDelta !== 0
+      || explicitZero?.classification !== 'unresolved') {
+      throw new Error('drop-race explicit zero evidence self-test failed');
+    }
+    const selfIncrease = sanitizeDropRaceLifecycle({
+      ...base,
+      event: 'settled',
+      disappearance: { selfDropDelta: 3, competitorDropDeltas: [] }
+    });
+    if (selfIncrease?.classification !== 'strong-inference') {
+      throw new Error('drop-race self Drop inference self-test failed');
+    }
+    const competitorIncrease = sanitizeDropRaceLifecycle({
+      ...base,
+      event: 'expired',
+      disappearance: { selfDropDelta: 0, competitorDropDeltas: [{ id: 'other', delta: 2 }] }
+    });
+    if (competitorIncrease?.classification !== 'strong-inference') {
+      throw new Error('drop-race competitor Drop inference self-test failed');
+    }
+    const confirmed = sanitizeDropRaceLifecycle({
+      ...base,
+      event: 'settled',
+      disappearance: {
+        selfDropDelta: null,
+        competitorDropDeltas: [],
+        picker: { id: 'other', source: 'server-picker', authority: 'server' }
+      }
+    });
+    if (confirmed?.classification !== 'confirmed') {
+      throw new Error('drop-race server picker confirmation self-test failed');
+    }
+    const nonterminalIncrease = sanitizeDropRaceLifecycle({
+      ...base,
+      event: 'drop-visible',
+      disappearance: { selfDropDelta: 3, competitorDropDeltas: [] }
+    });
+    if (nonterminalIncrease?.classification !== 'unresolved') {
+      throw new Error('drop-race nonterminal inference rejection self-test failed');
+    }
+    return { ok: true, cases: 8, maxCompetitors: realtime.competitors.length };
   }
 };
