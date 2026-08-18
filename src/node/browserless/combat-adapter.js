@@ -28,6 +28,7 @@ const {
   selectCombatMovementArbitrationCore,
   safeRetreatInterceptCandidateCore,
   stabilizeCombatMovementDirectionCore,
+  strategicDirectionProgressCore,
   shouldBackAwayFromTarget
 } = require('../../strategy/combat-movement');
 const {
@@ -109,7 +110,10 @@ const {
   secondaryFirePolicy,
   secondaryRetentionPolicy
 } = require('../../strategy/dual-target-policy');
-const { profitKillRacePolicy } = require('../../strategy/profit-kill-race');
+const {
+  observeProfitCompetitorEvidence,
+  profitKillRacePolicy
+} = require('../../strategy/profit-kill-race');
 const {
   dynamicWhitelistDistanceGuardBlocksCombatCore
 } = require('../../strategy/dynamic-whitelist-safety');
@@ -3269,7 +3273,8 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     self,
     target,
     primaryTarget: target.combatRole === 'primary',
-    realtimeTargets: options.realtimeTargets || [],
+    competitionTargets: options.profitCompetitionTargets || options.realtimeTargets || [],
+    observedTick: options.currentTick,
     nowMs: options.nowMs
   }, options);
   const escortEvidence = profitEscortEntryEvidence(
@@ -3376,9 +3381,9 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
         dy: Math.sign(Number(pendingCommands[pendingCommands.length - 1].dy || 0))
       }
     : null;
-  const predictiveDirection = preDodge
-    ? currentDirection
-    : strategicDirection;
+  const predictiveDirection = profitKillRace.active
+    ? profitKillRace.direction
+    : (preDodge ? currentDirection : strategicDirection);
   const movementSafetyCpaCm = Math.max(
     Number(options.combatMovementSafeCpaCm || 0),
     Number(options.combatBulletHitRadiusCm || COMBAT_CONSTANTS.BULLET_HIT_RADIUS_CM) + 110
@@ -3391,6 +3396,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
         pendingDirection,
         unavoidableHoldDirection: pendingDirection || currentDirection,
         pendingActive: Boolean(pendingDirection),
+        preferStrategicProgress: profitKillRace.active,
         emergencyDirection: contactEntryDodge || dodge || { dx: 0, dy: 0 }
       }, { minimumCpaCm: movementSafetyCpaCm })
     : null;
@@ -3401,6 +3407,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     const modifiers = [];
     if (source === 'emergency-dodge') modifiers.push('dodge');
     else if (source === 'pending-safe-hold' || source === 'current-safe-hold') modifiers.push('hold-current');
+    else if (profitKillRace.active) modifiers.push('profit-target-competition');
     else if (preDodge) modifiers.push('predictive-hold');
     else if (profitEscort?.active && !ballisticCloseActive) {
       modifiers.push('profit-escort');
@@ -3460,6 +3467,19 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
         minimumCpaCm: movementSafetyCpaCm
       })
     : null;
+  let distanceAwareBaseBand = 'hold-spacing';
+  if (profitKillRace.active) distanceAwareBaseBand = 'profit-target-competition';
+  else if (profitEscort?.active && !ballisticCloseActive) distanceAwareBaseBand = 'escort';
+  else if (closePressureTooClose || ballisticCloseTooClose) distanceAwareBaseBand = 'separate';
+  else if (lootRaceDirection) distanceAwareBaseBand = 'loot-race';
+  else if (strafe?.active) distanceAwareBaseBand = 'strafe';
+  else if (closeIn) distanceAwareBaseBand = 'approach';
+  let distanceAwareRadialIntent = movement;
+  if (profitKillRace.active) distanceAwareRadialIntent = profitKillRace.direction;
+  else if (profitEscort?.active && !ballisticCloseActive) distanceAwareRadialIntent = profitEscort.direction;
+  else if (closePressureTooClose || ballisticCloseTooClose) distanceAwareRadialIntent = awayFromTarget;
+  else if (lootRaceDirection) distanceAwareRadialIntent = lootRaceDirection;
+  else if (closeIn) distanceAwareRadialIntent = towardTarget;
   const distanceAwareDodge = distanceAwareDodgeEnabled
     ? resolveDistanceAwareDodgeCore({
         nowMs: options.nowMs,
@@ -3470,28 +3490,14 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
         bullets,
         dodge,
         baseMovement: movement,
-        baseDistanceBand: profitEscort?.active && !ballisticCloseActive
-          ? 'escort'
-          : (closePressureTooClose || ballisticCloseTooClose
-              ? 'separate'
-              : (lootRaceDirection
-                  ? 'loot-race'
-                  : (strafe?.active
-                      ? 'strafe'
-                      : (closeIn ? 'approach' : 'hold-spacing')))),
+        baseDistanceBand: distanceAwareBaseBand,
         currentDirection,
         pendingDirection,
         pendingVelocityCommands: options.pendingVelocityCommands,
         movementExecutionTiming: options.movementExecutionTiming,
         currentTick: options.currentTick,
         moveSpeedPerTick: options.combatMoveSpeedPerTick || 50,
-        radialIntentVector: profitEscort?.active && !ballisticCloseActive
-          ? profitEscort.direction
-          : (closePressureTooClose || ballisticCloseTooClose
-              ? awayFromTarget
-              : (lootRaceDirection
-                  ? lootRaceDirection
-                  : (closeIn ? towardTarget : movement))),
+        radialIntentVector: distanceAwareRadialIntent,
         previousState: options.distanceAwareDodgeState || null,
         reactionSlack: distanceAwareReactionSlack,
         activeOpponent: target.active === true,
@@ -3569,7 +3575,51 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     };
     effectiveDodge = null;
   }
-  const protectedMovementOverride = movement.modifiers.includes('dodge')
+  let competitionApproachPreemptedBy = String(
+    movementArbitration?.competitionApproachPreemptedBy || ''
+  );
+  let competitionSafeProgressRestored = false;
+  if (profitKillRace.active && profitKillRace.approaching) {
+    const safeProgressDirection = movementArbitration?.safeProgressDirection || null;
+    const selectedProgress = strategicDirectionProgressCore(movement, profitKillRace.direction);
+    if (!(selectedProgress > 0) && safeProgressDirection) {
+      movement = {
+        ...movement,
+        dx: Number(safeProgressDirection.dx || 0),
+        dy: Number(safeProgressDirection.dy || 0),
+        modifiers: Array.from(new Set([
+          ...(movement.modifiers || []).filter(modifier => ![
+            'dodge',
+            'distance-aware-dodge',
+            'hold-current',
+            'predictive-hold',
+            'close-in',
+            'close-pressure-strafe',
+            'loot-race-approach',
+            'back-away',
+            'back-away-mixed',
+            'profit-escort'
+          ].includes(modifier)),
+          'profit-target-competition',
+          'competition-safe-progress-restored'
+        ]))
+      };
+      effectiveDodge = null;
+      competitionSafeProgressRestored = true;
+      competitionApproachPreemptedBy = '';
+    } else if (!(selectedProgress > 0) && !competitionApproachPreemptedBy) {
+      competitionApproachPreemptedBy = contactEntryDodge
+        ? 'contact-entry-dodge-no-safe-forward-option'
+        : (movement.modifiers.includes('dodge')
+            ? 'collision-dodge-no-safe-forward-option'
+            : 'no-safe-forward-option');
+    }
+  }
+  const competitionProgressProtected = profitKillRace.active
+    && (movementArbitration?.source === 'strategic-safe-progress'
+      || movement.modifiers.includes('competition-safe-progress-restored'));
+  const protectedMovementOverride = competitionProgressProtected
+    || movement.modifiers.includes('dodge')
     || movement.modifiers.includes('hold-current')
     || movement.modifiers.includes('predictive-hold')
     || movement.modifiers.includes('distance-aware-dodge');
@@ -3743,6 +3793,16 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       direction: secondaryMainDirection
     } : null,
     profitKillRace,
+    competitionApproach: profitKillRace.active ? {
+      active: true,
+      required: profitKillRace.approaching,
+      selectedProgress: Math.round(
+        strategicDirectionProgressCore(movement, profitKillRace.direction) * 1000
+      ) / 1000,
+      safeProgressRestored: competitionSafeProgressRestored,
+      safeProgressCandidateCount: Number(movementArbitration?.safeProgressCandidateCount || 0),
+      preemptedBy: competitionApproachPreemptedBy
+    } : null,
     lootRacePositioning: {
       ...lootRaceCandidate,
       direction: lootRaceCandidate?.direction ? { ...lootRaceCandidate.direction } : null,
@@ -3778,6 +3838,12 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       minimumCpaCm: movementArbitration.minimumCpaCm,
       strategicSafe: movementArbitration.strategicSafe,
       baselineSafe: movementArbitration.baselineSafe,
+      preferStrategicProgress: movementArbitration.preferStrategicProgress,
+      strategicProgress: numberOrNull(movementArbitration.strategicProgress),
+      safeProgressCandidateCount: Number(movementArbitration.safeProgressCandidateCount || 0),
+      safeProgressDirection: movementArbitration.safeProgressDirection || null,
+      competitionApproachPreemptedBy,
+      competitionSafeProgressRestored,
       strategicDirection: predictiveDirection,
       pendingDirection,
       selectedDirectHits: numberOrNull(movementArbitration.selectedThreat?.directHits),
@@ -4413,6 +4479,20 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   if (!bullets.length) dataGaps.push('no-realtime-bullet-evidence');
   const stateful = options.decisionState || options.stateful || null;
   const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const profitCompetitionEvidence = observeProfitCompetitorEvidence(
+    stateful
+      ? (stateful.profitKillRaceCompetitorEvidence ||= {})
+      : {},
+    {
+      self,
+      realtimeTargets: targets,
+      realtimeBullets: bullets,
+      observedTick: realtime.tick,
+      nowMs
+    },
+    options
+  );
+  const profitCompetitionTargets = profitCompetitionEvidence.competitionTargets;
   const targetFrameGapHoldMaxMs = combatTargetFrameGapHoldLimit(options);
   let targetFrameGapReset = null;
   const previousTargetIdForGap = String(stateful?.combatTarget?.id ?? '');
@@ -5290,6 +5370,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     currentTick: realtime.tick,
     bullets,
     realtimeTargets: targets,
+    profitCompetitionTargets,
     combatMetrics: stateful?.combatMetrics || null,
     combatAim: aim.ok ? aim : null,
     contactEntryGuard: contactApplies ? contactEntryGuard : null
@@ -5882,7 +5963,8 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     self,
     target: primaryFireTarget,
     primaryTarget: true,
-    realtimeTargets: targets,
+    competitionTargets: profitCompetitionTargets,
+    observedTick: realtime.tick,
     nowMs: options.nowMs
   }, options) : { active: false, fireAllowed: false, reason: 'missing-primary-target' };
   const secondaryDispatchTimes = Array.isArray(stateful?.combatTarget?.secondaryDispatchTimes)
@@ -6034,7 +6116,8 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
         self,
         target,
         primaryTarget: target?.combatRole === 'primary',
-        realtimeTargets: targets,
+        competitionTargets: profitCompetitionTargets,
+        observedTick: realtime.tick,
         nowMs: options.nowMs
       }, options));
   if (resolvedWouldShoot

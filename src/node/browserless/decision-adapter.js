@@ -11020,6 +11020,10 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
   const immediateInjuryHpExitAction = deferInjuryExitForDynamicContact ? null : selectedInjuryHpExitAction;
   const deferredCombatExitAction = deferCombatExitForDynamicContact ? selectedCombatExitAction : null;
   const deferredInjuryHpExitAction = deferInjuryExitForDynamicContact ? selectedInjuryHpExitAction : null;
+  const defensiveLootCompositeAction = lootControl.summary?.compositeDefense === true
+    ? lootControl.action
+    : null;
+  const ordinaryLootControlAction = defensiveLootCompositeAction ? null : lootControl.action;
   let action = longStaminaExhaustedLeaveAction
     || criticalIncomingExitAction
     || immediateCombatExitAction
@@ -11035,9 +11039,10 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     || (healthyLootPriority && safetyActionForArbitration?.reason === 'avoid-invulnerable-target'
       ? null
       : safetyActionForArbitration)
+    || defensiveLootCompositeAction
     || dynamicDefensiveCombatAction
     || dynamicProximityCombatAction
-    || lootControl.action
+    || ordinaryLootControlAction
     || closePressureCombatAction
     || defensiveCombatAction
     || postKillSettlementWaitAction
@@ -11251,6 +11256,137 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}, in
     target: summarizeCoin(coin),
     realtimeLootPriority: true
   };
+  const protectedDrop = coin.selfKilledPlayerDrop === true || coin.primaryTargetDropPriority === true;
+  const defensiveLootTarget = combat?.target && (
+    combat.target.combatRole === 'secondary'
+      || combat.target.secondaryTarget === true
+      || combat.target.combatIntent === 'defensive'
+      || combat.target.firing === true
+      || targetHasRealBulletPressure(input, combat.target, stateful.combatTarget)
+  ) ? combat.target : null;
+  if (protectedDrop && defensiveLootTarget && combat?.dryRun) {
+    const safeDirection = pressure.active
+      ? safeLootDodgeDirection(combat, input.self, coin, incomingAssessment)
+      : null;
+    const directDirection = {
+      dx: Math.sign(Number(coin.x) - Number(input.self.x)),
+      dy: Math.sign(Number(coin.y) - Number(input.self.y))
+    };
+    const selectedDirection = safeDirection || directDirection;
+    const mode = pressure.active
+      ? (safeDirection ? 'safe-dodge-toward-coin' : 'damage-commit')
+      : 'defensive-loot-escort';
+    const movementReason = mode === 'safe-dodge-toward-coin'
+      ? 'post-kill-loot-safe-dodge'
+      : (mode === 'damage-commit'
+          ? 'post-kill-loot-damage-commit'
+          : 'post-kill-loot-defensive-escort');
+    const acceptedDamageRisk = mode === 'damage-commit';
+    const existingShooting = combat.dryRun.shooting || {};
+    const existingFireTarget = existingShooting.target || combat.dryRun.fireTarget || defensiveLootTarget;
+    const defensiveTargetId = String(targetIdentity(defensiveLootTarget) || '');
+    const fireTargetId = String(targetIdentity(existingFireTarget) || '');
+    const shootingMatchesDefense = !fireTargetId || fireTargetId === defensiveTargetId;
+    const compositeShooting = shootingMatchesDefense
+      ? {
+          ...existingShooting,
+          target: existingFireTarget,
+          targetRole: existingShooting.targetRole || 'secondary',
+          defensiveSecondaryTarget: true,
+          lootMovementIndependent: true
+        }
+      : {
+          ...existingShooting,
+          wouldShoot: false,
+          commandSuppressed: true,
+          state: 'loot-defense-target-mismatch',
+          reason: 'post-kill-loot-defense-target-mismatch',
+          defensiveSecondaryTarget: true,
+          lootMovementIndependent: true
+        };
+    const navigationTarget = summarizeCoin(coin);
+    const commitment = highValueLootCommitmentMeta(
+      { ...directActionBase, lootTarget: navigationTarget },
+      input,
+      pressure,
+      mode,
+      safeDirection,
+      options
+    );
+    const combatSummary = {
+      ...combat.dryRun,
+      movement: {
+        ...(combat.dryRun.movement || {}),
+        dx: Number(selectedDirection.dx || 0),
+        dy: Number(selectedDirection.dy || 0),
+        reason: movementReason,
+        modifiers: Array.from(new Set([
+          ...(combat.dryRun.movement?.modifiers || []).filter(modifier => ![
+            'back-away',
+            'back-away-mixed',
+            'close-in',
+            'close-pressure-strafe',
+            'secondary-main-target'
+          ].includes(modifier)),
+          'post-kill-loot',
+          'defensive-loot-composite',
+          ...(safeDirection ? ['post-kill-loot-safe-dodge'] : [])
+        ]))
+      },
+      shooting: compositeShooting,
+      realtimeLoot: {
+        active: true,
+        navigationActive: true,
+        navigationAuthority: 'snapshot-navigation',
+        reason,
+        target: navigationTarget,
+        defensiveTargetId,
+        incomingCount,
+        mode,
+        acceptedDamageRisk,
+        deferredCombatExitReason,
+        safeDirection: safeDirection
+          ? { dx: Number(safeDirection.dx || 0), dy: Number(safeDirection.dy || 0) }
+          : null
+      }
+    };
+    return {
+      action: {
+        kind: 'combat-live',
+        band: 'combat',
+        reason: movementReason,
+        dx: Number(selectedDirection.dx || 0),
+        dy: Number(selectedDirection.dy || 0),
+        target: defensiveLootTarget,
+        lootTarget: navigationTarget,
+        realtimeLootPriority: true,
+        defensiveLootComposite: true,
+        highValueLootCommitment: commitment
+      },
+      combat: combatSummary,
+      assessment,
+      summary: {
+        ...summaryBase,
+        active: true,
+        eligible: true,
+        compositeDefense: true,
+        navigationActive: true,
+        navigationAuthority: 'snapshot-navigation',
+        mode,
+        releasedOrdinaryProfitClosePressure: ordinaryProfitClosePressure,
+        healthyHp,
+        selfHp,
+        incomingCount,
+        acceptedDamageRisk,
+        deferredCombatExitReason,
+        defensiveTargetId,
+        shootingPreserved: shootingMatchesDefense,
+        safeDirection: safeDirection
+          ? { dx: Number(safeDirection.dx || 0), dy: Number(safeDirection.dy || 0) }
+          : null
+      }
+    };
+  }
   if (!pressure.active) {
     const directCombatSummary = combat?.dryRun ? {
       ...combat.dryRun,

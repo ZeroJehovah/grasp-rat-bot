@@ -156,6 +156,15 @@ function runAfkDynamicFireSelfTest() {
   const externalEvidence = evidenceAdapter.applyDecision(frame(externallyPressured, {
     tick: 20,
     receivedAtMs: evidenceNow,
+    entities: [{
+      entity_id: 9,
+      user_id: 9,
+      x: -1000,
+      y: 0,
+      hp: 100,
+      active: true,
+      current_join_mode: 'Active'
+    }],
     bullets: [{
       bullet_id: 901,
       owner_user_id: 9,
@@ -288,6 +297,43 @@ function runAfkDynamicFireSelfTest() {
   assert.strictEqual(competitionVelocities.at(-1).dx, 1);
   assert.strictEqual(competitionShots.length, 0);
 
+  const bulletOwnerShots = [];
+  const bulletOwnerAdapter = createBrowserlessActionAdapter({
+    userId: 7,
+    commandIntervalMs: 0,
+    shootRepeatEnabled: false,
+    afkAttackDynamicFireEnabled: true,
+    transport: {
+      sendVelocity() {
+        return { ok: true };
+      },
+      sendShoot(x, y) {
+        bulletOwnerShots.push({ x, y });
+        return { ok: true };
+      }
+    }
+  });
+  const quietBulletOwner = {
+    entity_id: 4,
+    user_id: 98,
+    x: 450,
+    y: 0,
+    hp: 100,
+    active: false
+  };
+  const bulletOwnerBlocked = bulletOwnerAdapter.applyDecision(frame(contestedTarget, {
+    tick: 30,
+    entities: [quietBulletOwner],
+    bullets: [{ bullet_id: 903, owner_user_id: 98 }]
+  }), action({ userId: 41, x: 500, y: 0, hp: 3, invulnerable: false }));
+  assert.strictEqual(bulletOwnerBlocked.shoot.skipped, true);
+  assert.strictEqual(bulletOwnerBlocked.shoot.reason, 'profit-target-competition-position-blocked');
+  assert.strictEqual(
+    bulletOwnerBlocked.shoot.profitKillRace.nearestCompetitor.evidenceReasons.includes('realtime-bullet-owner'),
+    true
+  );
+  assert.strictEqual(bulletOwnerShots.length, 0);
+
   const pickupRadiusTarget = { ...target, x: 150, hp: 3 };
   const pickupRadiusAllowed = competitionAdapter.applyDecision(frame(pickupRadiusTarget, {
     tick: 2,
@@ -337,7 +383,7 @@ function runAfkDynamicFireSelfTest() {
 
   return {
     ok: true,
-    cases: 10,
+    cases: 11,
     velocityCount: velocities.length,
     shootCount: shots.length,
     evidenceShootCount: evidenceShots.length,

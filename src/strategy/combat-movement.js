@@ -74,8 +74,40 @@ function movementThreatSafeCore(threat, minimumCpaCm = 200) {
   if (!threat) return true;
   const worstCaseCpa = Number(threat.worstCaseCpaCm ?? threat.minCPA ?? Infinity);
   return Number(threat.directHits || 0) === 0
+    && Number(threat.unavoidableHits || 0) === 0
     && threat.scheduleRobust !== false
     && worstCaseCpa >= Math.max(1, Number(minimumCpaCm || 200));
+}
+
+function strategicDirectionProgressCore(direction = {}, strategicDirection = {}) {
+  const candidate = normalizedDirection(direction);
+  const strategic = normalizedDirection(strategicDirection);
+  const candidateMagnitude = Math.hypot(candidate.dx, candidate.dy);
+  const strategicMagnitude = Math.hypot(strategic.dx, strategic.dy);
+  if (!(candidateMagnitude > 0) || !(strategicMagnitude > 0)) return 0;
+  return (
+    candidate.dx * strategic.dx + candidate.dy * strategic.dy
+  ) / (candidateMagnitude * strategicMagnitude);
+}
+
+function safestStrategicProgressDirectionCore(threatField = [], strategicDirection = {}, minimumCpaCm = 200) {
+  const candidates = (threatField || [])
+    .filter(item => item && (Number(item.dx || 0) || Number(item.dy || 0)))
+    .filter(item => Number(item.unavoidableHits || 0) === 0)
+    .filter(item => movementThreatSafeCore(item, minimumCpaCm))
+    .map(item => ({
+      ...item,
+      ...normalizedDirection(item),
+      strategicProgress: strategicDirectionProgressCore(item, strategicDirection)
+    }))
+    .filter(item => item.strategicProgress > 0)
+    .sort((left, right) => Number(right.strategicProgress) - Number(left.strategicProgress)
+      || Number(right.minCPA ?? right.worstCaseCpaCm ?? 0)
+        - Number(left.minCPA ?? left.worstCaseCpaCm ?? 0));
+  return {
+    direction: candidates[0] || null,
+    candidateCount: candidates.length
+  };
 }
 
 function movementDirectionKeyCore(direction = {}) {
@@ -362,6 +394,10 @@ function selectCombatMovementArbitrationCore(input = {}, options = {}) {
   const strategicSafe = movementThreatSafeCore(strategicThreat, minimumCpaCm);
   const baselineSafe = movementThreatSafeCore(baselineThreat, minimumCpaCm);
   const pendingActive = Boolean(input.pendingActive && pendingDirection);
+  const preferStrategicProgress = input.preferStrategicProgress === true;
+  const safeProgress = preferStrategicProgress
+    ? safestStrategicProgressDirectionCore(threatField, strategicDirection, minimumCpaCm)
+    : { direction: null, candidateCount: 0 };
 
   // A pending command is only a safety fallback.  It may be the tail of a
   // lateral Dodge generation, so preferring it over an equally safe strategic
@@ -375,7 +411,29 @@ function selectCombatMovementArbitrationCore(input = {}, options = {}) {
       strategicSafe,
       baselineSafe,
       minimumCpaCm,
+      preferStrategicProgress,
+      strategicProgress: 1,
+      safeProgressCandidateCount: safeProgress.candidateCount,
+      safeProgressDirection: strategicDirection,
+      competitionApproachPreemptedBy: '',
       selectedThreat: strategicThreat,
+      strategicThreat,
+      baselineThreat
+    };
+  }
+  if (safeProgress.direction) {
+    return {
+      ...normalizedDirection(safeProgress.direction),
+      source: 'strategic-safe-progress',
+      strategicSafe,
+      baselineSafe,
+      minimumCpaCm,
+      preferStrategicProgress,
+      strategicProgress: safeProgress.direction.strategicProgress,
+      safeProgressCandidateCount: safeProgress.candidateCount,
+      safeProgressDirection: normalizedDirection(safeProgress.direction),
+      competitionApproachPreemptedBy: '',
+      selectedThreat: safeProgress.direction,
       strategicThreat,
       baselineThreat
     };
@@ -387,6 +445,13 @@ function selectCombatMovementArbitrationCore(input = {}, options = {}) {
       strategicSafe,
       baselineSafe,
       minimumCpaCm,
+      preferStrategicProgress,
+      strategicProgress: strategicDirectionProgressCore(baselineDirection, strategicDirection),
+      safeProgressCandidateCount: safeProgress.candidateCount,
+      safeProgressDirection: null,
+      competitionApproachPreemptedBy: preferStrategicProgress
+        ? 'pending-safe-no-forward-option'
+        : '',
       selectedThreat: baselineThreat,
       strategicThreat,
       baselineThreat
@@ -399,6 +464,13 @@ function selectCombatMovementArbitrationCore(input = {}, options = {}) {
       strategicSafe,
       baselineSafe,
       minimumCpaCm,
+      preferStrategicProgress,
+      strategicProgress: strategicDirectionProgressCore(baselineDirection, strategicDirection),
+      safeProgressCandidateCount: safeProgress.candidateCount,
+      safeProgressDirection: null,
+      competitionApproachPreemptedBy: preferStrategicProgress
+        ? 'current-safe-no-forward-option'
+        : '',
       selectedThreat: baselineThreat,
       strategicThreat,
       baselineThreat
@@ -411,6 +483,13 @@ function selectCombatMovementArbitrationCore(input = {}, options = {}) {
     strategicSafe,
     baselineSafe,
     minimumCpaCm,
+    preferStrategicProgress,
+    strategicProgress: strategicDirectionProgressCore(emergency, strategicDirection),
+    safeProgressCandidateCount: safeProgress.candidateCount,
+    safeProgressDirection: null,
+    competitionApproachPreemptedBy: preferStrategicProgress
+      ? 'emergency-no-safe-forward-option'
+      : '',
     selectedThreat: directionThreatCore(threatField, emergency),
     strategicThreat,
     baselineThreat
@@ -2164,6 +2243,8 @@ module.exports = {
   movementDirectionKeyCore,
   movementSettlementWindowTicksCore,
   movementThreatSafeCore,
+  safestStrategicProgressDirectionCore,
+  strategicDirectionProgressCore,
   selectCombatMovementArbitrationCore,
   stabilizeCombatMovementDirectionCore,
   shouldBackAwayFromTarget,

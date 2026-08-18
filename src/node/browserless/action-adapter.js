@@ -10,7 +10,10 @@ const {
 const { evaluateAfkFirePolicyCore } = require('../../strategy/afk-fire-policy');
 const { isInvulnerableEntity } = require('../../strategy/combat-target-selection');
 const { stamina5sRemaining } = require('../../strategy/combat-fire-discipline');
-const { profitKillRacePolicy } = require('../../strategy/profit-kill-race');
+const {
+  observeProfitCompetitorEvidence,
+  profitKillRacePolicy
+} = require('../../strategy/profit-kill-race');
 const { remoteProfitApproachDistanceCm } = require('../../strategy/remote-profit-targets');
 
 const BROWSER_RUNTIME_DEFAULTS = buildRuntimeDefaults({}, false);
@@ -619,6 +622,7 @@ function createInitialActionState() {
     shootRepeatCorrelationSlot: null,
     afkTargetDamageObservations: {},
     afkDispatchedDamageByTarget: {},
+    profitKillRaceCompetitorEvidence: {},
     lastVelocityRepeatError: '',
     lastShootRepeatError: '',
     shootingSealed: false,
@@ -2037,6 +2041,58 @@ function createBrowserlessActionAdapter(options = {}) {
     return id === null || id === undefined || id === '' ? '' : String(id);
   }
 
+  function observeProfitCompetition(stateSnapshot) {
+    const realtime = stateSnapshot?.realtime || {};
+    return observeProfitCompetitorEvidence(
+      state.profitKillRaceCompetitorEvidence,
+      {
+        self: realtime.self || null,
+        realtimeTargets: Array.isArray(realtime.entities) ? realtime.entities : [],
+        realtimeBullets: Array.isArray(realtime.bullets) ? realtime.bullets : [],
+        observedTick: realtime.tick,
+        nowMs: optionalNumber(realtime.receivedAtMs) ?? now()
+      },
+      options
+    );
+  }
+
+  function actionProfitKillRace(stateSnapshot, self, target, primaryTarget, decisionGate = null) {
+    const observed = observeProfitCompetition(stateSnapshot);
+    const executionObservedTick = optionalNumber(stateSnapshot?.realtime?.tick);
+    const currentGate = profitKillRacePolicy({
+      self,
+      target,
+      primaryTarget: primaryTarget === true,
+      competitionTargets: observed.competitionTargets,
+      observedTick: stateSnapshot?.realtime?.tick
+    }, options);
+    if (decisionGate?.active === true && decisionGate.fireAllowed === false) {
+      return {
+        ...decisionGate,
+        executionRevalidated: true,
+        executionGateReason: 'decision-block-retained',
+        executionObservedTick,
+        executionValidationToken: `${executionObservedTick ?? 'none'}:${targetRepeatKey(target)}:blocked`
+      };
+    }
+    if (currentGate.active && !currentGate.fireAllowed) {
+      return {
+        ...currentGate,
+        executionRevalidated: true,
+        executionGateReason: 'new-or-retained-execution-evidence',
+        executionObservedTick,
+        executionValidationToken: `${executionObservedTick ?? 'none'}:${targetRepeatKey(target)}:blocked`
+      };
+    }
+    return {
+      ...currentGate,
+      executionRevalidated: true,
+      executionGateReason: 'execution-fire-allowed',
+      executionObservedTick,
+      executionValidationToken: `${executionObservedTick ?? 'none'}:${targetRepeatKey(target)}:allowed`
+    };
+  }
+
   function shotTargetKey(shot) {
     const explicit = shot?.targetId ?? shot?.target_id;
     if (explicit !== null && explicit !== undefined && explicit !== '') return String(explicit);
@@ -2260,12 +2316,13 @@ function createBrowserlessActionAdapter(options = {}) {
       };
     }
     target = realtimeTarget.target;
-    const profitKillRace = profitKillRacePolicy({
+    const profitKillRace = actionProfitKillRace(
+      gateOptions.stateSnapshot,
       self,
       target,
-      primaryTarget: gateOptions.primaryTarget === true,
-      realtimeTargets: gateOptions.stateSnapshot?.realtime?.entities || []
-    }, options);
+      gateOptions.primaryTarget === true,
+      gateOptions.profitKillRace || null
+    );
     if (profitKillRace.active && !profitKillRace.fireAllowed) {
       return {
         ok: false,
@@ -3888,12 +3945,7 @@ function createBrowserlessActionAdapter(options = {}) {
       };
     }
 
-    const profitKillRace = profitKillRacePolicy({
-      self,
-      target,
-      primaryTarget: true,
-      realtimeTargets: stateSnapshot?.realtime?.entities || []
-    }, options);
+    const profitKillRace = actionProfitKillRace(stateSnapshot, self, target, true);
     const fullAttack = Number.isFinite(distance) && distance <= fullAttackRange;
     const competitionApproach = profitKillRace.active && profitKillRace.approaching;
     const movementReason = competitionApproach
@@ -3993,67 +4045,105 @@ function createBrowserlessActionAdapter(options = {}) {
           ...transportFailure(stopped)
         };
       }
-    const movement = combat.movement || {};
-    const velocity = sendVelocity(
-      roundVelocity(movement.dx),
-      roundVelocity(movement.dy),
-      movement.reason || 'combat-live-movement',
-      combat.target,
-      { repeatSummary: false }
-    );
+      const movement = combat.movement || {};
+      const velocity = sendVelocity(
+        roundVelocity(movement.dx),
+        roundVelocity(movement.dy),
+        movement.reason || 'combat-live-movement',
+        combat.target,
+        { repeatSummary: false }
+      );
       const shooting = combat.shooting || {};
       const fireTarget = shooting.target || combat.fireTarget || combat.target;
-    let shoot = {
-      ok: true,
-      skipped: true,
-      reason: shooting.commandSuppressed ? (shooting.reason || 'shoot-command-suppressed') : 'shoot-not-requested'
-    };
-    if (shooting.wouldShoot && !shooting.commandSuppressed) {
-      const aim = shooting.aim || combat.fireAim || combat.aim || {};
-      const startX = numberOrNull(self?.x ?? combat.self?.x);
-      const startY = numberOrNull(self?.y ?? combat.self?.y);
-      const targetX = numberOrNull(aim.x);
-      const targetY = numberOrNull(aim.y);
-      if (startX === null || startY === null || targetX === null || targetY === null) {
-        state.skippedCount += 1;
-        const shotMeta = {
-          observedTick: combat.timing?.observedTick ?? combat.tick,
-          executionClass: SHOOT_EXECUTION_CLASSES.COMBAT,
-          engagementGeneration: combat.metrics?.engagementGeneration,
-          baseCadenceMs: shooting.cadenceMs,
-          executionCadenceMs: shooting.executionCadenceMs ?? shooting.cadenceMs,
-          advisoryCadenceMs: shooting.advisoryCadenceMs,
-          advisoryReasons: shooting.advisoryCadenceReasons
-        };
-        shoot = {
-          ok: false,
-          skipped: true,
-          reason: 'missing-shoot-coordinates',
-          execution: skippedShootExecution('missing-shoot-coordinates', fireTarget, shotMeta)
-        };
-      } else {
-        shoot = sendShoot(
-          targetX,
-          targetY,
-          startX,
-          startY,
-          shooting.reason || 'combat-live-shoot',
+      const fireTargetRole = String(shooting.targetRole || fireTarget?.combatRole || fireTarget?.role || '');
+      const primaryFireTarget = fireTargetRole === 'primary'
+        || (fireTargetRole === 'current'
+          && (fireTarget?.combatRole === 'primary' || combat.target?.combatRole === 'primary'));
+      let executionProfitKillRace = null;
+      let shoot = {
+        ok: true,
+        skipped: true,
+        reason: shooting.commandSuppressed ? (shooting.reason || 'shoot-command-suppressed') : 'shoot-not-requested'
+      };
+      if (shooting.wouldShoot && !shooting.commandSuppressed) {
+        executionProfitKillRace = actionProfitKillRace(
+          stateSnapshot,
+          self,
           fireTarget,
-          shooting.executionCadenceMs || shooting.cadenceMs,
-          {
+          primaryFireTarget,
+          shooting.profitKillRace || null
+        );
+        if (executionProfitKillRace.active && !executionProfitKillRace.fireAllowed) {
+          state.skippedCount += 1;
+          const shotMeta = {
             observedTick: combat.timing?.observedTick ?? combat.tick,
             executionClass: SHOOT_EXECUTION_CLASSES.COMBAT,
             engagementGeneration: combat.metrics?.engagementGeneration,
-            engagementTargetId: targetRepeatKey(combat.target),
             baseCadenceMs: shooting.cadenceMs,
-            executionCadenceMs: shooting.executionCadenceMs || shooting.cadenceMs,
+            executionCadenceMs: shooting.executionCadenceMs ?? shooting.cadenceMs,
             advisoryCadenceMs: shooting.advisoryCadenceMs,
-            advisoryReasons: shooting.advisoryCadenceReasons,
-            combatDecision: combat
+            advisoryReasons: shooting.advisoryCadenceReasons
+          };
+          shoot = {
+            ok: true,
+            skipped: true,
+            reason: 'profit-target-competition-position-blocked',
+            profitKillRace: executionProfitKillRace,
+            execution: skippedShootExecution(
+              'profit-target-competition-position-blocked',
+              fireTarget,
+              shotMeta
+            )
+          };
+        } else {
+          const aim = shooting.aim || combat.fireAim || combat.aim || {};
+          const startX = numberOrNull(self?.x ?? combat.self?.x);
+          const startY = numberOrNull(self?.y ?? combat.self?.y);
+          const targetX = numberOrNull(aim.x);
+          const targetY = numberOrNull(aim.y);
+          if (startX === null || startY === null || targetX === null || targetY === null) {
+            state.skippedCount += 1;
+            const shotMeta = {
+              observedTick: combat.timing?.observedTick ?? combat.tick,
+              executionClass: SHOOT_EXECUTION_CLASSES.COMBAT,
+              engagementGeneration: combat.metrics?.engagementGeneration,
+              baseCadenceMs: shooting.cadenceMs,
+              executionCadenceMs: shooting.executionCadenceMs ?? shooting.cadenceMs,
+              advisoryCadenceMs: shooting.advisoryCadenceMs,
+              advisoryReasons: shooting.advisoryCadenceReasons
+            };
+            shoot = {
+              ok: false,
+              skipped: true,
+              reason: 'missing-shoot-coordinates',
+              profitKillRace: executionProfitKillRace,
+              execution: skippedShootExecution('missing-shoot-coordinates', fireTarget, shotMeta)
+            };
+          } else {
+            shoot = sendShoot(
+              targetX,
+              targetY,
+              startX,
+              startY,
+              shooting.reason || 'combat-live-shoot',
+              fireTarget,
+              shooting.executionCadenceMs || shooting.cadenceMs,
+              {
+                observedTick: combat.timing?.observedTick ?? combat.tick,
+                executionClass: SHOOT_EXECUTION_CLASSES.COMBAT,
+                engagementGeneration: combat.metrics?.engagementGeneration,
+                engagementTargetId: targetRepeatKey(combat.target),
+                baseCadenceMs: shooting.cadenceMs,
+                executionCadenceMs: shooting.executionCadenceMs || shooting.cadenceMs,
+                advisoryCadenceMs: shooting.advisoryCadenceMs,
+                advisoryReasons: shooting.advisoryCadenceReasons,
+                combatDecision: combat
+              }
+            );
+            shoot.profitKillRace = executionProfitKillRace;
           }
-        );
+        };
       }
-    }
       return {
         ok: Boolean(velocity.ok && shoot.ok),
         kind: 'combat-live',
@@ -4074,6 +4164,7 @@ function createBrowserlessActionAdapter(options = {}) {
           command: shoot.command || null,
           cadenceMs: shoot.cadenceMs || null,
           execution: shoot.execution || null,
+          profitKillRace: shoot.profitKillRace || executionProfitKillRace,
           ...transportFailure(shoot)
         },
         target: combat.target,
@@ -4086,6 +4177,7 @@ function createBrowserlessActionAdapter(options = {}) {
   }
 
   function observeState(stateSnapshot) {
+    observeProfitCompetition(stateSnapshot);
     const shootRepeatValid = validateShootRepeatState(stateSnapshot);
     observeMovementStall(stateSnapshot);
     state.latestObservedTick = optionalNumber(stateSnapshot?.realtime?.tick);

@@ -72,7 +72,10 @@ const {
   secondaryFirePolicy,
   secondaryRetentionPolicy
 } = require('./dual-target-policy');
-const { profitKillRacePolicy } = require('./profit-kill-race');
+const {
+  observeProfitCompetitorEvidence,
+  profitKillRacePolicy
+} = require('./profit-kill-race');
 const { runCombatHpLossAttributionSelfTest } = require('./combat-hp-loss-attribution');
 const { recordActionSwitchDiagnosticsCore } = require('./action-switch-diagnostics');
 const { attackWorthTakingCore } = require('./attack-worth');
@@ -506,6 +509,12 @@ function runStrategyModuleSelfTests() {
       current_join_mode: 'Active'
     }]
   });
+  const snapshotCompetitorIgnored = profitKillRacePolicy({
+    self: { user_id: 1, x: 0, y: 0 },
+    target: { user_id: 2, x: 200, y: 0, hp: 19, current_join_mode: 'Active' },
+    primaryTarget: true,
+    realtimeTargets: [{ user_id: 3, x: 150, y: 0, active: true, authority: 'snapshot' }]
+  });
   results.push({
     name: 'primary-profit-target-competition-is-nearby-bounded-and-pickup-aware',
     passed: killRaceBlocked.active === true
@@ -526,6 +535,175 @@ function runStrategyModuleSelfTests() {
       && passiveKillRaceBlocked.fireAllowed === false
       && activeHpBoundaryInactive.active === false
       && killRaceJoinModeActiveBlocked.fireAllowed === false
+      && snapshotCompetitorIgnored.active === false
+      && snapshotCompetitorIgnored.reason === 'no-nearby-active-competitor'
+  });
+
+  const competitionEvidenceState = {};
+  const competitionSelf = { user_id: 1, x: 0, y: 0 };
+  const competitionTarget = {
+    user_id: 2,
+    x: 500,
+    y: 0,
+    hp: 19,
+    current_join_mode: 'Active'
+  };
+  const quietBulletOwner = {
+    user_id: 3,
+    x: 450,
+    y: 0,
+    active: false,
+    authority: 'realtime'
+  };
+  const bulletEvidence = observeProfitCompetitorEvidence(competitionEvidenceState, {
+    self: competitionSelf,
+    realtimeTargets: [competitionTarget, quietBulletOwner],
+    realtimeBullets: [{ owner_user_id: 3, authority: 'realtime' }],
+    observedTick: 100,
+    nowMs: 1000
+  });
+  const bulletEvidenceGate = profitKillRacePolicy({
+    self: competitionSelf,
+    target: competitionTarget,
+    primaryTarget: true,
+    competitionTargets: bulletEvidence.competitionTargets,
+    observedTick: 100
+  });
+  const heldEvidence = observeProfitCompetitorEvidence(competitionEvidenceState, {
+    self: competitionSelf,
+    realtimeTargets: [competitionTarget, quietBulletOwner],
+    realtimeBullets: [],
+    observedTick: 101,
+    nowMs: 1100
+  });
+  const missingEvidence = observeProfitCompetitorEvidence(competitionEvidenceState, {
+    self: competitionSelf,
+    realtimeTargets: [competitionTarget],
+    realtimeBullets: [],
+    observedTick: 102,
+    nowMs: 1200
+  });
+  const missingEvidenceGate = profitKillRacePolicy({
+    self: competitionSelf,
+    target: competitionTarget,
+    primaryTarget: true,
+    competitionTargets: missingEvidence.competitionTargets,
+    observedTick: 102
+  });
+  const missingEvidencePickupGate = profitKillRacePolicy({
+    self: { ...competitionSelf, x: 350 },
+    target: competitionTarget,
+    primaryTarget: true,
+    competitionTargets: missingEvidence.competitionTargets,
+    observedTick: 102
+  });
+  const sameTickBefore = {
+    lastStrongAt: competitionEvidenceState.records['3']?.lastStrongAt,
+    clearConfirmations: competitionEvidenceState.records['3']?.clearConfirmations
+  };
+  observeProfitCompetitorEvidence(competitionEvidenceState, {
+    self: competitionSelf,
+    realtimeTargets: [competitionTarget, { ...quietBulletOwner, current_join_mode: 'Passive' }],
+    realtimeBullets: [],
+    observedTick: 102,
+    nowMs: 1300
+  });
+  const sameTickAfter = {
+    lastStrongAt: competitionEvidenceState.records['3']?.lastStrongAt,
+    clearConfirmations: competitionEvidenceState.records['3']?.clearConfirmations
+  };
+  results.push({
+    name: 'primary-profit-competition-retains-realtime-bullet-owner-evidence-across-uncertain-frames',
+    passed: bulletEvidenceGate.fireAllowed === false
+      && bulletEvidenceGate.nearestCompetitor?.evidenceReasons?.includes('realtime-bullet-owner')
+      && heldEvidence.competitionTargets.find(item => String(item.user_id) === '3')
+        ?.profitCompetitionPositionFresh === true
+      && heldEvidence.competitionTargets.find(item => String(item.user_id) === '3')
+        ?.profitCompetitionHeld === true
+      && missingEvidence.competitionTargets.find(item => String(item.user_id) === '3')
+        ?.profitCompetitionPositionFresh === false
+      && missingEvidenceGate.fireAllowed === false
+      && missingEvidenceGate.reason === 'active-competitor-position-retained'
+      && missingEvidencePickupGate.fireAllowed === true
+      && missingEvidencePickupGate.insidePickupRadius === true
+      && sameTickAfter.lastStrongAt === sameTickBefore.lastStrongAt
+      && sameTickAfter.clearConfirmations === sameTickBefore.clearConfirmations
+  });
+
+  const missingOwnerEvidence = observeProfitCompetitorEvidence({}, {
+    self: competitionSelf,
+    realtimeTargets: [competitionTarget],
+    realtimeBullets: [{ owner_user_id: 4, authority: 'realtime' }],
+    observedTick: 110,
+    nowMs: 2000
+  });
+  const missingOwnerGate = profitKillRacePolicy({
+    self: competitionSelf,
+    target: competitionTarget,
+    primaryTarget: true,
+    competitionTargets: missingOwnerEvidence.competitionTargets,
+    observedTick: 110
+  });
+  const missingOwnerPickupGate = profitKillRacePolicy({
+    self: { ...competitionSelf, x: 400 },
+    target: { ...competitionTarget, x: 500 },
+    primaryTarget: true,
+    competitionTargets: missingOwnerEvidence.competitionTargets,
+    observedTick: 110
+  });
+  results.push({
+    name: 'primary-profit-competition-bullet-owner-without-position-fails-closed-outside-pickup-radius',
+    passed: missingOwnerGate.active === true
+      && missingOwnerGate.competitorCount === 1
+      && missingOwnerGate.nearestCompetitor?.id === '4'
+      && missingOwnerGate.nearestCompetitor?.positionFresh === false
+      && !Number.isFinite(missingOwnerGate.nearestCompetitor?.distanceCm)
+      && missingOwnerGate.competitorPositionUncertain === true
+      && missingOwnerGate.fireAllowed === false
+      && missingOwnerGate.reason === 'active-competitor-position-retained'
+      && missingOwnerPickupGate.fireAllowed === true
+      && missingOwnerPickupGate.insidePickupRadius === true
+  });
+
+  const passiveEvidenceState = {};
+  observeProfitCompetitorEvidence(passiveEvidenceState, {
+    self: competitionSelf,
+    realtimeTargets: [quietBulletOwner],
+    realtimeBullets: [{ owner_user_id: 3 }],
+    observedTick: 200,
+    nowMs: 2000
+  });
+  const passiveFrames = [201, 202, 203].map((tick, index) => observeProfitCompetitorEvidence(
+    passiveEvidenceState,
+    {
+      self: competitionSelf,
+      realtimeTargets: [{ ...quietBulletOwner, current_join_mode: 'Passive' }],
+      realtimeBullets: [],
+      observedTick: tick,
+      nowMs: 2100 + index * 100
+    }
+  ));
+  const ttlEvidenceState = {};
+  observeProfitCompetitorEvidence(ttlEvidenceState, {
+    self: competitionSelf,
+    realtimeTargets: [quietBulletOwner],
+    realtimeBullets: [{ owner_user_id: 3 }],
+    observedTick: 300,
+    nowMs: 3000
+  }, { profitKillRaceEvidenceHoldTtlMs: 1000 });
+  const ttlExpired = observeProfitCompetitorEvidence(ttlEvidenceState, {
+    self: competitionSelf,
+    realtimeTargets: [],
+    realtimeBullets: [],
+    observedTick: 301,
+    nowMs: 4001
+  }, { profitKillRaceEvidenceHoldTtlMs: 1000 });
+  results.push({
+    name: 'primary-profit-competition-needs-three-fresh-passive-frames-or-ttl-expiry-to-clear',
+    passed: passiveFrames[0].competitionTargets.some(item => String(item.user_id) === '3')
+      && passiveFrames[1].competitionTargets.some(item => String(item.user_id) === '3')
+      && !passiveFrames[2].competitionTargets.some(item => String(item.user_id) === '3')
+      && ttlExpired.competitionTargets.length === 0
   });
 
   const healthySecondaryExitPolicy = secondaryCombatExitPolicy(
@@ -3331,6 +3509,45 @@ function runStrategyModuleSelfTests() {
       && pendingMove.dx === 1 && pendingMove.dy === 0
       && emergencyMove.source === 'emergency-dodge'
       && emergencyMove.dx === -1 && emergencyMove.dy === 0
+  });
+
+  const competitionSafeProgressMove = selectCombatMovementArbitrationCore({
+    threatField: [
+      { dx: 1, dy: 0, directHits: 1, unavoidableHits: 0, minCPA: 50 },
+      { dx: 1, dy: 1, directHits: 0, unavoidableHits: 0, minCPA: 350 },
+      { dx: 0, dy: 1, directHits: 0, unavoidableHits: 0, minCPA: 450 },
+      { dx: -1, dy: 0, directHits: 0, unavoidableHits: 0, minCPA: 500 }
+    ],
+    strategicDirection: { dx: 1, dy: 0 },
+    currentDirection: { dx: -1, dy: 0 },
+    emergencyDirection: { dx: 0, dy: 1 },
+    preferStrategicProgress: true
+  }, { minimumCpaCm: 200 });
+  const competitionNoSafeProgressMove = selectCombatMovementArbitrationCore({
+    threatField: [
+      { dx: 1, dy: 0, directHits: 1, unavoidableHits: 0, minCPA: 50 },
+      { dx: 1, dy: 1, directHits: 1, unavoidableHits: 0, minCPA: 60 },
+      { dx: 1, dy: -1, directHits: 0, unavoidableHits: 1, minCPA: 60 },
+      { dx: 0, dy: 1, directHits: 0, unavoidableHits: 0, minCPA: 450 },
+      { dx: -1, dy: 0, directHits: 0, unavoidableHits: 0, minCPA: 500 }
+    ],
+    strategicDirection: { dx: 1, dy: 0 },
+    currentDirection: { dx: -1, dy: 0 },
+    emergencyDirection: { dx: 0, dy: 1 },
+    preferStrategicProgress: true
+  }, { minimumCpaCm: 200 });
+  results.push({
+    name: 'profit-competition-movement-selects-safe-positive-progress-before-retreat',
+    passed: competitionSafeProgressMove.source === 'strategic-safe-progress'
+      && competitionSafeProgressMove.dx === 1
+      && competitionSafeProgressMove.dy === 1
+      && competitionSafeProgressMove.strategicProgress > 0
+      && competitionSafeProgressMove.safeProgressCandidateCount === 1
+      && competitionSafeProgressMove.competitionApproachPreemptedBy === ''
+      && competitionNoSafeProgressMove.source === 'current-safe-hold'
+      && competitionNoSafeProgressMove.dx === -1
+      && competitionNoSafeProgressMove.safeProgressCandidateCount === 0
+      && competitionNoSafeProgressMove.competitionApproachPreemptedBy === 'current-safe-no-forward-option'
   });
 
   const escortForward = selectProfitEscortDirectionCore({

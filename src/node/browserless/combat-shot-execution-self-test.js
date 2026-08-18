@@ -327,6 +327,7 @@ function runCombatShotExecutionSelfTest() {
     controlGeneration: actionControl,
     commandIntervalMs: 0,
     combatShootMinIntervalMs: 160,
+    shootRepeatEnabled: false,
     maxPendingShootCommands: 20,
     getSegmentGeneration: context => (
       context.controlGeneration === actionControl
@@ -439,7 +440,8 @@ function runCombatShotExecutionSelfTest() {
   check('primary fire uses the primary wire target', primaryDispatch.shoot?.skipped === false
     && primaryDispatch.fireTarget?.user_id === 42
     && wireTargets.at(-1)?.x === 4200
-    && primaryDispatch.shoot?.execution?.targetId === '42');
+    && primaryDispatch.shoot?.execution?.targetId === '42'
+    && primaryDispatch.shoot?.profitKillRace?.executionValidationToken?.endsWith(':42:allowed'));
   check('primary fire retains the secondary engagement segment',
     primaryDispatch.shoot?.execution?.segmentGeneration === 'segment:execution-current');
   check('primary fire is synchronized as cross-target execution', syncedPrimaryEvents >= 1
@@ -477,6 +479,142 @@ function runCombatShotExecutionSelfTest() {
     && secondaryStateful.combatTarget.secondaryDispatchTimes.length === 1
     && secondaryStateful.combatMetrics.actualShots >= 1);
 
+  const lowHpPrimary = {
+    ...combatTarget(42, 500),
+    hp: 3,
+    combatRole: 'primary',
+    current_join_mode: 'Active'
+  };
+  const quietBulletOwner = {
+    ...combatTarget(9, 450),
+    active: false,
+    current_join_mode: undefined
+  };
+  actionNow += 160;
+  const dispatchesBeforeExecutionBlock = wireDispatches;
+  const executionCompetitionSnapshot = {
+    realtime: {
+      tick: 41,
+      receivedAtMs: actionNow,
+      self: { user_id: 1, x: 0, y: 0 },
+      entities: [lowHpPrimary, quietBulletOwner],
+      bullets: [{ bullet_id: 'competition-bullet', owner_user_id: 9 }]
+    },
+    command: actionStore.getCommandState(actionNow)
+  };
+  const executionCompetitionBlocked = adapter.applyDecision(
+    executionCompetitionSnapshot,
+    combatDecision(secondaryGeneration, 'mixed/unknown', 160, 1000, {
+      controlGeneration: actionControl,
+      tick: 41,
+      target: lowHpPrimary,
+      shooting: {
+        target: lowHpPrimary,
+        targetRole: 'primary',
+        aim: { x: 500, y: 0, mode: 'exact' },
+        profitKillRace: { active: false, fireAllowed: true, reason: 'decision-saw-no-competitor' }
+      }
+    })
+  );
+  check('wire gate adds a block when newer realtime bullet-owner evidence reveals a closer competitor',
+    executionCompetitionBlocked.shoot?.skipped === true
+      && executionCompetitionBlocked.shoot?.reason === 'profit-target-competition-position-blocked'
+      && executionCompetitionBlocked.shoot?.profitKillRace?.executionGateReason === 'new-or-retained-execution-evidence'
+      && executionCompetitionBlocked.shoot?.profitKillRace?.nearestCompetitor?.evidenceReasons
+        ?.includes('realtime-bullet-owner')
+      && wireDispatches === dispatchesBeforeExecutionBlock);
+
+  actionNow += 160;
+  const missingPositionExecutionBlocked = adapter.applyDecision({
+    realtime: {
+      tick: 411,
+      receivedAtMs: actionNow,
+      self: { user_id: 1, x: 0, y: 0 },
+      entities: [lowHpPrimary],
+      bullets: [{ bullet_id: 'positionless-competition-bullet', owner_user_id: 10 }]
+    },
+    command: actionStore.getCommandState(actionNow)
+  }, combatDecision(secondaryGeneration, 'mixed/unknown', 160, 1000, {
+    controlGeneration: actionControl,
+    tick: 411,
+    target: lowHpPrimary,
+    shooting: {
+      target: lowHpPrimary,
+      targetRole: 'primary',
+      aim: { x: 500, y: 0, mode: 'exact' },
+      profitKillRace: { active: false, fireAllowed: true, reason: 'decision-saw-no-competitor' }
+    }
+  }));
+  check('wire gate fails closed for a realtime bullet owner without a position',
+    missingPositionExecutionBlocked.shoot?.skipped === true
+      && missingPositionExecutionBlocked.shoot?.reason === 'profit-target-competition-position-blocked'
+      && missingPositionExecutionBlocked.shoot?.profitKillRace?.competitorPositionUncertain === true
+      && missingPositionExecutionBlocked.shoot?.profitKillRace?.competitorCount === 2
+      && missingPositionExecutionBlocked.shoot?.profitKillRace?.executionGateReason === 'new-or-retained-execution-evidence'
+      && wireDispatches === dispatchesBeforeExecutionBlock);
+
+  actionNow += 160;
+  const decisionBlocked = adapter.applyDecision({
+    realtime: {
+      tick: 42,
+      receivedAtMs: actionNow,
+      self: { user_id: 1, x: 0, y: 0 },
+      entities: [lowHpPrimary],
+      bullets: []
+    },
+    command: actionStore.getCommandState(actionNow)
+  }, combatDecision(secondaryGeneration, 'mixed/unknown', 160, 1000, {
+    controlGeneration: actionControl,
+    tick: 42,
+    target: lowHpPrimary,
+    shooting: {
+      target: lowHpPrimary,
+      targetRole: 'primary',
+      aim: { x: 500, y: 0, mode: 'exact' },
+      profitKillRace: {
+        active: true,
+        fireAllowed: false,
+        reason: 'active-player-as-close-or-closer-to-primary-profit-target'
+      }
+    }
+  }));
+  check('wire gate never reopens a primary shot already blocked by the decision layer',
+    decisionBlocked.shoot?.skipped === true
+      && decisionBlocked.shoot?.profitKillRace?.executionGateReason === 'decision-block-retained'
+      && wireDispatches === dispatchesBeforeExecutionBlock);
+
+  actionNow += 160;
+  const lowHpSecondary = {
+    ...lowHpPrimary,
+    user_id: 8,
+    userId: 8,
+    combatRole: 'secondary',
+    secondaryTarget: true
+  };
+  const secondaryDefensiveDispatch = adapter.applyDecision({
+    ...executionCompetitionSnapshot,
+    realtime: {
+      ...executionCompetitionSnapshot.realtime,
+      tick: 43,
+      receivedAtMs: actionNow,
+      entities: [lowHpSecondary, quietBulletOwner]
+    },
+    command: actionStore.getCommandState(actionNow)
+  }, combatDecision(secondaryGeneration, 'mixed/unknown', 160, 1000, {
+    controlGeneration: actionControl,
+    tick: 43,
+    target: lowHpSecondary,
+    shooting: {
+      target: lowHpSecondary,
+      targetRole: 'secondary',
+      aim: { x: 500, y: 0, mode: 'exact' }
+    }
+  }));
+  check('primary-profit competition gate does not suppress defensive secondary fire',
+    secondaryDefensiveDispatch.shoot?.skipped === false
+      && secondaryDefensiveDispatch.shoot?.profitKillRace?.active === false
+      && wireDispatches === dispatchesBeforeExecutionBlock + 1);
+
   actionNow += 50;
   const throttled = adapter.applyDecision(stateSnapshot, combatDecision(
     'execution-generation',
@@ -508,7 +646,7 @@ function runCombatShotExecutionSelfTest() {
   ));
   check('Dodge reserve remains an explicit hard fire-state boundary', reserveBlocked.shoot?.skipped === true
     && reserveBlocked.shoot?.reason === 'dodge-reserve'
-    && wireDispatches === modes.length + 2);
+    && wireDispatches === modes.length + 3);
 
   const safetyStop = adapter.sealShooting('safety-trigger:test-exit', {
     observedTick: 22,
@@ -529,7 +667,7 @@ function runCombatShotExecutionSelfTest() {
     && safetyStop.engagementGeneration === 'execution-generation'
     && staleAfterSafety.shoot?.skipped === true
     && staleAfterSafety.shoot?.reason === 'safety-trigger:test-exit'
-    && wireDispatches === modes.length + 2);
+    && wireDispatches === modes.length + 3);
   check('safety shot stop and stale skip remain structured and generation-bound', executionEvents.some(event => (
     event.type === 'shoot-stop'
     && event.executionClass === 'safety'

@@ -2829,6 +2829,108 @@ function runRemoteProfitDecisionSelfTest() {
   assert.strictEqual(incoming.input?.loot?.blockedReason, '');
   assert.ok(Number(incoming.action?.dx || 0) > 0, 'healthy high-value loot keeps positive coin progress under fire');
 
+  const selfKillCompositeOptions = {
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    finalActionArbitrationHoldMs: 0,
+    opportunitySwitchConfirmFrames: 1,
+    opportunitySwitchMargin: 0,
+    opportunitySwitchRelativeMargin: 0,
+    combatShootNoPressureDodgeReserveMs: 0,
+    combatShootDodgeReserveMs: 0
+  };
+  const selfKillCompositeAdapter = createBrowserlessDecisionAdapter(selfKillCompositeOptions);
+  selfKillCompositeAdapter.patchState({
+    postKillSettlements: {
+      '42': {
+        active: true,
+        phase: 'drop-visible',
+        targetId: '42',
+        primaryTargetDropPriority: false,
+        killAttribution: 'self',
+        startedAt: 4000,
+        updatedAt: 4000
+      }
+    }
+  });
+  const selfKillCompositeSecondary = {
+    entity_id: 2008,
+    user_id: 8,
+    name: 'self-kill-defense-secondary',
+    x: 1000,
+    y: 0,
+    vx: 0,
+    vy: 0,
+    hp: 100,
+    max_hp: 100,
+    current_join_mode: 'Active',
+    active: true,
+    firing: true,
+    stamina_5s_remaining_milli: 1000000,
+    stamina_5s_limit_milli: 1000000,
+    drop: 1
+  };
+  const selfKillCompositeFrame = state(
+    fullStaminaSelf({ hp: 80 }),
+    [selfKillCompositeSecondary],
+    [{ drop_id: 'self-kill-composite-drop', source_user_id: 42, amount: 29, x: -5000, y: 0 }],
+    true
+  );
+  selfKillCompositeFrame.realtime.tick = 40;
+  selfKillCompositeFrame.realtime.receivedAtMs = 4000;
+  selfKillCompositeFrame.realtime.bullets = [];
+  selfKillCompositeFrame.realtime.coinDrops = [];
+  selfKillCompositeFrame.realtime.coinDropsObserved = false;
+  selfKillCompositeFrame.fallback.coinDrops = [{
+    drop_id: 'self-kill-composite-drop',
+    source_user_id: 42,
+    amount: 29,
+    x: -5000,
+    y: 0
+  }];
+  selfKillCompositeFrame.fallback.coinDropsObserved = true;
+  const selfKillComposite = selfKillCompositeAdapter.evaluateRealtime(
+    selfKillCompositeFrame,
+    { ...selfKillCompositeOptions, nowMs: 4000 }
+  );
+  assert.strictEqual(selfKillComposite.action?.kind, 'combat-live');
+  assert.strictEqual(selfKillComposite.action?.reason, 'post-kill-loot-defensive-escort');
+  assert.strictEqual(selfKillComposite.input?.loot?.compositeDefense, true);
+  assert.strictEqual(selfKillComposite.combat?.realtimeLoot?.navigationActive, true);
+  assert.strictEqual(selfKillComposite.combat?.realtimeLoot?.navigationAuthority, 'snapshot-navigation');
+  assert.strictEqual(selfKillComposite.combat?.shooting?.defensiveSecondaryTarget, true);
+  assert.strictEqual(selfKillComposite.combat?.shooting?.target?.userId, 8);
+  assert.ok(Number(selfKillComposite.combat?.movement?.dx || 0) < 0,
+    'composite loot movement keeps positive progress toward the self-kill drop');
+  const compositeVelocities = [];
+  const compositeShots = [];
+  const compositeActionAdapter = createBrowserlessActionAdapter({
+    userId: 7,
+    commandIntervalMs: 0,
+    combatShootMinIntervalMs: 1,
+    shootRepeatEnabled: false,
+    transport: {
+      sendVelocity(dx, dy) {
+        compositeVelocities.push({ dx, dy });
+        return { ok: true };
+      },
+      sendShoot(x, y) {
+        compositeShots.push({ x, y });
+        return { ok: true };
+      }
+    }
+  });
+  const compositeApplied = compositeActionAdapter.applyDecision(
+    selfKillCompositeFrame,
+    selfKillComposite
+  );
+  assert.strictEqual(compositeApplied.kind, 'combat-live');
+  assert.ok(Number(compositeVelocities.at(-1)?.dx || 0) < 0,
+    'execution preserves movement toward the drop');
+  assert.strictEqual(compositeShots.length, selfKillComposite.combat?.shooting?.wouldShoot ? 1 : 0,
+    'execution preserves the defensive secondary fire decision');
+
   const missingCoinAdapter = createBrowserlessDecisionAdapter({
     userId: 7,
     controlMode: 'profit-live',

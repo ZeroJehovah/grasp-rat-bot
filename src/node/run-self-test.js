@@ -14096,7 +14096,7 @@ async function runSelfTest() {
           second.input.postKillSettlement.phase
         ].join('|');
       })(),
-      want: 'combat-live|drop-pending|coin|post-kill-drop-priority|34083|19|drop-visible'
+      want: 'combat-live|drop-pending|combat-live|post-kill-loot-defensive-escort|||drop-visible'
     },
     {
       name: 'browserless realtime high-HP disappearance does not start post-kill wait',
@@ -28879,7 +28879,7 @@ async function runSelfTest() {
           ['coin', 'seek-coin', 'patrol'].includes(missing.action?.kind)
         ].join('|');
       })(),
-      want: 'combat-live|post-kill-loot-safe-dodge|safe-dodge-toward-coin|true|false|coin|post-kill-drop-priority|damage-commit|true|true|false|coin|damage-commit|true|combat-low-hp-secondary-leave|combat-critical-hp-leave|true|true|false'
+      want: 'combat-live|post-kill-loot-safe-dodge|safe-dodge-toward-coin|true|false|combat-live|post-kill-loot-damage-commit|damage-commit|true|true|false|coin|damage-commit|true|combat-low-hp-secondary-leave|combat-critical-hp-leave|true|true|false'
     },
     {
       name: 'browserless healthy post-injury coin priority defers hp-gap exit',
