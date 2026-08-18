@@ -1356,6 +1356,8 @@ function renderBrowserlessWebPanel() {
       'dynamic-whitelist-low-hp-contact-leave': '低血量时动态白名单玩家进入安全半径，主动退出',
       'dynamic-whitelist-contact-no-dodge-budget-leave': '动态白名单玩家近身且闪避体力不足，主动退出',
       'incoming-bullet-dodge': '发现碰撞路径来弹，立即闪避',
+      'invulnerable-avoidance-yielded-to-secondary': '无敌威胁让位于防御副目标交战',
+      'invulnerable-avoidance-yielded-to-primary-mission': '无敌避让让位于主目标收益路线',
       'stamina-budget-coin-leave': '体力不足，退出等待恢复',
       'stamina-exhausted-leave': '体力耗尽，退出等待恢复',
       'dynamic-profit-threshold-wait': '当日时间充裕，动态收益门槛生效，等待更高收益目标',
@@ -3145,6 +3147,10 @@ function renderBrowserlessWebPanel() {
       const liveCombat = Boolean(realtimeOnline && (kind === 'combat-live' || action.kind === 'combat-live'));
 
       addRow(rowsOut, '状态', online ? actionTitleText(status) : offlineActionTitleText(status), true);
+      const invulnerableAvoidanceArbitration = status.combat?.invulnerableAvoidanceArbitration || null;
+      if (online && invulnerableAvoidanceArbitration?.reason) {
+        addRow(rowsOut, '无敌仲裁', reasonText(invulnerableAvoidanceArbitration.reason));
+      }
       const preflight = status.network?.sourceIpPreflight || null;
       const preflightPhase = String(preflight?.phase || '');
       if (!online && preflight && ['testing', 'retry-wait', 'deferred', 'insufficient', 'ready', 'login-attempt', 'login-failed'].includes(preflightPhase)) {

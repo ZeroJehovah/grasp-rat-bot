@@ -1543,6 +1543,176 @@ function profitCandidate(decision, userId) {
   )) || null;
 }
 
+function assertInvulnerableProfitEscortArbitration() {
+  const options = {
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    dynamicProfitThresholdEnabled: false,
+    singleCoinBaitEnabled: false,
+    finalActionArbitrationHoldMs: 0,
+    opportunitySwitchConfirmFrames: 1,
+    opportunitySwitchMargin: 0,
+    opportunitySwitchRelativeMargin: 0,
+    combatShootNoPressureDodgeReserveMs: 0,
+    combatShootDodgeReserveMs: 0
+  };
+  const remoteBatch = batch(remoteCandidate({
+    userId: 99,
+    name: 'primary-profit',
+    x: 50000,
+    drop: 80,
+    expectedReward: 80,
+    adjustedScore: 300000
+  }));
+  const invulnerableSecondary = (overrides = {}) => escortCombatTarget({
+    invulnerable: true,
+    invulnerable_remaining_ms: 80000,
+    firing: false,
+    ...overrides
+  });
+  const adapter = createBrowserlessDecisionAdapter(options);
+
+  const entered = decide(
+    adapter,
+    state(fullStaminaSelf(), [invulnerableSecondary({ firing: true })]),
+    1000,
+    remoteBatch,
+    options
+  );
+  assert.strictEqual(entered.action?.kind, 'combat-live');
+  assert.strictEqual(entered.combat?.target?.combatRole, 'secondary');
+  assert.strictEqual(entered.combat?.target?.primaryTargetId, '99');
+  assert.strictEqual(entered.combat?.shooting?.wouldShoot, false);
+  assert.strictEqual(
+    entered.combat?.invulnerableAvoidanceArbitration?.reason,
+    'invulnerable-avoidance-yielded-to-secondary'
+  );
+
+  const realtimeAdapter = createBrowserlessDecisionAdapter(options);
+  realtimeAdapter.decide(
+    state(fullStaminaSelf(), [invulnerableSecondary({ firing: true })]),
+    {
+      ...options,
+      nowMs: 1000,
+      remoteProfitBatch: remoteBatch
+    }
+  );
+  const realtimeHeld = realtimeAdapter.evaluateRealtime(
+    state(fullStaminaSelf(), [invulnerableSecondary()]),
+    {
+      ...options,
+      nowMs: 1100
+    }
+  );
+  assert.strictEqual(realtimeHeld.action?.kind, 'combat-live');
+  assert.strictEqual(
+    realtimeHeld.combat?.invulnerableAvoidanceArbitration?.reason,
+    'invulnerable-avoidance-yielded-to-secondary'
+  );
+
+  const retainedAt5000 = decide(
+    adapter,
+    state(fullStaminaSelf(), [invulnerableSecondary()]),
+    6000,
+    remoteBatch,
+    options
+  );
+  assert.strictEqual(retainedAt5000.combat?.secondaryRetention?.retained, true);
+  assert.strictEqual(retainedAt5000.action?.kind, 'combat-live');
+  assert.strictEqual(retainedAt5000.combat?.movement?.reason, 'secondary-follow-primary-target');
+  assert.strictEqual(
+    retainedAt5000.combat?.invulnerableAvoidanceArbitration?.reason,
+    'invulnerable-avoidance-yielded-to-secondary'
+  );
+
+  const releasedAt5001 = decide(
+    adapter,
+    state(fullStaminaSelf(), [invulnerableSecondary()]),
+    6001,
+    remoteBatch,
+    options
+  );
+  assert.strictEqual(releasedAt5001.combat?.target, null);
+  assert.strictEqual(releasedAt5001.action?.kind, 'seek-remote-player');
+  assert.strictEqual(releasedAt5001.profit?.mission?.targetId, '99');
+  assert.strictEqual(
+    releasedAt5001.combat?.invulnerableAvoidanceArbitration?.reason,
+    'invulnerable-avoidance-yielded-to-primary-mission'
+  );
+
+  const noMissionAdapter = createBrowserlessDecisionAdapter(options);
+  const noMission = decide(
+    noMissionAdapter,
+    state(fullStaminaSelf(), [invulnerableSecondary()]),
+    1000,
+    null,
+    options
+  );
+  assert.strictEqual(noMission.action?.reason, 'avoid-invulnerable-target');
+  assert.strictEqual(noMission.combat?.invulnerableAvoidanceArbitration, null);
+
+  const collisionAdapter = createBrowserlessDecisionAdapter(options);
+  const collisionBullet = {
+    bullet_id: 'invulnerable-secondary-collision',
+    owner_user_id: 8,
+    x: 8000,
+    y: 0,
+    target_x: 0,
+    target_y: 0,
+    speed_per_tick: 500,
+    created_tick: 1,
+    expire_tick: 30
+  };
+  const collision = decide(
+    collisionAdapter,
+    escortState(
+      fullStaminaSelf(),
+      [invulnerableSecondary()],
+      1,
+      { bullets: [collisionBullet] }
+    ),
+    1000,
+    remoteBatch,
+    options
+  );
+  assert.strictEqual(collision.action?.reason, 'incoming-bullet-dodge');
+  assert.strictEqual(collision.combat?.target?.combatRole, 'secondary');
+
+  const velocityCommands = [];
+  const shootCommands = [];
+  const actionAdapter = createBrowserlessActionAdapter({
+    ...options,
+    now: () => 1000,
+    commandIntervalMs: 0,
+    transport: {
+      sendVelocity(dx, dy) {
+        velocityCommands.push({ dx, dy });
+        return { ok: true };
+      },
+      sendShoot(x, y) {
+        shootCommands.push({ x, y });
+        return { ok: true };
+      }
+    }
+  });
+  const applied = actionAdapter.applyDecision(
+    escortState(fullStaminaSelf(), [invulnerableSecondary({ firing: true })], 1),
+    entered,
+    { source: 'realtime-control', observedTick: 1 }
+  );
+  assert.strictEqual(applied.kind, 'combat-live');
+  assert.strictEqual(applied.reason, 'combat-live-realtime');
+  assert.strictEqual(applied.movement?.reason, entered.combat?.movement?.reason);
+  assert.deepStrictEqual(
+    velocityCommands.at(-1),
+    { dx: entered.combat?.movement?.dx, dy: entered.combat?.movement?.dy }
+  );
+  assert.strictEqual(applied.movement?.command?.ownership?.source, 'realtime-control');
+  assert.strictEqual(applied.movement?.command?.ownership?.band, 'combat');
+  assert.strictEqual(shootCommands.length, 0);
+}
+
 function assertOrdinaryProfitEscortContinuity() {
   const adapter = createBrowserlessDecisionAdapter({
     userId: 7,
@@ -2081,6 +2251,7 @@ function runRemoteProfitDecisionSelfTest() {
   assert.strictEqual(qualityRealtimeEconomics.staminaCost, 107);
   assert.strictEqual(qualityRealtimeEconomics.netROI, 52 / 107 * 10000);
 
+  assertInvulnerableProfitEscortArbitration();
   assertOrdinaryProfitEscortContinuity();
   assertAfkProfitIgnoresOffLaneActiveBystander();
   const adapter = createBrowserlessDecisionAdapter({
@@ -2802,7 +2973,7 @@ function runRemoteProfitDecisionSelfTest() {
   assert.strictEqual(lowDropDecision.profit?.postKillCoinSuppression?.removedCount, 1);
   assert.strictEqual(lowDropDecision.stateful.profitMission?.targetId, '99');
 
-  return { ok: true, cases: 78 };
+  return { ok: true, cases: 79 };
 }
 
 if (require.main === module) {

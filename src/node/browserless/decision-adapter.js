@@ -9074,6 +9074,63 @@ function safetyActionCanYieldToInjuredFootCoin(action) {
   return action.kind === 'return-block-scan' || action.reason === 'return-block-lateral-scan';
 }
 
+function browserlessInvulnerableAvoidanceArbitration(input = {}, combatDecision = {}, stateful = {}, safetyAction = null, options = {}) {
+  if (safetyAction?.reason !== 'avoid-invulnerable-target') return null;
+  const mission = stateful?.profitMission || null;
+  if (!mission || mission.active === false) return null;
+  const missionType = String(mission.type || '');
+  if (missionType !== 'enemy' && missionType !== 'remote-player-navigation') return null;
+  const nowMs = Number.isFinite(Number(input?.nowMs)) ? Number(input.nowMs) : Date.now();
+  if (Number(mission.expiresAt || 0) > 0 && Number(mission.expiresAt) <= nowMs) return null;
+
+  const threat = safetyAction.target || safetyAction.threats?.[0] || null;
+  const threatId = targetIdentity(threat);
+  const primaryTargetId = profitMissionTargetId(mission);
+  if (!threatId || !primaryTargetId || String(threatId) === String(primaryTargetId)) return null;
+
+  const combatTarget = combatDecision?.target || combatDecision?.dryRun?.target || null;
+  const combatTargetId = targetIdentity(combatTarget);
+  const secondaryRetained = combatDecision?.dryRun?.secondaryRetention?.retained === true
+    || combatDecision?.secondaryRetention?.retained === true;
+  const secondaryCombat = combatTargetId
+    && String(combatTargetId) === String(threatId)
+    && (combatTarget?.combatRole === 'secondary'
+      || combatTarget?.secondaryTarget === true
+      || secondaryRetained);
+  if (secondaryCombat && options.combatActionEligible !== false) {
+    return {
+      mode: 'secondary-combat',
+      reason: 'invulnerable-avoidance-yielded-to-secondary',
+      threatId: String(threatId),
+      primaryTargetId: String(primaryTargetId),
+      targetRetained: true
+    };
+  }
+  const lastEscortRelease = stateful?.profitEscortContinuityLastRelease || null;
+  const releasedSecondary = lastEscortRelease?.active === false
+    && String(lastEscortRelease?.releaseReason || '') === 'secondary-defensive-evidence-cleared'
+    && String(lastEscortRelease?.combatTargetId || lastEscortRelease?.targetId || '') === String(threatId);
+  if (!releasedSecondary) return null;
+
+  const evidence = safetyAction.threatEvidence || {};
+  const directBulletOwner = (input?.bullets || []).some(bullet => {
+    const ownerId = bullet?.owner_user_id ?? bullet?.ownerUserId ?? bullet?.owner_id ?? bullet?.ownerId ?? bullet?.user_id;
+    return ownerId !== null && ownerId !== undefined && String(ownerId) === String(threatId);
+  });
+  const targetFiring = Boolean(threat?.firing || threat?.shooting || threat?.is_firing);
+  const recentDamage = Boolean(input?.injury?.active || input?.self?.recentlyDamaged);
+  if (evidence.realBulletOwner || evidence.firing || evidence.recentDamage || directBulletOwner || targetFiring || recentDamage) return null;
+  const selfHp = hpValue(input?.self);
+  if (selfHp === null || selfHp <= 50) return null;
+  return {
+    mode: 'primary-mission',
+    reason: 'invulnerable-avoidance-yielded-to-primary-mission',
+    threatId: String(threatId),
+    primaryTargetId: String(primaryTargetId),
+    targetRetained: false
+  };
+}
+
 function recoverySummary(self) {
   return {
     hp: hpValue(self),
@@ -10877,6 +10934,16 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     profitLiveSafetyDecision(input, combat, stateful, safetyContextOptions, null),
     incomingThreatAssessment
   );
+  const invulnerableAvoidanceArbitration = browserlessInvulnerableAvoidanceArbitration(
+    input,
+    combat,
+    stateful,
+    safetyAction,
+    safetyContextOptions
+  );
+  const safetyActionForArbitration = invulnerableAvoidanceArbitration
+    ? null
+    : safetyAction;
   const combatExitAction = attachIncomingCoverToLeaveDecision(
     combat.exitAction || null,
     incomingThreatAssessment
@@ -10965,9 +11032,9 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     || lowHpRecoveryThreatExitAction
     || selectedStandaloneIncomingDodgeAction
     || selectedRecoveryContactGuardAction
-    || (healthyLootPriority && safetyAction?.reason === 'avoid-invulnerable-target'
+    || (healthyLootPriority && safetyActionForArbitration?.reason === 'avoid-invulnerable-target'
       ? null
-      : safetyAction)
+      : safetyActionForArbitration)
     || dynamicDefensiveCombatAction
     || dynamicProximityCombatAction
     || lootControl.action
@@ -11043,6 +11110,7 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     combat: {
       ...(lootControl.combat || combat.dryRun || {}),
       profitMission: cloneJson(stateful.profitMission || null),
+      invulnerableAvoidanceArbitration,
       dangerousTargetCooldown: dangerousCombatExit,
       profitPursuitSuppression: realtimeEconomicSuppression
     },
@@ -13028,6 +13096,16 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     };
   }
   safetyAction = attachIncomingCoverToLeaveDecision(safetyAction, incomingThreatAssessment);
+  const invulnerableAvoidanceArbitration = browserlessInvulnerableAvoidanceArbitration(
+    input,
+    combat,
+    stateful,
+    safetyAction,
+    safetyContextOptions
+  );
+  const safetyActionForArbitration = invulnerableAvoidanceArbitration
+    ? null
+    : safetyAction;
   const injuryHpExitAction = attachIncomingCoverToLeaveDecision(
     input.self && !realtimeStale
       ? buildBrowserlessInjuryHpExitDecision(input, stateful, combat, safetyContextOptions)
@@ -13120,17 +13198,17 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     );
   }
   const safetyYieldsToHighValueCoin = Boolean(
-    safetyAction
-      && safetyAction.reason === 'avoid-invulnerable-target'
+    safetyActionForArbitration
+      && safetyActionForArbitration.reason === 'avoid-invulnerable-target'
       && healthyLootPriority
   );
-  const immediateSafetyAction = safetyAction
+  const immediateSafetyAction = safetyActionForArbitration
     && !hardSafetyAction
     && !safetyYieldsToHighValueCoin
-    && !safetyActionCanYieldToInjuredFootCoin(safetyAction)
-    ? safetyAction
+    && !safetyActionCanYieldToInjuredFootCoin(safetyActionForArbitration)
+    ? safetyActionForArbitration
     : null;
-  const yieldableSafetyAction = safetyYieldsToHighValueCoin ? null : safetyAction;
+  const yieldableSafetyAction = safetyYieldsToHighValueCoin ? null : safetyActionForArbitration;
   const rawCoinStaminaBudgetExitAction = (profitLive || nonCombatProfit)
     ? buildStaminaBudgetExitDecision(input, options)
     : null;
@@ -13174,8 +13252,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
         ...recoveryAction,
         recoveryPriority: recoveryPriorityMetadata
       } : null);
-  const injuredCautionFootCoinAction = safetyAction
-    && safetyActionCanYieldToInjuredFootCoin(safetyAction)
+  const injuredCautionFootCoinAction = safetyActionForArbitration
+    && safetyActionCanYieldToInjuredFootCoin(safetyActionForArbitration)
     && input.self
     && isInjuredSelf(input.self, options)
     ? buildFootCoinPriorityDecision(profitSelectionInput, 'foot-coin-before-active-caution', options)
@@ -13214,7 +13292,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       && !selectedRecoveryFootCoinAction
       && !selectedRecoveryAction
       && !injuredCautionFootCoinAction
-      && !safetyAction
+      && !safetyActionForArbitration
       && !dailyFinalCoinAction
   );
   const singleCoinBait = buildSingleCoinBaitDecision(
@@ -13568,6 +13646,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       ...(combat.dryRun || {}),
       target: combat.dryRun?.target || summarizeTarget(combat.target),
       actionEligible: combatActionEligible,
+      invulnerableAvoidanceArbitration,
       activeCombatOpportunity,
       kiteReassessment,
       dangerousTargetCooldown: dangerousCombatExit,

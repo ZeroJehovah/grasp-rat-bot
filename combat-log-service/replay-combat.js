@@ -448,6 +448,19 @@ function normalizeBrowserlessCombatLiveEntry(entry, state = {}) {
   const aim = detail.aim && typeof detail.aim === 'object' ? detail.aim : {};
   const shooting = detail.shooting && typeof detail.shooting === 'object' ? detail.shooting : {};
   const metrics = detail.metrics && typeof detail.metrics === 'object' ? detail.metrics : {};
+  const combatAudit = detail.combatAudit && typeof detail.combatAudit === 'object'
+    ? detail.combatAudit
+    : {};
+  const finalAction = combatAudit.finalAction && typeof combatAudit.finalAction === 'object'
+    ? combatAudit.finalAction
+    : {};
+  const desiredAction = combatAudit.desiredAction && typeof combatAudit.desiredAction === 'object'
+    ? combatAudit.desiredAction
+    : {};
+  const movement = detail.movement && typeof detail.movement === 'object' ? detail.movement : {};
+  const secondaryRetention = detail.secondaryRetention && typeof detail.secondaryRetention === 'object'
+    ? detail.secondaryRetention
+    : {};
   const primarySource = detail.profitMission?.navigationTarget || null;
   const primaryId = primarySource?.userId ?? primarySource?.user_id
     ?? detail.profitMission?.targetId ?? detail.profitMission?.subjectId ?? null;
@@ -470,6 +483,24 @@ function normalizeBrowserlessCombatLiveEntry(entry, state = {}) {
     combatMetrics: metrics,
     control: detail.control || null,
     incomingBullet: detail.incomingBullet || null,
+    invulnerableAvoidanceReplay: primaryId === null || primaryId === undefined || primaryId === ''
+      ? null
+      : {
+          primaryTargetId: String(primaryId),
+          primaryTargetName: String(primarySource?.name || ''),
+          secondaryTargetId: target.user_id === undefined || target.user_id === null
+            ? ''
+            : String(target.user_id),
+          secondaryRetained: secondaryRetention.retained === true,
+          secondaryEvidenceAgeMs: numberOrNull(secondaryRetention.ageMs),
+          loggedFinalActionKind: String(finalAction.kind || ''),
+          loggedFinalActionBand: String(finalAction.band || ''),
+          loggedFinalActionReason: String(finalAction.reason || ''),
+          desiredActionKind: String(desiredAction.kind || ''),
+          desiredActionBand: String(desiredAction.band || ''),
+          desiredActionReason: String(desiredAction.reason || ''),
+          movementReason: String(movement.reason || '')
+        },
     dualTargetReplay: primaryId === null || primaryId === undefined || primaryId === ''
       ? null
       : {
@@ -723,6 +754,48 @@ function runLoadFramesSelfTest() {
         && dualTarget?.loggedDispatches?.primary === 0
         && dualTarget?.loggedDispatches?.secondaryBeforePrimaryAuthorization === 1
         && dualTarget?.improved === true);
+
+    const avoidanceEntries = [
+      {
+        at: '2026-07-29T00:00:00.000Z',
+        type: 'combat-live',
+        detail: {
+          self: { userId: '7', x: 0, y: 0, hp: 100, stamina5s: 9000 },
+          target: { userId: '8', name: 'target', x: 5000, y: 0, hp: 100, distance: 5000, invulnerable: true },
+          movement: { reason: 'secondary-follow-primary-target' },
+          secondaryRetention: { retained: true, ageMs: 100 },
+          combatAudit: {
+            finalAction: { kind: 'flee', band: 'safety', reason: 'avoid-invulnerable-target' },
+            desiredAction: { kind: 'shoot', band: 'combat', reason: 'secondary:secondary-invulnerable-dodge-only' }
+          },
+          profitMission: { targetId: '9', navigationTarget: { ...primaryTarget } }
+        }
+      },
+      {
+        at: '2026-07-29T00:00:00.050Z',
+        type: 'combat-live',
+        detail: {
+          self: { userId: '7', x: 0, y: 0, hp: 100, stamina5s: 8500 },
+          target: { userId: '8', name: 'target', x: 5010, y: 0, hp: 100, distance: 5010, invulnerable: true },
+          movement: { reason: 'secondary-follow-primary-target' },
+          secondaryRetention: { retained: true, ageMs: 150 },
+          combatAudit: {
+            finalAction: { kind: 'incoming-bullet-dodge', band: 'safety', reason: 'incoming-bullet-dodge' },
+            desiredAction: { kind: 'shoot', band: 'combat', reason: 'secondary:secondary-invulnerable-dodge-only' }
+          },
+          profitMission: { targetId: '9', navigationTarget: { ...primaryTarget } }
+        }
+      }
+    ];
+    const avoidanceFile = path.join(root, 'invulnerable-avoidance.jsonl.gz');
+    fs.writeFileSync(avoidanceFile, zlib.gzipSync(Buffer.from(avoidanceEntries.map(JSON.stringify).join('\n') + '\n')));
+    const avoidanceLoaded = loadFrames({ file: avoidanceFile, startLine: 1, endLine: 2, selfId: '', targetId: '', targetName: '' });
+    const avoidance = runInvulnerableAvoidanceArbitrationReplay(avoidanceLoaded.frames);
+    assert('browserless replay corrects generic invulnerable avoidance while preserving incoming Dodge',
+      avoidance?.loggedAvoidanceFrames === 1
+        && avoidance?.correctedEscortFrames === 1
+        && avoidance?.preservedIncomingDodgeFrames === 1
+        && avoidance?.improved === true);
 
     const invalidFile = path.join(root, 'invalid.jsonl');
     fs.writeFileSync(invalidFile, JSON.stringify({ type: 'other', at: 1 }) + '\n');
@@ -2168,6 +2241,91 @@ function runDualTargetFireArbitrationReplay(frames = [], sourceEvents = []) {
   };
 }
 
+function runInvulnerableAvoidanceArbitrationReplay(frames = []) {
+  const candidates = frames.filter(frame => {
+    const replay = frame.entry?.invulnerableAvoidanceReplay;
+    return Boolean(
+        replay?.primaryTargetId
+        && replay?.secondaryTargetId
+        && replay.primaryTargetId !== replay.secondaryTargetId
+    );
+  });
+  if (!candidates.length) return null;
+
+  const first = candidates[0].entry.invulnerableAvoidanceReplay;
+  let primaryMissionFrames = 0;
+  let secondaryRetentionFrames = 0;
+  let loggedAvoidanceFrames = 0;
+  let correctedEscortFrames = 0;
+  let alreadyEscortedFrames = 0;
+  let preservedIncomingDodgeFrames = 0;
+  let firstCorrection = null;
+  const correctedReasons = {};
+  const evidenceAges = [];
+
+  for (const frame of candidates) {
+    const replay = frame.entry.invulnerableAvoidanceReplay;
+    if (replay.primaryTargetId === first.primaryTargetId) primaryMissionFrames += 1;
+    if (replay.secondaryRetained === true) secondaryRetentionFrames += 1;
+    if (Number.isFinite(Number(replay.secondaryEvidenceAgeMs))) {
+      evidenceAges.push(Number(replay.secondaryEvidenceAgeMs));
+    }
+    if (replay.loggedFinalActionReason === 'incoming-bullet-dodge') {
+      preservedIncomingDodgeFrames += 1;
+    }
+    if (replay.loggedFinalActionReason === 'combat-live-realtime'
+      || replay.loggedFinalActionKind === 'combat-live') {
+      alreadyEscortedFrames += 1;
+    }
+    if (replay.loggedFinalActionReason !== 'avoid-invulnerable-target'
+      || replay.secondaryRetained !== true) continue;
+    loggedAvoidanceFrames += 1;
+    const corrected = replay.desiredActionBand === 'combat'
+      && Boolean(replay.movementReason);
+    if (!corrected) continue;
+    correctedEscortFrames += 1;
+    const reason = replay.desiredActionReason || replay.movementReason || 'combat-action';
+    correctedReasons[reason] = Number(correctedReasons[reason] || 0) + 1;
+    if (!firstCorrection) {
+      firstCorrection = {
+        line: frame.lineNo,
+        time: formatTime(frame.at),
+        atMs: frame.at,
+        selfHp: frame.selfHp,
+        secondaryEvidenceAgeMs: replay.secondaryEvidenceAgeMs,
+        loggedFinalActionReason: replay.loggedFinalActionReason,
+        correctedActionReason: reason,
+        movementReason: replay.movementReason
+      };
+    }
+  }
+
+  const evidenceMinMs = evidenceAges.length ? Math.min(...evidenceAges) : null;
+  const evidenceMaxMs = evidenceAges.length ? Math.max(...evidenceAges) : null;
+  const improved = primaryMissionFrames > 0
+    && secondaryRetentionFrames > 0
+    && loggedAvoidanceFrames > 0
+    && correctedEscortFrames > 0;
+  return {
+    primaryTargetId: first.primaryTargetId,
+    primaryTargetName: first.primaryTargetName,
+    secondaryTargetId: first.secondaryTargetId,
+    primaryMissionFrames,
+    secondaryRetentionFrames,
+    loggedAvoidanceFrames,
+    correctedEscortFrames,
+    alreadyEscortedFrames,
+    preservedIncomingDodgeFrames,
+    secondaryEvidenceAgeMs: { min: evidenceMinMs, max: evidenceMaxMs },
+    correctedReasons,
+    firstCorrection,
+    improved,
+    reason: improved
+      ? 'restored-secondary-escort-action-after-invulnerable-avoidance-arbitration'
+      : 'no-demonstrated-invulnerable-avoidance-arbitration-improvement'
+  };
+}
+
 function replay(options) {
   const loaded = loadFrames(options);
   const frames = loaded.frames;
@@ -2229,6 +2387,7 @@ function replay(options) {
     .sort((a, b) => a - b);
   const targetHpValues = Array.from(new Set(frames.map(frame => frame.targetHp).filter(Number.isFinite))).sort((a, b) => a - b);
   const dualTargetFire = runDualTargetFireArbitrationReplay(frames, loaded.sourceEvents);
+  const invulnerableAvoidance = runInvulnerableAvoidanceArbitrationReplay(frames);
   return {
     file: loaded.file,
     lineRange: [frames[0].lineNo, frames[frames.length - 1].lineNo],
@@ -2242,6 +2401,7 @@ function replay(options) {
     selfHp: [frames[0].selfHp, frames[frames.length - 1].selfHp],
     targetHpValues,
     dualTargetFire,
+    invulnerableAvoidance,
     coordinateDivergence: {
       samples: divergences.length,
       over10m: divergences.filter(value => value > 1000).length,
@@ -2285,6 +2445,13 @@ function printReport(result) {
     console.log(`Dual-target policy selections preservedSecondary=${dual.preservedSecondarySelectionFrames}, correctedPrimaryOutside${dual.closePressureDistanceCm}cm=${dual.correctedPrimarySelectionFrames}, correctedLoggedNoFire=${dual.loggedNoFireFramesCorrected}, improved=${dual.improved}`);
     if (dual.firstCorrectedSelection) {
       console.log(`First corrected primary selection line ${dual.firstCorrectedSelection.line} at ${dual.firstCorrectedSelection.time}, HP self/primary=${dual.firstCorrectedSelection.selfHp}/${dual.firstCorrectedSelection.primaryHp}, secondaryDistance=${dual.firstCorrectedSelection.secondaryDistanceCm}cm, loggedBlocker=${dual.firstCorrectedSelection.loggedFinalFireBlocker || '-'}`);
+    }
+  }
+  if (result.invulnerableAvoidance) {
+    const avoidance = result.invulnerableAvoidance;
+    console.log(`Invulnerable-avoidance replay primary ${avoidance.primaryTargetId} vs secondary ${avoidance.secondaryTargetId}: loggedAvoidance=${avoidance.loggedAvoidanceFrames}, correctedEscort=${avoidance.correctedEscortFrames}, alreadyEscorted=${avoidance.alreadyEscortedFrames}, preservedIncomingDodge=${avoidance.preservedIncomingDodgeFrames}, evidenceAge=${avoidance.secondaryEvidenceAgeMs.min}-${avoidance.secondaryEvidenceAgeMs.max}ms, improved=${avoidance.improved}`);
+    if (avoidance.firstCorrection) {
+      console.log(`First corrected escort action line ${avoidance.firstCorrection.line} at ${avoidance.firstCorrection.time}, age=${avoidance.firstCorrection.secondaryEvidenceAgeMs}ms, logged=${avoidance.firstCorrection.loggedFinalActionReason}, corrected=${avoidance.firstCorrection.correctedActionReason}, movement=${avoidance.firstCorrection.movementReason}`);
     }
   }
   if (result.dynamicStart) {
@@ -2692,5 +2859,6 @@ module.exports = {
   loadFrames,
   replay,
   runDualTargetFireArbitrationReplay,
+  runInvulnerableAvoidanceArbitrationReplay,
   runLoadFramesSelfTest
 };
