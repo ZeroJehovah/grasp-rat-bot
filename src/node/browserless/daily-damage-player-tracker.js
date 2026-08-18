@@ -2,8 +2,13 @@
 
 const fs = require('fs');
 const path = require('path');
+const {
+  nameObservationFreshness,
+  observedNameAtMs,
+  storedNameAtMs
+} = require('./player-name-observation');
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DEFAULT_COMBAT_MEMORY_MS = 10000;
 
@@ -85,6 +90,7 @@ function normalizePlayer(key, player) {
     userId,
     name: playerName(player, `#${userId}`),
     nameUpdatedAt: String(player.nameUpdatedAt || player.lastDamagedAt || player.firstDamagedAt || ''),
+    nameObservedAt: String(player.nameObservedAt || player.nameUpdatedAt || player.lastDamagedAt || player.firstDamagedAt || ''),
     nameObservedTick: numberOrNull(player.nameObservedTick ?? player.lastDamageTick),
     firstDamagedAt: String(player.firstDamagedAt || player.lastDamagedAt || ''),
     lastDamagedAt: String(player.lastDamagedAt || player.firstDamagedAt || ''),
@@ -146,7 +152,11 @@ function createDailyDamagePlayerTracker(options = {}) {
   let store = readStore(file, dayKey(now()));
   let lastSelf = null;
   let lastCombatTarget = null;
-  if (!fs.existsSync(file)) writeStore(file, store);
+  let storedSchema = null;
+  try {
+    storedSchema = Number(JSON.parse(fs.readFileSync(file, 'utf8'))?.schemaVersion);
+  } catch (_) {}
+  if (!fs.existsSync(file) || storedSchema !== SCHEMA_VERSION) writeStore(file, store);
 
   function emit(event) {
     if (!onEvent || !event) return;
@@ -197,6 +207,7 @@ function createDailyDamagePlayerTracker(options = {}) {
     const at = new Date(atMs).toISOString();
     const sourceTick = numberOrNull(detail.tick);
     const updates = [];
+    let changed = false;
     for (const target of targets || []) {
       const userId = playerUserId(target);
       if (userId === null) continue;
@@ -206,13 +217,29 @@ function createDailyDamagePlayerTracker(options = {}) {
       const name = playerName(target);
       if (!name) continue;
       const tick = numberOrNull(target?.tick) ?? sourceTick;
+      const observedAtMs = observedNameAtMs(target, atMs);
+      const previousObservedAtMs = storedNameAtMs(existing, [
+        existing.nameUpdatedAt,
+        existing.lastDamagedAt,
+        existing.firstDamagedAt
+      ]);
       const previousTick = numberOrNull(existing.nameObservedTick);
-      if (tick !== null && previousTick !== null && tick < previousTick) continue;
+      const freshness = nameObservationFreshness({
+        observedAtMs,
+        observedTick: tick,
+        previousObservedAtMs,
+        previousObservedTick: previousTick
+      });
+      if (!freshness.accepted) continue;
+      const observedAt = new Date(observedAtMs).toISOString();
+      if (existing.nameObservedAt !== observedAt || (tick !== null && previousTick !== tick)) changed = true;
+      existing.nameObservedAt = observedAt;
       if (tick !== null) existing.nameObservedTick = tick;
       if (existing.name === name) continue;
       const oldName = existing.name;
       existing.name = name;
       existing.nameUpdatedAt = at;
+      changed = true;
       updates.push({
         type: 'name-updated',
         at,
@@ -222,7 +249,7 @@ function createDailyDamagePlayerTracker(options = {}) {
         name
       });
     }
-    if (updates.length) {
+    if (changed) {
       persist(atMs);
       for (const event of updates) emit(event);
     }
@@ -240,14 +267,36 @@ function createDailyDamagePlayerTracker(options = {}) {
     const observedName = playerName(actor);
     const fallbackName = `#${userId}`;
     const meaningfulObservedName = observedName && observedName !== fallbackName ? observedName : '';
-    const name = meaningfulObservedName || existing?.name || fallbackName;
+    const observedAtMs = observedNameAtMs(actor, atMs);
+    const previousObservedAtMs = storedNameAtMs(existing, [
+      existing?.nameUpdatedAt,
+      existing?.lastDamagedAt,
+      existing?.firstDamagedAt
+    ]);
+    const previousObservedTick = numberOrNull(existing?.nameObservedTick);
+    const observedTick = numberOrNull(detail.tick);
+    const freshness = nameObservationFreshness({
+      observedAtMs,
+      observedTick,
+      previousObservedAtMs,
+      previousObservedTick
+    });
+    const useObservedName = Boolean(meaningfulObservedName && freshness.accepted);
+    const name = useObservedName ? meaningfulObservedName : (existing?.name || fallbackName);
     const hpLost = Math.max(0, Number(detail.hpLost || 0));
     store.players[key] = {
       key,
       userId,
       name,
-      nameUpdatedAt: meaningfulObservedName && meaningfulObservedName !== existing?.name ? at : String(existing?.nameUpdatedAt || at),
-      nameObservedTick: numberOrNull(detail.tick) ?? numberOrNull(existing?.nameObservedTick),
+      nameUpdatedAt: useObservedName && meaningfulObservedName !== existing?.name
+        ? at
+        : String(existing?.nameUpdatedAt || at),
+      nameObservedAt: useObservedName
+        ? new Date(observedAtMs).toISOString()
+        : String(existing?.nameObservedAt || existing?.nameUpdatedAt || at),
+      nameObservedTick: useObservedName && observedTick !== null
+        ? observedTick
+        : previousObservedTick,
       firstDamagedAt: existing?.firstDamagedAt || at,
       lastDamagedAt: at,
       lastDamageTick: numberOrNull(detail.tick),

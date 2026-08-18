@@ -8,6 +8,11 @@ const {
   createTransportHandle,
   normalizeChatText
 } = require('./ws-transport');
+const {
+  nameObservationFreshness,
+  observedNameAtMs,
+  storedNameAtMs
+} = require('./player-name-observation');
 
 const CHAT_NAME_CACHE_SCHEMA_VERSION = 1;
 const DEFAULT_CHAT_MESSAGE_LIMIT = 200;
@@ -272,19 +277,25 @@ function createChatService(options = {}) {
       const name = playerName(entity);
       if (userId === null || !name) continue;
       const existing = names.get(userId) || null;
-      const entityObservedAt = String(entity?.lastObservedAt || entity?.nameUpdatedAt || at);
-      const entityObservedMs = Date.parse(entityObservedAt);
-      const recordAt = Number.isFinite(entityObservedMs) ? entityObservedAt : at;
+      const entityObservedMs = observedNameAtMs(entity, observedAtMs);
+      const recordAt = new Date(entityObservedMs).toISOString();
+      const recordTick = numberOrNull(entity?.lastObservedTick ?? entity?.nameObservedTick ?? observedTick);
       const record = {
         key: `user:${userId}`,
         userId,
         name,
         lastObservedAt: recordAt,
-        lastObservedTick: numberOrNull(entity?.lastObservedTick ?? entity?.nameObservedTick ?? observedTick),
+        lastObservedTick: recordTick,
         source
       };
-      const existingAtMs = Date.parse(existing?.lastObservedAt || '');
-      if (!existing || !Number.isFinite(existingAtMs) || Date.parse(record.lastObservedAt) >= existingAtMs) {
+      const existingAtMs = storedNameAtMs(existing, [existing?.lastObservedAt]);
+      const freshness = nameObservationFreshness({
+        observedAtMs: entityObservedMs,
+        observedTick: recordTick,
+        previousObservedAtMs: existingAtMs,
+        previousObservedTick: existing?.lastObservedTick
+      });
+      if (!existing || freshness.accepted) {
         names.set(userId, record);
         nameCache.players[record.key] = record;
         if (!existing || existing.name !== name) {
@@ -293,8 +304,8 @@ function createChatService(options = {}) {
           changedPlayers.push({
             userId,
             name,
-            observedAtMs: Date.parse(record.lastObservedAt),
-            firstObservedAtMs: existingAtMs || Date.parse(record.lastObservedAt)
+            observedAtMs: entityObservedMs,
+            firstObservedAtMs: existingAtMs || entityObservedMs
           });
         }
       }
@@ -729,11 +740,32 @@ function runChatServiceSelfTest() {
     firstId: retentionStatus.messages[0]?.id,
     lastId: retentionStatus.messages.at(-1)?.id
   };
+  const renameAtMs = nowMs + DEFAULT_CHAT_HISTORY_RESYNC_INTERVAL_MS + 1000;
+  const renamed = service.rememberNames([{ user_id: 8, name: 'Alice Renamed' }], {
+    source: 'new-session-snapshot',
+    observedAtMs: renameAtMs,
+    tick: 5
+  });
+  const sameName = service.rememberNames([{ user_id: 8, name: 'Alice Renamed' }], {
+    source: 'new-session-snapshot',
+    observedAtMs: renameAtMs + 30000,
+    tick: 6
+  });
+  nowMs = renameAtMs + 31000;
   const restartedService = createChatService({
     now: () => nowMs,
     selfUserId: 7,
     nameCacheFile,
     nameCacheTtlMs: 60 * 60 * 1000
+  });
+  const staleName = restartedService.rememberNames([{
+    user_id: 8,
+    name: 'Alice',
+    nameObservedAt: new Date(renameAtMs + 15000).toISOString()
+  }], {
+    source: 'stale-snapshot',
+    observedAtMs: nowMs,
+    tick: 100
   });
   restartedService.observeSnapshot({
     tick: 510,
@@ -786,7 +818,11 @@ function runChatServiceSelfTest() {
       && retentionSummary.count === 200
       && retentionSummary.firstId === 6
       && retentionSummary.lastId === 205
-      && restartedStatus.messages[0]?.name === 'Alice'
+      && renamed.updated === 1
+      && sameName.updated === 0
+      && staleName.updated === 0
+      && restartedService.findPlayersByName('Alice Renamed')[0]?.userId === 8
+      && restartedStatus.messages[0]?.name === 'Alice Renamed'
       && expiredStatus.messages[0]?.name === 'User 8'
       && offlineSend.reason === 'game-offline'
       && invalidSend.reason === 'chat-control-character'
@@ -800,6 +836,9 @@ function runChatServiceSelfTest() {
     historyBatches,
     onlineStatus,
     retentionSummary,
+    renamed,
+    sameName,
+    staleName,
     restartedStatus,
     expiredStatus,
     offlineSend,

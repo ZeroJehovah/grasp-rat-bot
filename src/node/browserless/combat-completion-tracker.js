@@ -2,8 +2,14 @@
 
 const fs = require('fs');
 const path = require('path');
+const {
+  nameObservationFreshness,
+  numberOrNull,
+  observedNameAtMs,
+  storedNameAtMs
+} = require('./player-name-observation');
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function emptyStore() {
@@ -21,6 +27,8 @@ function normalizePlayer(key, player = {}) {
   return {
     userId,
     name: String(player.name || ''),
+    nameObservedAt: String(player.nameObservedAt || player.updatedAt || ''),
+    nameObservedTick: numberOrNull(player.nameObservedTick),
     attempts: numeric(player.attempts),
     successes: numeric(player.successes),
     failures: numeric(player.failures),
@@ -199,7 +207,7 @@ function strategyLearningPatch(previous, next) {
 function readStore(file) {
   try {
     const value = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (![1, SCHEMA_VERSION].includes(Number(value?.schemaVersion))) return emptyStore();
+    if (![1, 2, SCHEMA_VERSION].includes(Number(value?.schemaVersion))) return emptyStore();
     const players = {};
     for (const [key, player] of Object.entries(value.players || {})) {
       const normalized = normalizePlayer(key, player);
@@ -229,6 +237,24 @@ function writeStore(file, store, backgroundIo = null) {
 
 function escapeOutcome(reason) {
   return /active-target-missing|target-unavailable|target-switched|action-released|pursuit|out-of-range|max-ms|approach/i.test(String(reason || ''));
+}
+
+function playerUserId(value) {
+  return value?.userId ?? value?.user_id ?? value?.targetUserId ?? value?.target_user_id;
+}
+
+function playerName(value) {
+  return String(
+    value?.name
+      || value?.targetName
+      || value?.target_name
+      || value?.label
+      || value?.username
+      || value?.user_name
+      || value?.displayName
+      || value?.display_name
+      || ''
+  ).trim();
 }
 
 function createCombatCompletionTracker(options = {}) {
@@ -291,13 +317,24 @@ function createCombatCompletionTracker(options = {}) {
   }
 
   function observe(event = {}) {
-    const userId = event.userId ?? event.user_id;
+    const userId = playerUserId(event);
     if (userId === null || userId === undefined || userId === '') return null;
     if (!['engagement-started', 'killed', 'not-killed'].includes(String(event.type || ''))) return null;
     const atMs = Date.parse(String(event.at || '')) || now();
     const key = `user:${userId}`;
     const previous = normalizePlayer(key, store.players[key] || {}) || normalizePlayer(key, { userId });
     const values = decayed(previous, atMs);
+    const observedName = playerName(event);
+    const observedAtMs = observedNameAtMs(event, atMs);
+    const previousObservedAtMs = storedNameAtMs(previous, [previous.updatedAt]);
+    const observedTick = numberOrNull(event.tick);
+    const freshness = nameObservationFreshness({
+      observedAtMs,
+      observedTick,
+      previousObservedAtMs,
+      previousObservedTick: previous.nameObservedTick
+    });
+    const useObservedName = Boolean(observedName && freshness.accepted);
     if (event.type === 'engagement-started') values.attempts += 1;
     else if (event.type === 'killed') values.successes += 1;
     else if (event.neutral !== true) {
@@ -308,7 +345,13 @@ function createCombatCompletionTracker(options = {}) {
     store.players[key] = {
       ...previous,
       userId: String(userId),
-      name: String(event.name || previous.name || ''),
+      name: useObservedName ? observedName : String(previous.name || ''),
+      nameObservedAt: useObservedName
+        ? new Date(observedAtMs).toISOString()
+        : String(previous.nameObservedAt || previous.updatedAt || ''),
+      nameObservedTick: useObservedName && observedTick !== null
+        ? observedTick
+        : previous.nameObservedTick,
       ...values,
       lastOutcome: event.type === 'not-killed' && event.neutral === true ? 'neutral' : String(event.type || ''),
       lastReason: String(event.reason || ''),
@@ -319,12 +362,23 @@ function createCombatCompletionTracker(options = {}) {
   }
 
   function observeCombatSample(sample = {}) {
-    const userId = sample.userId ?? sample.user_id ?? sample.targetId;
+    const userId = playerUserId(sample) ?? sample.targetId;
     if (userId === null || userId === undefined || userId === '') return null;
     const atMs = Number.isFinite(Number(sample.atMs)) ? Number(sample.atMs) : now();
     const key = `user:${userId}`;
     const previous = normalizePlayer(key, store.players[key] || {}) || normalizePlayer(key, { userId });
     const values = decayed(previous, atMs);
+    const observedName = playerName(sample);
+    const observedAtMs = observedNameAtMs(sample, atMs);
+    const previousObservedAtMs = storedNameAtMs(previous, [previous.updatedAt]);
+    const observedTick = numberOrNull(sample.tick);
+    const freshness = nameObservationFreshness({
+      observedAtMs,
+      observedTick,
+      previousObservedAtMs,
+      previousObservedTick: previous.nameObservedTick
+    });
+    const useObservedName = Boolean(observedName && freshness.accepted);
     const startedAt = numeric(sample.startedAt);
     const targetDamage = numeric(sample.targetDamage);
     const selfDamage = numeric(sample.selfDamage);
@@ -338,7 +392,13 @@ function createCombatCompletionTracker(options = {}) {
     store.players[key] = {
       ...previous,
       userId: String(userId),
-      name: String(sample.name || previous.name || ''),
+      name: useObservedName ? observedName : String(previous.name || ''),
+      nameObservedAt: useObservedName
+        ? new Date(observedAtMs).toISOString()
+        : String(previous.nameObservedAt || previous.updatedAt || ''),
+      nameObservedTick: useObservedName && observedTick !== null
+        ? observedTick
+        : previous.nameObservedTick,
       ...values,
       currentEngagementStartedAt: startedAt,
       currentTargetDamage: targetDamage,
@@ -348,6 +408,40 @@ function createCombatCompletionTracker(options = {}) {
     };
     persist(atMs, { dirtyPlayerKeys: [key] });
     return probability(userId, atMs);
+  }
+
+  function observePlayerNames(targets = [], detail = {}) {
+    const atMs = Number.isFinite(Number(detail.atMs)) ? Number(detail.atMs) : now();
+    const sourceTick = numberOrNull(detail.tick);
+    const dirtyPlayerKeys = [];
+    const updates = [];
+    for (const target of targets || []) {
+      const userId = playerUserId(target);
+      if (userId === null || userId === undefined || userId === '') continue;
+      const key = `user:${userId}`;
+      const existing = store.players[key] || null;
+      if (!existing) continue;
+      const name = playerName(target);
+      if (!name) continue;
+      const observedTick = numberOrNull(target?.tick) ?? sourceTick;
+      const observedAtMs = observedNameAtMs(target, atMs);
+      const previousObservedAtMs = storedNameAtMs(existing, [existing.updatedAt]);
+      const freshness = nameObservationFreshness({
+        observedAtMs,
+        observedTick,
+        previousObservedAtMs,
+        previousObservedTick: existing.nameObservedTick
+      });
+      if (!freshness.accepted) continue;
+      const oldName = existing.name;
+      existing.name = name;
+      existing.nameObservedAt = new Date(observedAtMs).toISOString();
+      if (observedTick !== null) existing.nameObservedTick = observedTick;
+      dirtyPlayerKeys.push(key);
+      if (oldName !== name) updates.push({ userId: String(userId), oldName, name });
+    }
+    if (dirtyPlayerKeys.length) persist(atMs, { dirtyPlayerKeys });
+    return { ok: true, updated: updates.length, updates };
   }
 
   function probability(userId, atMs = now()) {
@@ -411,6 +505,7 @@ function createCombatCompletionTracker(options = {}) {
     file,
     observe,
     observeCombatSample,
+    observePlayerNames,
     probability,
     status,
     strategyLearning,

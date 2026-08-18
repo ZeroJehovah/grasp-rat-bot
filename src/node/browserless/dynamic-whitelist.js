@@ -2,6 +2,11 @@
 
 const fs = require('fs');
 const path = require('path');
+const {
+  nameObservationFreshness,
+  observedNameAtMs,
+  storedNameAtMs
+} = require('./player-name-observation');
 const { COMBAT_CONSTANTS } = require('../../strategy/combat-constants');
 const { isInvulnerableEntity } = require('../../strategy/combat-target-selection');
 
@@ -194,6 +199,7 @@ function createDynamicWhitelist(options = {}) {
     const at = new Date(atMs).toISOString();
     const sourceTick = numberOrNull(detail.tick);
     const updates = [];
+    let changed = false;
     for (const target of targets || []) {
       const id = userId(target);
       if (id === null) continue;
@@ -203,25 +209,29 @@ function createDynamicWhitelist(options = {}) {
       const name = playerName(target);
       if (!name) continue;
       const tick = numberOrNull(target?.tick) ?? sourceTick;
-      const observedAtMs = Number.isFinite(Date.parse(String(target?.nameObservedAt || '')))
-        ? Date.parse(String(target.nameObservedAt))
-        : atMs;
-      const previousObservedAtMs = Date.parse(String(
-        existing.nameObservedAt || existing.nameUpdatedAt || existing.addedAt || ''
-      ));
+      const observedAtMs = observedNameAtMs(target, atMs);
+      const previousObservedAtMs = storedNameAtMs(existing, [
+        existing.nameUpdatedAt,
+        existing.addedAt
+      ]);
       const previousTick = numberOrNull(existing.nameObservedTick);
-      if (Number.isFinite(previousObservedAtMs) && observedAtMs < previousObservedAtMs) continue;
-      if (Number.isFinite(previousObservedAtMs)
-        && observedAtMs === previousObservedAtMs
-        && tick !== null
-        && previousTick !== null
-        && tick < previousTick) continue;
-      existing.nameObservedAt = new Date(observedAtMs).toISOString();
+      const freshness = nameObservationFreshness({
+        observedAtMs,
+        observedTick: tick,
+        previousObservedAtMs,
+        previousObservedTick: previousTick
+      });
+      if (!freshness.accepted) continue;
+      const observedAt = new Date(observedAtMs).toISOString();
+      if (existing.nameObservedAt !== observedAt
+        || (tick !== null && previousTick !== tick)) changed = true;
+      existing.nameObservedAt = observedAt;
       if (tick !== null) existing.nameObservedTick = tick;
       if (existing.name === name) continue;
       const oldName = existing.name;
       existing.name = name;
       existing.nameUpdatedAt = at;
+      changed = true;
       const disabled = temporarilyDisabled.get(key);
       if (disabled) disabled.name = name;
       updates.push({
@@ -233,7 +243,7 @@ function createDynamicWhitelist(options = {}) {
         name
       });
     }
-    if (updates.length) persist(atMs);
+    if (changed) persist(atMs);
     return { ok: true, updated: updates.length, updates: clone(updates) };
   }
   function observeDamage(target, state, detail = {}) {

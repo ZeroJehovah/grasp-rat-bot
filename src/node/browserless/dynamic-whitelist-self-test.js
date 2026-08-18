@@ -169,9 +169,18 @@ async function runDynamicWhitelistSelfTest() {
       const tickResetRename = whitelist.observePlayerNames([
         { user_id: 8, name: 'renamed-after-tick-reset' }
       ], { atMs: 5000, tick: 10, source: 'new-session-gap-http' });
+      const sameNameRefresh = whitelist.observePlayerNames([
+        { user_id: 8, name: 'renamed-after-tick-reset' }
+      ], { atMs: 6000, tick: 11, source: 'new-session-gap-http' });
       const persisted = JSON.parse(fs.readFileSync(file, 'utf8')).players['user:8'];
-      const reloaded = createDynamicWhitelist({ file, now: () => 6000 });
+      const reloaded = createDynamicWhitelist({ file, now: () => 7000 });
+      const staleAfterReload = reloaded.observePlayerNames([{
+        user_id: 8,
+        name: 'stale-after-reload',
+        nameObservedAt: '1970-01-01T00:00:05.500Z'
+      }], { atMs: 7000, tick: 1000, source: 'stale-snapshot' });
       assert.strictEqual(sameName.updated, 0);
+      assert.strictEqual(sameNameRefresh.updated, 0);
       assert.strictEqual(renamed.updated, 1);
       assert.deepStrictEqual(renamed.updates[0], {
         type: 'name-updated',
@@ -185,9 +194,10 @@ async function runDynamicWhitelistSelfTest() {
       assert.strictEqual(tickResetRename.updated, 1);
       assert.strictEqual(tickResetRename.updates[0].oldName, 'renamed');
       assert.strictEqual(tickResetRename.updates[0].name, 'renamed-after-tick-reset');
+      assert.strictEqual(staleAfterReload.updated, 0);
       assert.strictEqual(persisted.name, 'renamed-after-tick-reset');
-      assert.strictEqual(persisted.nameObservedAt, '1970-01-01T00:00:05.000Z');
-      assert.strictEqual(persisted.nameObservedTick, 10);
+      assert.strictEqual(persisted.nameObservedAt, '1970-01-01T00:00:06.000Z');
+      assert.strictEqual(persisted.nameObservedTick, 11);
       assert.strictEqual(reloaded.status().players[0].name, 'renamed-after-tick-reset');
       assert.strictEqual(reloaded.isMember({ user_id: 8, name: 'anything' }), true);
       cases.push('stable-id-name-refresh-uses-observation-time-across-session-tick-reset');

@@ -2,6 +2,10 @@
 
 const fs = require('fs');
 const path = require('path');
+const {
+  nameObservationFreshness,
+  timestampOrNull
+} = require('./player-name-observation');
 
 const SCHEMA_VERSION = 3;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
@@ -117,11 +121,16 @@ function normalizeStore(value, expectedDay) {
     const candidateLastMs = Date.parse(candidate.lastObservedAt || '');
     const existingLastTick = numberOrNull(existing.lastObservedTick);
     const candidateLastTick = numberOrNull(candidate.lastObservedTick);
-    const candidateIsLater = Number.isFinite(existingLastMs) && Number.isFinite(candidateLastMs)
-      ? candidateLastMs >= existingLastMs
-      : (candidateLastTick !== null && existingLastTick !== null
+    const candidateIsLater = !Number.isFinite(candidateLastMs) && !Number.isFinite(existingLastMs)
+      ? (candidateLastTick !== null && existingLastTick !== null
         ? candidateLastTick >= existingLastTick
-        : !Number.isFinite(existingLastMs));
+        : !Number.isFinite(existingLastMs))
+      : nameObservationFreshness({
+          observedAtMs: Number.isFinite(candidateLastMs) ? candidateLastMs : null,
+          observedTick: candidateLastTick,
+          previousObservedAtMs: Number.isFinite(existingLastMs) ? existingLastMs : null,
+          previousObservedTick: existingLastTick
+        }).accepted;
     const first = candidateIsEarlier ? candidate : existing;
     const latest = candidateIsLater ? candidate : existing;
     output.players[normalizedKey] = {
@@ -202,6 +211,7 @@ function createHighDropPlayerTracker(options = {}) {
     }
     let observed = 0;
     let updated = 0;
+    let observationAdvanced = 0;
     for (const entity of payload.entities) {
       if (!entity || typeof entity !== 'object') continue;
       const identity = entityIdentity(entity);
@@ -233,15 +243,21 @@ function createHighDropPlayerTracker(options = {}) {
         continue;
       }
       const nextMax = Math.max(Number(existing.maxDrop), drop);
-      const existingObservedAtMs = Date.parse(existing.lastObservedAt || '');
-      const staleObservation = Number.isFinite(existingObservedAtMs) && atMs < existingObservedAtMs;
+      const existingObservedAtMs = timestampOrNull(existing.lastObservedAt);
+      const freshness = nameObservationFreshness({
+        observedAtMs: atMs,
+        observedTick: snapshotTick,
+        previousObservedAtMs: existingObservedAtMs,
+        previousObservedTick: existing.lastObservedTick
+      });
+      const staleObservation = !freshness.accepted;
       const displayChanged = existing.maxDrop !== nextMax
         || (!staleObservation && (existing.name !== name
           || existing.entityId !== identity.entityId
           || existing.latestDrop !== drop
           || existing.online !== true));
-      const observationAdvanced = !staleObservation && existing.lastObservedTick !== snapshotTick;
-      if (displayChanged || observationAdvanced) {
+      if (freshness.advanced) observationAdvanced += 1;
+      if (displayChanged || freshness.advanced) {
         store.players[identity.key] = {
           ...existing,
           maxDrop: nextMax,
@@ -274,6 +290,7 @@ function createHighDropPlayerTracker(options = {}) {
       store.lastGlobalSnapshotSource = source;
     }
     const shouldPersist = updated > 0
+      || observationAdvanced > 0
       || globalSnapshot
       || !lastWriteAtMs
       || atMs - lastWriteAtMs >= DEFAULT_SNAPSHOT_GAP_MS;

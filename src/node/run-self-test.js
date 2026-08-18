@@ -8313,12 +8313,38 @@ async function runSelfTest() {
         }, 7000);
         const failed = tracker.probability(8, 8000);
         const successful = tracker.probability(9, 8000);
-        const reloaded = createCombatCompletionTracker({ file, now: () => 8000 });
+        const renamed = tracker.observePlayerNames([{ user_id: 8, name: 'failed-renamed' }], {
+          atMs: 8000,
+          tick: 5,
+          source: 'new-session-snapshot'
+        });
+        const sameName = tracker.observePlayerNames([{ user_id: 8, name: 'failed-renamed' }], {
+          atMs: 9000,
+          tick: 6,
+          source: 'new-session-snapshot'
+        });
+        const reloaded = createCombatCompletionTracker({ file, now: () => 10000 });
+        const staleName = reloaded.observePlayerNames([{
+          user_id: 8,
+          name: 'legacy-failed',
+          nameObservedAt: new Date(8500).toISOString()
+        }], {
+          atMs: 10000,
+          tick: 100,
+          source: 'stale-snapshot'
+        });
+        const renamedStored = JSON.parse(fs.readFileSync(file, 'utf8')).players['user:8'];
         const failedEstimate = activeTargetCompletionEstimate({ active: true, user_id: 8, hp: 60, distance: 6000 }, { combatCompletionTracker: reloaded });
         const successfulEstimate = activeTargetCompletionEstimate({ active: true, user_id: 9, hp: 60, distance: 6000 }, { combatCompletionTracker: reloaded });
         return [
-          migrated.schemaVersion === 2,
+          migrated.schemaVersion === 3,
           migrated.players['user:8']?.failures === 2,
+          renamed.updated,
+          sameName.updated,
+          staleName.updated,
+          renamedStored.name,
+          renamedStored.nameObservedAt,
+          renamedStored.nameObservedTick,
           Object.keys(migrated.strategyLearning || {}).sort().join(','),
           migrated.strategyLearning?.modeMetrics?.['retreat:edge'] === undefined,
           failed.probability < 1 / 3,
@@ -8343,7 +8369,7 @@ async function runSelfTest() {
           reloaded.status().schemaVersion
         ].join('|');
       })(),
-      want: 'true|true|hitRateByModeDistance,modeMetrics,routeAimFeedback,routeTransitions|true|true|true|true|true|true|true|true|true|true|true|stable-user-completion-history|12|true|true|5|true|true|2|hitRateByModeDistance,modeMetrics,routeAimFeedback,routeTransitions|2'
+      want: 'true|true|1|0|0|failed-renamed|1970-01-01T00:00:09.000Z|6|hitRateByModeDistance,modeMetrics,routeAimFeedback,routeTransitions|true|true|true|true|true|true|true|true|true|true|true|stable-user-completion-history|12|true|true|5|true|true|2|hitRateByModeDistance,modeMetrics,routeAimFeedback,routeTransitions|3'
     },
     {
       name: 'browserless runtime revision resolves directly from Git metadata without repository trust',
@@ -44879,19 +44905,40 @@ async function runSelfTest() {
 	            source: 'realtime-visible',
 	            tick: 30
 	          });
-	          const stale = tracker.observePlayerNames([{ user_id: 8, name: 'old-name' }], {
-	            atMs: 3500,
+	          const tickResetRename = tracker.observePlayerNames([{ user_id: 8, name: 'new-session-name' }], {
+	            atMs: 4000,
 	            source: 'snapshot',
-	            tick: 20
+	            tick: 5
 	          });
-	          const current = tracker.status();
-	          const reloaded = createEasyKillPlayerTracker({ file, now: () => 4000 }).status();
+	          const sameName = tracker.observePlayerNames([{ user_id: 8, name: 'new-session-name' }], {
+	            atMs: 5000,
+	            source: 'snapshot',
+	            tick: 6
+	          });
+	          const reloadedTracker = createEasyKillPlayerTracker({ file, now: () => 6000 });
+	          const stale = reloadedTracker.observePlayerNames([{
+	            user_id: 8,
+	            name: 'old-name',
+	            nameObservedAt: '1970-01-01T00:00:04.500Z'
+	          }], {
+	            atMs: 6000,
+	            source: 'snapshot',
+	            tick: 100
+	          });
+	          const current = reloadedTracker.status();
+	          const reloaded = createEasyKillPlayerTracker({ file, now: () => 7000 }).status();
+	          const persisted = JSON.parse(fs.readFileSync(file, 'utf8')).players['user:8'];
 	          return [
 	            renamed.updated,
+	            tickResetRename.updated,
+	            sameName.updated,
 	            stale.updated,
 	            current.playerCount,
 	            current.players[0]?.userId,
 	            current.players[0]?.name,
+	            current.players[0]?.nameObservedAt,
+	            current.players[0]?.nameObservedTick,
+	            persisted.nameObservedAt,
 	            reloaded.players[0]?.userId,
 	            reloaded.players[0]?.name
 	          ].join('|');
@@ -44899,7 +44946,7 @@ async function runSelfTest() {
 	          fs.rmSync(dir, { recursive: true, force: true });
 	        }
 	      })(),
-	      want: '1|0|1|8|new-name|8|new-name'
+	      want: '1|1|0|0|1|8|new-session-name|1970-01-01T00:00:05.000Z|6|1970-01-01T00:00:05.000Z|8|new-session-name'
 	    },
 	    {
 	      name: 'browserless easy-kill tracker immediately persists legacy kill counts as capped scores',
@@ -44929,7 +44976,7 @@ async function runSelfTest() {
 	          fs.rmSync(dir, { recursive: true, force: true });
 	        }
 	      })(),
-	      want: '3|2|3|9:3,8:2'
+	      want: '4|2|3|9:3,8:2'
 	    },
 	    {
 	      name: 'browserless easy-kill tracker decays every score at UTC+8 midnight and removes zeroes',
@@ -45123,15 +45170,35 @@ async function runSelfTest() {
 	            tick: 12,
 	            source: 'snapshot'
 	          });
-	          const current = tracker.status(baseMs + 2000);
+	          const tickResetRename = tracker.observePlayerNames([{ user_id: 8, name: 'new-session-attacker' }], {
+	            atMs: baseMs + 3000,
+	            tick: 2,
+	            source: 'snapshot'
+	          });
+	          const reloadedTracker = createDailyDamagePlayerTracker({ file, now: () => baseMs + 4000 });
+	          const stale = reloadedTracker.observePlayerNames([{
+	            user_id: 8,
+	            name: 'stale-attacker',
+	            nameObservedAt: new Date(baseMs + 2500).toISOString()
+	          }], {
+	            atMs: baseMs + 4000,
+	            tick: 100,
+	            source: 'stale-snapshot'
+	          });
+	          const current = reloadedTracker.status(baseMs + 4000);
 	          const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
-	          const nextDay = tracker.status(baseMs + 24 * 60 * 60 * 1000);
+	          const nextDay = reloadedTracker.status(baseMs + 24 * 60 * 60 * 1000);
 	          return [
 	            observed.recorded,
+	            tickResetRename.updated,
+	            stale.updated,
+	            stored.schemaVersion,
 	            current.day,
 	            current.playerCount,
 	            current.players[0]?.userId,
 	            current.players[0]?.name,
+	            current.players[0]?.nameObservedAt,
+	            current.players[0]?.nameObservedTick,
 	            current.players[0]?.totalHpLost,
 	            Object.keys(stored.players).join(','),
 	            nextDay.playerCount
@@ -45140,7 +45207,7 @@ async function runSelfTest() {
 	          fs.rmSync(dir, { recursive: true, force: true });
 	        }
 	      })(),
-	      want: 'true|2026-07-14|1|8|renamed-attacker|12|user:8|0'
+	      want: 'true|1|0|2|2026-07-14|1|8|new-session-attacker|2026-07-14T01:00:03.000Z|2|12|user:8|0'
 	    },
 	    {
 	      name: 'browserless dynamic whitelist excludes profit combat and avoidance candidates',

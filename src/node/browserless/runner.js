@@ -2266,6 +2266,19 @@ async function runBrowserlessRunner(config, deps = {}) {
       });
     }
     try {
+      combatCompletionTracker.observePlayerNames?.(payload?.entities || [], {
+        atMs: observedAtMs,
+        source: detail.source || 'snapshot',
+        tick: payload?.tick
+      });
+    } catch (err) {
+      recordSupervisorError(err, { operation: 'combat-learning-player-name-observe', source: detail.source || 'snapshot' });
+      logStore.append('runner', 'combat-learning-player-name-observation-error', {
+        source: detail.source || 'snapshot',
+        error: errorMessage(err)
+      });
+    }
+    try {
       const evidence = snapshotSelfKillEvidence(payload, config.userId);
       const snapshotSelf = snapshotSelfForUser(payload, config.userId);
       const latestSelf = snapshotSelf

@@ -2,8 +2,13 @@
 
 const fs = require('fs');
 const path = require('path');
+const {
+  nameObservationFreshness,
+  observedNameAtMs,
+  storedNameAtMs
+} = require('./player-name-observation');
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 const INITIAL_SCORE = 1;
 const MAX_SCORE = 3;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
@@ -135,6 +140,7 @@ function normalizePlayer(key, player) {
     userId,
     name: targetName(player, `#${userId}`),
     nameUpdatedAt: String(player.nameUpdatedAt || player.lastKilledAt || player.firstKilledAt || ''),
+    nameObservedAt: String(player.nameObservedAt || player.nameUpdatedAt || player.lastKilledAt || player.firstKilledAt || ''),
     nameObservedTick: numberOrNull(player.nameObservedTick ?? player.lastKillTick),
     score,
     killCount: Math.max(1, Math.round(Number(player.killCount || 1))),
@@ -154,6 +160,7 @@ function normalizeEngagement(key, engagement) {
     userId,
     name: targetName(engagement, `#${userId}`),
     nameUpdatedAt: String(engagement.nameUpdatedAt || engagement.lastShotAt || engagement.startedAt || ''),
+    nameObservedAt: String(engagement.nameObservedAt || engagement.nameUpdatedAt || engagement.lastShotAt || engagement.startedAt || ''),
     nameObservedTick: numberOrNull(engagement.nameObservedTick ?? engagement.lastShotTick ?? engagement.startedTick),
     active: engagement.active !== false && !engagement.endedAt,
     startedAt: String(engagement.startedAt || ''),
@@ -341,6 +348,7 @@ function createEasyKillPlayerTracker(options = {}) {
     const at = new Date(atMs).toISOString();
     const sourceTick = numberOrNull(observedTick);
     const updates = new Map();
+    let changed = false;
     for (const target of targets || []) {
       const userId = targetUserId(target);
       if (userId === null) continue;
@@ -353,25 +361,47 @@ function createEasyKillPlayerTracker(options = {}) {
       let oldName = '';
       let playerUpdated = false;
       let engagementUpdated = false;
-      const playerTick = numberOrNull(player?.nameObservedTick);
-      if (player && (tick === null || playerTick === null || tick >= playerTick)) {
-        if (tick !== null) player.nameObservedTick = tick;
-      }
-      if (player && player.name !== name && (tick === null || playerTick === null || tick >= playerTick)) {
-        oldName = player.name || oldName;
-        player.name = name;
-        player.nameUpdatedAt = at;
-        playerUpdated = true;
-      }
+      const observationAtMs = observedNameAtMs(target, atMs);
+      const playerObservedAtMs = storedNameAtMs(player, [
+        player?.nameUpdatedAt,
+        player?.lastKilledAt,
+        player?.firstKilledAt
+      ]);
       const engagementTick = numberOrNull(engagement?.nameObservedTick);
-      if (engagement && (tick === null || engagementTick === null || tick >= engagementTick)) {
-        if (tick !== null) engagement.nameObservedTick = tick;
-      }
-      if (engagement && engagement.name !== name && (tick === null || engagementTick === null || tick >= engagementTick)) {
-        oldName = oldName || engagement.name;
-        engagement.name = name;
-        engagement.nameUpdatedAt = at;
-        engagementUpdated = true;
+      const engagementObservedAtMs = storedNameAtMs(engagement, [
+        engagement?.nameUpdatedAt,
+        engagement?.lastShotAt,
+        engagement?.startedAt
+      ]);
+      const previousObservedAtMs = [playerObservedAtMs, engagementObservedAtMs]
+        .filter(value => value !== null)
+        .reduce((max, value) => Math.max(max, value), null);
+      const previousTickValues = [
+        ...(playerObservedAtMs === previousObservedAtMs ? [numberOrNull(player?.nameObservedTick)] : []),
+        ...(engagementObservedAtMs === previousObservedAtMs ? [engagementTick] : [])
+      ].filter(value => value !== null);
+      const previousObservedTick = previousTickValues.length ? Math.max(...previousTickValues) : null;
+      const freshness = nameObservationFreshness({
+        observedAtMs: observationAtMs,
+        observedTick: tick,
+        previousObservedAtMs,
+        previousObservedTick
+      });
+      if (!freshness.accepted) continue;
+      const observationAt = new Date(observationAtMs).toISOString();
+      for (const [record, kind] of [[player, 'player'], [engagement, 'engagement']]) {
+        if (!record) continue;
+        if (record.nameObservedAt !== observationAt || (tick !== null && record.nameObservedTick !== tick)) changed = true;
+        record.nameObservedAt = observationAt;
+        if (tick !== null) record.nameObservedTick = tick;
+        if (record.name !== name) {
+          oldName = oldName || record.name;
+          record.name = name;
+          record.nameUpdatedAt = at;
+          changed = true;
+          if (kind === 'player') playerUpdated = true;
+          else engagementUpdated = true;
+        }
       }
       if (!playerUpdated && !engagementUpdated) continue;
       updates.set(key, {
@@ -385,18 +415,18 @@ function createEasyKillPlayerTracker(options = {}) {
         engagementUpdated
       });
     }
-    return Array.from(updates.values());
+    return { changed, updates: Array.from(updates.values()) };
   }
 
   function observePlayerNames(targets = [], detail = {}) {
     const atMs = Number.isFinite(Number(detail.atMs)) ? Number(detail.atMs) : now();
     refreshDailyScores(atMs);
-    const updates = updateNamesFromTargets(targets, atMs, detail.source || 'snapshot', detail.tick);
-    if (updates.length) {
+    const nameResult = updateNamesFromTargets(targets, atMs, detail.source || 'snapshot', detail.tick);
+    if (nameResult.changed) {
       persist(atMs);
-      for (const event of updates) emit(event);
+      for (const event of nameResult.updates) emit(event);
     }
-    return { ok: true, updated: updates.length, updates: cloneJson(updates) };
+    return { ok: true, updated: nameResult.updates.length, updates: cloneJson(nameResult.updates) };
   }
 
   function observeCombatShot(target, detail = {}) {
@@ -418,7 +448,8 @@ function createEasyKillPlayerTracker(options = {}) {
         ?? detail.self?.maxHp
         ?? detail.self?.max_hp
     );
-    const nameUpdates = updateNamesFromTargets([target], atMs, detail.source || 'realtime-combat', detail.tick);
+    const nameResult = updateNamesFromTargets([target], atMs, detail.source || 'realtime-combat', detail.tick);
+    const nameUpdates = nameResult.updates;
     const name = previous?.name || store.players[key]?.name || targetName(target, `#${userId}`);
     const startedAtMs = created ? atMs : Number(previous.startedAtMs || atMs);
     const startedTick = created
@@ -429,6 +460,7 @@ function createEasyKillPlayerTracker(options = {}) {
       userId,
       name,
       nameUpdatedAt: previous?.name === name ? String(previous?.nameUpdatedAt || '') : at,
+      nameObservedAt: previous?.nameObservedAt || new Date(observedNameAtMs(target, atMs)).toISOString(),
       nameObservedTick: numberOrNull(detail.tick) ?? numberOrNull(previous?.nameObservedTick),
       active: true,
       startedAt: new Date(startedAtMs).toISOString(),
@@ -450,7 +482,7 @@ function createEasyKillPlayerTracker(options = {}) {
       lastSelfMaxHp: observedSelfMaxHp ?? positiveNumberOrNull(previous?.lastSelfMaxHp),
       lastSelfHpAtMs: observedSelfHp === null ? Number(previous?.lastSelfHpAtMs || 0) : atMs
     };
-    if (created || nameUpdates.length || !lastWriteAtMs || atMs - lastWriteAtMs >= persistIntervalMs) persist(atMs);
+    if (created || nameResult.changed || !lastWriteAtMs || atMs - lastWriteAtMs >= persistIntervalMs) persist(atMs);
     for (const event of nameUpdates) emit(event);
     if (created) {
       emit({
@@ -473,7 +505,8 @@ function createEasyKillPlayerTracker(options = {}) {
     const atMs = Number.isFinite(Number(detail.atMs)) ? Number(detail.atMs) : now();
     refreshDailyScores(atMs);
     const missingGraceMs = Math.max(0, Number(detail.missingGraceMs || 0));
-    const nameUpdates = updateNamesFromTargets(targets, atMs, detail.source || 'realtime-visible', detail.tick);
+    const nameResult = updateNamesFromTargets(targets, atMs, detail.source || 'realtime-visible', detail.tick);
+    const nameUpdates = nameResult.updates;
     const visibleByUserId = new Map();
     for (const target of targets || []) {
       const userId = targetUserId(target);
@@ -510,7 +543,7 @@ function createEasyKillPlayerTracker(options = {}) {
       const result = finishEngagement(engagement.userId, detail.reason || 'active-target-missing', { atMs });
       if (result.ok) ended.push(result.engagement);
     }
-    if (nameUpdates.length || cleared.length) {
+    if (nameResult.changed || cleared.length) {
       persist(atMs);
       for (const event of nameUpdates) emit(event);
     }
@@ -569,16 +602,38 @@ function createEasyKillPlayerTracker(options = {}) {
       const tick = numberOrNull(item?.tick);
       if (tick !== null && engagement.startedTick !== null && tick < engagement.startedTick) continue;
       const existing = store.players[key] || null;
-      const currentName = engagement.name || existing?.name || `#${userId}`;
-      const currentNameTick = numberOrNull(engagement.nameObservedTick) ?? numberOrNull(existing?.nameObservedTick);
+      const engagementNameAtMs = storedNameAtMs(engagement, [
+        engagement.nameUpdatedAt,
+        engagement.lastShotAt,
+        engagement.startedAt
+      ]);
+      const existingNameAtMs = storedNameAtMs(existing, [
+        existing?.nameUpdatedAt,
+        existing?.lastKilledAt,
+        existing?.firstKilledAt
+      ]);
+      const currentRecord = existingNameAtMs !== null
+        && (engagementNameAtMs === null || existingNameAtMs > engagementNameAtMs)
+        ? existing
+        : engagement;
+      const currentName = currentRecord?.name || engagement.name || existing?.name || `#${userId}`;
+      const currentNameAtMs = currentRecord === existing ? existingNameAtMs : engagementNameAtMs;
+      const currentNameTick = numberOrNull(currentRecord?.nameObservedTick);
       const evidenceName = targetName(item);
-      const name = tick !== null && currentNameTick !== null && tick < currentNameTick
-        ? currentName
-        : (evidenceName || currentName);
-      const observedNameTicks = [tick, currentNameTick, numberOrNull(existing?.nameObservedTick)]
-        .filter(value => value !== null);
-      const nameObservedTick = observedNameTicks.length ? Math.max(...observedNameTicks) : null;
       const killedAt = String(item?.at || '') || new Date(atMs).toISOString();
+      const evidenceAtMs = observedNameAtMs(item, Date.parse(killedAt) || atMs);
+      const evidenceFreshness = nameObservationFreshness({
+        observedAtMs: evidenceAtMs,
+        observedTick: tick,
+        previousObservedAtMs: currentNameAtMs,
+        previousObservedTick: currentNameTick
+      });
+      const useEvidenceName = Boolean(evidenceName && evidenceFreshness.accepted);
+      const name = useEvidenceName ? evidenceName : currentName;
+      const nameObservedAt = new Date(useEvidenceName
+        ? evidenceAtMs
+        : (currentNameAtMs ?? atMs)).toISOString();
+      const nameObservedTick = useEvidenceName && tick !== null ? tick : currentNameTick;
       const previousScore = existing ? normalizedScore(existing.score, INITIAL_SCORE) : 0;
       const scoreAward = killScoreIncrement(detail, engagement);
       const score = Math.min(MAX_SCORE, previousScore + scoreAward.increment);
@@ -588,7 +643,10 @@ function createEasyKillPlayerTracker(options = {}) {
           key,
           userId,
           name,
-          nameUpdatedAt: killedAt,
+          nameUpdatedAt: existing?.name === name
+            ? String(existing?.nameUpdatedAt || currentRecord?.nameUpdatedAt || killedAt)
+            : killedAt,
+          nameObservedAt,
           nameObservedTick,
           score,
           killCount,
