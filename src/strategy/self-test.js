@@ -106,7 +106,10 @@ const {
   resetClashLeaveRescueRoundCore
 } = require('./leave-command');
 const { buildCoinDiagnostics, addCoinFilterDiagnostic } = require('./coin-diagnostics');
-const { activeCoinCompetitionCore } = require('./coin-competition');
+const {
+  activeCoinCompetitionCore,
+  activeCoinPickupCompetitionCore
+} = require('./coin-competition');
 const {
   coinAxisLockShouldHoldCore,
   coinDirectionToCore,
@@ -1132,6 +1135,35 @@ function runStrategyModuleSelfTests() {
       && uncertainCompetition?.reason === 'active-player-large-distance-lead'
       && weakAwayCompetition === null
       && nearCoinCompetition === null
+  });
+
+  const pickupCompetition = activeCoinPickupCompetitionCore(
+    { user_id: 1, x: 0, y: 0 },
+    { drop_id: 'near', amount: 16, x: 4800, y: 0, distance: 4800 },
+    [{ user_id: 6, name: 'pickup-rival', x: 4750, y: 0, joinModeActive: true, alive: true }]
+  );
+  const pickupCompetitionByMotion = activeCoinPickupCompetitionCore(
+    { user_id: 1, x: 0, y: 0 },
+    { drop_id: 'near', amount: 16, x: 4800, y: 0, distance: 4800 },
+    [{ user_id: 7, name: 'moving-rival', x: 4750, y: 0, moving: true, alive: true }]
+  );
+  const pickupCompetitionSelfArrived = activeCoinPickupCompetitionCore(
+    { user_id: 1, x: 4650, y: 0 },
+    { drop_id: 'near', amount: 16, x: 4800, y: 0, distance: 150 },
+    [{ user_id: 6, name: 'pickup-rival', x: 4750, y: 0, active: true, alive: true }]
+  );
+  const pickupCompetitionPassive = activeCoinPickupCompetitionCore(
+    { user_id: 1, x: 0, y: 0 },
+    { drop_id: 'near', amount: 16, x: 4800, y: 0, distance: 4800 },
+    [{ user_id: 8, name: 'passive-player', x: 4750, y: 0, active: false, alive: true }]
+  );
+  results.push({
+    name: 'active-player-already-in-pickup-radius-blocks-uncommitted-coin',
+    passed: pickupCompetition?.reason === 'active-player-in-coin-pickup-area'
+      && pickupCompetition.competitorDistanceCm === 50
+      && pickupCompetitionByMotion?.competitorId === '7'
+      && pickupCompetitionSelfArrived === null
+      && pickupCompetitionPassive === null
   });
 
   const threshold = { rewardCoins: 1, staminaMilli: 10000 };

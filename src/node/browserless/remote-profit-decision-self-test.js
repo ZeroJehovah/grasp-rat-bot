@@ -333,6 +333,145 @@ function assertRealtimeSupersededMissionContinuity() {
   assert.strictEqual(resumed.action?.target?.cachedNavigationOnly, false);
 }
 
+function assertPassiveRealtimeDamageDoesNotDiscardRemoteMission() {
+  const adapter = createBrowserlessDecisionAdapter({
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    singleCoinBaitEnabled: false,
+    finalActionArbitrationHoldMs: 0,
+    opportunitySwitchConfirmFrames: 1,
+    opportunitySwitchMargin: 0,
+    opportunitySwitchRelativeMargin: 0
+  });
+  const original = remoteCandidate({
+    userId: 99,
+    name: 'high-drop-passive',
+    x: 48000,
+    drop: 153,
+    expectedReward: 153,
+    adjustedScore: 1700000
+  });
+  const detour = remoteCandidate({
+    userId: 2703,
+    name: 'lower-drop-passive',
+    x: 106000,
+    drop: 101,
+    expectedReward: 101,
+    adjustedScore: 394000
+  });
+  const remoteBatch = batch(original, {
+    generation: 11,
+    candidates: [original, detour]
+  });
+  const first = decide(adapter, state(fullStaminaSelf()), 2000, remoteBatch, {
+    controlMode: 'profit-live',
+    combatEnabled: true
+  });
+  assert.strictEqual(first.action?.target?.userId, 99);
+
+  // Seed the native activity watermark with a stamina change. The target is
+  // still Passive and alive, but it is temporarily excluded from AFK profit
+  // candidates after third-party activity changes its HP/stamina.
+  adapter.patchState({
+    seenEntities: {
+      '99': {
+        x: 48000,
+        y: 0,
+        seenAt: 2000,
+        movedAt: 0,
+        activityAt: 0,
+        motionObservedSpeed: 0,
+        stamina5s: 1000000
+      }
+    }
+  });
+  const target = {
+    entity_id: 2,
+    user_id: 99,
+    name: 'high-drop-passive',
+    x: 48000,
+    y: 0,
+    hp: 97,
+    max_hp: 100,
+    current_join_mode: 'Passive',
+    stamina_5s_remaining_milli: 999000,
+    stamina_5s_limit_milli: 1000000,
+    drop: 153
+  };
+  const retained = decide(
+    adapter,
+    state(fullStaminaSelf(), [target]),
+    2200,
+    { ...remoteBatch, realtimeSupersededIds: ['99'] },
+    { controlMode: 'profit-live', combatEnabled: true }
+  );
+  assert.strictEqual(retained.action?.kind, 'seek-remote-player');
+  assert.strictEqual(retained.action?.target?.userId, 99);
+  assert.strictEqual(retained.profit?.mission?.targetId, '99');
+  assert.strictEqual(retained.profit?.mission?.navigationPaused, false);
+  assert.strictEqual(retained.profit?.remoteProfit?.selected?.userId, 99);
+}
+
+function assertActivePlayerPickupRadiusCoinCompetition() {
+  const common = {
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    singleCoinBaitEnabled: false,
+    finalActionArbitrationHoldMs: 0,
+    opportunitySwitchConfirmFrames: 1,
+    opportunitySwitchMargin: 0,
+    opportunitySwitchRelativeMargin: 0
+  };
+  const activePlayer = {
+    entity_id: 2,
+    user_id: 8,
+    name: 'pickup-rival',
+    x: 4750,
+    y: 0,
+    hp: 100,
+    max_hp: 100,
+    current_join_mode: 'Active',
+    stamina_5s_remaining_milli: 1000000,
+    stamina_5s_limit_milli: 1000000
+  };
+  const blockedState = state(fullStaminaSelf(), [activePlayer]);
+  blockedState.fallback.tick = 2;
+  blockedState.fallback.receivedAtMs = 2000;
+  blockedState.fallback.coinDrops = [{
+    drop_id: 319,
+    amount: 16,
+    x: 4800,
+    y: 0
+  }];
+  const blocked = createBrowserlessDecisionAdapter(common).evaluateRealtime(
+    blockedState,
+    { ...common, nowMs: 2000 }
+  );
+  assert.strictEqual(blocked.action, null);
+  assert.strictEqual(blocked.input?.loot?.reason, 'active-player-in-coin-pickup-area');
+  assert.strictEqual(blocked.input?.loot?.candidateCount, 0);
+  assert.strictEqual(blocked.input?.loot?.competitionBlocked?.[0]?.competitorId, '8');
+
+  const committedAdapter = createBrowserlessDecisionAdapter(common);
+  const initialState = state(fullStaminaSelf());
+  initialState.fallback.tick = 3;
+  initialState.fallback.receivedAtMs = 3000;
+  initialState.fallback.coinDrops = [{ drop_id: 319, amount: 16, x: 4800, y: 0 }];
+  const initial = committedAdapter.evaluateRealtime(initialState, { ...common, nowMs: 3000 });
+  assert.strictEqual(initial.action?.kind, 'coin');
+
+  const competitionState = state(fullStaminaSelf(), [activePlayer]);
+  competitionState.fallback.tick = 4;
+  competitionState.fallback.receivedAtMs = 3200;
+  competitionState.fallback.coinDrops = [{ drop_id: 319, amount: 16, x: 4800, y: 0 }];
+  const retained = committedAdapter.evaluateRealtime(competitionState, { ...common, nowMs: 3200 });
+  assert.strictEqual(retained.action?.kind, 'coin');
+  assert.strictEqual(retained.action?.target?.id, 319);
+  assert.strictEqual(retained.input?.loot?.reason, 'high-value-visible-coin');
+}
+
 function assertSelfKillReleasesSupersededMission() {
   const adapter = createBrowserlessDecisionAdapter({
     userId: 7,
@@ -2695,6 +2834,8 @@ function runRemoteProfitDecisionSelfTest() {
   assertImmediateRemoteRelease(remoteBatch, 210900, 211000);
   assertDynamicThresholdLinkedCoinRoute();
   assertRealtimeSupersededMissionContinuity();
+  assertPassiveRealtimeDamageDoesNotDiscardRemoteMission();
+  assertActivePlayerPickupRadiusCoinCompetition();
   assertSelfKillReleasesSupersededMission();
   assertRemoteMissionDoesNotOverrideRealtimeProfit();
   assertProfitMissionContinuityRegressions();
@@ -3075,7 +3216,7 @@ function runRemoteProfitDecisionSelfTest() {
   assert.strictEqual(lowDropDecision.profit?.postKillCoinSuppression?.removedCount, 1);
   assert.strictEqual(lowDropDecision.stateful.profitMission?.targetId, '99');
 
-  return { ok: true, cases: 79 };
+  return { ok: true, cases: 80 };
 }
 
 if (require.main === module) {

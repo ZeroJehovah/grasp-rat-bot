@@ -102,7 +102,43 @@ function activeCoinCompetitionCore(self, coin, competitors = [], options = {}) {
   return best;
 }
 
+function activeCoinPickupCompetitionCore(self, coin, competitors = [], options = {}) {
+  if (!self || !coin) return null;
+  const selfId = entityKey(self);
+  const selfDistance = finiteNumber(coin?.distance) ?? pointDistance(self, coin);
+  const pickupRadius = Math.max(1, Number(options.pickupRadiusCm ?? 150) || 150);
+  if (!Number.isFinite(selfDistance) || selfDistance <= pickupRadius) return null;
+
+  let best = null;
+  for (const competitor of competitors || []) {
+    if (!competitor || competitor.alive === false) continue;
+    const competitorId = entityKey(competitor);
+    if (selfId && competitorId && competitorId === selfId) continue;
+    const active = competitor.active === true
+      || competitor.joinModeActive === true
+      || competitor.moving === true
+      || competitor.firing === true;
+    if (!active) continue;
+    const competitorDistance = pointDistance(competitor, coin);
+    if (!Number.isFinite(competitorDistance) || competitorDistance > pickupRadius) continue;
+    const candidate = {
+      reason: 'active-player-in-coin-pickup-area',
+      coinId: entityKey({ id: coin?.drop_id ?? coin?.id }),
+      coinAmount: Math.max(0, Number(coin?.amount || 0)),
+      pickupRadiusCm: Math.round(pickupRadius),
+      selfDistanceCm: Math.round(selfDistance),
+      competitorId,
+      competitorName: entityName(competitor),
+      competitorDistanceCm: Math.round(competitorDistance),
+      distanceLeadCm: Math.round(selfDistance - competitorDistance)
+    };
+    if (!best || competitorDistance < Number(best.competitorDistanceCm)) best = candidate;
+  }
+  return best;
+}
+
 module.exports = {
   activeCoinCompetitionCore,
-  activeCoinCompetitorHeadingCore
+  activeCoinCompetitorHeadingCore,
+  activeCoinPickupCompetitionCore
 };

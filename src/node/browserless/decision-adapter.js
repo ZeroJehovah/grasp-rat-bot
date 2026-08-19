@@ -120,7 +120,10 @@ const {
   singleCoinBaitMatchesCore,
   singleCoinBaitPolicyCore
 } = require('../../strategy/single-coin-bait');
-const { activeCoinCompetitionCore } = require('../../strategy/coin-competition');
+const {
+  activeCoinCompetitionCore,
+  activeCoinPickupCompetitionCore
+} = require('../../strategy/coin-competition');
 const { updateOutsideCenterIdleCore } = require('../../strategy/outside-center-idle');
 const { recoveryPriorityDecision } = require('../../strategy/recovery-profit-priority');
 const { secondaryCombatExitPolicy } = require('../../strategy/dual-target-policy');
@@ -2234,17 +2237,36 @@ function selectRealtimeLootCandidate(input, stateful = {}, options = {}) {
       playerDropPriority: true
     };
   });
+  const previousIntent = stateful.realtimeLootIntent || null;
+  const competitionBlocked = [];
   const candidates = ageMs <= maxAgeMs
     ? observedCoins
       .filter(coin => coin.primaryTargetDropPriority === true || Number(coin.amount || 0) >= minAmount)
       .filter(coin => Number.isFinite(Number(coin.distance)) && (!maxDistance || Number(coin.distance) <= maxDistance))
       .filter(coin => opportunityStaminaAffordable(input?.self, opportunityCoinStaminaCost(coin, options), options))
+      .filter(coin => {
+        const protectedDrop = coin.primaryTargetDropPriority === true || coin.selfKilledPlayerDrop === true;
+        const retainedCommitment = String(previousIntent?.key || '') === String(coin?.key || '');
+        if (protectedDrop || retainedCommitment) return true;
+        const competition = activeCoinPickupCompetitionCore(
+          input?.self,
+          coin,
+          input?.visibleTargets || [],
+          {
+            pickupRadiusCm: options.playerDropPickupRadiusCm
+              ?? BROWSER_RUNTIME_DEFAULTS.playerDropPickupRadiusCm
+              ?? 150
+          }
+        );
+        if (!competition) return true;
+        competitionBlocked.push(competition);
+        return false;
+      })
       .sort((a, b) => Number(Boolean(b.primaryTargetDropPriority)) - Number(Boolean(a.primaryTargetDropPriority))
         || Number(Boolean(b.selfKilledPlayerDrop)) - Number(Boolean(a.selfKilledPlayerDrop))
         || Number(b.amount || 0) - Number(a.amount || 0)
         || Number(a.distance || Infinity) - Number(b.distance || Infinity))
     : [];
-  const previousIntent = stateful.realtimeLootIntent || null;
   const previousLastSeenAt = Number(previousIntent?.lastSeenAt || previousIntent?.startedAt || 0);
   const previousIntentAgeMs = previousLastSeenAt > 0
     ? Math.max(0, nowMs - previousLastSeenAt)
@@ -2282,7 +2304,10 @@ function selectRealtimeLootCandidate(input, stateful = {}, options = {}) {
       hysteresisHoldMs,
       retainedBoundaryIntent: false,
       candidateCount: candidates.length,
-      reason: ageMs > maxAgeMs ? 'snapshot-stale' : 'no-high-value-coin'
+      competitionBlocked: competitionBlocked.slice(0, 8),
+      reason: ageMs > maxAgeMs
+        ? 'snapshot-stale'
+        : (competitionBlocked.length ? 'active-player-in-coin-pickup-area' : 'no-high-value-coin')
     };
   }
   const same = previousIntent?.key === selected.key;
@@ -2316,6 +2341,7 @@ function selectRealtimeLootCandidate(input, stateful = {}, options = {}) {
     hysteresisHoldMs,
     retainedBoundaryIntent,
     candidateCount: candidates.length,
+    competitionBlocked: competitionBlocked.slice(0, 8),
     reason: retainedBoundaryIntent
       ? 'high-value-coin-boundary-hold'
       : (selected.primaryTargetDropPriority
@@ -6662,6 +6688,37 @@ function remoteProfitCurrentWhitelistIds(options = {}) {
   ].map(Number).filter(Number.isFinite).map(String));
 }
 
+function realtimeProfitAuthorityIds(input = {}, options = {}) {
+  const ids = new Set();
+  const add = target => {
+    const id = easyKillTargetUserId(target);
+    if (id !== null) ids.add(String(id));
+  };
+  for (const target of input.afkTargets || []) add(target);
+  for (const target of input.easyKillTargets || []) add(target);
+  const activeProfitRange = Math.max(0, Number(
+    options.combatAttackRange ?? options.attackRange ?? DEFAULT_ATTACK_RANGE
+  ));
+  const selfStamina5s = input.self?.stamina5s
+    ?? input.self?.stamina_5s_remaining_milli
+    ?? input.self?.stamina5sRemainingMilli;
+  for (const target of input.visibleTargets || []) {
+    if (target?.authority !== 'realtime' && target?.authority !== 'native') continue;
+    if (target?.joinModeActive !== true || target?.alive === false || target?.invulnerable) continue;
+    if (target?.whitelisted || !Number.isFinite(Number(target?.distance))
+      || Number(target.distance) > activeProfitRange) continue;
+    if (!proactiveActiveProfitEligible(target, {
+      ...options,
+      selfStamina5s,
+      proactiveActiveCombatMinimumStamina5s: options.combatProactiveActiveMinStamina5s
+        ?? options.combatOpponentProbeReserveMs
+        ?? 5600
+    })) continue;
+    add(target);
+  }
+  return ids;
+}
+
 function remoteProfitCandidateInput(input, options = {}, stateful = {}) {
   const batch = input?.remoteProfitBatch && typeof input.remoteProfitBatch === 'object'
     ? input.remoteProfitBatch
@@ -6712,11 +6769,12 @@ function remoteProfitCandidateInput(input, options = {}, stateful = {}) {
   const superseded = new Set((batch.realtimeSupersededIds || []).map(String));
   const missSuppressed = new Set((batch.missSuppressedIds || []).map(String));
   const currentWhitelistIds = remoteProfitCurrentWhitelistIds(options);
+  const realtimeAuthorityIds = realtimeProfitAuthorityIds(input, options);
   const completedProfitTargets = observeCompletedProfitTargets(input, stateful, options);
   const batchTick = positiveTick(batch?.tick);
   const tickEpoch = currentProfitTickEpoch(stateful);
   for (const id of visibleIds) {
-    if (candidateIds.has(id)) superseded.add(id);
+    if (candidateIds.has(id) && realtimeAuthorityIds.has(id)) superseded.add(id);
   }
   const arrivalToleranceCm = Math.max(0, Number(
     options.remoteProfitArrivalToleranceCm
@@ -6995,7 +7053,7 @@ function activeProfitEscortContinuityForMission(stateful = {}, mission = null, n
   return null;
 }
 
-function profitMissionRemoteState(input = {}, mission = {}, nowMs = Date.now(), remoteProfit = null, stateful = {}) {
+function profitMissionRemoteState(input = {}, mission = {}, nowMs = Date.now(), remoteProfit = null, stateful = {}, options = {}) {
   const state = {
     invalidated: false,
     navigationPaused: false,
@@ -7030,6 +7088,22 @@ function profitMissionRemoteState(input = {}, mission = {}, nowMs = Date.now(), 
   if (missSuppressed) return { ...state, invalidated: true, reason: 'remote-target-miss-suppressed' };
   if (explicitlyInvalidated) return { ...state, invalidated: true, reason: 'remote-target-invalidated' };
   if (realtimeSuperseded) {
+    const visibleTarget = (input.visibleTargets || []).find(target => (
+      String(easyKillTargetUserId(target) ?? '') === id
+    ));
+    const realtimeAuthority = realtimeProfitAuthorityIds(input, options).has(id);
+    const passiveObservation = visibleTarget
+      && visibleTarget.alive !== false
+      && visibleTarget.active !== true
+      && visibleTarget.joinModeActive !== true
+      && visibleTarget.moving !== true
+      && visibleTarget.firing !== true;
+    // A remote high-value mission may briefly appear in native view while a
+    // third party changes its HP/activity. If that observation is still a
+    // passive, non-profit candidate, keep the remote mission authoritative;
+    // otherwise a lower-value remote candidate can replace it on the next
+    // refresh even though the original target is still alive.
+    if (passiveObservation && !realtimeAuthority) return state;
     return {
       ...state,
       navigationPaused: true,
@@ -7203,7 +7277,7 @@ function reconcileProfitMissionState(input = {}, stateful = {}, options = {}, re
     clearExpiredRealtimeEnemyMissionState(stateful, mission, missingRealtimeEnemy.reason);
     return null;
   }
-  const remoteState = profitMissionRemoteState(input, mission, nowMs, remoteProfit, stateful);
+  const remoteState = profitMissionRemoteState(input, mission, nowMs, remoteProfit, stateful, options);
   if (remoteState.invalidated) {
     clearProfitMission(stateful, remoteState.reason || 'remote-target-invalidated', nowMs);
     return null;
@@ -11174,6 +11248,7 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}, in
     hysteresisHoldMs: assessment.hysteresisHoldMs,
     retainedBoundaryIntent: Boolean(assessment.retainedBoundaryIntent),
     candidateCount: assessment.candidateCount,
+    competitionBlocked: cloneJson(assessment.competitionBlocked || []),
     candidate: coin ? {
       id: coin.id,
       amount: Math.round(Number(coin.amount || 0)),
