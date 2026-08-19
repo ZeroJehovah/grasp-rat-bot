@@ -36,15 +36,29 @@ function numberOrNull(value) {
 function parseArgs(argv) {
   const result = {
     dayDir: DEFAULT_DAY_DIR,
-    loginCpuBaselineRevision: DEFAULT_LOGIN_CPU_BASELINE_REVISION
+    loginCpuBaselineRevision: DEFAULT_LOGIN_CPU_BASELINE_REVISION,
+    selfTest: false
   };
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === '--day-dir') result.dayDir = path.resolve(argv[++index]);
     else if (argv[index] === '--login-cpu-baseline-revision') {
       result.loginCpuBaselineRevision = String(argv[++index] || '');
-    }
+    } else if (argv[index] === '--self-test') result.selfTest = true;
   }
   return result;
+}
+
+function executionTargetsSegment(event, targetId) {
+  if (event?.crossTargetWithinEngagement === true) return false;
+  const normalizedTargetId = targetId === null || targetId === undefined || String(targetId) === ''
+    ? null
+    : String(targetId);
+  const eventTargetId = event?.targetId;
+  if (normalizedTargetId === null) return true;
+  return eventTargetId === null
+    || eventTargetId === undefined
+    || String(eventTargetId) === ''
+    || String(eventTargetId) === normalizedTargetId;
 }
 
 function readIndex(dayDir) {
@@ -93,7 +107,9 @@ async function inspectBattle(dayDir, index) {
     const atMs = Date.parse(row.at);
     const detail = row.detail || {};
     if (row.type === 'shoot-execution') {
-      physicalLedger = recordPhysicalExecution(physicalLedger, detail);
+      if (executionTargetsSegment(detail, index.targetId)) {
+        physicalLedger = recordPhysicalExecution(physicalLedger, detail);
+      }
       physicalExecutionEvents.push({
         type: String(detail.type || ''),
         atMs: numberOrNull(detail.atMs) ?? atMs,
@@ -109,6 +125,7 @@ async function inspectBattle(dayDir, index) {
         originStatus: String(detail.originStatus || ''),
         currentSegmentId: detail.currentSegmentId ?? null,
         currentSegmentFile: detail.currentSegmentFile ?? null,
+        crossTargetWithinEngagement: detail.crossTargetWithinEngagement === true,
         ack: detail.ack || null
       });
     } else if (row.type === 'combat-live' || row.type === 'combat-dry-run') {
@@ -452,14 +469,17 @@ function physicalExecutionOwnershipAudit(battles) {
   for (const battle of battles) {
     for (const event of battle.physicalExecutionEvents) {
       const type = String(event.type || '');
+      const targetsSegment = executionTargetsSegment(event, battle.index.targetId);
       const requestId = event.requestId === null || event.requestId === undefined
         ? ''
         : String(event.requestId);
       if (type === 'shoot-dispatch') {
         dispatchCount += 1;
-        dispatchCountByBattle.set(battle, Number(dispatchCountByBattle.get(battle) || 0) + 1);
+        if (targetsSegment) {
+          dispatchCountByBattle.set(battle, Number(dispatchCountByBattle.get(battle) || 0) + 1);
+        }
         if (!dispatches.has(requestId)) dispatches.set(requestId, []);
-        dispatches.get(requestId).push({ battle, event });
+        dispatches.get(requestId).push({ battle, event, targetsSegment });
       } else if (type === 'shoot-ack-accepted') {
         acceptedCount += 1;
         accepted.push({ battle, event });
@@ -505,8 +525,11 @@ function physicalExecutionOwnershipAudit(battles) {
     acceptedByRequest.set(requestId, Number(acceptedByRequest.get(requestId) || 0) + 1);
     const owners = dispatches.get(requestId);
     if (owners.length === 1) {
-      const ownerBattle = owners[0].battle;
-      acceptedCountByBattle.set(ownerBattle, Number(acceptedCountByBattle.get(ownerBattle) || 0) + 1);
+      const owner = owners[0];
+      const ownerBattle = owner.battle;
+      if (owner.targetsSegment && executionTargetsSegment(item.event, ownerBattle.index.targetId)) {
+        acceptedCountByBattle.set(ownerBattle, Number(acceptedCountByBattle.get(ownerBattle) || 0) + 1);
+      }
     }
   }
   const duplicateAccepted = [...acceptedByRequest.entries()]
@@ -535,6 +558,31 @@ function physicalExecutionOwnershipAudit(battles) {
     acceptedCountByBattle: { value: acceptedCountByBattle }
   });
   return result;
+}
+
+function runFocusedSelfTest() {
+  const battle = {
+    index: { line: 1, file: '8_8000.jsonl.gz', segmentId: '8:8000#1', targetId: '8' },
+    physicalExecutionEvents: [
+      { type: 'shoot-dispatch', requestId: 'primary', targetId: '42', crossTargetWithinEngagement: true, originSegmentId: '8:8000#1', originFile: '8_8000.jsonl.gz', originStatus: 'active-segment' },
+      { type: 'shoot-ack-accepted', requestId: 'primary', targetId: '42', crossTargetWithinEngagement: true, originSegmentId: '8:8000#1', originFile: '8_8000.jsonl.gz', originStatus: 'active-segment' },
+      { type: 'shoot-dispatch', requestId: 'secondary', targetId: '8', crossTargetWithinEngagement: false, originSegmentId: '8:8000#1', originFile: '8_8000.jsonl.gz', originStatus: 'active-segment' },
+      { type: 'shoot-ack-accepted', requestId: 'secondary', targetId: '8', crossTargetWithinEngagement: false, originSegmentId: '8:8000#1', originFile: '8_8000.jsonl.gz', originStatus: 'active-segment' }
+    ]
+  };
+  const audit = physicalExecutionOwnershipAudit([battle]);
+  const assertions = {
+    globalRawOwnershipRetained: audit.dispatchCount === 2 && audit.acceptedCount === 2,
+    targetScopedSegmentCounts: audit.dispatchCountByBattle.get(battle) === 1
+      && audit.acceptedCountByBattle.get(battle) === 1,
+    crossTargetExcluded: executionTargetsSegment(battle.physicalExecutionEvents[0], '8') === false,
+    matchingTargetIncluded: executionTargetsSegment(battle.physicalExecutionEvents[2], '8') === true,
+    legacyMissingSegmentTargetIncluded: executionTargetsSegment(battle.physicalExecutionEvents[2], null) === true,
+    ownershipInvariant: audit.executionOwnershipOk === true
+  };
+  const ok = Object.values(assertions).every(Boolean);
+  process.stdout.write(`${JSON.stringify({ ok, assertions }, null, 2)}\n`);
+  if (!ok) throw new Error('audit-runtime-log-fixes focused self-test failed');
 }
 
 async function reconcileBattleTerminals(dayDir, battles) {
@@ -725,6 +773,10 @@ async function loginSuccessCpuBaseline(dayDir, startRevision) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  if (options.selfTest) {
+    runFocusedSelfTest();
+    return;
+  }
   const indexes = readIndex(options.dayDir);
   const battles = [];
   for (const index of indexes) battles.push(await inspectBattle(options.dayDir, index));
@@ -911,7 +963,15 @@ async function main() {
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
-main().catch(error => {
-  process.stderr.write(`${error.stack || error.message || String(error)}\n`);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch(error => {
+    process.stderr.write(`${error.stack || error.message || String(error)}\n`);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  executionTargetsSegment,
+  physicalExecutionOwnershipAudit,
+  runFocusedSelfTest
+};
