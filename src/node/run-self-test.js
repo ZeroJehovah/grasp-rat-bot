@@ -8781,7 +8781,7 @@ async function runSelfTest() {
           row?.[7]
         ].join('|');
       })(),
-      want: 'flee|safety|avoid-invulnerable-target|8|true|1250|9600|true|snapshot|9600|1250|1|Passive'
+      want: 'flee|safety|avoid-invulnerable-target|8|true|1150|9600|true|protection-lease|9600|1150|1|Passive'
     },
     {
       name: 'browserless invulnerability ticks use the 50ms server clock for early AFK approach and panel',
@@ -8920,7 +8920,7 @@ async function runSelfTest() {
           raw?.invulnerableRemainingMs
         ].join('|');
       })(),
-      want: '94200|94200|94200|94200|94200'
+      want: '94100|94100|94100|94200|94200'
     },
     {
       name: 'browserless decision adapter emits snapshot fallback profit without commands',
@@ -46477,6 +46477,7 @@ async function runSelfTest() {
 	        return [result.kind, result.reason, result.easyKillApproach, commands.join(','), commands.includes('shoot')].join('|');
 	      })(),
 	      want: 'velocity|profit-easy-kill-seek|true|vel 1 0|false'
+
 	    },
 	    {
 	      name: 'browserless action adapter approaches ETA-qualified invulnerable easy active player without firing',
@@ -46527,7 +46528,7 @@ async function runSelfTest() {
 	        });
 	        return [result.kind, result.reason, result.easyKillApproach, commands.join(','), commands.includes('shoot')].join('|');
 	      })(),
-	      want: 'velocity|profit-easy-kill-seek|true|vel 1 0|false'
+	      want: 'velocity|profit-active-invulnerable-approach||vel 1 0|false'
 	    },
 	    {
 	      name: 'browserless action adapter preserves snapshot invulnerability when realtime easy active target omits protection fields',
@@ -46553,7 +46554,7 @@ async function runSelfTest() {
 	          invulnerable: true,
 	          invulnerableRemainingMs: 5550,
 	          invulnerableMetadataAuthority: 'snapshot',
-	          invulnerableApproachDistanceCm: 10000,
+          invulnerableApproachDistanceCm: 15000,
 	          easyKillKnown: true,
 	          easyKillProfitTarget: true,
 	          easyKillInvulnerableApproachEligible: true
@@ -46605,7 +46606,7 @@ async function runSelfTest() {
 	          commands.includes('shoot')
 	        ].join('|');
 	      })(),
-	      want: 'stop|profit-easy-kill-invulnerable-close-wait|true|5550|snapshot|stop|profit-easy-kill-combat-handoff|false|0|realtime|false'
+      want: 'velocity|profit-active-invulnerable-separate|true|5550|snapshot|stop|profit-easy-kill-combat-handoff|false|0|realtime|false'
 	    },
 	    {
 	      name: 'browserless easy-kill approach stops after eight-second low-closing window',

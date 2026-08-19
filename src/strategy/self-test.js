@@ -243,6 +243,7 @@ const {
   combatTargetIncomingThreatEvidenceCore,
   combatTargetThreatAdvantageCore,
   pickEngagedCombatTargetCore,
+  proactiveActiveProfitEligible,
   recentAfkAttackCommitmentCore
 } = require('./combat-target-selection');
 const {
@@ -7636,6 +7637,17 @@ function runStrategyModuleSelfTests() {
     proactiveActiveCombatMinimumStamina5s: 5600,
     opportunityStaminaBudget: 200000
   });
+  const lowStaminaProfitCandidate = proactiveActiveProfitEligible({
+    userId: 19677,
+    current_join_mode: 'Active',
+    active: true,
+    firing: false,
+    drop: 551
+  }, {
+    selfStamina5s: 289,
+    proactiveActiveCombatMinimumStamina5s: 5600,
+    opportunityStaminaBudget: 200000
+  });
   results.push({
     name: 'combat-proactive-active-respects-recent-afk-shot-and-immediate-stamina',
     passed: recentAfkCommitment?.reason === 'recent-afk-attack-commitment'
@@ -7644,6 +7656,7 @@ function runStrategyModuleSelfTests() {
       && expiredAfkCommitment === null
       && lowStaminaProactive.allowed === false
       && lowStaminaProactive.reason === 'insufficient-immediate-stamina'
+      && lowStaminaProfitCandidate === true
       && lowStaminaDefensive.allowed === true
   });
 

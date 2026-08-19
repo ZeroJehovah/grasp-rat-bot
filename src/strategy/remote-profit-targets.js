@@ -5,6 +5,7 @@ const {
   rawInvulnerabilityMsFrom
 } = require('./invulnerability-time');
 const { estimateEightWayRouteCore } = require('./eight-way-route-eta');
+const { invulnerableProfitSelectionCostCore } = require('./invulnerable-profit-selection');
 
 const DEFAULT_REMOTE_PROFIT_TARGET_CONFIG = Object.freeze({
   minDrop: 50,
@@ -17,7 +18,7 @@ const DEFAULT_REMOTE_PROFIT_TARGET_CONFIG = Object.freeze({
   distanceFloorFactor: 0.5,
   staminaFullRatio: 0.98,
   invulnerableAfkApproachDistanceCm: 150,
-  invulnerableActiveApproachDistanceCm: 10000,
+  invulnerableActiveApproachDistanceCm: 15000,
   invulnerableAxisSpeedCmPerSec: 950,
   invulnerableDiagonalSpeedCmPerSec: 940,
   invulnerableRouteSegmentOverheadMs: 120,
@@ -110,6 +111,10 @@ function remoteProfitApproachDistanceCm(classification = '', config = {}) {
     ? DEFAULT_REMOTE_PROFIT_TARGET_CONFIG.invulnerableActiveApproachDistanceCm
     : DEFAULT_REMOTE_PROFIT_TARGET_CONFIG.invulnerableAfkApproachDistanceCm;
   return Math.max(0, Number(configured ?? config.invulnerableApproachDistanceCm ?? fallback));
+}
+
+function remoteProfitClassificationIsAfk(classification = '') {
+  return ['high-drop-afk', 'easy-kill-afk'].includes(String(classification || ''));
 }
 
 function remoteProfitApproachEtaMs(distance, config = {}, classification = '', from = null, to = null) {
@@ -262,6 +267,13 @@ function classifyRemoteTarget(target, context, config, helpers) {
   const easyKillActive = Boolean(easy)
     && target.hp > 0
     && Boolean(target.active || joinModeActive || target.moving || target.firing);
+  const easyKillAfk = Boolean(easy)
+    && target.hp > 0
+    && !joinModeActive
+    && !target.active
+    && !target.moving
+    && !target.firing
+    && !target.recentActivity;
   let classification = '';
   let score = null;
   if (highDropAfk && easyKillActive && context.diagnostics) {
@@ -270,6 +282,10 @@ function classifyRemoteTarget(target, context, config, helpers) {
   if (easyKillActive) {
     if (easy.score === 1 && distance > config.easyKillScoreOneMaxDistanceCm) return { reject: 'easy-kill-score-one-distance' };
     classification = 'easy-kill-active';
+    score = easy.score;
+  } else if (easyKillAfk) {
+    if (easy.score === 1 && distance > config.easyKillScoreOneMaxDistanceCm) return { reject: 'easy-kill-score-one-distance' };
+    classification = 'easy-kill-afk';
     score = easy.score;
   } else if (highDropAfk) {
     classification = 'high-drop-afk';
@@ -281,7 +297,7 @@ function classifyRemoteTarget(target, context, config, helpers) {
   const invulnerable = Boolean(target.invulnerable || (invulnerableRemainingMs !== null && invulnerableRemainingMs > 0));
   const approachDistanceCm = remoteProfitApproachDistanceCm(classification, config);
   const approachEtaMs = remoteProfitApproachEtaMs(distance, config, classification, context.self, target);
-  const approachSlackMs = classification === 'high-drop-afk'
+  const approachSlackMs = remoteProfitClassificationIsAfk(classification)
     ? Math.max(0, Number(config.invulnerableAfkApproachSlackMs
       ?? config.invulnerableProfitApproachSlackMs
       ?? DEFAULT_REMOTE_PROFIT_TARGET_CONFIG.invulnerableAfkApproachSlackMs))
@@ -313,8 +329,20 @@ function classifyRemoteTarget(target, context, config, helpers) {
   const profitScoreMultiplier = finiteNumber(
     hasOwn('profitScoreMultiplier') ? economics.profitScoreMultiplier : null
   );
+  const selection = invulnerableProfitSelectionCostCore({
+    staminaCost,
+    expectedReward,
+    invulnerable,
+    invulnerableRemainingMs,
+    approachEtaMs
+  }, config);
   const distanceFactor = remoteProfitDistanceFactor(distance, config);
-  const adjustedScore = baseScore !== null && distanceFactor !== null ? baseScore * distanceFactor : null;
+  const selectionScore = baseScore !== null
+    ? baseScore * Number(selection.selectionScoreMultiplier || 0)
+    : null;
+  const adjustedScore = selectionScore !== null && distanceFactor !== null
+    ? selectionScore * distanceFactor
+    : null;
   if (!(expectedReward > 0)
     || staminaCost === null
     || !(staminaCost >= 0)
@@ -342,7 +370,11 @@ function classifyRemoteTarget(target, context, config, helpers) {
       approachSlackMs,
       expectedReward,
       staminaCost,
+      selectionStaminaCost: selection.selectionStaminaCost,
+      selectionNetROI: selection.selectionNetROI,
+      invulnerableSelection: selection,
       baseScore,
+      selectionScore,
       profitScoreMultiplier,
       distanceFactor,
       adjustedScore
@@ -371,6 +403,7 @@ function evaluateRemoteProfitTargets(request = {}, helpers = {}) {
     candidateCount: 0,
     highDropAfkCount: 0,
     easyKillActiveCount: 0,
+    easyKillAfkCount: 0,
     classificationConflictCount: 0,
     filtered: {}
   };
@@ -406,6 +439,7 @@ function evaluateRemoteProfitTargets(request = {}, helpers = {}) {
     }
     if (result.candidate.classification === 'high-drop-afk') diagnostics.highDropAfkCount += 1;
     if (result.candidate.classification === 'easy-kill-active') diagnostics.easyKillActiveCount += 1;
+    if (result.candidate.classification === 'easy-kill-afk') diagnostics.easyKillAfkCount += 1;
     candidates.push(result.candidate);
   }
   candidates.sort((a, b) => Number(b.adjustedScore) - Number(a.adjustedScore)
@@ -455,9 +489,13 @@ function buildRemotePlayerNavigationOpportunitiesCore(candidates = [], options =
       reward: finiteNumber(candidate.expectedReward),
       expectedReward: finiteNumber(candidate.expectedReward),
       staminaCost: finiteNumber(candidate.staminaCost),
+      selectionStaminaCost: finiteNumber(candidate.selectionStaminaCost),
+      selectionNetROI: finiteNumber(candidate.selectionNetROI),
+      invulnerableSelection: candidate.invulnerableSelection || null,
       score,
       selectionScore: score,
       baseScore: finiteNumber(candidate.baseScore),
+      invulnerabilityAdjustedBaseScore: finiteNumber(candidate.selectionScore),
       profitScoreMultiplier: finiteNumber(candidate.profitScoreMultiplier),
       distanceFactor: finiteNumber(candidate.distanceFactor),
       adjustedScore: score,
@@ -483,5 +521,6 @@ module.exports = {
   evaluateRemoteProfitTargets,
   remoteProfitApproachDistanceCm,
   remoteProfitApproachEtaMs,
+  remoteProfitClassificationIsAfk,
   remoteProfitDistanceFactor
 };

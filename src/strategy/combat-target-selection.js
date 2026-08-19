@@ -272,8 +272,7 @@ function proactiveActiveProfitEligible(entity, context = {}) {
   if (!entity || !isActiveCombatMode(entity)) return false;
   if (isPreferredEasyKillTarget(entity, context)) return true;
   return combatDropValue(entity) > lowValueActiveDropMax(context)
-    && !proactiveActiveCombatBudgetBlocked(context)
-    && !proactiveActiveCombatImmediateStaminaBlocked(context);
+    && !proactiveActiveCombatBudgetBlocked(context);
 }
 
 function combatTargetThreatensSelf(entity, context = {}) {

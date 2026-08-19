@@ -146,6 +146,7 @@ function buildEnemyOpportunityCandidatesCore(targets, options = {}) {
   const opportunityStaminaAffordable = typeof options.opportunityStaminaAffordable === 'function' ? options.opportunityStaminaAffordable : () => true;
   const isAfkProfitTarget = typeof options.isAfkProfitTarget === 'function' ? options.isAfkProfitTarget : () => false;
   const priorityTier = typeof options.priorityTier === 'function' ? options.priorityTier : item => opportunityPriorityTierCore(item, options);
+  const enemySelection = typeof options.enemySelection === 'function' ? options.enemySelection : null;
   const attackRange = Math.max(0, Number(options.attackRange || 0));
   const attackEngageRange = Math.max(attackRange, Number(options.attackEngageRange || attackRange || 0));
   const opportunities = [];
@@ -154,6 +155,7 @@ function buildEnemyOpportunityCandidatesCore(targets, options = {}) {
     if (score === null) continue;
     const staminaCost = enemyStaminaCost(target);
     if (!opportunityStaminaAffordable(staminaCost)) continue;
+    const selection = enemySelection ? enemySelection(target, staminaCost) : null;
     const afk = isAfkProfitTarget(target);
     const inRange = Number(target?.distance || Infinity) <= (afk ? attackRange : attackEngageRange);
     const actionKind = inRange ? 'attack' : 'seek-enemy';
@@ -162,6 +164,13 @@ function buildEnemyOpportunityCandidatesCore(targets, options = {}) {
       id: target.user_id,
       distance: target.distance,
       staminaCost,
+      selectionStaminaCost: Number.isFinite(Number(selection?.selectionStaminaCost))
+        ? Number(selection.selectionStaminaCost)
+        : staminaCost,
+      selectionNetROI: Number.isFinite(Number(selection?.selectionNetROI))
+        ? Number(selection.selectionNetROI)
+        : null,
+      invulnerableSelection: selection || null,
       score,
       actionKind,
       reason: '',

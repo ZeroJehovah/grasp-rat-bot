@@ -1585,6 +1585,11 @@ function summarizeCombatTarget(target) {
         target?.stamina_5s_limit_milli ?? target?.stamina5sLimitMilli
       ),
     firing: Boolean(target.firing || target.is_firing || target.shooting),
+    invulnerable: isInvulnerableEntity(target),
+    invulnerableRemainingMs: numberOrNull(target.invulnerableRemainingMs),
+    invulnerableProtectionLeaseUntilMs: numberOrNull(target.invulnerableProtectionLeaseUntilMs),
+    invulnerableProtectionRemainingMs: numberOrNull(target.invulnerableProtectionRemainingMs),
+    invulnerableMetadataAuthority: String(target.invulnerableMetadataAuthority || ''),
     easyKillKnown: Boolean(target.easyKillKnown),
     easyKillDamagedToday: Boolean(target.easyKillDamagedToday),
     easyKillThreatExempt: Boolean(target.easyKillThreatExempt),
@@ -6030,6 +6035,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   };
   const fireAuthorization = resolveEstablishedCombatFireAuthorizationCore({
     targetPresent: Boolean(target),
+    targetInvulnerable: Boolean(target && isInvulnerableEntity(target)),
     aim,
     aimOk: aim.ok,
     inRange,
@@ -6038,6 +6044,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   });
   const primaryFireAuthorization = resolveEstablishedCombatFireAuthorizationCore({
     targetPresent: Boolean(primaryFireTarget),
+    targetInvulnerable: Boolean(primaryFireTarget && isInvulnerableEntity(primaryFireTarget)),
     aim: primaryAim,
     aimOk: primaryAim.ok,
     inRange: primaryInRange,

@@ -204,6 +204,7 @@ function resolveEstablishedCombatFireAuthorizationCore(input = {}) {
   const reachabilityChecked = fireReachability && typeof fireReachability === 'object';
   let finalFireBlocker = 'none';
   if (!targetPresent) finalFireBlocker = 'no-target';
+  else if (input.targetInvulnerable === true) finalFireBlocker = 'target-invulnerable';
   else if (!aimOk) finalFireBlocker = `aim:${String(input.aim?.reason || input.aimReason || 'unavailable')}`;
   else if (reachabilityChecked && fireReachability.reachable !== true) {
     finalFireBlocker = `aim-unreachable:${String(fireReachability.reason || 'creation-oracle-rejected')}`;

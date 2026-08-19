@@ -25,6 +25,7 @@ const {
 } = require('../../strategy/opportunity-candidates');
 const { playerProfitScoreMultiplierCore } = require('../../strategy/player-profit-score');
 const { estimateEightWayRouteCore } = require('../../strategy/eight-way-route-eta');
+const { invulnerableProfitSelectionCostCore } = require('../../strategy/invulnerable-profit-selection');
 const {
   chooseStableOpportunityCore,
   rememberOpportunityChoiceCore
@@ -32,7 +33,8 @@ const {
 const {
   DEFAULT_REMOTE_PROFIT_TARGET_CONFIG,
   remoteProfitApproachDistanceCm,
-  remoteProfitApproachEtaMs
+  remoteProfitApproachEtaMs,
+  remoteProfitDistanceFactor
 } = require('../../strategy/remote-profit-targets');
 const {
   profitEscortContinuityMatchesCore,
@@ -195,7 +197,7 @@ const EASY_KILL_SEEK_RANGE_CM_BY_SCORE = Object.freeze({
   3: null
 });
 const DEFAULT_INVULNERABLE_PROFIT_APPROACH_DISTANCE_CM = BROWSER_RUNTIME_DEFAULTS.playerDropPickupRadiusCm ?? 150;
-const DEFAULT_INVULNERABLE_ACTIVE_PROFIT_APPROACH_DISTANCE_CM = 10000;
+const DEFAULT_INVULNERABLE_ACTIVE_PROFIT_APPROACH_DISTANCE_CM = 15000;
 const DEFAULT_INVULNERABLE_PROFIT_MOVE_SPEED_CM_PER_SEC = 1000;
 const DEFAULT_DANGEROUS_TARGET_COOLDOWN_MS = BROWSER_RUNTIME_DEFAULTS.browserlessDangerousTargetCooldownMs ?? 900000;
 const DEFAULT_EASY_KILL_APPROACH_WINDOW_MS = BROWSER_RUNTIME_DEFAULTS.browserlessEasyKillApproachWindowMs ?? 8000;
@@ -1330,6 +1332,11 @@ function normalizeEntityForDecision(entity, self = null, authority = 'realtime',
     ? protocolInvulnerabilityRemainingMs(entity, options)
     : invulnerableRemainingMs(entity, options);
   const fullStamina5s = hasFull5sStamina(entity, options);
+  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const protectionLeaseUntilMs = numberOrNull(entity.invulnerableProtectionLeaseUntilMs);
+  const protectionLeaseRemainingMs = protectionLeaseUntilMs === null
+    ? 0
+    : Math.max(0, protectionLeaseUntilMs - nowMs);
   const dropKnown = entityDropKnown(entity);
   const normalized = {
     ...entity,
@@ -1349,13 +1356,20 @@ function normalizeEntityForDecision(entity, self = null, authority = 'realtime',
     speed: numberOrNull(entity.speed ?? entity.speed_per_tick ?? entity.speedPerTick) ?? entitySpeed(entity),
     firing,
     alive: isAliveEntity(entity),
-    invulnerable: isInvulnerableEntity(entity),
+    invulnerable: isInvulnerableEntity(entity) || protectionLeaseRemainingMs > 0,
     fullStamina5s
   };
   assignStaminaAliases(normalized, '5s', stamina5s, stamina5sLimit);
   assignStaminaAliases(normalized, '1h', stamina1h, stamina1hLimit);
   assignStaminaAliases(normalized, '1d', stamina1d, stamina1dLimit);
-  if (invulnerableMs !== null && invulnerableMs > 0) normalized.invulnerableRemainingMs = invulnerableMs;
+  if ((invulnerableMs !== null && invulnerableMs > 0) || protectionLeaseRemainingMs > 0) {
+    normalized.invulnerableRemainingMs = Math.max(invulnerableMs || 0, protectionLeaseRemainingMs);
+  }
+  if (protectionLeaseRemainingMs > 0) {
+    normalized.invulnerableProtectionLeaseUntilMs = protectionLeaseUntilMs;
+    normalized.invulnerableProtectionRemainingMs = protectionLeaseRemainingMs;
+    normalized.invulnerableMetadataAuthority = 'protection-lease';
+  }
   normalized.distance = self ? distanceBetween(self, normalized) : numberOrNull(entity.distance);
   return normalized;
 }
@@ -1556,6 +1570,10 @@ function enrichRealtimeEntityWithSnapshotProfitMetadata(entity, snapshotEntity, 
   let invulnerableMerged = false;
   let displayMerged = false;
   for (const field of TARGET_SNAPSHOT_METADATA_FIELDS) {
+    // Countdown values from the snapshot are converted into a bounded
+    // protection lease below. Copying the raw countdown onto the realtime
+    // entity would make an old positive value look permanently authoritative.
+    if (TARGET_SNAPSHOT_INVULNERABLE_FIELDS.includes(field)) continue;
     if (hasOwnUsableValue(output, field) || !hasOwnUsableValue(snapshotEntity, field)) continue;
     output[field] = cloneJson(snapshotEntity[field]);
     if (TARGET_SNAPSHOT_DISPLAY_FIELDS.includes(field)) displayMerged = true;
@@ -1587,6 +1605,50 @@ function enrichRealtimeEntityWithSnapshotProfitMetadata(entity, snapshotEntity, 
       ? String(entity.dropAuthority || 'realtime')
       : 'snapshot',
     profitMetadataAuthority: 'snapshot'
+  };
+}
+
+function maintainInvulnerableProtectionLease(entity, snapshotEntity, stateful = {}, nowMs = Date.now(), options = {}) {
+  if (!entity || typeof entity !== 'object') return entity;
+  const userId = numberOrNull(entity.user_id ?? entity.userId);
+  if (userId === null) return entity;
+  stateful.invulnerableProtectionLeases = stateful.invulnerableProtectionLeases
+    && typeof stateful.invulnerableProtectionLeases === 'object'
+    ? stateful.invulnerableProtectionLeases
+    : {};
+  const key = String(userId);
+  const previous = stateful.invulnerableProtectionLeases[key] || null;
+  const candidates = [];
+  const realtimeRemainingMs = entity.invulnerableMetadataAuthority === 'snapshot'
+    ? null
+    : protocolInvulnerabilityRemainingMs(entity, options);
+  if (realtimeRemainingMs !== null && realtimeRemainingMs > 0) {
+    candidates.push({ untilMs: nowMs + realtimeRemainingMs, observedAtMs: nowMs, source: 'realtime-countdown' });
+  }
+  const snapshotRemainingMs = protocolInvulnerabilityRemainingMs(snapshotEntity, options);
+  const snapshotObservedAtMs = numberOrNull(snapshotEntity?.receivedAtMs ?? options.snapshotReceivedAtMs);
+  if (snapshotRemainingMs !== null && snapshotRemainingMs > 0 && snapshotObservedAtMs !== null) {
+    candidates.push({
+      untilMs: snapshotObservedAtMs + snapshotRemainingMs,
+      observedAtMs: snapshotObservedAtMs,
+      source: 'snapshot-countdown'
+    });
+  }
+  let lease = previous;
+  for (const candidate of candidates) {
+    if (candidate.untilMs > nowMs && candidate.untilMs > Number(lease?.untilMs || 0)) lease = candidate;
+  }
+  if (!lease || Number(lease.untilMs || 0) <= nowMs) {
+    delete stateful.invulnerableProtectionLeases[key];
+    return entity;
+  }
+  stateful.invulnerableProtectionLeases[key] = lease;
+  return {
+    ...entity,
+    invulnerableProtectionLeaseUntilMs: Number(lease.untilMs),
+    invulnerableProtectionRemainingMs: Math.max(0, Number(lease.untilMs) - nowMs),
+    invulnerableProtectionSource: String(lease.source || 'countdown'),
+    invulnerableMetadataAuthority: 'protection-lease'
   };
 }
 
@@ -2621,6 +2683,9 @@ function summarizeTarget(target) {
     firing: Boolean(target.firing),
     invulnerable: Boolean(target.invulnerable || isInvulnerableEntity(target)),
     invulnerableRemainingMs: invulnerableRemainingMs(target),
+    invulnerableProtectionLeaseUntilMs: numberOrNull(target.invulnerableProtectionLeaseUntilMs),
+    invulnerableProtectionRemainingMs: numberOrNull(target.invulnerableProtectionRemainingMs),
+    invulnerableProtectionSource: String(target.invulnerableProtectionSource || ''),
     invulnerableMetadataAuthority: target.invulnerableMetadataAuthority || '',
     recentlyActive: Boolean(target.recentlyActive),
     recentlyMoved: Boolean(target.recentlyMoved),
@@ -3819,13 +3884,18 @@ function observeBrowserlessCoinPickups(input, stateful = {}, options = {}) {
 function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const realtime = state?.realtime || {};
   const fallback = state?.fallback || state?.snapshot || {};
-  const normalizationOptions = { ...options, rawProtocolFields: true };
   const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const normalizationOptions = { ...options, nowMs, rawProtocolFields: true };
   advanceProfitTickEpoch(stateful, realtime.tick, options);
   const dataGaps = [];
   const snapshotFrameAgeMs = numberOrNull(fallback.frameAgeMs);
   const snapshotMaxAgeMs = Math.max(1000, Number(options.snapshotCoinFallbackMaxAgeMs || 5000));
   const snapshotFreshForMetadata = snapshotFrameAgeMs === null || snapshotFrameAgeMs <= snapshotMaxAgeMs;
+  const snapshotLeaseOptions = {
+    ...options,
+    snapshotReceivedAtMs: numberOrNull(fallback.receivedAtMs)
+      ?? (snapshotFrameAgeMs !== null ? nowMs - Math.max(0, snapshotFrameAgeMs) : null)
+  };
   const snapshotEntitiesByUserId = snapshotFreshForMetadata ? snapshotEntityByUserId(fallback) : new Map();
   const rawSelfUserId = numberOrNull(realtime.self?.user_id ?? realtime.self?.userId ?? state?.userId ?? options.userId);
   const snapshotSelf = rawSelfUserId !== null ? snapshotEntitiesByUserId.get(rawSelfUserId) : null;
@@ -3836,11 +3906,16 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const whitelistIdentityContext = buildWhitelistSafetyIdentityContext(options, nowMs);
   const selfUserId = Number(self?.user_id ?? state?.userId ?? options.userId ?? 0);
   const realtimeEntities = (Array.isArray(realtime.entities) ? realtime.entities : [])
-    .map(entity => enrichRealtimeEntityWithSnapshotProfitMetadata(
-      entity,
-      snapshotEntitiesByUserId.get(numberOrNull(entity?.user_id ?? entity?.userId)),
-      options
-    ))
+    .map(entity => {
+      const snapshotEntity = snapshotEntitiesByUserId.get(numberOrNull(entity?.user_id ?? entity?.userId));
+      return maintainInvulnerableProtectionLease(
+        enrichRealtimeEntityWithSnapshotProfitMetadata(entity, snapshotEntity, snapshotLeaseOptions),
+        snapshotEntity,
+        stateful,
+        nowMs,
+        snapshotLeaseOptions
+      );
+    })
     .map(entity => normalizeEntityForDecision(entity, self, 'realtime', normalizationOptions))
     .filter(Boolean);
   annotateBrowserlessRecentActivity(realtimeEntities, stateful, nowMs, options);
@@ -4076,7 +4151,6 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
 
 function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {}) {
   const inputStages = {};
-  const normalizationOptions = { ...options, rawProtocolFields: true };
   let inputStageStarted = performance.now();
   const markInputStage = name => {
     inputStages[name] = performance.now() - inputStageStarted;
@@ -4085,11 +4159,17 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
   const realtime = state?.realtime || {};
   const fallback = state?.fallback || state?.snapshot || {};
   const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const normalizationOptions = { ...options, nowMs, rawProtocolFields: true };
   advanceProfitTickEpoch(stateful, realtime.tick, options);
   const whitelistIdentityContext = buildWhitelistSafetyIdentityContext(options, nowMs);
   const snapshotFrameAgeMs = numberOrNull(fallback.frameAgeMs);
   const snapshotMaxAgeMs = Math.max(1000, Number(options.snapshotCoinFallbackMaxAgeMs || 5000));
   const snapshotFreshForMetadata = snapshotFrameAgeMs === null || snapshotFrameAgeMs <= snapshotMaxAgeMs;
+  const snapshotLeaseOptions = {
+    ...options,
+    snapshotReceivedAtMs: numberOrNull(fallback.receivedAtMs)
+      ?? (snapshotFrameAgeMs !== null ? nowMs - Math.max(0, snapshotFrameAgeMs) : null)
+  };
   const rawSelfUserId = numberOrNull(realtime.self?.user_id ?? realtime.self?.userId ?? state?.userId ?? options.userId);
   const priorityUserIds = new Set();
   if (rawSelfUserId !== null) priorityUserIds.add(String(rawSelfUserId));
@@ -4157,11 +4237,12 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
   for (const entity of rawRealtimeEntities) {
     const userId = numberOrNull(entity?.user_id ?? entity?.userId);
     if (userId !== null && Number(userId) === selfUserId) continue;
-    const enriched = enrichRealtimeEntityWithSnapshotProfitMetadata(
+    const snapshotEntity = userId === null ? null : snapshotEntitiesByUserId.get(userId);
+    const enriched = maintainInvulnerableProtectionLease(enrichRealtimeEntityWithSnapshotProfitMetadata(
       entity,
-      userId === null ? null : snapshotEntitiesByUserId.get(userId),
-      options
-    );
+      snapshotEntity,
+      snapshotLeaseOptions
+    ), snapshotEntity, stateful, nowMs, snapshotLeaseOptions);
     const normalized = normalizeEntityForDecision(enriched, self, 'realtime', normalizationOptions);
     if (normalized) realtimeEntities.push(normalized);
   }
@@ -4484,12 +4565,33 @@ function scoreEnemyOpportunity(target, options = {}) {
       : dropWeight
   ) ?? 1);
   const effective = effectiveProfitReward(target, options);
-  const economicScore = opportunityValueScoreCore(effective.expectedReward, effective.staminaCost, {
+  const selection = options.invulnerableProfitSelectionEnabled === false
+    ? { selectionStaminaCost: effective.staminaCost }
+    : enemyOpportunitySelection(target, effective, options);
+  const economicScore = opportunityValueScoreCore(effective.expectedReward, selection.selectionStaminaCost, {
     distanceFloor: options.opportunityDistanceFloor ?? BROWSER_RUNTIME_DEFAULTS.opportunityDistanceFloor,
     distanceScoreScale: options.distanceScoreScale || options.opportunityDistanceScoreScale || BROWSER_RUNTIME_DEFAULTS.opportunityDistanceScoreScale || 10000,
     weight
   });
   return economicScore * playerProfitScoreMultiplierCore(effective.rawDrop);
+}
+
+function enemyOpportunitySelection(target, effectiveOrStaminaCost, options = {}) {
+  const effective = effectiveOrStaminaCost && typeof effectiveOrStaminaCost === 'object'
+    ? effectiveOrStaminaCost
+    : effectiveProfitReward(target, {
+        ...options,
+        staminaCostOverride: effectiveOrStaminaCost
+      });
+  const estimate = target?.invulnerableApproachEstimate
+    || (target?.invulnerable ? invulnerableProfitApproachEstimate(target, options) : null);
+  return invulnerableProfitSelectionCostCore({
+    staminaCost: effective.staminaCost,
+    expectedReward: effective.expectedReward,
+    invulnerable: target?.invulnerable === true,
+    invulnerableRemainingMs: estimate?.remainingMs ?? invulnerableRemainingMs(target, options),
+    approachEtaMs: estimate?.routeEtaMs ?? null
+  }, options);
 }
 
 function coinSafeFromThreats(coin, threats = [], options = {}) {
@@ -6699,20 +6801,13 @@ function realtimeProfitAuthorityIds(input = {}, options = {}) {
   const activeProfitRange = Math.max(0, Number(
     options.combatAttackRange ?? options.attackRange ?? DEFAULT_ATTACK_RANGE
   ));
-  const selfStamina5s = input.self?.stamina5s
-    ?? input.self?.stamina_5s_remaining_milli
-    ?? input.self?.stamina5sRemainingMilli;
   for (const target of input.visibleTargets || []) {
     if (target?.authority !== 'realtime' && target?.authority !== 'native') continue;
     if (target?.joinModeActive !== true || target?.alive === false || target?.invulnerable) continue;
     if (target?.whitelisted || !Number.isFinite(Number(target?.distance))
       || Number(target.distance) > activeProfitRange) continue;
     if (!proactiveActiveProfitEligible(target, {
-      ...options,
-      selfStamina5s,
-      proactiveActiveCombatMinimumStamina5s: options.combatProactiveActiveMinStamina5s
-        ?? options.combatOpponentProbeReserveMs
-        ?? 5600
+      ...options
     })) continue;
     add(target);
   }
@@ -6837,13 +6932,53 @@ function remoteProfitCandidateInput(input, options = {}, stateful = {}) {
       reject('stamina-unaffordable');
       continue;
     }
+    const selectionRecalculationRequired = Boolean(
+      candidate.invulnerable === true
+        || snapshotRemainingMs !== null
+        || candidate.invulnerableSelection
+        || candidate.selectionScore !== undefined
+    );
+    const selection = selectionRecalculationRequired
+      ? invulnerableProfitSelectionCostCore({
+          staminaCost: candidate.staminaCost,
+          expectedReward: candidate.expectedReward,
+          invulnerable: snapshotInvulnerable && (remainingNowMs === null || remainingNowMs > 0),
+          invulnerableRemainingMs: remainingNowMs,
+          approachEtaMs
+        }, options)
+      : {
+          selectionStaminaCost: candidate.selectionStaminaCost ?? candidate.staminaCost,
+          selectionNetROI: candidate.selectionNetROI ?? null,
+          selectionScoreMultiplier: 1,
+          applied: false,
+          reason: 'snapshot-score-authoritative'
+        };
+    const distanceFactor = selectionRecalculationRequired
+      ? remoteProfitDistanceFactor(distanceNow, options)
+      : Number(candidate.distanceFactor);
+    const selectionScore = selectionRecalculationRequired
+      ? Number(candidate.baseScore) * Number(selection.selectionScoreMultiplier || 0)
+      : Number(candidate.selectionScore ?? candidate.baseScore ?? candidate.adjustedScore);
+    const adjustedScore = selectionRecalculationRequired
+      ? selectionScore * Number(distanceFactor)
+      : Number(candidate.adjustedScore);
+    if (!(adjustedScore > 0)) {
+      reject('non-positive-current-score');
+      continue;
+    }
     result.candidates.push({
       ...candidate,
       distance: distanceNow,
       invulnerable: snapshotInvulnerable && (remainingNowMs === null || remainingNowMs > 0),
       invulnerableRemainingMs: remainingNowMs,
       approachDistanceCm,
-      approachEtaMs
+      approachEtaMs,
+      selectionStaminaCost: selection.selectionStaminaCost,
+      selectionNetROI: selection.selectionNetROI,
+      invulnerableSelection: selection,
+      selectionScore,
+      distanceFactor,
+      adjustedScore
     });
   }
   result.realtimeSupersededIds = Array.from(superseded).slice(0, 64);
@@ -7618,6 +7753,10 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       ...options,
       recentCombatMetrics: stateful.combatMetrics
     }),
+    enemySelection: (target, staminaCost) => enemyOpportunitySelection(target, staminaCost, {
+      ...options,
+      recentCombatMetrics: stateful.combatMetrics
+    }),
     opportunityStaminaAffordable: staminaCost => opportunityStaminaAffordable(input.self, staminaCost, options),
     routeEligible: thresholdContext.active
       ? route => profitRouteThresholdEligible(route, thresholdContext)
@@ -7667,15 +7806,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     .filter(target => !isWhitelistedTargetForOptions(target, options))
     .filter(target => Number.isFinite(Number(target.distance)) && Number(target.distance) <= activeProfitRange)
     .filter(target => !targetDangerousCooldownRecord(stateful, target, input.nowMs))
-    .filter(target => proactiveActiveProfitEligible(target, {
-      ...options,
-      selfStamina5s: input.self?.stamina5s
-        ?? input.self?.stamina_5s_remaining_milli
-        ?? input.self?.stamina5sRemainingMilli,
-      proactiveActiveCombatMinimumStamina5s: options.combatProactiveActiveMinStamina5s
-        ?? options.combatOpponentProbeReserveMs
-        ?? 5600
-    }));
+    .filter(target => proactiveActiveProfitEligible(target, options));
   const enemyOpportunityTargets = Array.from(new Map(
     [...afkOpportunityTargets, ...easyKillOpportunityTargets, ...ordinaryActiveProfitTargets]
       .map(target => [String(target.user_id ?? target.userId ?? target.entity_id ?? target.entityId ?? ''), target])
@@ -7706,6 +7837,9 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       reward: effective.expectedReward,
       expectedReward: effective.expectedReward,
       effectiveProfitReward: effective,
+      selectionStaminaCost: item.selectionStaminaCost,
+      selectionNetROI: item.selectionNetROI,
+      invulnerableSelection: item.invulnerableSelection,
       heldCandidateSource: item.sourceTarget?.authority === 'realtime' ? 'realtime-visible' : String(item.sourceTarget?.authority || ''),
       heldRewardSource: rewardKnown
         ? String(item.sourceTarget?.profitMetadataAuthority || effective.modelSource || 'realtime-visible-drop')

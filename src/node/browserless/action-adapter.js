@@ -24,6 +24,14 @@ const DEFAULT_PLAYER_DROP_PICKUP_RADIUS_CM = Math.max(
   Number(BROWSER_RUNTIME_DEFAULTS.playerDropPickupRadiusCm || 150)
 );
 const DEFAULT_INVULNERABLE_PROFIT_ARRIVAL_HYSTERESIS_CM = 100;
+const DEFAULT_INVULNERABLE_ACTIVE_PROFIT_APPROACH_DISTANCE_CM = Math.max(
+  0,
+  Number(BROWSER_RUNTIME_DEFAULTS.invulnerableActiveProfitApproachDistanceCm || 15000)
+);
+const DEFAULT_INVULNERABLE_ACTIVE_PROFIT_ARRIVAL_HYSTERESIS_CM = Math.max(
+  0,
+  Number(BROWSER_RUNTIME_DEFAULTS.invulnerableActiveProfitArrivalHysteresisCm || 500)
+);
 const DEFAULT_COMMAND_INTERVAL_MS = 500;
 const DEFAULT_SETTLEMENT_FRAMES = 2;
 const DEFAULT_MOVEMENT_SETTLEMENT_STALL_MS = 5000;
@@ -179,7 +187,12 @@ function hasOwnInvulnerabilityMetadata(entity) {
   });
 }
 
-function mergeRealtimeTargetInvulnerability(metadataTarget, realtimeTarget) {
+function invulnerableProtectionLeaseActive(target, atMs = Date.now()) {
+  const untilMs = numberOrNull(target?.invulnerableProtectionLeaseUntilMs);
+  return untilMs !== null && untilMs > Number(atMs);
+}
+
+function mergeRealtimeTargetInvulnerability(metadataTarget, realtimeTarget, atMs = Date.now()) {
   if (!realtimeTarget || typeof realtimeTarget !== 'object') return metadataTarget || null;
   if (!metadataTarget || typeof metadataTarget !== 'object') return realtimeTarget;
 
@@ -189,8 +202,15 @@ function mergeRealtimeTargetInvulnerability(metadataTarget, realtimeTarget) {
     for (const field of INVULNERABILITY_METADATA_FIELDS) {
       if (!Object.prototype.hasOwnProperty.call(realtimeTarget, field)) delete merged[field];
     }
-    merged.invulnerable = isInvulnerableEntity(realtimeTarget);
-    merged.invulnerableMetadataAuthority = 'realtime';
+    const leaseActive = invulnerableProtectionLeaseActive(metadataTarget, atMs);
+    merged.invulnerable = isInvulnerableEntity(realtimeTarget) || leaseActive;
+    merged.invulnerableMetadataAuthority = leaseActive ? 'protection-lease' : 'realtime';
+    if (leaseActive) {
+      merged.invulnerableProtectionRemainingMs = Math.max(
+        0,
+        Number(metadataTarget.invulnerableProtectionLeaseUntilMs) - Number(atMs)
+      );
+    }
   } else {
     merged.invulnerable = isInvulnerableEntity(metadataTarget);
   }
@@ -1581,6 +1601,100 @@ function createBrowserlessActionAdapter(options = {}) {
     };
   }
 
+  function applyActiveInvulnerableProfitApproach(self, target, detail = {}) {
+    clearInvulnerableProfitApproach('active-invulnerable-profit-distance-band');
+    const sx = coordinateOrNull(self?.x);
+    const sy = coordinateOrNull(self?.y);
+    const tx = coordinateOrNull(target?.x);
+    const ty = coordinateOrNull(target?.y);
+    if (sx === null || sy === null || tx === null || ty === null) {
+      const stopped = stop('profit-active-invulnerable-missing-position');
+      return {
+        ok: stopped.ok,
+        kind: 'stop',
+        reason: 'profit-active-invulnerable-missing-position',
+        command: stopped.command || null,
+        skipped: Boolean(stopped.skipped),
+        target,
+        ...transportFailure(stopped)
+      };
+    }
+    const distance = Math.hypot(tx - sx, ty - sy);
+    const approachDistanceCm = Math.max(0, Number(
+      target?.invulnerableApproachDistanceCm
+        ?? options.invulnerableActiveProfitApproachDistanceCm
+        ?? DEFAULT_INVULNERABLE_ACTIVE_PROFIT_APPROACH_DISTANCE_CM
+    ));
+    const releaseDistanceCm = approachDistanceCm + Math.max(0, Number(
+      options.invulnerableActiveProfitArrivalHysteresisCm
+        ?? DEFAULT_INVULNERABLE_ACTIVE_PROFIT_ARRIVAL_HYSTERESIS_CM
+    ));
+    if (distance >= approachDistanceCm && distance <= releaseDistanceCm) {
+      const stopped = stop('profit-active-invulnerable-distance-hold');
+      return {
+        ok: stopped.ok,
+        kind: 'stop',
+        reason: 'profit-active-invulnerable-distance-hold',
+        command: stopped.command || null,
+        skipped: Boolean(stopped.skipped),
+        target,
+        activeInvulnerableApproach: true,
+        distanceCm: Math.round(distance),
+        approachDistanceCm,
+        releaseDistanceCm,
+        remoteNavigationOnly: Boolean(detail.remoteNavigationOnly),
+        shoot: { ok: true, skipped: true, reason: 'target-invulnerable-wire-gate' },
+        ...transportFailure(stopped)
+      };
+    }
+    const separating = distance < approachDistanceCm;
+    const vector = separating
+      ? movementVectorToTarget(target, self, { ...options, targetDeadZoneCm: 0 })
+      : movementVectorToTarget(self, target, { ...options, targetDeadZoneCm: 0 });
+    if (!vector.ok) {
+      const stopped = stop(separating
+        ? 'profit-active-invulnerable-separation-unavailable'
+        : 'profit-active-invulnerable-approach-unavailable');
+      return {
+        ok: stopped.ok,
+        kind: 'stop',
+        reason: separating
+          ? 'profit-active-invulnerable-separation-unavailable'
+          : 'profit-active-invulnerable-approach-unavailable',
+        vector,
+        command: stopped.command || null,
+        skipped: Boolean(stopped.skipped),
+        target,
+        activeInvulnerableApproach: true,
+        distanceCm: Math.round(distance),
+        approachDistanceCm,
+        releaseDistanceCm,
+        ...transportFailure(stopped)
+      };
+    }
+    const reason = separating
+      ? 'profit-active-invulnerable-separate'
+      : (detail.remoteNavigationOnly ? 'seek-remote-player' : 'profit-active-invulnerable-approach');
+    const sent = sendVelocity(vector.dx, vector.dy, reason, target);
+    return {
+      ok: sent.ok,
+      kind: 'velocity',
+      reason,
+      vector,
+      command: sent.command || null,
+      skipped: Boolean(sent.skipped),
+      target,
+      activeInvulnerableApproach: true,
+      separating,
+      distanceCm: Math.round(distance),
+      approachDistanceCm,
+      releaseDistanceCm,
+      remoteNavigationOnly: Boolean(detail.remoteNavigationOnly),
+      shoot: { ok: true, skipped: true, reason: 'target-invulnerable-wire-gate' },
+      ...transportFailure(sent)
+    };
+  }
+
   function nearCoinContinuationSummary(continuation = state.nearCoinContinuation) {
     if (!continuation) return null;
     const pulse = continuation.lastPulse || null;
@@ -2517,7 +2631,7 @@ function createBrowserlessActionAdapter(options = {}) {
     const key = targetRepeatKey(target);
     const entity = findRealtimeEntity(stateSnapshot, key);
     if (!entity) return { ok: false, reason: 'afk-fire-missing-realtime-target', target: null };
-    const mergedTarget = mergeRealtimeTargetInvulnerability(target, entity);
+    const mergedTarget = mergeRealtimeTargetInvulnerability(target, entity, now());
     const hp = numberOrNull(entity.hp);
     const x = numberOrNull(entity.x);
     const y = numberOrNull(entity.y);
@@ -2675,7 +2789,7 @@ function createBrowserlessActionAdapter(options = {}) {
         cancelShootRepeat('shoot-repeat-target-active', { error: true });
         return false;
       }
-      const mergedTarget = mergeRealtimeTargetInvulnerability(repeat.target, entity);
+      const mergedTarget = mergeRealtimeTargetInvulnerability(repeat.target, entity, now());
       if (isInvulnerableEntity(mergedTarget)) {
         cancelShootRepeat('shoot-repeat-target-invulnerable');
         return false;
@@ -3053,6 +3167,21 @@ function createBrowserlessActionAdapter(options = {}) {
       advisoryReasons: shotMeta.advisoryReasons
     };
     expirePendingShootCommands(atMs);
+    if (isInvulnerableEntity(target) || invulnerableProtectionLeaseActive(target, atMs)) {
+      state.skippedCount += 1;
+      const skipReason = 'target-invulnerable-wire-gate';
+      return {
+        ok: true,
+        skipped: true,
+        reason: skipReason,
+        execution: emitShootExecution({
+          ...executionContext,
+          type: 'shoot-skip',
+          skipReason,
+          outcome: 'hard-gate-blocked'
+        })
+      };
+    }
     if (state.shootingSealed) {
       state.skippedCount += 1;
       const skipReason = state.shootingSealReason || 'shooting-sealed';
@@ -3485,10 +3614,11 @@ function createBrowserlessActionAdapter(options = {}) {
       clearCoinFeedbackGate();
       const target = profitAction.target;
       const remoteClassification = target?.remoteClassification || target?.sourceTarget?.classification || '';
-      if (target?.invulnerable === true && remoteClassification !== 'easy-kill-active') {
-        return applyPassiveInvulnerableProfitApproach(stateSnapshot, self, target, {
-          remoteNavigationOnly: true
-        });
+      if (target?.invulnerable === true) {
+        if (remoteClassification === 'easy-kill-active') {
+          return applyActiveInvulnerableProfitApproach(self, target, { remoteNavigationOnly: true });
+        }
+        return applyPassiveInvulnerableProfitApproach(stateSnapshot, self, target, { remoteNavigationOnly: true });
       }
       clearInvulnerableProfitApproach('remote-player-not-passive-invulnerable');
       const arrivalToleranceCm = Math.max(0, Number(
@@ -3790,6 +3920,7 @@ function createBrowserlessActionAdapter(options = {}) {
 
   function applyProfitEnemyDecision(stateSnapshot, self, target, decision) {
     clearNearCoinContinuation('profit-enemy-action');
+    if (target?.invulnerable !== true) clearInvulnerableProfitApproach('vulnerable-profit-target');
     const rawRealtimeTarget = findRealtimeEntity(stateSnapshot, targetRepeatKey(target));
     if (!rawRealtimeTarget && target?.cachedNavigationOnly !== true) {
       clearInvulnerableProfitApproach('profit-target-missing-realtime');
@@ -3806,21 +3937,23 @@ function createBrowserlessActionAdapter(options = {}) {
     }
     if (rawRealtimeTarget) {
       target = {
-        ...mergeRealtimeTargetInvulnerability(target, rawRealtimeTarget),
+        ...mergeRealtimeTargetInvulnerability(target, rawRealtimeTarget, now()),
         authority: 'realtime',
         active: entityActiveLike(rawRealtimeTarget)
       };
     }
+    if (target?.invulnerable !== true) clearInvulnerableProfitApproach('vulnerable-profit-target');
     if (target?.active && target?.easyKillProfitTarget) {
       clearInvulnerableProfitApproach('active-profit-target');
       const invulnerableApproach = target?.invulnerable === true;
+      if (invulnerableApproach) return applyActiveInvulnerableProfitApproach(self, target);
       const vector = movementVectorToTarget(self, target, invulnerableApproach
         ? {
             ...options,
             targetDeadZoneCm: Math.max(0, Number(
               target.invulnerableApproachDistanceCm
                 ?? options.invulnerableActiveProfitApproachDistanceCm
-                ?? 10000
+                ?? DEFAULT_INVULNERABLE_ACTIVE_PROFIT_APPROACH_DISTANCE_CM
             ))
           }
         : options);
@@ -3851,7 +3984,10 @@ function createBrowserlessActionAdapter(options = {}) {
           ...transportFailure(stopped),
           target,
           easyKillApproach: true,
-          approachDistanceCm: Math.round(Number(target.invulnerableApproachDistanceCm ?? 10000))
+          approachDistanceCm: Math.round(Number(
+            target.invulnerableApproachDistanceCm
+              ?? DEFAULT_INVULNERABLE_ACTIVE_PROFIT_APPROACH_DISTANCE_CM
+          ))
         };
       }
       if (!vector.ok) {
@@ -4054,7 +4190,11 @@ function createBrowserlessActionAdapter(options = {}) {
         { repeatSummary: false }
       );
       const shooting = combat.shooting || {};
-      const fireTarget = shooting.target || combat.fireTarget || combat.target;
+      const metadataFireTarget = shooting.target || combat.fireTarget || combat.target;
+      const realtimeFireTarget = findRealtimeEntity(stateSnapshot, targetRepeatKey(metadataFireTarget));
+      const fireTarget = realtimeFireTarget
+        ? mergeRealtimeTargetInvulnerability(metadataFireTarget, realtimeFireTarget, now())
+        : metadataFireTarget;
       const fireTargetRole = String(shooting.targetRole || fireTarget?.combatRole || fireTarget?.role || '');
       const primaryFireTarget = fireTargetRole === 'primary'
         || (fireTargetRole === 'current'

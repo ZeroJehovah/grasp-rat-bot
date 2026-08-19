@@ -1070,9 +1070,11 @@ function assertDualTargetRuntimeRules() {
   primaryFrame.realtime.tick = 2;
   const primarySelected = decide(dualAdapter, primaryFrame, 1100, null, common);
   assert.strictEqual(primarySelected.combat?.target?.userId, 8);
-  assert.strictEqual(primarySelected.combat?.fireTarget?.userId, 42);
-  assert.strictEqual(primarySelected.combat?.shooting?.targetRole, 'primary');
-  assert.strictEqual(primarySelected.combat?.shooting?.mode, 'primary-profit');
+  // The previous frame's protection lease remains active, so the defensive
+  // secondary is still the only legal fire target.
+  assert.strictEqual(primarySelected.combat?.fireTarget?.userId, 8);
+  assert.strictEqual(primarySelected.combat?.shooting?.targetRole, 'secondary');
+  assert.strictEqual(primarySelected.combat?.shooting?.mode, 'secondary-defensive');
   assert.strictEqual(primarySelected.combat?.shooting?.wouldShoot, true);
 
   let missingPrimaryDecision = null;
@@ -2604,7 +2606,7 @@ function runRemoteProfitDecisionSelfTest() {
   );
   assert.strictEqual(invulnerableRemoteFirst.action?.kind, 'seek-remote-player');
   assert.strictEqual(invulnerableRemoteFirst.action?.target?.invulnerableRemainingMs, 74000);
-  assert.strictEqual(invulnerableRemoteFirst.action?.target?.arrivalToleranceCm, 10000);
+  assert.strictEqual(invulnerableRemoteFirst.action?.target?.arrivalToleranceCm, 15000);
   const remoteApproachAdapter = createBrowserlessActionAdapter({
     userId: 7,
     commandIntervalMs: 0,
@@ -2618,8 +2620,8 @@ function runRemoteProfitDecisionSelfTest() {
     state(fullStaminaSelf({ x: 80000 })),
     invulnerableRemoteFirst
   );
-  assert.strictEqual(remoteActiveClose.kind, 'stop');
-  assert.strictEqual(remoteActiveClose.reason, 'remote-target-arrived');
+  assert.strictEqual(remoteActiveClose.kind, 'velocity');
+  assert.strictEqual(remoteActiveClose.reason, 'profit-active-invulnerable-separate');
   const invulnerableAfkBatch = batch(remoteCandidate({
     invulnerable: true,
     invulnerableRemainingMs: 75000,
@@ -2685,7 +2687,7 @@ function runRemoteProfitDecisionSelfTest() {
   );
   assert.strictEqual(realtimeInvulnerableReady.action?.kind, 'seek-enemy');
   assert.strictEqual(realtimeInvulnerableReady.action?.target?.easyKillInvulnerableApproachEligible, true);
-  assert.strictEqual(realtimeInvulnerableReady.action?.target?.invulnerableApproachDistanceCm, 10000);
+  assert.strictEqual(realtimeInvulnerableReady.action?.target?.invulnerableApproachDistanceCm, 15000);
   const activeApproachAdapter = createBrowserlessActionAdapter({
     userId: 7,
     commandIntervalMs: 0,
@@ -2699,12 +2701,12 @@ function runRemoteProfitDecisionSelfTest() {
     state(fullStaminaSelf({ x: 0 }), [activeInvulnerable(20000, 72000)]),
     realtimeInvulnerableReady
   );
-  assert.strictEqual(activeApproachAction.reason, 'profit-easy-kill-seek');
+  assert.strictEqual(activeApproachAction.reason, 'profit-active-invulnerable-approach');
   const activeCloseAction = activeApproachAdapter.applyDecision(
-    state(fullStaminaSelf({ x: 10000 }), [activeInvulnerable(10000, 72000)]),
+    state(fullStaminaSelf({ x: 0 }), [activeInvulnerable(10000, 72000)]),
     realtimeInvulnerableReady
   );
-  assert.strictEqual(activeCloseAction.reason, 'profit-easy-kill-invulnerable-close-wait');
+  assert.strictEqual(activeCloseAction.reason, 'profit-active-invulnerable-separate');
   const realtimeInvulnerableTooClose = decide(
     realtimeInvulnerableAdapter,
     state(fullStaminaSelf(), [activeInvulnerable(20000, 72000)]),

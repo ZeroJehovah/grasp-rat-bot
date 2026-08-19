@@ -55,7 +55,7 @@ function opportunityReward(item) {
 function opportunityNetRoiCore(item, extraStaminaCost = 0) {
   if (!item) return null;
   const reward = opportunityReward(item);
-  const staminaCost = Number(item.staminaCost);
+  const staminaCost = Number(item.selectionStaminaCost ?? item.staminaCost);
   if (reward !== null && Number.isFinite(staminaCost) && staminaCost + extraStaminaCost > 0) {
     return reward / (staminaCost + Math.max(0, Number(extraStaminaCost || 0)));
   }

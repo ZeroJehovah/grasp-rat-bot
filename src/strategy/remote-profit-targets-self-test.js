@@ -8,6 +8,7 @@ const {
   remoteProfitApproachEtaMs,
   remoteProfitDistanceFactor
 } = require('./remote-profit-targets');
+const { invulnerableProfitSelectionCostCore } = require('./invulnerable-profit-selection');
 const {
   canonicalInvulnerabilityMsFrom,
   protocolInvulnerabilityMsFrom,
@@ -78,8 +79,8 @@ function runRemoteProfitTargetsSelfTest() {
     playerDropPickupRadiusCm: 220,
     invulnerableAfkApproachDistanceCm: 0
   }), 220);
-  assert.strictEqual(remoteProfitApproachDistanceCm('easy-kill-active'), 10000);
-  assert.strictEqual(remoteProfitApproachEtaMs(100000, {}, 'easy-kill-active'), 94737);
+  assert.strictEqual(remoteProfitApproachDistanceCm('easy-kill-active'), 15000);
+  assert.strictEqual(remoteProfitApproachEtaMs(100000, {}, 'easy-kill-active'), 89474);
   assert.strictEqual(rawInvulnerabilityMsToWallMs(36600), 15250);
   assert.strictEqual(rawInvulnerabilityMsToWallMs(34200), 14250);
   assert.strictEqual(rawInvulnerabilityMsFrom({ invulnerable_remaining_ms: 36600 }), 15250);
@@ -139,6 +140,24 @@ function runRemoteProfitTargetsSelfTest() {
   }, { scoreTarget: (_entity, details) => scoring({ ...details, drop: _entity.drop, distance: details.distance }) });
   assert.strictEqual(easyListed.candidates.length, 1);
   assert.strictEqual(easyListed.candidates[0].classification, 'easy-kill-active');
+  const easyListedAfk = evaluateRemoteProfitTargets({
+    generation: 8,
+    self: { user_id: 1, x: 0, y: 0 },
+    entities: [target({
+      user_id: 25,
+      hp: 17,
+      drop: 50,
+      current_join_mode: 'Passive',
+      stamina_1d_remaining_milli: 100
+    })],
+    easyKillPlayers: [{ userId: 25, score: 2 }],
+    config: {},
+    online: true
+  }, { scoreTarget: (_entity, details) => scoring({ ...details, drop: _entity.drop, distance: details.distance }) });
+  assert.strictEqual(easyListedAfk.candidates.length, 1);
+  assert.strictEqual(easyListedAfk.candidates[0].classification, 'easy-kill-afk');
+  assert.strictEqual(easyListedAfk.candidates[0].active, false);
+  assert.strictEqual(easyListedAfk.diagnostics.easyKillAfkCount, 1);
   let observedScoringActive = null;
   const activeEconomics = evaluateRemoteProfitTargets({
     generation: 9,
@@ -221,7 +240,7 @@ function runRemoteProfitTargetsSelfTest() {
     online: true
   }, { scoreTarget: (_entity, details) => scoring({ ...details, drop: _entity.drop, distance: details.distance }) });
   assert.strictEqual(invulnerableActiveReady.candidates.length, 1);
-  assert.strictEqual(invulnerableActiveReady.candidates[0].approachDistanceCm, 10000);
+  assert.strictEqual(invulnerableActiveReady.candidates[0].approachDistanceCm, 15000);
   const invulnerableActiveLate = evaluateRemoteProfitTargets({
     self: { user_id: 1, x: 0, y: 0 },
     entities: [target({ user_id: 24, x: 100000, current_join_mode: 'Active', invulnerable: true, invulnerableRemainingMs: 89475 })],
@@ -240,6 +259,25 @@ function runRemoteProfitTargetsSelfTest() {
     invulnerableRemainingMs: 24000
   })], { rawProtocolFields: true });
   assert.strictEqual(rawCamelFallbackReady.candidates.length, 1, 'raw camel countdown converts in fallback normalizer');
+
+  const mangoSelection = invulnerableProfitSelectionCostCore({
+    staminaCost: 172342.3169,
+    expectedReward: 1,
+    invulnerable: true,
+    invulnerableRemainingMs: 51440,
+    approachEtaMs: 82813
+  });
+  const competingSelection = invulnerableProfitSelectionCostCore({
+    staminaCost: 53418.3765,
+    expectedReward: 1,
+    invulnerable: true,
+    invulnerableRemainingMs: 119000,
+    approachEtaMs: 24481
+  });
+  assert.strictEqual(mangoSelection.selectionStaminaCost, 172342.3169);
+  assert(Math.abs(competingSelection.selectionStaminaCost - 98314.9015) < 1e-9);
+  assert(Math.abs(1816980 * mangoSelection.selectionScoreMultiplier - 1816980) < 1e-9);
+  assert(Math.abs(1908107 * competingSelection.selectionScoreMultiplier - 1036749.839) < 1);
 
   const conflict = evaluateRemoteProfitTargets({
     self: { user_id: 1, x: 0, y: 0 },
@@ -309,7 +347,7 @@ function runRemoteProfitTargetsSelfTest() {
   assert.strictEqual(movedSelfOpportunities[0].baseScore, opportunities[0].baseScore);
   assert.strictEqual(movedSelfOpportunities[0].distanceFactor, opportunities[0].distanceFactor);
   assert.strictEqual(movedSelfOpportunities[0].adjustedScore, opportunities[0].adjustedScore);
-  return { ok: true, cases: 51 };
+  return { ok: true, cases: 55 };
 }
 
 if (require.main === module) {

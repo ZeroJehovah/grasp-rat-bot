@@ -155,6 +155,7 @@ function remoteTargetActivityTextCore(target = {}) {
     || target?.moving === true
     || target?.firing === true) return '活动玩家';
   if (classification === 'high-drop-afk'
+    || classification === 'easy-kill-afk'
     || (target?.active === false && target?.moving === false && target?.firing === false)) return '挂机玩家';
   return '玩家';
 }

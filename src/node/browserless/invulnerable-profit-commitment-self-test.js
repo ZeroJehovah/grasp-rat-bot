@@ -422,8 +422,22 @@ function runInvulnerableProfitCommitmentSelfTest() {
   assert.strictEqual(outsideBoundary.precisionPulseMs, 75);
 
   const vulnerableTarget = afk(41, 900, 20, 0, 3);
-  const vulnerableDecision = decide(actionDecisionAdapter, state(self(), [vulnerableTarget], [], [], 5), 2100);
-  const vulnerableAction = actionAdapter.applyDecision(
+  // The previous realtime countdown creates a short protection lease. Verify
+  // normal AFK fire resumes only after that lease has expired.
+  const vulnerableDecision = decide(actionDecisionAdapter, state(self(), [vulnerableTarget], [], [], 5), 5000);
+  const vulnerableActionAdapter = createBrowserlessActionAdapter({
+    userId: 7,
+    commandIntervalMs: 0,
+    shootRepeatEnabled: false,
+    transport: {
+      sendVelocity() { return { ok: true }; },
+      sendShoot(x, y) {
+        shots.push({ x, y });
+        return { ok: true };
+      }
+    }
+  });
+  const vulnerableAction = vulnerableActionAdapter.applyDecision(
     state(self(), [vulnerableTarget], [], [], 5),
     vulnerableDecision
   );
@@ -431,7 +445,7 @@ function runInvulnerableProfitCommitmentSelfTest() {
   assert.strictEqual(vulnerableAction.shoot.skipped, false);
   assert.strictEqual(shots.length, 1);
 
-  const missingAction = actionAdapter.applyDecision(
+  const missingAction = vulnerableActionAdapter.applyDecision(
     state(self(), [], [], [], 6),
     vulnerableDecision
   );

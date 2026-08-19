@@ -133,6 +133,9 @@ const DEFAULTS = {
   playerDropPickupRadiusCm: 150,
   invulnerableProfitApproachDistanceCm: 150,
   invulnerableProfitArrivalHysteresisCm: 100,
+  invulnerableActiveProfitApproachDistanceCm: 15000,
+  invulnerableActiveProfitArrivalHysteresisCm: 500,
+  invulnerableProfitWaitStaminaWeight: 0.5,
   invulnerableProfitApproachSlackMs: 10000,
   invulnerableProfitAxisSpeedCmPerSec: 950,
   invulnerableProfitDiagonalSpeedCmPerSec: 940,
@@ -396,6 +399,18 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     invulnerableProfitArrivalHysteresisCm: numberEnv(
       env.GRASP_RAT_BROWSERLESS_INVULNERABLE_PROFIT_ARRIVAL_HYSTERESIS_CM,
       DEFAULTS.invulnerableProfitArrivalHysteresisCm
+    ),
+    invulnerableActiveProfitApproachDistanceCm: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_INVULNERABLE_ACTIVE_PROFIT_APPROACH_DISTANCE_CM,
+      DEFAULTS.invulnerableActiveProfitApproachDistanceCm
+    ),
+    invulnerableActiveProfitArrivalHysteresisCm: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_INVULNERABLE_ACTIVE_PROFIT_ARRIVAL_HYSTERESIS_CM,
+      DEFAULTS.invulnerableActiveProfitArrivalHysteresisCm
+    ),
+    invulnerableProfitWaitStaminaWeight: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_INVULNERABLE_PROFIT_WAIT_STAMINA_WEIGHT,
+      DEFAULTS.invulnerableProfitWaitStaminaWeight
     ),
     invulnerableProfitApproachSlackMs: numberEnv(env.GRASP_RAT_BROWSERLESS_INVULNERABLE_PROFIT_APPROACH_SLACK_MS, DEFAULTS.invulnerableProfitApproachSlackMs),
     invulnerableProfitAxisSpeedCmPerSec: numberEnv(env.GRASP_RAT_BROWSERLESS_INVULNERABLE_PROFIT_AXIS_SPEED_CM_PER_SEC, DEFAULTS.invulnerableProfitAxisSpeedCmPerSec),

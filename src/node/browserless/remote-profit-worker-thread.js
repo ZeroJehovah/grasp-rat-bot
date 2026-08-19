@@ -24,7 +24,7 @@ function scoreTarget(request, target, details = {}) {
     ...(request.scoringOptions || {}),
     ...(details.config || {}),
     nowMs: Number(request.observedAtMs || Date.now()),
-    isAfkProfitTarget: () => details.classification === 'high-drop-afk',
+    isAfkProfitTarget: () => ['high-drop-afk', 'easy-kill-afk'].includes(details.classification),
     combatCompletionByUserId: request.combatCompletionByUserId || {}
   };
   const staminaCost = opportunityEnemyStaminaCost(target, baseOptions);
@@ -34,7 +34,8 @@ function scoreTarget(request, target, details = {}) {
   });
   const baseScore = scoreEnemyOpportunity(target, {
     ...baseOptions,
-    isAfkProfitTarget: () => details.classification === 'high-drop-afk'
+    invulnerableProfitSelectionEnabled: false,
+    isAfkProfitTarget: () => ['high-drop-afk', 'easy-kill-afk'].includes(details.classification)
   });
   return {
     expectedReward: effective.expectedReward,
