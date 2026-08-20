@@ -5952,6 +5952,43 @@ function runStrategyModuleSelfTests() {
       && farHighValueResult.chosen?.highValueCoinHold !== true
   });
 
+  const lowCoinDisplacement = chooseStableOpportunityCore([
+    { type: 'enemy', id: 'enemy', distance: 950, score: 500, priorityTier: 0, actionKind: 'seek-enemy' },
+    { type: 'coin', id: 'coin', amount: 1, x: 100, y: 0, distance: 100, score: 100, priorityTier: 1 }
+  ], { key: 'enemy:enemy', type: 'enemy', id: 'enemy', until: 99999 }, null, {
+      nowMs: 1000,
+      switchMargin: 0,
+      switchRelativeMargin: 0,
+      oscillationSwitchLimit: 0
+    });
+  const highValueCoinDisplacement = chooseStableOpportunityCore([
+    { type: 'enemy', id: 'enemy', distance: 950, score: 500, priorityTier: 0, actionKind: 'seek-enemy' },
+    { type: 'coin', id: 'high', amount: 15, x: 100, y: 0, distance: 100, score: 5000, priorityTier: 1 }
+  ], { key: 'enemy:enemy', type: 'enemy', id: 'enemy', until: 99999 }, null, {
+      nowMs: 1000,
+      switchMargin: 0,
+      switchRelativeMargin: 0,
+      oscillationSwitchLimit: 0
+    });
+  const outscoredCoinDisplacement = chooseStableOpportunityCore([
+    { type: 'enemy', id: 'enemy', distance: 950, score: 100, priorityTier: 0, actionKind: 'seek-enemy' },
+    { type: 'coin', id: 'coin', amount: 1, x: 100, y: 0, distance: 100, score: 5000, priorityTier: 1 }
+  ], { key: 'enemy:enemy', type: 'enemy', id: 'enemy', until: 99999 }, null, {
+      nowMs: 1000,
+      switchMargin: 0,
+      switchRelativeMargin: 0,
+      oscillationSwitchLimit: 0
+    });
+  results.push({
+    name: 'opportunity-choice-holds-enemy-main-over-low-coin',
+    passed: lowCoinDisplacement.chosen?.id === 'enemy'
+      && lowCoinDisplacement.chosen?.enemyMainHold === true
+      && highValueCoinDisplacement.chosen?.id === 'high'
+      && highValueCoinDisplacement.chosen?.enemyMainHold !== true
+      && outscoredCoinDisplacement.chosen?.id === 'coin'
+      && outscoredCoinDisplacement.chosen?.enemyMainHold !== true
+  });
+
   const afkFinishIncidentOpportunities = [
     {
       type: 'enemy', id: '36046', distance: 47824, score: 3252155, staminaCost: 76749,

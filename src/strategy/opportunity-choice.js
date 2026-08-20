@@ -196,6 +196,20 @@ function highValueCoinHoldBlocksEnemySwitchCore(held, best, options = {}) {
   return Boolean(isHighValueCoinOpportunityCore(held, options) && String(best?.type || '') === 'enemy');
 }
 
+// A committed enemy main target must not be displaced by a coin just because the
+// coin wins the nearby/distance priority-tier band. When the established enemy
+// main already outscores the coin, hold the enemy (finish the current kill)
+// instead of letting a 1-coin break the engagement. A coin that genuinely
+// outscores the enemy - a high-value coin naturally has a high score - still
+// wins, so healthy-high-value-coin commitment is preserved.
+function enemyMainHoldAgainstLowCoinCore(held, best, options = {}) {
+  return Boolean(
+    String(held?.type || '') === 'enemy'
+      && String(best?.type || '') === 'coin'
+      && Number(best?.score ?? -Infinity) < Number(held?.score ?? -Infinity)
+  );
+}
+
 function afkFinishCommitmentCore(held, best, options = {}) {
   const target = held?.sourceTarget || null;
   if (String(held?.type || '') !== 'enemy' || String(best?.type || '') !== 'enemy') return null;
@@ -370,7 +384,9 @@ function chooseStableOpportunityCore(opportunities, current, switchLock, options
   if (current?.key && t < Number(current.until || 0)) {
     const held = sorted.find(item => opportunityMatchesChoiceCore(item, current, options));
     if (held && !opportunityMatchesChoiceCore(best, current, options)) {
-      if (highValueCoinHoldBlocksEnemySwitchCore(held, best, options)) {
+      if (enemyMainHoldAgainstLowCoinCore(held, best, options)) {
+        chosen = { ...held, held: true, enemyMainHold: true, competingScore: best.score };
+      } else if (highValueCoinHoldBlocksEnemySwitchCore(held, best, options)) {
         chosen = { ...held, held: true, highValueCoinHold: true, competingScore: best.score };
       } else if (Number(best.priorityTier || 0) <= Number(held.priorityTier || 0)) {
         const margin = Math.max(0, Number(options.switchMargin) || 0);
@@ -384,6 +400,17 @@ function chooseStableOpportunityCore(opportunities, current, switchLock, options
     }
   }
   const held = current ? sorted.find(item => opportunityMatchesChoiceCore(item, current, options)) || null : null;
+  // Post-hold-window fallback: keep a committed enemy main target over a
+  // lower-scoring, non-high-value coin even after `current.until` lapses, so the
+  // kill window is not broken by a nearby 1-coin once the hold tie expired.
+  if (
+    held
+    && chosen
+    && enemyMainHoldAgainstLowCoinCore(held, chosen, options)
+    && !opportunityMatchesChoiceCore(chosen, current, options)
+  ) {
+    chosen = { ...held, held: true, enemyMainHold: true, competingScore: chosen.score };
+  }
   const finishCommitment = afkFinishCommitmentCore(held, best, options);
   if (finishCommitment) {
     chosen = {
