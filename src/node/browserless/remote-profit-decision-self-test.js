@@ -413,6 +413,62 @@ function assertPassiveRealtimeDamageDoesNotDiscardRemoteMission() {
   assert.strictEqual(retained.profit?.remoteProfit?.selected?.userId, 99);
 }
 
+function assertLowerValuePassiveEnemyDoesNotTakeRemotePrimaryMission() {
+  const common = {
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    dynamicProfitThresholdEnabled: false,
+    singleCoinBaitEnabled: false,
+    finalActionArbitrationHoldMs: 0,
+    opportunitySwitchConfirmFrames: 1,
+    opportunitySwitchMargin: 0,
+    opportunitySwitchRelativeMargin: 0
+  };
+  const adapter = createBrowserlessDecisionAdapter(common);
+  const passiveTarget = ordinaryProfitTarget(6398, 14000, 15, {
+    name: 'feeli',
+    current_join_mode: 'AFK',
+    active: false,
+    firing: false
+  });
+  const initial = decide(
+    adapter,
+    state(fullStaminaSelf(), [passiveTarget]),
+    2000,
+    null,
+    common
+  );
+  assert.strictEqual(initial.action?.target?.userId, 6398);
+
+  const primaryBatch = batch(remoteCandidate({
+    userId: 31361,
+    name: 'mango',
+    x: 220500,
+    drop: 546,
+    active: true,
+    classification: 'easy-kill-active',
+    expectedReward: 323.084,
+    staminaCost: 1000,
+    adjustedScore: 18461937
+  }), { generation: 12 });
+  const recovered = decide(
+    adapter,
+    state(fullStaminaSelf(), [passiveTarget]),
+    2100,
+    primaryBatch,
+    common
+  );
+  assert.strictEqual(recovered.action?.kind, 'seek-remote-player');
+  assert.strictEqual(recovered.action?.target?.userId, 31361);
+  assert.strictEqual(recovered.profit?.mission?.targetId, '31361');
+  assert.strictEqual(recovered.combat?.target, null);
+  assert.ok(recovered.profit?.candidates?.some(candidate => (
+    candidate.type === 'remote-player-navigation' && String(candidate.id) === '31361'
+  )));
+  assert.ok(recovered.profit?.candidates?.some(candidate => String(candidate.id) === '6398'));
+}
+
 function assertActivePlayerPickupRadiusCoinCompetition() {
   const common = {
     userId: 7,
@@ -2837,6 +2893,7 @@ function runRemoteProfitDecisionSelfTest() {
   assertDynamicThresholdLinkedCoinRoute();
   assertRealtimeSupersededMissionContinuity();
   assertPassiveRealtimeDamageDoesNotDiscardRemoteMission();
+  assertLowerValuePassiveEnemyDoesNotTakeRemotePrimaryMission();
   assertActivePlayerPickupRadiusCoinCompetition();
   assertSelfKillReleasesSupersededMission();
   assertRemoteMissionDoesNotOverrideRealtimeProfit();

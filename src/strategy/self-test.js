@@ -5989,6 +5989,131 @@ function runStrategyModuleSelfTests() {
       && outscoredCoinDisplacement.chosen?.enemyMainHold !== true
   });
 
+  const activePrimaryBeatsPassiveEnemy = chooseStableOpportunityCore([
+    {
+      type: 'enemy',
+      id: 'mango',
+      distance: 22000,
+      score: 18000000,
+      priorityTier: 0,
+      actionKind: 'seek-enemy',
+      sourceTarget: { authority: 'realtime', alive: true, active: true, joinModeActive: true }
+    },
+    {
+      type: 'enemy',
+      id: 'feeli',
+      distance: 14000,
+      score: 350000,
+      priorityTier: 1,
+      actionKind: 'attack',
+      sourceTarget: { authority: 'realtime', alive: true, active: false, joinModeActive: false, firing: false }
+    }
+  ], null, null, { nowMs: 1000, attackRange: 14500, oscillationSwitchLimit: 0 });
+  const passiveCurrentYieldsToActivePrimary = chooseStableOpportunityCore([
+    {
+      type: 'enemy',
+      id: 'mango',
+      distance: 22000,
+      score: 18000000,
+      priorityTier: 0,
+      actionKind: 'seek-enemy',
+      sourceTarget: { authority: 'realtime', alive: true, active: true, joinModeActive: true }
+    },
+    {
+      type: 'enemy',
+      id: 'feeli',
+      distance: 14000,
+      score: 350000,
+      priorityTier: 1,
+      actionKind: 'attack',
+      sourceTarget: { authority: 'realtime', alive: true, active: false, joinModeActive: false, firing: false }
+    }
+  ], { key: 'enemy:feeli', type: 'enemy', id: 'feeli', until: 0 }, null, {
+    nowMs: 1000,
+    attackRange: 14500,
+    switchConfirmFrames: 3,
+    oscillationSwitchLimit: 0
+  });
+  results.push({
+    name: 'opportunity-choice-lower-passive-enemy-cannot-displace-active-primary',
+    passed: activePrimaryBeatsPassiveEnemy.chosen?.id === 'mango'
+      && passiveCurrentYieldsToActivePrimary.chosen?.id === 'mango'
+  });
+
+  const remotePrimaryBeatsPassiveEnemy = chooseStableOpportunityCore([
+    {
+      type: 'remote-player-navigation',
+      id: 'mango',
+      distance: 220500,
+      score: 18000000,
+      priorityTier: 1,
+      actionKind: 'seek-remote-player',
+      sourceTarget: {
+        authority: 'snapshot-navigation',
+        classification: 'easy-kill-active',
+        alive: true,
+        active: true
+      }
+    },
+    {
+      type: 'enemy',
+      id: 'feeli',
+      distance: 14000,
+      score: 350000,
+      priorityTier: 1,
+      actionKind: 'attack',
+      sourceTarget: {
+        authority: 'realtime',
+        alive: true,
+        active: false,
+        joinModeActive: false,
+        firing: false
+      }
+    }
+  ], { key: 'enemy:feeli', type: 'enemy', id: 'feeli', until: 0 }, null, {
+    nowMs: 1000,
+    attackRange: 14500,
+    switchConfirmFrames: 1,
+    oscillationSwitchLimit: 0
+  });
+  results.push({
+    name: 'opportunity-choice-lower-passive-enemy-cannot-displace-remote-primary',
+    passed: remotePrimaryBeatsPassiveEnemy.chosen?.id === 'mango'
+      && remotePrimaryBeatsPassiveEnemy.chosen?.type === 'remote-player-navigation'
+  });
+
+  const establishedHighValueEnemyHoldsLowerPassiveEnemy = chooseStableOpportunityCore([
+    {
+      type: 'enemy',
+      id: 'mango',
+      distance: 22000,
+      score: 18000000,
+      priorityTier: 0,
+      actionKind: 'seek-enemy',
+      sourceTarget: { authority: 'realtime', alive: true, active: false, joinModeActive: false }
+    },
+    {
+      type: 'enemy',
+      id: 'feeli',
+      distance: 14000,
+      score: 350000,
+      priorityTier: 1,
+      actionKind: 'attack',
+      sourceTarget: { authority: 'realtime', alive: true, active: false, joinModeActive: false, firing: false }
+    }
+  ], { key: 'enemy:mango', type: 'enemy', id: 'mango', until: 0 }, null, {
+    nowMs: 1000,
+    attackRange: 14500,
+    switchConfirmFrames: 3,
+    oscillationSwitchLimit: 0
+  });
+  results.push({
+    name: 'opportunity-choice-established-high-value-enemy-holds-lower-passive-enemy',
+    passed: establishedHighValueEnemyHoldsLowerPassiveEnemy.chosen?.id === 'mango'
+      && establishedHighValueEnemyHoldsLowerPassiveEnemy.chosen?.enemyMainHold === true
+      && establishedHighValueEnemyHoldsLowerPassiveEnemy.switchDiagnostics?.bestRejectedReason === 'hold-or-margin'
+  });
+
   const afkFinishIncidentOpportunities = [
     {
       type: 'enemy', id: '36046', distance: 47824, score: 3252155, staminaCost: 76749,

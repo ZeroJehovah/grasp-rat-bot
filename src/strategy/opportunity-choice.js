@@ -210,6 +210,63 @@ function enemyMainHoldAgainstLowCoinCore(held, best, options = {}) {
   );
 }
 
+function isPlayerOpportunityCore(item) {
+  const type = String(item?.type || '');
+  return type === 'enemy' || type === 'remote-player-navigation';
+}
+
+function enemyMainHoldAgainstLowerValueEnemyCore(held, best) {
+  return Boolean(
+    isPlayerOpportunityCore(held)
+      && isPlayerOpportunityCore(best)
+      && Number(best?.score ?? -Infinity) < Number(held?.score ?? -Infinity)
+  );
+}
+
+function opportunitySourceTargetCore(item) {
+  return item?.sourceTarget || item?.target || null;
+}
+
+function isRealtimeActiveEnemyOpportunityCore(item) {
+  if (String(item?.type || '') !== 'enemy') return false;
+  const target = opportunitySourceTargetCore(item);
+  if (!target || target.alive === false) return false;
+  const authority = String(target.authority || '');
+  if (authority && authority !== 'realtime') return false;
+  return target.active === true || target.joinModeActive === true;
+}
+
+function isStrongPrimaryOpportunityCore(item) {
+  return String(item?.type || '') === 'remote-player-navigation'
+    || isRealtimeActiveEnemyOpportunityCore(item);
+}
+
+function isPassiveEnemyOpportunityCore(item) {
+  if (String(item?.type || '') !== 'enemy') return false;
+  const target = opportunitySourceTargetCore(item);
+  if (!target || target.alive === false) return false;
+  return target.active !== true && target.joinModeActive !== true;
+}
+
+// A lower-value Passive/AFK player is not allowed to take the primary profit
+// route away from a stronger player opportunity, including a remote snapshot
+// mission. The passive player remains in realtime target data, so actual attack
+// evidence can still create a defensive secondary without changing
+// primary-centered movement.
+function suppressLowerValuePassiveEnemyPrimaryCore(opportunities = []) {
+  const bestPlayerScore = (opportunities || [])
+    .filter(isStrongPrimaryOpportunityCore)
+    .map(item => Number(item.score))
+    .filter(Number.isFinite)
+    .reduce((best, score) => Math.max(best, score), -Infinity);
+  if (!Number.isFinite(bestPlayerScore)) return opportunities || [];
+  return (opportunities || []).filter(item => {
+    if (!isPassiveEnemyOpportunityCore(item)) return true;
+    const score = Number(item.score);
+    return !Number.isFinite(score) || score >= bestPlayerScore;
+  });
+}
+
 function afkFinishCommitmentCore(held, best, options = {}) {
   const target = held?.sourceTarget || null;
   if (String(held?.type || '') !== 'enemy' || String(best?.type || '') !== 'enemy') return null;
@@ -371,20 +428,25 @@ function applyOpportunityOscillationLockCore(sorted, current, chosen, switchLock
 }
 
 function chooseStableOpportunityCore(opportunities, current, switchLock, options = {}) {
-  const sorted = (opportunities || [])
+  const primaryEligibleOpportunities = suppressLowerValuePassiveEnemyPrimaryCore(opportunities);
+  const sortOpportunities = values => values
     .slice()
     .sort((a, b) => b.priorityTier - a.priorityTier
       || b.score - a.score
       || (a.type === b.type ? 0 : (a.type === 'enemy' ? -1 : 1))
       || a.distance - b.distance);
+  const allSorted = sortOpportunities(opportunities || []);
+  const sorted = sortOpportunities(primaryEligibleOpportunities);
   const best = sorted[0] || null;
-  if (!best) return { chosen: null, switchLock, sorted };
+  if (!best) return { chosen: null, switchLock, sorted, allSorted };
   const t = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
   let chosen = best;
   if (current?.key && t < Number(current.until || 0)) {
     const held = sorted.find(item => opportunityMatchesChoiceCore(item, current, options));
     if (held && !opportunityMatchesChoiceCore(best, current, options)) {
-      if (enemyMainHoldAgainstLowCoinCore(held, best, options)) {
+      if (enemyMainHoldAgainstLowerValueEnemyCore(held, best)) {
+        chosen = { ...held, held: true, enemyMainHold: true, competingScore: best.score };
+      } else if (enemyMainHoldAgainstLowCoinCore(held, best, options)) {
         chosen = { ...held, held: true, enemyMainHold: true, competingScore: best.score };
       } else if (highValueCoinHoldBlocksEnemySwitchCore(held, best, options)) {
         chosen = { ...held, held: true, highValueCoinHold: true, competingScore: best.score };
@@ -406,7 +468,8 @@ function chooseStableOpportunityCore(opportunities, current, switchLock, options
   if (
     held
     && chosen
-    && enemyMainHoldAgainstLowCoinCore(held, chosen, options)
+    && (enemyMainHoldAgainstLowerValueEnemyCore(held, chosen)
+      || enemyMainHoldAgainstLowCoinCore(held, chosen, options))
     && !opportunityMatchesChoiceCore(chosen, current, options)
   ) {
     chosen = { ...held, held: true, enemyMainHold: true, competingScore: chosen.score };
@@ -434,7 +497,13 @@ function chooseStableOpportunityCore(opportunities, current, switchLock, options
     confirmed.diagnostics.switchBlocked = true;
     confirmed.diagnostics.bestRejectedReason = 'oscillation-lock';
   }
-  return { chosen: locked.chosen, switchLock: locked.switchLock, sorted, switchDiagnostics: confirmed.diagnostics };
+  return {
+    chosen: locked.chosen,
+    switchLock: locked.switchLock,
+    sorted,
+    allSorted,
+    switchDiagnostics: confirmed.diagnostics
+  };
 }
 
 function opportunityMissingHoldUntilCore(choice, options = {}) {
@@ -665,6 +734,8 @@ module.exports = {
   opportunityMatchesChoiceCore,
   isHighValueCoinOpportunityCore,
   highValueCoinHoldBlocksEnemySwitchCore,
+  enemyMainHoldAgainstLowerValueEnemyCore,
+  suppressLowerValuePassiveEnemyPrimaryCore,
   afkFinishCommitmentCore,
   lockedOpportunityChoiceCore,
   applyOpportunityOscillationLockCore,

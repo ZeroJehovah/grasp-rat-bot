@@ -8318,7 +8318,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     rawChoice: rawChosen,
     rawAction,
     choice: chosen,
-    sorted: choice.sorted || [],
+    sorted: choice.allSorted || choice.sorted || [],
     switchLock: thresholdContext.active && !opportunities.length ? null : (choice.switchLock || null),
     switchDiagnostics: choice.switchDiagnostics || null,
     opportunityChoice: remembered.choice || null,
