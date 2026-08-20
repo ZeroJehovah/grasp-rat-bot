@@ -100,6 +100,10 @@ const {
   combatPressureStrafeCore,
   combatPressureTargetRangeCore
 } = require('../../strategy/combat-pressure');
+const {
+  observeCombatAttackClock,
+  runCombatAttackClockSelfTest
+} = require('../../strategy/combat-attack-clock');
 const { lootRacePositioningCore } = require('../../strategy/loot-race-positioning');
 const {
   classifyCombatTargetRole,
@@ -1590,6 +1594,13 @@ function summarizeCombatTarget(target) {
     invulnerableProtectionLeaseUntilMs: numberOrNull(target.invulnerableProtectionLeaseUntilMs),
     invulnerableProtectionRemainingMs: numberOrNull(target.invulnerableProtectionRemainingMs),
     invulnerableMetadataAuthority: String(target.invulnerableMetadataAuthority || ''),
+    attackTimerState: String(target.attackTimerState || 'not-applicable'),
+    attackTimerPauseReason: String(target.attackTimerPauseReason || ''),
+    effectiveAttackStartedAt: numberOrNull(target.effectiveAttackStartedAt),
+    effectiveAttackElapsedMs: numberOrNull(target.effectiveAttackElapsedMs),
+    effectiveMissNoDamageMs: numberOrNull(target.effectiveMissNoDamageMs),
+    protectedMs: numberOrNull(target.protectedMs),
+    invulnerabilityEndedAt: numberOrNull(target.invulnerabilityEndedAt),
     easyKillKnown: Boolean(target.easyKillKnown),
     easyKillDamagedToday: Boolean(target.easyKillDamagedToday),
     easyKillThreatExempt: Boolean(target.easyKillThreatExempt),
@@ -2659,6 +2670,14 @@ function buildCombatExitEvaluation(self, target, combatTargetState = {}, options
   if (target.easyKillThreatExempt && immediateHpExit?.rule !== 'critical-hp') {
     return { exit: null, baselineExit: null, disadvantageObservation: null };
   }
+  const attackTimerState = String(combatTargetState?.attackTimerState || 'not-applicable');
+  const attackClockPaused = attackTimerState === 'protected' || attackTimerState === 'unknown';
+  const effectiveNowMs = Number.isFinite(Number(combatTargetState?.effectiveClockNowMs))
+    ? Number(combatTargetState.effectiveClockNowMs)
+    : Number(options.nowMs || Date.now());
+  const effectiveEngagedMs = Number.isFinite(Number(combatTargetState?.effectiveAttackElapsedMs))
+    ? Math.max(0, Number(combatTargetState.effectiveAttackElapsedMs))
+    : Math.max(0, Number(options.nowMs || Date.now()) - Number(combatTargetState?.firstSeenAt || combatTargetState?.at || options.nowMs || Date.now()));
   const noDamageMs = Math.max(0, Number(combatTargetState?.noDamageMs || 0));
   const evaluation = evaluateConfirmedCombatHpExitCore({
     self,
@@ -2724,8 +2743,8 @@ function buildCombatExitEvaluation(self, target, combatTargetState = {}, options
     || nowMs - Number(combatTargetState?.lastSelfDamageAt || 0) <= 10000;
   const closePressure = combatTargetState?.combatPhase === 'close-pressure';
   const exchangeStopLoss = evaluateCombatExchangeStopLossCore({
-    nowMs,
-    engagedMs: nowMs - Number(combatTargetState?.firstSeenAt || combatTargetState?.at || nowMs),
+    nowMs: attackClockPaused ? effectiveNowMs : nowMs,
+    engagedMs: effectiveEngagedMs,
     acceptedShots: Number((combatMetrics || combatTargetState?.combatMetrics)?.acceptedShots || 0),
     damageObservations: Math.max(shortDamageObservations, longDamageObservations),
     selfHp: hpValue(self),
@@ -2748,14 +2767,26 @@ function buildCombatExitEvaluation(self, target, combatTargetState = {}, options
     retreatSelfDamageBaseline: combatTargetState?.exchangeRetreatSelfDamageBaseline,
     retreatTargetDamageBaseline: combatTargetState?.exchangeRetreatTargetDamageBaseline
   }, options);
-  combatTargetState.exchangeDegradationSinceAt = exchangeStopLoss.degradationSinceAt;
-  combatTargetState.exchangeRetreatSinceAt = exchangeStopLoss.retreatSinceAt;
-  combatTargetState.exchangeRetreatSelfDamageBaseline = exchangeStopLoss.retreatSelfDamageBaseline;
-  combatTargetState.exchangeRetreatTargetDamageBaseline = exchangeStopLoss.retreatTargetDamageBaseline;
-  const secondaryExchangeSuppressed = secondaryHealthy && (exchangeStopLoss.shouldExit || exchangeStopLoss.disengage);
-  const effectiveExchangeStopLoss = secondaryExchangeSuppressed
+  const pausedExchangeStopLoss = attackClockPaused
     ? {
         ...exchangeStopLoss,
+        active: false,
+        triggered: false,
+        shouldExit: false,
+        disengage: false,
+        pausedForAttackClock: true,
+        attackTimerState,
+        reason: 'combat-exchange-attack-clock-paused'
+      }
+    : exchangeStopLoss;
+  combatTargetState.exchangeDegradationSinceAt = pausedExchangeStopLoss.degradationSinceAt;
+  combatTargetState.exchangeRetreatSinceAt = pausedExchangeStopLoss.retreatSinceAt;
+  combatTargetState.exchangeRetreatSelfDamageBaseline = pausedExchangeStopLoss.retreatSelfDamageBaseline;
+  combatTargetState.exchangeRetreatTargetDamageBaseline = pausedExchangeStopLoss.retreatTargetDamageBaseline;
+  const secondaryExchangeSuppressed = secondaryHealthy && (pausedExchangeStopLoss.shouldExit || pausedExchangeStopLoss.disengage);
+  const effectiveExchangeStopLoss = secondaryExchangeSuppressed
+    ? {
+        ...pausedExchangeStopLoss,
         shouldExit: false,
         disengage: false,
         suppressedForSecondary: true,
@@ -2763,7 +2794,7 @@ function buildCombatExitEvaluation(self, target, combatTargetState = {}, options
         originalDisengage: Boolean(exchangeStopLoss.disengage),
         response: 'continue-secondary-defense'
       }
-    : exchangeStopLoss;
+    : pausedExchangeStopLoss;
   return {
     ...evaluation,
     exchangeStopLoss: {
@@ -3984,6 +4015,29 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   const previousHp = same && Number.isFinite(Number(previous.hp)) ? Number(previous.hp) : null;
   const damaged = hp !== null && previousHp !== null && hp < previousHp - 0.01;
   const healed = hp !== null && previousHp !== null && hp > previousHp + 0.01;
+  const priorAttackTimerState = String(previous?.attackTimerState || 'not-applicable');
+  const priorAttackClockPaused = priorAttackTimerState === 'protected'
+    || priorAttackTimerState === 'unknown';
+  const metricsStartedAt = same
+    && String(stateful?.combatMetrics?.targetId ?? '') === String(id)
+    ? numberOrNull(stateful?.combatMetrics?.startedAt)
+    : null;
+  const fallbackAttackStartedAt = same
+    ? (metricsStartedAt ?? numberOrNull(previous?.firstSeenAt ?? previous?.at ?? nowMs))
+    : nowMs;
+  const fallbackAttackElapsedMs = same && !priorAttackClockPaused && fallbackAttackStartedAt !== null
+    ? Math.max(0, nowMs - fallbackAttackStartedAt)
+    : 0;
+  const fallbackMissNoDamageMs = same && !priorAttackClockPaused
+    ? Math.max(0, nowMs - Number(previous?.lastDamageAt || previous?.at || nowMs))
+    : 0;
+  const attackClock = observeCombatAttackClock(same ? previous : null, target, nowMs, {
+    ...options,
+    damaged,
+    initialAttackStartedAt: fallbackAttackStartedAt,
+    initialEffectiveAttackElapsedMs: fallbackAttackElapsedMs,
+    initialEffectiveMissNoDamageMs: fallbackMissNoDamageMs
+  });
   const previousSelfHp = same ? hpValue(previous?.self) : null;
   const currentSelfHp = hpValue(self);
   const currentSelfX = numberOrNull(self?.x);
@@ -4245,6 +4299,18 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     exchangeRetreatTargetDamageBaseline,
     lastDamageAmount: damaged ? Math.max(0, previousHp - hp) : Number(previous?.lastDamageAmount || 0),
     noDamageMs: Math.max(0, nowMs - (damaged ? nowMs : (same ? Number(previous.lastDamageAt || previous.at || nowMs) : nowMs))),
+    attackTimerState: attackClock.attackTimerState,
+    attackTimerPauseReason: attackClock.attackTimerPauseReason,
+    effectiveAttackStartedAt: attackClock.effectiveAttackStartedAt,
+    invulnerabilityEndedAt: attackClock.invulnerabilityEndedAt,
+    protectedStartedAt: attackClock.protectedStartedAt,
+    protectedMs: attackClock.protectedMs,
+    effectiveAttackElapsedMs: attackClock.effectiveAttackElapsedMs,
+    effectiveClosePressureElapsedMs: attackClock.effectiveClosePressureElapsedMs,
+    effectiveMissNoDamageMs: attackClock.effectiveMissNoDamageMs,
+    effectiveClockNowMs: attackClock.effectiveNowMs,
+    attackableObservationCount: attackClock.attackableObservationCount,
+    attackClockFrameGapMs: attackClock.frameGapMs,
     motionSamples,
     opponentBehaviorState,
     fireRiskClassification,
@@ -4976,6 +5042,10 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
           || combatTargetState.lastDamageAt
           || combatTargetState.firstSeenAt
           || options.nowMs),
+        effectiveAttackStartedAt: combatTargetState.effectiveAttackStartedAt,
+        effectiveNowMs: combatTargetState.effectiveClockNowMs,
+        effectiveMissNoDamageMs: combatTargetState.effectiveMissNoDamageMs,
+        attackTimerState: combatTargetState.attackTimerState,
         lastDamageAt: combatTargetState.lastDamageAt,
         movementStaminaSinceDamage: Number(combatTargetState.movementStaminaSinceDamage || 0),
         shootingStaminaSinceDamage: Math.max(
@@ -5023,6 +5093,10 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
               || retainedCombatTargetState.lastDamageAt
               || retainedCombatTargetState.firstSeenAt
               || options.nowMs),
+            effectiveAttackStartedAt: retainedCombatTargetState.effectiveAttackStartedAt,
+            effectiveNowMs: retainedCombatTargetState.effectiveClockNowMs,
+            effectiveMissNoDamageMs: retainedCombatTargetState.effectiveMissNoDamageMs,
+            attackTimerState: retainedCombatTargetState.attackTimerState,
             lastDamageAt: retainedCombatTargetState.lastDamageAt,
             movementStaminaSinceDamage: Number(retainedCombatTargetState.movementStaminaSinceDamage || 0),
             shootingStaminaSinceDamage: Math.max(0, Number(
@@ -6200,6 +6274,16 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     },
     targetFrameGapReset,
     targetFrameGapHold,
+    attackClock: combatTargetState ? {
+      state: combatTargetState.attackTimerState || 'not-applicable',
+      pauseReason: combatTargetState.attackTimerPauseReason || '',
+      effectiveAttackStartedAt: numberOrNull(combatTargetState.effectiveAttackStartedAt),
+      effectiveAttackElapsedMs: numberOrNull(combatTargetState.effectiveAttackElapsedMs),
+      effectiveMissNoDamageMs: numberOrNull(combatTargetState.effectiveMissNoDamageMs),
+      protectedMs: numberOrNull(combatTargetState.protectedMs),
+      invulnerabilityEndedAt: numberOrNull(combatTargetState.invulnerabilityEndedAt),
+      attackableObservationCount: Number(combatTargetState.attackableObservationCount || 0)
+    } : null,
     combatPhase: combatPhase || {
       phase: combatTargetState?.combatPhase || 'normal-combat',
       active: closePressureActive
@@ -6408,6 +6492,7 @@ module.exports = {
   normalizeCombatEntity,
   recordCombatShotLearning,
   rememberBrowserlessCombatEngagement,
+  runCombatAttackClockSelfTest,
   syncCombatShotExecutionEvents,
   syncConfirmedCombatShots,
   summarizeCombatTarget

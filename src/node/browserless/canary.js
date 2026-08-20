@@ -1186,7 +1186,11 @@ async function fetchPreLoginSnapshot(config, deps = {}, requestDetail = {}) {
     try {
       await deps.onSnapshotPayload(body.json, {
         source: 'prelogin-http',
-        observedAtMs
+        observedAtMs,
+        receivedAtMs: observedAtMs,
+        global: true,
+        snapshotKind: 'http',
+        snapshotPurpose: deps.snapshotPurpose || 'login-point-safety'
       });
     } catch (_) {}
   }
@@ -1342,11 +1346,22 @@ async function runSinglePreLoginSnapshotSafetyProbe(config, state, deps = {}, de
 }
 
 async function runPreLoginSnapshotSafety(config, state, deps = {}) {
+  const snapshotPurpose = String(deps.snapshotPurpose || 'login-point-safety');
+  const publishSnapshotSafety = value => {
+    if (!value || typeof value !== 'object') return value;
+    const decorated = {
+      ...value,
+      snapshotPurpose,
+      loginGateApplied: snapshotPurpose === 'login-point-safety',
+      carriedIntoSession: false
+    };
+    if (typeof deps.onSnapshotSafety === 'function') deps.onSnapshotSafety(decorated);
+    return decorated;
+  };
   const checkedAtMs = typeof deps.now === 'function' ? deps.now() : Date.now();
   const highHpExemption = highHpLoginPointSafetyExemption(state, checkedAtMs);
   if (highHpExemption) {
-    if (typeof deps.onSnapshotSafety === 'function') deps.onSnapshotSafety(highHpExemption);
-    return highHpExemption;
+    return publishSnapshotSafety(highHpExemption);
   }
   if (config.snapshotEdgeEnabled === true) {
     const edge = await waitForSnapshotEdge({
@@ -1381,8 +1396,7 @@ async function runPreLoginSnapshotSafety(config, state, deps = {}) {
           baseline: edge.baseline?.version || null
         }
       };
-      if (typeof deps.onSnapshotSafety === 'function') deps.onSnapshotSafety(result);
-      return result;
+      return publishSnapshotSafety(result);
     }
     const evaluated = await runSinglePreLoginSnapshotSafetyProbe(config, state, deps, {
       required: 1,
@@ -1406,8 +1420,7 @@ async function runPreLoginSnapshotSafety(config, state, deps = {}) {
         safetyEvaluationCount: 1
       }
     };
-    if (typeof deps.onSnapshotSafety === 'function') deps.onSnapshotSafety(result);
-    return result;
+    return publishSnapshotSafety(result);
   }
   const runtimeDefaults = buildBrowserlessRuntimeDefaults(config);
   const required = Math.max(0, Math.round(Number(
@@ -1452,7 +1465,7 @@ async function runPreLoginSnapshotSafety(config, state, deps = {}) {
         probeIntervalMs: intervalMs,
         checkedAt: new Date(typeof deps.now === 'function' ? deps.now() : Date.now()).toISOString()
       };
-      if (typeof deps.onSnapshotSafety === 'function') deps.onSnapshotSafety(last);
+      last = publishSnapshotSafety(last);
       return last;
     }
     if (last.bypassedPreLoginSafety) {
@@ -1464,7 +1477,7 @@ async function runPreLoginSnapshotSafety(config, state, deps = {}) {
         attempt,
         probeIntervalMs: intervalMs
       };
-      if (typeof deps.onSnapshotSafety === 'function') deps.onSnapshotSafety(last);
+      last = publishSnapshotSafety(last);
       return last;
     }
     if (!last.ok) {
@@ -1480,7 +1493,7 @@ async function runPreLoginSnapshotSafety(config, state, deps = {}) {
         attempt,
         probeIntervalMs: intervalMs
       };
-      if (typeof deps.onSnapshotSafety === 'function') deps.onSnapshotSafety(last);
+      last = publishSnapshotSafety(last);
       return last;
     }
     const probeTick = Number(last.response?.summary?.tick);
@@ -1496,7 +1509,7 @@ async function runPreLoginSnapshotSafety(config, state, deps = {}) {
         attempt,
         probeIntervalMs: intervalMs
       };
-      if (typeof deps.onSnapshotSafety === 'function') deps.onSnapshotSafety(last);
+      last = publishSnapshotSafety(last);
       return last;
     }
     if (Number.isFinite(probeTick)) lastProbeTick = probeTick;
@@ -1524,7 +1537,7 @@ async function runPreLoginSnapshotSafety(config, state, deps = {}) {
         }
       }
     };
-    if (typeof deps.onSnapshotSafety === 'function') deps.onSnapshotSafety(last);
+    last = publishSnapshotSafety(last);
     if (last.ok) return last;
     if (intervalMs > 0) await sleep(intervalMs);
   }
@@ -2431,7 +2444,12 @@ async function runReadOnlyCanary(config, options = {}) {
     try {
       options.onSnapshotPayload(pending.payload, {
         source: 'ws',
-        observedAtMs: pending.observedAtMs
+        observedAtMs: pending.observedAtMs,
+        receivedAtMs: pending.observedAtMs,
+        global: false,
+        snapshotKind: 'ws',
+        snapshotPurpose: 'gameplay',
+        auditRecorded: pending.auditRecorded === true
       });
     } catch (err) {
       log('canary-snapshot-observer-error', { error: err?.message || String(err) });
@@ -2471,8 +2489,24 @@ async function runReadOnlyCanary(config, options = {}) {
     }
   };
   const scheduleSnapshotWork = (payload, observedAtMs) => {
+    let auditRecorded = false;
+    if (typeof options.onSnapshotAuditPayload === 'function') {
+      try {
+        const auditResult = options.onSnapshotAuditPayload(payload, {
+          source: 'ws',
+          observedAtMs,
+          receivedAtMs: observedAtMs,
+          global: false,
+          snapshotKind: 'ws',
+          snapshotPurpose: 'gameplay'
+        });
+        auditRecorded = auditResult?.ok !== false;
+      } catch (err) {
+        log('canary-snapshot-audit-observer-error', { error: errorMessage(err) });
+      }
+    }
     if (typeof options.onSnapshotPayload === 'function') {
-      pendingSnapshotObserver = { payload, observedAtMs };
+      pendingSnapshotObserver = { payload, observedAtMs, auditRecorded };
       if (!snapshotObserverScheduled) {
         snapshotObserverScheduled = true;
         setImmediate(flushSnapshotObserver);
@@ -3761,7 +3795,12 @@ async function runReadOnlyCanary(config, options = {}) {
       result.snapshotSafety = await (options.runPreLoginSnapshotSafety || runPreLoginSnapshotSafety)(
         recoverySnapshotConfig,
         options.persistedState || {},
-        options
+        {
+          ...options,
+          snapshotPurpose: persistedPendingExit || expiredPendingExit
+            ? 'exit-recovery-confirmation'
+            : 'login-point-safety'
+        }
       );
     }
   } catch (err) {
@@ -3778,6 +3817,14 @@ async function runReadOnlyCanary(config, options = {}) {
     }
     log('canary-snapshot-safety-error', { error: message });
   }
+  const snapshotPurpose = String(result.snapshotSafety?.snapshotPurpose
+    || ((persistedPendingExit || expiredPendingExit) ? 'exit-recovery-confirmation' : 'login-point-safety'));
+  result.snapshotSafety = {
+    ...(result.snapshotSafety || {}),
+    snapshotPurpose,
+    loginGateApplied: snapshotPurpose === 'login-point-safety',
+    carriedIntoSession: false
+  };
   log('canary-snapshot-safety', result.snapshotSafety);
   result.snapshotSafety = allowSelfPresentSnapshotControl(result.snapshotSafety);
   const recoveryPendingExit = persistedPendingExit || expiredPendingExit;
@@ -3792,6 +3839,27 @@ async function runReadOnlyCanary(config, options = {}) {
   result.recovery.pendingExit = pendingExitResolution.pendingExit;
   result.recovery.pendingExitResolution = pendingExitResolution.reason;
   if (pendingExitResolution.cleared) {
+    result.recovery.recoveryOutcome = 'confirmed-absent';
+    result.recovery.loginGateApplied = false;
+    result.recovery.carriedIntoSession = false;
+    result.recovery.reloginDeferredThisCanary = true;
+    result.recovery.loginIntervalNotBefore = new Date(
+      Math.max(
+        startedAt,
+        (Date.parse(String(options.persistedState?.runner?.lastLoginAt || '')) || 0)
+          + Math.max(60000, Number(config.loginIntervalMs || 60000))
+      )
+    ).toISOString();
+    result.snapshotSafety = {
+      ...result.snapshotSafety,
+      recoveryOutcome: 'confirmed-absent',
+      loginGateApplied: false,
+      carriedIntoSession: false
+    };
+    // Do not let the canary that confirmed the old session's absence open a
+    // new WebSocket.  The runner returns to its loop and re-applies the
+    // start-to-start login interval before the normal login gate.
+    exitRecoveryActive = true;
     emitExitRecoveryOutcome(pendingExitResolution.outcome);
     logExit('exit-recovery-snapshot-resolution', {
       exitAttemptId: recoveryPendingExit?.exitAttemptId || '',
@@ -3810,6 +3878,17 @@ async function runReadOnlyCanary(config, options = {}) {
     const snapshotFresh = snapshotSummary?.freshness?.ok === true
       || (snapshotSummary?.freshness?.ok === undefined && result.snapshotSafety?.ok === true);
     const snapshotSelfPresent = snapshotFresh && snapshotSummary.selfPresent === true;
+    result.recovery.recoveryOutcome = snapshotSelfPresent
+      ? 'self-present'
+      : (expiredPendingExit ? 'timeout-unconfirmed' : 'unknown');
+    result.recovery.loginGateApplied = false;
+    result.recovery.carriedIntoSession = false;
+    result.snapshotSafety = {
+      ...result.snapshotSafety,
+      recoveryOutcome: result.recovery.recoveryOutcome,
+      loginGateApplied: false,
+      carriedIntoSession: false
+    };
     if (snapshotSelfPresent) {
       result.snapshotSafety = {
         ...result.snapshotSafety,
@@ -4663,10 +4742,12 @@ async function runReadOnlyCanary(config, options = {}) {
 
   const authOpenFailure = /websocket unexpected response 403|http 403|not logged in/i.test(result.error || '');
   const authoritativeInGameEvidence = canaryHasAuthoritativeInGameEvidence(result);
+  const recoveryConfirmedAbsent = result.recovery?.recoveryOutcome === 'confirmed-absent';
   const protectedExitEvidence = Boolean(
-    result.recovery?.exitRecovery
-      || persistedPendingExit
-      || expiredPendingExit
+    !recoveryConfirmedAbsent
+      && (result.recovery?.exitRecovery
+        || persistedPendingExit
+        || expiredPendingExit)
   );
   const shouldVerifyExitAfterOpenFailure = Boolean(
     openFailedBeforeTransport
@@ -4926,8 +5007,11 @@ async function runReadOnlyCanary(config, options = {}) {
   const noFrames = Number(stats.decodedFrameCount || 0) <= 0;
   const noSelf = Number(stats.selfPresent.true || 0) <= 0;
   const frameGap = Number(frameHealth.maxFrameGapMs || 0) > frameGapAlertMs;
-  const leaveFailed = !result.leave?.ok;
-  const confirmedAbsentBeforeWsActive = Boolean(terminalBeforeWsActive && result.leave?.ok);
+  const leaveFailed = !recoveryConfirmedAbsent && !result.leave?.ok;
+  const confirmedAbsentBeforeWsActive = Boolean(
+    terminalBeforeWsActive
+      && (result.leave?.ok || result.recovery?.recoveryOutcome === 'confirmed-absent')
+  );
   if (!result.error && noFrames && !confirmedAbsentBeforeWsActive) result.error = 'no decoded frames received';
   if (!result.error && noSelf && !confirmedAbsentBeforeWsActive) result.error = 'self not observed in realtime frames';
   if (!result.error && frameGap) result.error = `frame gap exceeded ${frameGapAlertMs}ms`;

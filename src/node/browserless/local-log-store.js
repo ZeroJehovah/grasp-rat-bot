@@ -5,7 +5,7 @@ const path = require('path');
 const { redactStructuredSecrets } = require('./session-client');
 const { utc8DayKey } = require('./utc8-day');
 
-const DEFAULT_STREAMS = new Set(['runner', 'decisions', 'combat', 'exits', 'ws']);
+const DEFAULT_STREAMS = new Set(['runner', 'decisions', 'combat', 'exits', 'ws', 'snapshot-audit']);
 
 function sanitizeStreamName(stream) {
   const value = String(stream || '').trim();

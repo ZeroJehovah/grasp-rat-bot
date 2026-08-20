@@ -62,6 +62,10 @@ const {
   createSnapshotGapPoller
 } = require('./high-drop-player-tracker');
 const {
+  createSnapshotAuditObserver,
+  runSnapshotAuditSelfTest
+} = require('./snapshot-audit');
+const {
   DEFAULT_SNAPSHOT_REQUEST_INTERVAL_MS,
   createSnapshotRequestScheduler,
   runSnapshotRequestSchedulerSelfTest
@@ -97,7 +101,10 @@ const {
   effectiveLongStaminaExhaustedWindows
 } = require('../../shared/daily-stamina-window');
 const { createBrowserlessActionAdapter } = require('./action-adapter');
-const { buildBrowserlessCombatDryRun } = require('./combat-adapter');
+const {
+  buildBrowserlessCombatDryRun,
+  runCombatAttackClockSelfTest
+} = require('./combat-adapter');
 const { runCombatShotExecutionSelfTest } = require('./combat-shot-execution-self-test');
 const { runCombatTargetFrameGapSelfTest } = require('./combat-target-frame-gap-self-test');
 const { runLootRacePositioningSelfTest } = require('./loot-race-positioning-self-test');
@@ -2084,6 +2091,10 @@ async function runBrowserlessRunner(config, deps = {}) {
     now,
     backgroundIo
   });
+  const snapshotAuditObserver = deps.snapshotAuditObserver || createSnapshotAuditObserver({
+    now,
+    selfUserId: config.userId
+  });
   const combatCompletionTracker = deps.combatCompletionTracker || createCombatCompletionTracker({
     file: path.join(config.dataDir, 'combat-learning.json'),
     now,
@@ -2172,9 +2183,69 @@ async function runBrowserlessRunner(config, deps = {}) {
   const remoteProfitRealtimeSelf = () => remoteProfitRealtimeSelfFromLiveState(liveState, config.userId);
   let onlineSnapshotSession = null;
   let activeRunKillConfirmations = [];
+  const recordSnapshotAudit = (payload, detail = {}) => {
+    let audit;
+    try {
+      audit = snapshotAuditObserver.observe(payload, {
+        ...detail,
+        selfUserId: config.userId
+      });
+      const summaryEntry = logStore.append('snapshot-audit', 'snapshot-summary', {
+        ...audit.summary,
+        auditQueueStatus: 'queued',
+        auditQueueError: ''
+      }, {
+        atMs: Number(detail.receivedAtMs ?? detail.observedAtMs ?? now())
+      });
+      if (summaryEntry?.error) {
+        logStore.append('runner', 'snapshot-audit-write-error', {
+          source: detail.source || 'snapshot',
+          snapshotPurpose: detail.snapshotPurpose || '',
+          stage: 'summary-queue',
+          error: String(summaryEntry.error)
+        });
+        audit.summary = {
+          ...audit.summary,
+          auditQueueStatus: 'queue-failed',
+          auditQueueError: String(summaryEntry.error)
+        };
+      }
+      for (const observation of audit.observations || []) {
+        const observationEntry = logStore.append('snapshot-audit', 'player-observation', observation, {
+          atMs: Number(detail.receivedAtMs ?? detail.observedAtMs ?? now())
+        });
+        if (observationEntry?.error) {
+          logStore.append('runner', 'snapshot-audit-write-error', {
+            source: detail.source || 'snapshot',
+            snapshotPurpose: detail.snapshotPurpose || '',
+            stage: 'observation-queue',
+            identityKey: observation.identityKey || '',
+            error: String(observationEntry.error)
+          });
+        }
+      }
+      return audit;
+    } catch (err) {
+      recordSupervisorError(err, { operation: 'snapshot-audit-observe', source: detail.source || 'snapshot' });
+      logStore.append('runner', 'snapshot-audit-write-error', {
+        source: detail.source || 'snapshot',
+        snapshotPurpose: detail.snapshotPurpose || '',
+        error: errorMessage(err)
+      });
+      return { ok: false, error: errorMessage(err), summary: null, observations: [] };
+    }
+  };
   const observeSnapshotPayload = (payload, detail = {}) => {
     const observedAtMs = Number(detail.observedAtMs ?? now());
     const snapshotSource = String(detail.source || 'snapshot');
+    if (detail.auditRecorded !== true) recordSnapshotAudit(payload, {
+      ...detail,
+      observedAtMs,
+      receivedAtMs: detail.receivedAtMs ?? observedAtMs,
+      snapshotKind: detail.snapshotKind || (snapshotSource === 'ws' ? 'ws' : 'http'),
+      snapshotPurpose: detail.snapshotPurpose
+        || (snapshotSource === 'ws' ? 'gameplay' : (snapshotSource === 'prelogin-http' ? 'login-point-safety' : 'gameplay'))
+    });
     snapshotGapPoller?.noteSnapshot(observedAtMs, {
       global: detail.global === true || snapshotSource !== 'ws',
       scheduleAtMs: detail.scheduleAtMs
@@ -2535,7 +2606,11 @@ async function runBrowserlessRunner(config, deps = {}) {
         entityCount: Array.isArray(payload?.entities) ? payload.entities.length : 0,
         intervalMs: snapshotIntervalForMode()
       });
-      return observeSnapshotPayload(payload, detail);
+      return observeSnapshotPayload(payload, {
+        ...detail,
+        snapshotKind: 'http',
+        snapshotPurpose: 'gameplay'
+      });
     },
     onError: err => {
       recordSupervisorError(err, { operation: 'shared-gap-snapshot' });
@@ -3213,6 +3288,8 @@ async function runBrowserlessRunner(config, deps = {}) {
           fetchWithTimeout: sourceIpController.fetchWithTimeout,
           snapshotRequest: snapshotRequestScheduler.request,
           onSnapshotPayload: observePreparedSnapshotPayload,
+          onSnapshotAuditPayload: recordSnapshotAudit,
+          snapshotPurpose: 'exit-recovery-confirmation',
           easyKillPlayerTracker,
           damagePlayerTracker,
           dynamicWhitelist
@@ -3294,7 +3371,9 @@ async function runBrowserlessRunner(config, deps = {}) {
             fetchWithTimeout: sourceIpController.fetchWithTimeout,
             snapshotRequest: snapshotRequestScheduler.request,
             onSnapshotPayload: observePreparedSnapshotPayload,
+            onSnapshotAuditPayload: recordSnapshotAudit,
             onSnapshotSafety: recordSnapshotSafetyProgress,
+            snapshotPurpose: 'login-point-safety',
             onSnapshotEdge: recordSnapshotEdgeProgress,
             easyKillPlayerTracker,
             damagePlayerTracker
@@ -3494,8 +3573,11 @@ async function runBrowserlessRunner(config, deps = {}) {
     const exitRecoveryOutcomes = outcome
       ? [...priorExitRecoveryOutcomes, outcome].slice(-64)
       : priorExitRecoveryOutcomes;
+    const recoverySnapshot = snapshotSafety.snapshotPurpose === 'exit-recovery-confirmation';
     const patch = mergeState(snapshotOfflineTransitionPatch(currentState, snapshotSafety, now()), {
-      loginPointSafety: loginPointSafetyPatchFromSnapshot(snapshotSafety),
+      ...(recoverySnapshot ? {} : {
+        loginPointSafety: loginPointSafetyPatchFromSnapshot(snapshotSafety)
+      }),
       ...((clearsConfirmedLeave || pendingResolution.cleared) ? {
         runner: {
           ...(clearsConfirmedLeave ? { confirmedLeave: null } : {}),
@@ -3509,6 +3591,9 @@ async function runBrowserlessRunner(config, deps = {}) {
     if (liveState) patchLiveState(patch, { updatedAt });
     logStore.append('runner', 'snapshot-safety-observation', {
       checkedAt: snapshotSafety?.checkedAt || '',
+      snapshotPurpose: snapshotSafety?.snapshotPurpose || '',
+      loginGateApplied: snapshotSafety?.loginGateApplied === true,
+      carriedIntoSession: snapshotSafety?.carriedIntoSession === true,
       ok: Boolean(snapshotSafety?.ok),
       reason: snapshotSafety?.reason || '',
       originalReason: snapshotSafety?.originalReason || summary?.safety?.reason || '',
@@ -3968,6 +4053,8 @@ async function runBrowserlessRunner(config, deps = {}) {
           fetchWithTimeout: sourceIpController.fetchWithTimeout,
           snapshotRequest: snapshotRequestScheduler.request,
           onSnapshotPayload: observePreparedSnapshotPayload,
+          onSnapshotAuditPayload: recordSnapshotAudit,
+          snapshotPurpose: 'login-point-safety',
           easyKillPlayerTracker,
           damagePlayerTracker,
           dynamicWhitelist
@@ -4439,6 +4526,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           allowMissingLoginPointBootstrap: true,
           onSnapshotSafety: recordSnapshotSafetyProgress,
           onSnapshotPayload: observeBootstrapSnapshotPayload,
+          onSnapshotAuditPayload: recordSnapshotAudit,
           getRemoteProfitContext: remoteProfitContext,
           onRemoteProfitDecision: decision => remoteProfitWorker?.observeDecision?.(decision),
           onRemoteProfitRealtime: entities => remoteProfitWorker?.observeRealtimeEntities?.(entities),
@@ -4581,6 +4669,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         transportRecoveryEscalation,
         onSnapshotSafety: recordSnapshotSafetyProgress,
         onSnapshotPayload: observeLoginSnapshotPayload,
+        onSnapshotAuditPayload: recordSnapshotAudit,
         getRemoteProfitContext: remoteProfitContext,
         onRemoteProfitDecision: decision => remoteProfitWorker?.observeDecision?.(decision),
         onRemoteProfitRealtime: entities => remoteProfitWorker?.observeRealtimeEntities?.(entities),
@@ -4718,7 +4807,9 @@ async function runBrowserlessRunner(config, deps = {}) {
       ...currentExitRecoveryOutcomes
     ].filter(item => item?.exitAttemptId).map(item => [String(item.exitAttemptId), item])).values()).slice(-64);
     const finalLastKnown = finalLastKnownFromCanary(finalStateBase.lastKnown, finalSelf, canary, now());
-    const completedLoginPointSafety = canary?.snapshotSafety && typeof canary.snapshotSafety === 'object'
+    const completedLoginPointSafety = canary?.snapshotSafety
+      && typeof canary.snapshotSafety === 'object'
+      && canary.snapshotSafety.snapshotPurpose !== 'exit-recovery-confirmation'
       ? loginPointSafetyPatchFromSnapshot(canary.snapshotSafety)
       : null;
     const finalState = mergeState(finalStateBase, {
@@ -6334,9 +6425,212 @@ async function runCriticalLatencyExitRegressionSelfTest() {
   };
 }
 
+async function runPendingExitCanaryGateSelfTest() {
+  const nowMs = Date.parse('2026-08-20T00:20:00.000Z');
+  const pendingExit = {
+    active: true,
+    exitAttemptId: 'exit:self-test-pending-canary',
+    originalReason: 'leave-not-confirmed',
+    reason: 'leave-not-confirmed',
+    sourceRunId: 'self-test-previous-canary',
+    firstAtMs: nowMs - 30000,
+    startedAtMs: nowMs - 30000,
+    lastAttemptAtMs: nowMs - 25000,
+    attemptCount: 1,
+    requestAttemptCount: 1,
+    startHp: 100,
+    minHp: 100,
+    lastHp: 100,
+    httpStatuses: [502]
+  };
+  const snapshotPurposes = [];
+  let wsOpenAttempts = 0;
+  let normalWsOpenAttempts = 0;
+  const baseConfig = {
+    controlMode: 'read-only',
+    gameOrigin: 'https://example.invalid',
+    userId: '7',
+    sessionToken: 'pending-exit-canary-self-test-token',
+    readOnlyProbeMs: 1000,
+    targetWhitelistUrl: '',
+    targetWhitelistFile: ''
+  };
+  const recovery = await runReadOnlyCanary(baseConfig, {
+    now: () => nowMs,
+    sleep: async () => {},
+    persistedState: {
+      runner: {
+        pendingExit,
+        lastLoginAt: new Date(nowMs - 30000).toISOString()
+      },
+      stats: { currentSession: { online: false } }
+    },
+    useLeaveSupervisor: false,
+    runPreLoginSnapshotSafety: async (_config, _state, deps) => {
+      snapshotPurposes.push(String(deps.snapshotPurpose || ''));
+      return {
+        ok: true,
+        reason: 'safe',
+        satisfied: true,
+        checkedAt: new Date(nowMs).toISOString(),
+        response: {
+          summary: {
+            valid: true,
+            selfPresent: false,
+            freshness: { ok: true }
+          }
+        }
+      };
+    },
+    openBrowserlessWs: async () => {
+      wsOpenAttempts += 1;
+      throw new Error('confirmed-absent pending-exit canary opened websocket');
+    }
+  });
+  const normal = await runReadOnlyCanary(baseConfig, {
+    now: () => nowMs,
+    sleep: async () => {},
+    persistedState: {
+      runner: { lastLoginAt: new Date(nowMs - 30000).toISOString() },
+      stats: { currentSession: { online: false } }
+    },
+    useLeaveSupervisor: false,
+    runPreLoginSnapshotSafety: async (_config, _state, deps) => {
+      snapshotPurposes.push(String(deps.snapshotPurpose || ''));
+      return {
+        ok: true,
+        reason: 'safe',
+        satisfied: true,
+        checkedAt: new Date(nowMs).toISOString(),
+        response: {
+          summary: {
+            valid: true,
+            selfPresent: false,
+            freshness: { ok: true }
+          }
+        }
+      };
+    },
+    openBrowserlessWs: async () => {
+      normalWsOpenAttempts += 1;
+      throw new Error('normal-login self-test transport stub');
+    }
+  });
+  const cooldown = browserlessLoginIntervalDelayPlan({
+    runner: { lastLoginAt: new Date(nowMs - 30000).toISOString() },
+    stats: { currentSession: { online: false } }
+  }, { loginIntervalMs: 60000 }, nowMs);
+  return {
+    ok: Boolean(
+      recovery.ok
+        && recovery.recovery?.recoveryOutcome === 'confirmed-absent'
+        && recovery.recovery?.loginGateApplied === false
+        && recovery.recovery?.reloginDeferredThisCanary === true
+        && recovery.snapshotSafety?.snapshotPurpose === 'exit-recovery-confirmation'
+        && recovery.snapshotSafety?.loginGateApplied === false
+        && recovery.safety?.transportLifecycle?.phase === 'suppressed-for-exit-recovery'
+        && wsOpenAttempts === 0
+        && snapshotPurposes[0] === 'exit-recovery-confirmation'
+        && snapshotPurposes[1] === 'login-point-safety'
+        && normalWsOpenAttempts === 1
+        && cooldown?.reason === 'login-interval'
+        && cooldown?.delayMs === 30000
+    ),
+    recovery: {
+      ok: Boolean(recovery.ok),
+      outcome: recovery.recovery?.recoveryOutcome || '',
+      snapshotPurpose: recovery.snapshotSafety?.snapshotPurpose || '',
+      loginGateApplied: recovery.snapshotSafety?.loginGateApplied === true,
+      reloginDeferredThisCanary: recovery.recovery?.reloginDeferredThisCanary === true,
+      transportPhase: recovery.safety?.transportLifecycle?.phase || '',
+      wsOpenAttempts
+    },
+    normal: {
+      ok: Boolean(normal.ok),
+      snapshotPurpose: snapshotPurposes[1] || '',
+      wsOpenAttempts: normalWsOpenAttempts
+    },
+    cooldown
+  };
+}
+
+function runSnapshotAuditPersistenceSelfTest(tmp) {
+  const atMs = Date.parse('2026-08-20T00:21:00.000Z');
+  const auditObserver = createSnapshotAuditObserver({ selfUserId: 7, now: () => atMs });
+  const logStore = createLocalLogStore({ logDir: path.join(tmp, 'snapshot-audit-persistence') });
+  const payloads = [
+    {
+      payload: {
+        tick: 101,
+        entities: [
+          { entity_id: 1, user_id: 7, name: 'self', drop: 999 },
+          { entity_id: 2, user_id: 8, name: 'drop-200', drop: 200 },
+          { entity_id: 3, user_id: 9, name: 'drop-201', drop: 201, hp: 80 },
+          { entity_id: 4, name: 'entity-only', drop: 202 },
+          { name: 'no-id', drop: 203 }
+        ]
+      },
+      detail: {
+        source: 'prelogin-http',
+        global: true,
+        snapshotKind: 'http',
+        snapshotPurpose: 'exit-recovery-confirmation',
+        observedAtMs: atMs,
+        receivedAtMs: atMs + 5
+      }
+    },
+    {
+      payload: {
+        tick: 102,
+        entities: [{ entity_id: 3, user_id: 9, name: 'drop-201', drop: 205 }]
+      },
+      detail: {
+        source: 'ws',
+        global: false,
+        snapshotKind: 'ws',
+        snapshotPurpose: 'gameplay',
+        observedAtMs: atMs + 1000,
+        receivedAtMs: atMs + 1000
+      }
+    }
+  ];
+  const audits = [];
+  for (const item of payloads) {
+    const audit = auditObserver.observe(item.payload, item.detail);
+    audits.push(audit);
+    logStore.append('snapshot-audit', 'snapshot-summary', audit.summary, { atMs: item.detail.observedAtMs });
+    for (const observation of audit.observations) {
+      logStore.append('snapshot-audit', 'player-observation', observation, { atMs: item.detail.observedAtMs });
+    }
+  }
+  const entries = logStore.readEntries('snapshot-audit', browserlessDayKey(atMs));
+  const summaries = entries.filter(entry => entry.type === 'snapshot-summary').map(entry => entry.detail);
+  const observations = entries.filter(entry => entry.type === 'player-observation').map(entry => entry.detail);
+  return {
+    ok: Boolean(
+      audits.length === 2
+        && entries.length === 5
+        && summaries.length === 2
+        && observations.length === 3
+        && summaries[0]?.completeHttpSnapshot === true
+        && summaries[0]?.absenceMeaning === 'complete-global-snapshot-only'
+        && summaries[1]?.absenceMeaning === 'presence-only'
+        && observations.every(item => item.drop > 200)
+        && observations.some(item => item.identityKey === 'user:9' && item.drop === 201)
+        && observations.some(item => item.identityKey === 'entity:4' && item.identityStable === false)
+        && observations.some(item => item.identityKey === 'user:9' && item.drop === 205)
+    ),
+    entryCount: entries.length,
+    summaryCount: summaries.length,
+    observationCount: observations.length,
+    observations: observations.map(item => ({ identityKey: item.identityKey, drop: item.drop }))
+  };
+}
+
 async function runBrowserlessRunnerSelfTest() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-browserless-runner-'));
   try {
+    const snapshotAudit = runSnapshotAuditSelfTest();
     const remoteProfitWorker = await runRemoteProfitWorkerSelfTest();
     const remoteProfitAction = runRemoteProfitActionSelfTest();
     const remoteProfitDecision = runRemoteProfitDecisionSelfTest();
@@ -8901,7 +9195,10 @@ async function runBrowserlessRunnerSelfTest() {
       };
     })();
     const pendingExitRecovery = runPendingExitRecoverySelfTest();
+    const pendingExitCanaryGate = await runPendingExitCanaryGateSelfTest();
+    const snapshotAuditPersistence = runSnapshotAuditPersistenceSelfTest(tmp);
     const combatBattleLog = runCombatBattleLogSelfTest();
+    const combatAttackClock = runCombatAttackClockSelfTest();
     const combatShotExecution = runCombatShotExecutionSelfTest();
     const combatTargetFrameGap = runCombatTargetFrameGapSelfTest();
     const lootRacePositioning = runLootRacePositioningSelfTest();
@@ -8999,12 +9296,16 @@ async function runBrowserlessRunnerSelfTest() {
         && cloudflareChallenge.ok
         && transportRecoveryCloudflare.ok
         && pendingExitRecovery.ok
+        && pendingExitCanaryGate.ok
+        && snapshotAuditPersistence.ok
         && combatBattleLog.ok
+        && combatAttackClock.ok
         && combatShotExecution.ok
         && combatTargetFrameGap.ok
         && lootRacePositioning.ok
         && dynamicWhitelist.ok
         && recoveryContact.ok
+        && snapshotAudit.ok
         && complexCombatMainThreadBudget.battleLogOk
         // Host scheduling/GC timing is diagnostic; functional runner blocks
         // remain release-gating without turning an external pause into a
@@ -9088,12 +9389,16 @@ async function runBrowserlessRunnerSelfTest() {
       cloudflareChallenge,
       transportRecoveryCloudflare,
       pendingExitRecovery,
+      pendingExitCanaryGate,
+      snapshotAuditPersistence,
       combatBattleLog,
+      combatAttackClock,
       combatShotExecution,
       combatTargetFrameGap,
       lootRacePositioning,
       dynamicWhitelist,
       recoveryContact,
+      snapshotAudit,
       complexCombatMainThreadBudget,
       logFile: runnerLog
     };

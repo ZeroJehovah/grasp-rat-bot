@@ -1299,6 +1299,60 @@ function isInjuredSelf(self, options = {}) {
   return hp !== null && hp <= injuryHp;
 }
 
+// Normalization always exposes a boolean `invulnerable` field for decision
+// consumers.  Keep a separate provenance bit so the combat attack clock can
+// distinguish a protocol-provided `false` from that derived default.  A
+// derived false must retain the legacy not-applicable clock path; treating it
+// as an explicit release would change ordinary combat timing and stop-loss
+// behavior for protocols that omit invulnerability metadata entirely.
+const INVULNERABILITY_METADATA_FIELDS = [
+  'invulnerable_remaining_ticks',
+  'invincible_remaining_ticks',
+  'invulnerability_remaining_ticks',
+  'invulnerableTicks',
+  'invulnerableRemainingTicks',
+  'invincibleRemainingTicks',
+  'invulnerabilityRemainingTicks',
+  'invulnerable_ticks',
+  'invincible_ticks',
+  'invulnerability_ticks',
+  'invulnerable_tick',
+  'invincible_tick',
+  'invulnerability_tick',
+  'invulnerable_remaining_ms',
+  'invincible_remaining_ms',
+  'invulnerability_remaining_ms',
+  'invulnerableRemainingMs',
+  'invincibleRemainingMs',
+  'invulnerabilityRemainingMs',
+  'invulnerable_ms',
+  'invincible_ms',
+  'invulnerability_ms',
+  'immune_remaining_ms',
+  'immuneRemainingMs',
+  'invulnerable_remaining',
+  'invincible_remaining',
+  'invulnerability_remaining',
+  'invulnerableRemaining',
+  'invincibleRemaining',
+  'invulnerabilityRemaining',
+  'invulnerable',
+  'is_invulnerable',
+  'isInvulnerable',
+  'immune',
+  'is_immune'
+];
+
+function hasOwnInvulnerabilityMetadata(entity) {
+  if (!entity || typeof entity !== 'object') return false;
+  if (Object.prototype.hasOwnProperty.call(entity, 'invulnerabilityMetadataPresent')) {
+    return entity.invulnerabilityMetadataPresent === true;
+  }
+  const authority = String(entity.invulnerableMetadataAuthority || '').trim();
+  if (authority === 'derived') return false;
+  return INVULNERABILITY_METADATA_FIELDS.some(field => Object.prototype.hasOwnProperty.call(entity, field));
+}
+
 function snapshotFallbackThreatBlocks(threat, self, options = {}) {
   if (!threat || threat.alive === false) return false;
   if (threat.whitelisted) return false;
@@ -1337,6 +1391,8 @@ function normalizeEntityForDecision(entity, self = null, authority = 'realtime',
   const protectionLeaseRemainingMs = protectionLeaseUntilMs === null
     ? 0
     : Math.max(0, protectionLeaseUntilMs - nowMs);
+  const invulnerabilityMetadataPresent = hasOwnInvulnerabilityMetadata(entity)
+    || protectionLeaseRemainingMs > 0;
   const dropKnown = entityDropKnown(entity);
   const normalized = {
     ...entity,
@@ -1357,6 +1413,7 @@ function normalizeEntityForDecision(entity, self = null, authority = 'realtime',
     firing,
     alive: isAliveEntity(entity),
     invulnerable: isInvulnerableEntity(entity) || protectionLeaseRemainingMs > 0,
+    invulnerabilityMetadataPresent,
     fullStamina5s
   };
   assignStaminaAliases(normalized, '5s', stamina5s, stamina5sLimit);

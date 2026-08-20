@@ -508,11 +508,19 @@ function combatEfficiencyWindowCore(efficiencyThreshold, options = {}) {
  * Shot count remains diagnostic and never gates distance control or stop-loss.
  */
 function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
-  const nowMs = Math.max(0, Number(input.nowMs ?? Date.now()));
+  const wallClockNowMs = Math.max(0, Number(input.nowMs ?? Date.now()));
+  const effectiveNowProvided = Number.isFinite(Number(input.effectiveNowMs));
+  const nowMs = Math.max(0, Number(
+    effectiveNowProvided ? input.effectiveNowMs : wallClockNowMs
+  ));
+  const attackTimerState = String(input.attackTimerState || 'not-applicable');
+  const attackClockPaused = attackTimerState === 'protected' || attackTimerState === 'unknown';
   const targetId = targetIdOf(input);
   const previousId = targetIdOf(previous);
   const sameTarget = Boolean(targetId && previousId && targetId === previousId);
-  const startedAt = numberOrNull(input.engagedAt
+  const startedAt = numberOrNull((effectiveNowProvided && input.effectiveAttackStartedAt !== undefined)
+    ? input.effectiveAttackStartedAt
+    : input.engagedAt
     ?? input.firstSeenAt
     ?? (sameTarget ? previous.firstSeenAt ?? previous.at : null));
   const engagedMs = Math.max(0, nowMs - (startedAt === null ? nowMs : startedAt));
@@ -536,8 +544,16 @@ function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
     : null;
   const targetDistance = numberOrNull(input.distance ?? input.targetDistance);
   const acceptedShotsSinceDamage = Math.max(0, Math.round(Number(input.acceptedShotsSinceDamage || 0)));
-  const damageProgressAt = Math.max(0, Number(input.damageProgressAt || input.lastDamageAt || startedAt || nowMs));
-  const noDamageMs = Math.max(0, nowMs - damageProgressAt);
+  const damageProgressAt = Math.max(0, Number(
+    input.effectiveDamageProgressAt
+      ?? input.damageProgressAt
+      ?? input.lastDamageAt
+      ?? startedAt
+      ?? nowMs
+  ));
+  const noDamageMs = Number.isFinite(Number(input.effectiveMissNoDamageMs))
+    ? Math.max(0, Number(input.effectiveMissNoDamageMs))
+    : Math.max(0, nowMs - damageProgressAt);
   const ballisticRange = combatPressureTargetRangeCore(options);
   const stepCm = Math.max(100, Number(options.combatEfficiencyCloseStepCm ?? 1000));
   const minimumDistanceCm = Math.max(0, Number(
@@ -593,15 +609,16 @@ function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
     : (windowStaminaUnits > 0
         ? windowDamageHp / windowStaminaUnits
         : (windowDamageHp > 0 ? Infinity : 0));
-  const windowComplete = windowElapsedMs >= evaluationWindowMs;
+  const windowComplete = !attackClockPaused && windowElapsedMs >= evaluationWindowMs;
   const efficiencyMeasurable = damageEfficiencyHpPerStamina !== null;
   const lowDamageEfficiency = Boolean(
-    windowComplete
+    !attackClockPaused
+      && windowComplete
       && (efficiencyMeasurable
         ? damageEfficiencyHpPerStamina < Number(efficiencyThreshold.requiredHpPerStamina ?? Infinity)
         : windowDamageHp <= 0)
   );
-  const efficiencyAcceptable = Boolean(windowComplete && !lowDamageEfficiency);
+  const efficiencyAcceptable = Boolean(!attackClockPaused && windowComplete && !lowDamageEfficiency);
   const wasActive = Boolean(
     !hardSafety
       && sameTarget
@@ -768,7 +785,7 @@ function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
     windowStartedAt = nowMs;
     windowStartDamageTotal = targetDamageTotal;
     windowStartStaminaMilli = totalStaminaSpentMilli ?? 0;
-  } else if (!wasActive && windowComplete) {
+  } else if (!attackClockPaused && !wasActive && windowComplete) {
     justCompletedWindow = {
       phase: 'normal-combat',
       stepIndex: 0,
@@ -871,6 +888,11 @@ function combatPressurePhaseCore(previous = {}, input = {}, options = {}) {
     engagedMs: Math.round(engagedMs),
     noDamageTrigger: Boolean(lowDamageEfficiency && windowDamageHp <= 0),
     noDamageMs: Math.round(noDamageMs),
+    wallClockNowMs: Math.round(wallClockNowMs),
+    attackTimerState,
+    attackTimerPaused: attackClockPaused,
+    effectiveAttackStartedAt: startedAt,
+    effectiveAttackElapsedMs: Math.round(Math.max(0, nowMs - (startedAt ?? nowMs))),
     maxDurationTrigger: false,
     triggerReason,
     phaseStartedAt,
