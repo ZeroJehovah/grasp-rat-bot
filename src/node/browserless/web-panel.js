@@ -2366,6 +2366,23 @@ function renderBrowserlessWebPanel() {
       context.stroke();
       context.restore();
     }
+    function mapTargetPathColor(marker) {
+      if (marker?.targetRole === 'combat') return '#fb7185';
+      if (marker?.targetRole === 'remote-snapshot') return '#9ca3af';
+      if (marker?.targetRole === 'afk') return '#4ade80';
+      return '#fb7185';
+    }
+    function mapTargetPathPoint(target, scene, frame) {
+      if (!target) return null;
+      const x = Number(target.x);
+      const y = Number(target.y);
+      const selfX = Number(scene.selfX);
+      const selfY = Number(scene.selfY);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(selfX) || !Number.isFinite(selfY)) return null;
+      const projected = mapRemoteTargetPosition(x - selfX, y - selfY, scene.visibleRange);
+      if (!projected) return null;
+      return { px: frame.center + projected.dx * scene.scale, py: frame.center + projected.dy * scene.scale };
+    }
     function drawMapLabel(context, marker, size) {
       if (!marker.label) return;
       context.font = (marker.targetRole ? '700 ' : '600 ') + '11px system-ui,-apple-system,Segoe UI,sans-serif';
@@ -2442,17 +2459,32 @@ function renderBrowserlessWebPanel() {
       const coinMarkers = markers.filter(marker => marker.kind === 'coin');
       const routeMarkers = coinMarkers.filter(marker => marker.routeOrder > 0).sort((a, b) => a.routeOrder - b.routeOrder);
       drawMapTargetPath(context, frame.center, routeMarkers.length ? routeMarkers : coinMarkers.filter(marker => marker.selected), '#fbbf24');
-      const playerTarget = markers.find(marker => marker.targetRole === 'combat')
+      const playerTarget = markers.find(marker => marker.role === 'primary')
+        || markers.find(marker => marker.targetRole === 'combat')
         || markers.find(marker => marker.targetRole === 'afk')
         || markers.find(marker => marker.targetRole === 'remote-snapshot');
-      if (playerTarget) {
-        const remoteSnapshot = playerTarget.targetRole === 'remote-snapshot';
+      const secondaryTarget = markers.find(marker => marker.role === 'secondary');
+      const targetRoles = panelTargetRoles(status);
+      const primaryPoint = (playerTarget?.role === 'primary' ? playerTarget : mapTargetPathPoint(targetRoles?.primary, scene, frame))
+        || (playerTarget?.role !== 'primary' ? playerTarget : null);
+      const secondaryPoint = (secondaryTarget?.role === 'secondary' ? secondaryTarget : mapTargetPathPoint(targetRoles?.secondary, scene, frame))
+        || (secondaryTarget?.role === 'secondary' ? secondaryTarget : null);
+      if (primaryPoint) {
         drawMapTargetPath(
           context,
           frame.center,
-          [playerTarget],
-          playerTarget.targetRole === 'combat' ? '#fb7185' : (remoteSnapshot ? '#9ca3af' : '#4ade80'),
-          remoteSnapshot
+          [primaryPoint],
+          mapTargetPathColor(primaryPoint),
+          false
+        );
+      }
+      if (secondaryPoint) {
+        drawMapTargetPath(
+          context,
+          frame.center,
+          [secondaryPoint],
+          mapTargetPathColor(secondaryPoint),
+          true
         );
       }
       for (const marker of markers.filter(marker => !marker.selected)) drawMapMarker(context, marker);
@@ -2545,6 +2577,7 @@ function renderBrowserlessWebPanel() {
       const coinRows = Array.isArray(status.nearby?.c) ? status.nearby.c : [];
       const playerRows = Array.isArray(status.nearby?.p) ? status.nearby.p : [];
       const markers = [];
+      const targetRoles = panelTargetRoles(status);
       const recordNames = mapPlayerRecordNames(status);
       for (const item of coinRows) {
         const x = number(item?.[7]);
@@ -2589,6 +2622,9 @@ function renderBrowserlessWebPanel() {
           ? mapRemoteTargetPosition(dx, dy, visibleRange)
           : { dx, dy };
         if (!mapPosition) continue;
+        const role = mapTargetMatchesPlayer(targetRoles?.primary, item)
+          ? 'primary'
+          : (mapTargetMatchesPlayer(targetRoles?.secondary, item) ? 'secondary' : '');
         const name = String(item?.[0] || '');
         const label = targetRole === 'combat'
           ? name + ' HP ' + integer(item?.[1])
@@ -2606,6 +2642,7 @@ function renderBrowserlessWebPanel() {
           kind: 'player',
           selected: Boolean(targetRole),
           targetRole,
+          role,
           direction: remoteSnapshot || afk ? null : mapVelocity(item?.[14], item?.[15]),
           invulnerable,
           worldX: x,
