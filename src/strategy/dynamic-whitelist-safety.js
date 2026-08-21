@@ -1,5 +1,7 @@
 'use strict';
 
+const { incomingBulletReachabilityCore } = require('./combat-bullet-reachability');
+
 const DEFAULT_PROXIMITY_BASE_RANGE_CM = 6500;
 const DEFAULT_COMBAT_ATTACK_RANGE_CM = 14500;
 const DEFAULT_LOW_HP_THRESHOLD = 50;
@@ -278,19 +280,17 @@ function dynamicWhitelistIncomingOverrideCore(target, incoming, context = {}, op
   const ownerId = incomingOwnerId(incoming);
   const targetId = targetUserId(target);
   const ownerMatches = Boolean(ownerId && targetId && ownerId === targetId);
-  const cpa = numberOrNull(incoming?.cpa);
-  const hitRadiusCm = Math.max(
-    1,
-    numberOrNull(options.combatTargetSwitchIncomingCpaCm ?? options.combatBulletHitRadiusCm)
+  const collisionEvidence = incomingBulletReachabilityCore(incoming, {
+    ...options,
+    combatBulletHitRadiusCm: options.combatTargetSwitchIncomingCpaCm
+      ?? options.combatBulletHitRadiusCm
       ?? DEFAULT_BULLET_HIT_RADIUS_CM
-  );
-  const collisionPath = Boolean(
-    incoming
-      && incoming.incoming !== false
-      && cpa !== null
-      && cpa >= 0
-      && cpa <= hitRadiusCm
-  );
+  });
+  const cpa = collisionEvidence.cpa;
+  const hitRadiusCm = collisionEvidence.hitRadiusCm
+    ?? Math.max(1, numberOrNull(options.combatTargetSwitchIncomingCpaCm ?? options.combatBulletHitRadiusCm)
+      ?? DEFAULT_BULLET_HIT_RADIUS_CM);
+  const collisionPath = collisionEvidence.reachable === true;
   const incomingDodgeRequired = Boolean(collisionPath && (ownerMatches || !target));
   const creatorProtected = context.creatorProtected === true || target?.creatorProtected === true;
   const dynamicWhitelistMember = context.dynamicWhitelistMember === true || target?.dynamicWhitelistMember === true;
@@ -320,6 +320,9 @@ function dynamicWhitelistIncomingOverrideCore(target, incoming, context = {}, op
     cpa,
     hitRadiusCm,
     incomingDodgeRequired,
+    collisionPathReason: collisionEvidence.reason,
+    timeToImpactMs: collisionEvidence.timeToImpactMs,
+    remainingTicks: collisionEvidence.remainingTicks,
     defensiveTargetEligible,
     dodgeOnly: Boolean(incomingDodgeRequired && !defensiveTargetEligible),
     outsideAttackRange: distanceCm !== null && distanceCm > attackRangeCm,

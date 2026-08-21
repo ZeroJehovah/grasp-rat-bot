@@ -1487,11 +1487,27 @@ function estimateBulletKinematics(bullet, self, options = {}) {
   const targetY = numberOrNull(bullet.target_y ?? bullet.targetY ?? bullet.aim_y ?? bullet.aimY);
   const speedValue = numberOrNull(bullet.speed_per_tick ?? bullet.speedPerTick ?? bullet.speed);
   const speed = Math.max(0, Number(speedValue ?? COMBAT_CONSTANTS.BULLET_SPEED_CM_PER_TICK));
+  const bulletRangeCm = Math.max(1, Number(
+    options.combatBulletRangeCm
+      ?? bullet.range_cm
+      ?? bullet.rangeCm
+      ?? COMBAT_CONSTANTS.BULLET_RANGE_CM
+  ));
+  const bulletLifetimeTicks = Math.max(1, Number(
+    options.combatBulletLifetimeTicks
+      ?? options.combatInterceptMaxTicks
+      ?? (speed > 0 ? bulletRangeCm / speed : 1)
+  ));
   const direction = bulletDirection(bullet, startX, startY, targetX, targetY);
   const currentTick = numberOrNull(options.currentTick);
   const createdTick = numberOrNull(bullet.created_tick ?? bullet.createdTick);
   const expireTick = numberOrNull(bullet.expire_tick ?? bullet.expireTick);
   const ageTicks = currentTick !== null && createdTick !== null ? Math.max(0, currentTick - createdTick) : 0;
+  const remainingTicks = currentTick !== null && expireTick !== null
+    ? expireTick - currentTick
+    : (currentTick !== null && createdTick !== null
+        ? createdTick + bulletLifetimeTicks - currentTick
+        : null);
   const projectedX = startX !== null ? startX + direction.dx * speed * ageTicks : null;
   const projectedY = startY !== null ? startY + direction.dy * speed * ageTicks : null;
   const x = numberOrNull(bullet.x ?? projectedX ?? startX);
@@ -1503,11 +1519,17 @@ function estimateBulletKinematics(bullet, self, options = {}) {
     const relX = Number(self.x) - x;
     const relY = Number(self.y) - y;
     const closestTicks = (relX * direction.dx + relY * direction.dy) / speed;
-    if (closestTicks > 0) {
+    const futureHorizonTicks = remainingTicks === null ? bulletLifetimeTicks : remainingTicks;
+    if (closestTicks > 0 && closestTicks <= futureHorizonTicks) {
       const closestX = x + direction.dx * speed * closestTicks;
       const closestY = y + direction.dy * speed * closestTicks;
       cpa = distanceBetween(self, { x: closestX, y: closestY });
       timeToImpact = Math.round(closestTicks * 50);
+    } else if (Number.isFinite(closestTicks)) {
+      // Do not expose an infinite-ray CPA as a future collision once the
+      // projectile is already moving away or cannot reach the player before expiry.
+      cpa = null;
+      timeToImpact = null;
     }
   }
   if (!Number.isFinite(distance)) distance = null;
@@ -1526,7 +1548,7 @@ function estimateBulletKinematics(bullet, self, options = {}) {
     createdTick,
     expireTick,
     currentTick,
-    remainingTicks: currentTick !== null && expireTick !== null ? Math.max(0, expireTick - currentTick) : null
+    remainingTicks: remainingTicks === null ? null : Math.max(0, remainingTicks)
   };
 }
 

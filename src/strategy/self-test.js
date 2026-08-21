@@ -1024,7 +1024,7 @@ function runStrategyModuleSelfTests() {
   );
   const collisionOverride = dynamicWhitelistIncomingOverrideCore(
     dynamicTarget(5000),
-    { ownerId: 8, incoming: true, cpa: 50 },
+    { ownerId: 8, incoming: true, cpa: 50, timeToImpact: 500, remainingTicks: 30 },
     dynamicContext,
     { combatAttackRange: 14500, combatBulletHitRadiusCm: 90 }
   );
@@ -1042,6 +1042,32 @@ function runStrategyModuleSelfTests() {
       && collisionOverride.incomingDodgeRequired === true
       && collisionOverride.defensiveTargetEligible === true
       && offLaneOverride.incomingDodgeRequired === false
+  });
+
+  const reachableIncomingBullet = {
+    incoming: true,
+    authority: 'realtime',
+    cpa: 50,
+    distance: 5000,
+    timeToImpact: 500,
+    remainingTicks: 10
+  };
+  const beyondLifetimeIncomingBullet = {
+    ...reachableIncomingBullet,
+    distance: 43900,
+    timeToImpact: 4390,
+    remainingTicks: 30
+  };
+  const expiredIncomingBullet = {
+    ...reachableIncomingBullet,
+    remainingTicks: 0
+  };
+  results.push({
+    name: 'incoming-collision-requires-future-impact-within-bullet-lifetime',
+    passed: incomingBulletHasCollisionRiskCore(reachableIncomingBullet)
+      && !incomingBulletHasCollisionRiskCore(beyondLifetimeIncomingBullet)
+      && !incomingBulletHasCollisionRiskCore(expiredIncomingBullet)
+      && !incomingBulletHasCollisionRiskCore({ cpa: 50, timeToImpact: 500 })
   });
 
   const edgeAction = {
@@ -7737,14 +7763,14 @@ function runStrategyModuleSelfTests() {
 
   results.push({
     name: 'combat-incoming-shooter-switch-requires-hit-corridor-and-urgency',
-    passed: incomingBulletHasCollisionRiskCore({ cpa: 90 })
-      && !incomingBulletHasCollisionRiskCore({ cpa: 91 })
+    passed: incomingBulletHasCollisionRiskCore({ cpa: 90, timeToImpact: 500, remainingTicks: 30 })
+      && !incomingBulletHasCollisionRiskCore({ cpa: 91, timeToImpact: 500, remainingTicks: 30 })
       && !incomingBulletHasCollisionRiskCore({ cpa: null })
-      && incomingBulletRequiresTargetSwitchCore({ cpa: 50, distance: 6500, timeToImpact: 1200 }, {
+      && incomingBulletRequiresTargetSwitchCore({ cpa: 50, distance: 6500, timeToImpact: 1200, remainingTicks: 30 }, {
         combatTargetSwitchIncomingDistance: 6500,
         combatTargetSwitchIncomingTimeMs: 900
       })
-      && !incomingBulletRequiresTargetSwitchCore({ cpa: 1000, distance: 1000, timeToImpact: 100 }, {
+      && !incomingBulletRequiresTargetSwitchCore({ cpa: 1000, distance: 1000, timeToImpact: 100, remainingTicks: 30 }, {
         combatTargetSwitchIncomingDistance: 6500,
         combatTargetSwitchIncomingTimeMs: 900
       })
@@ -8279,9 +8305,9 @@ function runStrategyModuleSelfTests() {
     currentInvalid: true, nowMs: 1500
   }, null);
   const threatEvidence = combatTargetIncomingThreatEvidenceCore([
-    { ownerId: 8, incoming: true, cpa: 40, distance: 6200, timeToImpact: 1000 },
-    { ownerId: 9, incoming: true, cpa: 50, distance: 3000, timeToImpact: 400 },
-    { ownerId: 9, incoming: true, cpa: 500, distance: 1000, timeToImpact: 100 }
+    { ownerId: 8, incoming: true, cpa: 40, distance: 6200, timeToImpact: 1000, remainingTicks: 30 },
+    { ownerId: 9, incoming: true, cpa: 50, distance: 3000, timeToImpact: 400, remainingTicks: 30 },
+    { ownerId: 9, incoming: true, cpa: 500, distance: 1000, timeToImpact: 100, remainingTicks: 30 }
   ], '9', {
     combatTargetSwitchIncomingDistance: 6500,
     combatTargetSwitchIncomingTimeMs: 900,

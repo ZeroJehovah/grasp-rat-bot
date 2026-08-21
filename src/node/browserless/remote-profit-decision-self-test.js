@@ -3012,7 +3012,7 @@ function runRemoteProfitDecisionSelfTest() {
   const incomingBullet = {
     bullet_id: 1,
     owner_user_id: 42,
-    start_x: 15769,
+    start_x: 14000,
     start_y: 0,
     target_x: 0,
     target_y: 0,

@@ -2,6 +2,10 @@
 
 const { COMBAT_CONSTANTS } = require('./combat-constants');
 const {
+  incomingBulletHasCollisionRiskCore,
+  incomingBulletReachabilityCore
+} = require('./combat-bullet-reachability');
+const {
   dynamicWhitelistDistanceGuardBlocksCombatCore,
   dynamicWhitelistIncomingOverrideCore
 } = require('./dynamic-whitelist-safety');
@@ -646,19 +650,6 @@ function selectBestCombatTarget(self, candidates, context = {}) {
   };
 }
 
-function incomingBulletHasCollisionRiskCore(incomingBullet, options = {}) {
-  if (!incomingBullet) return false;
-  const cpaValue = incomingBullet.cpa;
-  if (cpaValue === null || cpaValue === undefined || cpaValue === '') return false;
-  const cpa = Number(cpaValue);
-  const hitRadius = Math.max(1, Number(
-    options.combatTargetSwitchIncomingCpaCm
-      ?? options.combatBulletHitRadiusCm
-      ?? COMBAT_CONSTANTS.BULLET_HIT_RADIUS_CM
-  ));
-  return Number.isFinite(cpa) && cpa >= 0 && cpa <= hitRadius;
-}
-
 function incomingBulletRequiresTargetSwitchCore(incomingBullet, options = {}) {
   if (!incomingBulletHasCollisionRiskCore(incomingBullet, options)) return false;
   const distanceValue = incomingBullet.distance;
@@ -1171,6 +1162,7 @@ module.exports = {
   applyCombatTargetSwitchHysteresisCore,
   defensiveTargetOverridesEngagedCore,
   incomingBulletHasCollisionRiskCore,
+  incomingBulletReachabilityCore,
   incomingBulletRequiresTargetSwitchCore,
   isActiveCombatMode,
   isFiringCombatEntity,

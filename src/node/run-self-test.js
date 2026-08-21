@@ -114,6 +114,7 @@ const {
   combatLearningCellCount,
   currentCombatShotOriginDiagnostics,
   estimateAim,
+  normalizeCombatBullet,
   recordCombatShotLearning,
   rememberBrowserlessCombatEngagement
 } = require('./browserless/combat-adapter');
@@ -7999,6 +8000,69 @@ async function runSelfTest() {
       want: 'false|true|false|realtime|1|2|true'
     },
     {
+      name: 'browserless bullet collision requires finite reachable lifetime',
+      got: (() => {
+        const self = { user_id: 7, x: 0, y: 0 };
+        const normalize = (startX, bulletId) => normalizeCombatBullet({
+          bullet_id: bulletId,
+          owner_user_id: 8,
+          start_x: startX,
+          start_y: 0,
+          target_x: 0,
+          target_y: 0,
+          speed_per_tick: 500,
+          created_tick: 100,
+          expire_tick: 130
+        }, self, { currentTick: 100 });
+        const reachable = normalize(5000, 'reachable');
+        const unreachable = normalize(43900, 'unreachable');
+        const farCombat = buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: {
+            tick: 100,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100 },
+              {
+                entity_id: 2,
+                user_id: 8,
+                name: 'far-observer',
+                x: 43900,
+                y: 0,
+                hp: 100,
+                current_join_mode: 'Passive',
+                dynamicWhitelistMember: true,
+                dynamicWhitelistEnabled: true,
+                profitProtected: true
+              }
+            ],
+            bullets: [{
+              bullet_id: 'far-shot',
+              owner_user_id: 8,
+              start_x: 43900,
+              start_y: 0,
+              target_x: 0,
+              target_y: 0,
+              speed_per_tick: 500,
+              created_tick: 100,
+              expire_tick: 130
+            }]
+          }
+        }, { nowMs: 1000, combatAttackRange: 14500, combatDisengageRange: 17000 });
+        return [
+          reachable.cpa,
+          reachable.timeToImpact,
+          reachable.remainingTicks,
+          unreachable.cpa,
+          unreachable.timeToImpact,
+          unreachable.remainingTicks,
+          farCombat.target === null,
+          farCombat.candidates.length
+        ].join('|');
+      })(),
+      want: '0|500|30|||30|true|0'
+    },
+    {
       name: 'browserless state store derives bounded bullet trajectory uncertainty and expires history',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
@@ -9880,7 +9944,7 @@ async function runSelfTest() {
             { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100 },
             { entity_id: 2, user_id: 8, name: 'attacker', x: 5000, y: 0, hp: 80, max_hp: 100, current_join_mode: 'Active', firing: true, drop: 6 }
           ],
-          bullets: [{ bullet_id: 1, owner_user_id: 8, start_x: 5000, start_y: 0, target_x: 0, target_y: 0, speed_per_tick: 500 }],
+          bullets: [{ bullet_id: 1, owner_user_id: 8, start_x: 5000, start_y: 0, target_x: 0, target_y: 0, speed_per_tick: 500, created_tick: 54, expire_tick: 84 }],
           coin_drops: [{ drop_id: 'low-combat-coin', amount: 1, x: 11000, y: 0 }]
         }, { receivedAtMs: nowMs });
         store.ingestFrame({
@@ -10475,7 +10539,7 @@ async function runSelfTest() {
             { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 40, max_hp: 100 }
           ],
           bullets: [
-            { bullet_id: 1, owner_user_id: 8, start_x: 5000, start_y: 0, target_x: 0, target_y: 0, speed_per_tick: 500 }
+            { bullet_id: 1, owner_user_id: 8, start_x: 5000, start_y: 0, target_x: 0, target_y: 0, speed_per_tick: 500, created_tick: 59, expire_tick: 89 }
           ],
           coin_drops: [
             { drop_id: 'high-value-coin', amount: 12, x: 5000, y: 0 }
@@ -18666,7 +18730,9 @@ async function runSelfTest() {
             cpa: 11700,
             incoming: true,
             synthetic: false,
-            createdTick: 20
+            createdTick: 20,
+            timeToImpact: 500,
+            remainingTicks: 30
           }],
           combatBulletHitRadiusCm: 200
         });
@@ -18684,7 +18750,9 @@ async function runSelfTest() {
             cpa: 100,
             incoming: true,
             synthetic: false,
-            createdTick: 21
+            createdTick: 21,
+            timeToImpact: 500,
+            remainingTicks: 30
           }],
           combatBulletHitRadiusCm: 200
         });
@@ -18959,7 +19027,7 @@ async function runSelfTest() {
               { entity_id: 3, user_id: 9, name: 'incoming', x: 1200, y: 0, hp: 80, current_join_mode: 'Active', firing: true, drop: 1 }
             ],
             bullets: [
-              { bullet_id: 4, owner_user_id: 9, x: 1000, y: 0, target_x: 0, target_y: 0, speed_per_tick: 500 }
+              { bullet_id: 4, owner_user_id: 9, x: 1000, y: 0, target_x: 0, target_y: 0, speed_per_tick: 500, created_tick: 62, expire_tick: 92 }
             ]
           }
         }, {
@@ -19044,7 +19112,7 @@ async function runSelfTest() {
               { entity_id: 2, user_id: 8, name: 'low-value-active', x: 1000, y: 0, hp: 80, current_join_mode: 'Active', drop: 1 }
             ],
             bullets: [
-              { bullet_id: 4, owner_user_id: 8, x: 1000, y: 0, target_x: 0, target_y: 0, speed_per_tick: 500 }
+              { bullet_id: 4, owner_user_id: 8, x: 1000, y: 0, target_x: 0, target_y: 0, speed_per_tick: 500, created_tick: 62, expire_tick: 92 }
             ]
           }
         }, { nowMs: 1500, combatAttackRange: 11000, combatTargetSwitchIncomingDistance: 6500 });
@@ -20756,7 +20824,7 @@ async function runSelfTest() {
           { active: false }
         );
         const oldDistant = run([{ ownerId: 8, cpa: 5000 }]);
-        const collision = run([{ ownerId: 8, cpa: 0 }]);
+        const collision = run([{ ownerId: 8, cpa: 0, timeToImpact: 100, remainingTicks: 30 }]);
         const injured = run([], { browserlessInjury: { at: 9000, targetKey: '8', attributable: true } });
         const firingClosing = run([], {
           combatTarget: {
