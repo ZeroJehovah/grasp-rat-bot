@@ -8072,7 +8072,7 @@ async function runBrowserlessRunnerSelfTest() {
         ok: player?.name === 'huaming song latest'
           && player?.entityId === '3'
           && player?.initialDrop === 787
-          && player?.maxDrop === 1800
+          && player?.maxDrop === 1762
           && player?.latestDrop === 1705
           && player?.lastObservedTick === 90,
         player

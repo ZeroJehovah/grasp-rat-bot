@@ -34314,7 +34314,7 @@ async function runSelfTest() {
           nextDay.players.length
         ].join('|');
       }),
-      want: '2026-07-14|3|alice-after-tick-reset|8|520|900|800|bob|500|500|450|carol-low|50|50|40|true|true|false|false|false|50|ws|gap-http|2026-07-15|0'
+      want: '2026-07-14|3|alice-after-tick-reset|8|520|800|800|bob|500|500|450|carol-low|50|50|40|true|true|false|false|false|50|ws|gap-http|2026-07-15|0'
     },
     {
       name: 'browserless snapshot gap poller waits three minutes after any observed snapshot',

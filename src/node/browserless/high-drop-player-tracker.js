@@ -242,7 +242,6 @@ function createHighDropPlayerTracker(options = {}) {
         updated += 1;
         continue;
       }
-      const nextMax = Math.max(Number(existing.maxDrop), drop);
       const existingObservedAtMs = timestampOrNull(existing.lastObservedAt);
       const freshness = nameObservationFreshness({
         observedAtMs: atMs,
@@ -251,17 +250,20 @@ function createHighDropPlayerTracker(options = {}) {
         previousObservedTick: existing.lastObservedTick
       });
       const staleObservation = !freshness.accepted;
-      const displayChanged = existing.maxDrop !== nextMax
-        || (!staleObservation && (existing.name !== name
+      if (freshness.advanced) observationAdvanced += 1;
+      // maxDrop 与 latestDrop 使用同一套新旧门控:stale/乱序观测不得抬高 max、也不得
+      // 回退 latest,避免出现 latestDrop < maxDrop(玩家未死但推测额度被省略)。
+      if (!staleObservation) {
+        const nextMax = Math.max(Number(existing.maxDrop), drop);
+        const displayChanged = existing.maxDrop !== nextMax
+          || existing.name !== name
           || existing.entityId !== identity.entityId
           || existing.latestDrop !== drop
-          || existing.online !== true));
-      if (freshness.advanced) observationAdvanced += 1;
-      if (displayChanged || freshness.advanced) {
-        store.players[identity.key] = {
-          ...existing,
-          maxDrop: nextMax,
-          ...(staleObservation ? {} : {
+          || existing.online !== true;
+        if (displayChanged || freshness.advanced) {
+          store.players[identity.key] = {
+            ...existing,
+            maxDrop: nextMax,
             entityId: identity.entityId,
             name,
             latestDrop: drop,
@@ -270,9 +272,9 @@ function createHighDropPlayerTracker(options = {}) {
             online: true,
             onlineObservedAt: at,
             ...(globalSnapshot ? { onlineCheckedAt: at } : {})
-          })
-        };
-        if (displayChanged) updated += 1;
+          };
+          if (displayChanged) updated += 1;
+        }
       }
     }
     if (globalSnapshot) {
