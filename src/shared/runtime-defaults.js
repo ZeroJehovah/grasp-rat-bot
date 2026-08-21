@@ -344,6 +344,11 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     opportunitySwitchRelativeMargin: 0.1,
     opportunitySwitchHoldMs: 7000,
     opportunityMissingHoldMs: 7000,
+    // A realtime Active profit mission may disappear from one compact/native
+    // candidate batch while the entity is still alive.  Keep that established
+    // navigation authority long enough for the next observation instead of
+    // letting a lower-value Passive candidate take over.
+    activeProfitTargetMissingHoldMs: numberDefault(config.activeProfitTargetMissingHoldMs, 12000),
     opportunityOscillationSwitchLimit: 2,
     opportunityOscillationWindowMs: 30000,
     opportunityOscillationLockMs: 30000,

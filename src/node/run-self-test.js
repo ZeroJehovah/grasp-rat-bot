@@ -46386,9 +46386,11 @@ async function runSelfTest() {
 	              active: true,
 	              phase: 'drop-pending',
 	              targetId: '36176',
-	              targetName: 'Victor8886',
-	              targetDrop: 91,
-	              startedAt: 1050,
+              targetName: 'Victor8886',
+              targetDrop: 91,
+              x: -5000,
+              y: 0,
+              startedAt: 1050,
 	              confirmedAt: 1050,
 	              expiresAt: 6000,
 	              matchedCoinKey: '',
@@ -46419,7 +46421,7 @@ async function runSelfTest() {
 	          fs.rmSync(dir, { recursive: true, force: true });
 	        }
 	      })(),
-	      want: 'combat-live|post-attack-drop-wait|post-kill-settlement-wait|2889|0|true|combat-live|2889|0|true'
+	      want: 'combat-live|combat-live|combat-live-realtime|2889|0|true|combat-live|2889|0|true'
 	    },
 	    {
 	      name: 'browserless worker planner handoff seeds realtime easy-kill control',

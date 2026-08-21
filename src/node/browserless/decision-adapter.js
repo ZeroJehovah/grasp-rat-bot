@@ -203,6 +203,7 @@ const DEFAULT_DANGEROUS_TARGET_COOLDOWN_MS = BROWSER_RUNTIME_DEFAULTS.browserles
 const DEFAULT_EASY_KILL_APPROACH_WINDOW_MS = BROWSER_RUNTIME_DEFAULTS.browserlessEasyKillApproachWindowMs ?? 8000;
 const DEFAULT_EASY_KILL_APPROACH_MIN_CLOSING_CM = BROWSER_RUNTIME_DEFAULTS.browserlessEasyKillApproachMinClosingCm ?? 1000;
 const DEFAULT_PROFIT_MISSION_TTL_MS = 180000;
+const DEFAULT_ACTIVE_PROFIT_TARGET_MISSING_HOLD_MS = BROWSER_RUNTIME_DEFAULTS.activeProfitTargetMissingHoldMs ?? 12000;
 const DEFAULT_COMPLETED_PROFIT_TARGET_TTL_MS = 210000;
 const DEFAULT_PROFIT_TICK_REGRESSION_TOLERANCE = 5;
 const DEFAULT_ACTIVE_COIN_COMPETITION_MIN_SELF_DISTANCE_CM = BROWSER_RUNTIME_DEFAULTS.activeCoinCompetitionMinSelfDistanceCm ?? 18000;
@@ -7150,7 +7151,80 @@ function profitMissionChoiceIsHighValue(choice, options = {}) {
   const amount = Number(source?.amount ?? choice?.amount ?? 0);
   const highValueAmount = Number(options.highValueCoinPriorityAmount
     ?? OPPORTUNITY_CONSTANTS.HIGH_VALUE_COIN_PRIORITY_AMOUNT);
-  return Number.isFinite(amount) && amount >= highValueAmount;
+  const reward = Number(
+    choice?.expectedReward
+      ?? choice?.reward
+      ?? source?.drop
+      ?? source?.Drop
+      ?? source?.reward
+      ?? source?.death_reward_preview
+      ?? source?.death_drop_coins
+      ?? 0
+  );
+  // Player opportunities expose their value as Drop/reward rather than
+  // `amount`.  Treat that observed value as high-value too, so an established
+  // realtime Active target keeps its mission across a transient candidate
+  // omission instead of being replaced by a nearby Passive target.
+  const enemyType = profitMissionChoiceType(choice) === 'enemy';
+  const sourceAuthority = String(source?.authority || choice?.authority || '');
+  const realtimeActive = enemyType
+    && (source?.active === true
+      || source?.joinModeActive === true
+      || source?.realtimeActiveProvenance === true
+      || choice?.targetActive === true)
+    && (!sourceAuthority
+      || sourceAuthority === 'realtime'
+      || sourceAuthority === 'native'
+      || sourceAuthority === 'realtime-visible'
+      || source?.realtimeActiveProvenance === true);
+  return (Number.isFinite(amount) && amount >= highValueAmount)
+    || (realtimeActive && Number.isFinite(reward) && reward >= highValueAmount);
+}
+
+function profitMissionIsEstablishedRealtimeActive(mission = {}) {
+  if (String(mission?.type || '') !== 'enemy') return false;
+  const source = profitMissionChoiceSource(mission?.choice)
+    || mission?.navigationTarget
+    || mission?.target
+    || null;
+  if (!source || source.alive === false || source.invulnerable === true) return false;
+  const authority = String(source.authority || mission?.navigationAuthority || '');
+  const retainedRealtimeProvenance = source.realtimeActiveProvenance === true
+    || mission?.heldCandidateSource === 'realtime-visible'
+    || mission?.choice?.heldCandidateSource === 'realtime-visible';
+  if (authority
+    && authority !== 'realtime'
+    && authority !== 'native'
+    && authority !== 'realtime-visible'
+    && !retainedRealtimeProvenance) return false;
+  return source.active === true
+    || source.joinModeActive === true
+    || source.realtimeActiveProvenance === true
+    || mission?.choice?.targetActive === true;
+}
+
+function opportunityIsEstablishedRealtimeActive(item) {
+  if (String(item?.type || '') !== 'enemy') return false;
+  const source = item?.sourceTarget || item?.target || null;
+  if (!source || source.alive === false || source.invulnerable === true) return false;
+  const authority = String(item?.authority || source.authority || '');
+  if (authority
+    && authority !== 'realtime'
+    && authority !== 'native'
+    && authority !== 'realtime-visible'
+    && source.realtimeActiveProvenance !== true) return false;
+  return source.active === true
+    || source.joinModeActive === true
+    || source.realtimeActiveProvenance === true
+    || item?.targetActive === true;
+}
+
+function opportunityIsPassiveOrInvulnerable(item) {
+  if (String(item?.type || '') !== 'enemy') return false;
+  const source = item?.sourceTarget || item?.target || null;
+  if (!source) return item?.targetActive === false;
+  return Boolean(source.invulnerable === true
+    || (source.active !== true && source.joinModeActive !== true));
 }
 
 function buildProfitMissionFromChoice(choice, input = {}, previous = null, options = {}) {
@@ -7361,14 +7435,28 @@ function realtimeEnemyMissionMissingState(input = {}, mission = {}, nowMs = Date
       || ''
   );
   const realtimeProvenance = authority === 'realtime-visible'
-    || String(source.authority || mission.navigationAuthority || '') === 'realtime';
+    || String(source.authority || mission.navigationAuthority || '') === 'realtime'
+    || source.realtimeActiveProvenance === true;
   if (!realtimeProvenance) return {
     missing: true,
     expired: false,
     targetId: missionId,
     reason: 'non-realtime-mission-provenance'
   };
-  const holdMs = Math.max(0, Number(options.enemyMissingHoldMs ?? 1800));
+  const ordinaryHoldMs = Math.max(0, Number(options.enemyMissingHoldMs ?? 1800));
+  const activeHoldMs = Math.max(0, Number(
+    options.activeProfitTargetMissingHoldMs
+      ?? BROWSER_RUNTIME_DEFAULTS.activeProfitTargetMissingHoldMs
+      ?? DEFAULT_ACTIVE_PROFIT_TARGET_MISSING_HOLD_MS
+  ));
+  const sourceIsRealtimeActive = source.realtimeActiveProvenance === true
+    || (source.active === true || source.joinModeActive === true)
+    && source.invulnerable !== true
+    && (!source.authority
+      || source.authority === 'realtime'
+      || source.authority === 'native'
+      || source.authority === 'realtime-visible');
+  const holdMs = sourceIsRealtimeActive ? Math.max(ordinaryHoldMs, activeHoldMs) : ordinaryHoldMs;
   const observedAt = numberOrNull(
     mission.heldRewardObservedAt
       ?? choice.heldRewardObservedAt
@@ -7716,6 +7804,11 @@ function releaseProfitMissionForPickups(stateful = {}, pickups = [], nowMs = 0, 
 function buildOpportunityDecision(input, stateful = {}, options = {}) {
   const thresholdContext = options.profitThresholdContext || buildProfitThresholdContext(input, options);
   const enemyMissingHoldMs = Math.max(0, Number(options.enemyMissingHoldMs ?? 1800));
+  const activeProfitTargetMissingHoldMs = Math.max(0, Number(
+    options.activeProfitTargetMissingHoldMs
+      ?? BROWSER_RUNTIME_DEFAULTS.activeProfitTargetMissingHoldMs
+      ?? DEFAULT_ACTIVE_PROFIT_TARGET_MISSING_HOLD_MS
+  ));
   if (!input.self) {
     return {
       opportunities: [],
@@ -7853,12 +7946,46 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       ?? options.attackRange
       ?? DEFAULT_ATTACK_RANGE
   ));
+  // The native compact nearby list can briefly omit an established Active
+  // target (for example while its join-mode field catches up).  Admit that
+  // same realtime entity back into the planner only when it is already the
+  // retained mission/choice; this does not create a new combat target from a
+  // snapshot or from a Passive player.
+  const retainedRealtimeActiveIds = new Set();
+  const retainedMission = stateful.profitMission || null;
+  if (profitMissionIsEstablishedRealtimeActive(retainedMission)) {
+    const id = profitMissionTargetId(retainedMission);
+    if (id) retainedRealtimeActiveIds.add(String(id));
+  }
+  for (const retained of [stateful.currentOpportunity, stateful.opportunityChoice]) {
+    if (!retained || String(retained.type || '') !== 'enemy') continue;
+    const retainedSource = retained.sourceTarget || retained.target || null;
+    const authority = String(retained.heldCandidateSource || retainedSource?.authority || '');
+    if (retainedSource
+      && retainedSource.active === true
+      && retainedSource.invulnerable !== true
+      && (!authority
+        || authority === 'realtime'
+        || authority === 'native'
+        || authority === 'realtime-visible'
+        || retainedSource.realtimeActiveProvenance === true)) {
+      const id = retained.id ?? retained.userId ?? retained.user_id;
+      if (id !== null && id !== undefined && id !== '') retainedRealtimeActiveIds.add(String(id));
+    } else if (retained.targetActive === true
+      && (!authority || authority === 'realtime' || authority === 'native' || authority === 'realtime-visible')) {
+      const id = retained.id ?? retained.userId ?? retained.user_id;
+      if (id !== null && id !== undefined && id !== '') retainedRealtimeActiveIds.add(String(id));
+    }
+  }
   const ordinaryActiveProfitTargets = (input.visibleTargets || [])
     .filter(target => target?.authority === 'realtime')
     // Profit admission requires the realtime protocol's Active mode. The
     // broader `active` flag also covers movement and firing for safety logic;
     // those signals alone must never create a profit mission.
-    .filter(target => target.joinModeActive === true && target.alive !== false)
+    .filter(target => (
+      target.joinModeActive === true
+      || (target.active === true && retainedRealtimeActiveIds.has(String(target.user_id ?? target.userId ?? '')))
+    ) && target.alive !== false)
     .filter(target => !target.invulnerable)
     .filter(target => !isWhitelistedTargetForOptions(target, options))
     .filter(target => Number.isFinite(Number(target.distance)) && Number(target.distance) <= activeProfitRange)
@@ -7903,7 +8030,11 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
         : '',
       heldRewardKnown: rewardKnown,
       heldRewardObservedAt: input.nowMs,
-      heldProvenanceExpiresAt: input.nowMs + enemyMissingHoldMs,
+      heldProvenanceExpiresAt: input.nowMs + (
+        opportunityIsEstablishedRealtimeActive(item)
+          ? Math.max(enemyMissingHoldMs, activeProfitTargetMissingHoldMs)
+          : enemyMissingHoldMs
+      ),
       targetHp: numberOrNull(item.sourceTarget?.hp),
       targetActive: Boolean(item.sourceTarget?.active)
     };
@@ -8067,6 +8198,21 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       ? activeProfitEscortContinuityForMission(stateful, currentMission, input.nowMs)
       : null;
     const continuityHold = Boolean(escortContinuity);
+    const currentSource = current.sourceTarget || current.target || null;
+    const currentIsEstablishedRealtimeActive = Boolean(
+      currentSource?.active === true
+        && currentSource?.invulnerable !== true
+        && (!currentSource?.authority
+          || currentSource.authority === 'realtime'
+          || currentSource.authority === 'native'
+          || currentSource.authority === 'realtime-visible')
+    ) || currentSource?.realtimeActiveProvenance === true
+      || (current.targetActive === true && current.heldCandidateSource === 'realtime-visible')
+      || (current.heldCandidateSource === 'realtime-visible'
+        && profitMissionIsEstablishedRealtimeActive(currentMission));
+    const currentMissingHoldMs = currentIsEstablishedRealtimeActive
+      ? Math.max(enemyMissingHoldMs, activeProfitTargetMissingHoldMs)
+      : enemyMissingHoldMs;
     const ageMs = Math.max(0, input.nowMs - enemyLastSeenAt);
     const cachedTarget = {
       type: 'enemy',
@@ -8077,6 +8223,8 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       distance: distanceBetween(input.self, current),
       hp: numberOrNull(current.targetHp),
       active: Boolean(current.targetActive),
+      joinModeActive: currentIsEstablishedRealtimeActive,
+      realtimeActiveProvenance: currentIsEstablishedRealtimeActive,
       cachedNavigationOnly: true,
       authority: 'last-realtime-position'
     };
@@ -8119,8 +8267,8 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
         })
       : null;
     let releaseReason = '';
-    if (!continuityHold && enemyMissingHoldMs <= 0) releaseReason = 'missing-hold-disabled';
-    else if (!continuityHold && ageMs > enemyMissingHoldMs) releaseReason = 'missing-hold-expired';
+    if (!continuityHold && currentMissingHoldMs <= 0) releaseReason = 'missing-hold-disabled';
+    else if (!continuityHold && ageMs > currentMissingHoldMs) releaseReason = 'missing-hold-expired';
     else if (!positionComplete) releaseReason = 'held-position-incomplete';
     else if (heldReward === null || heldReward <= 0 || current.heldRewardKnown !== true) releaseReason = 'held-reward-unknown';
     else if (!provenanceComplete) releaseReason = 'held-provenance-incomplete';
@@ -8142,18 +8290,22 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       ageMs,
       holdMs: continuityHold
         ? Math.max(0, Number(escortContinuity.expiresAt || input.nowMs) - input.nowMs)
-        : enemyMissingHoldMs,
+        : currentMissingHoldMs,
       releaseReason,
       replacementCandidate: null
     };
     if (!releaseReason) {
+      const missingContinuityScore = currentIsEstablishedRealtimeActive
+        && Number.isFinite(Number(current.score))
+        ? Number(current.score)
+        : (Number.isFinite(Number(heldScore)) ? Number(heldScore) : Number(current.score || 0));
       opportunities = opportunities.concat([{
         type: 'enemy',
         id: current.id,
         x: cachedTarget.x,
         y: cachedTarget.y,
         distance: cachedTarget.distance,
-        score: Number.isFinite(Number(heldScore)) ? Number(heldScore) : Number(current.score || 0),
+        score: missingContinuityScore,
         reward: heldReward,
         expectedReward: heldReward,
         effectiveProfitReward: current.effectiveProfitReward || null,
@@ -8189,6 +8341,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
   const missionEscortContinuity = lockedProfitMission
     ? activeProfitEscortContinuityForMission(stateful, lockedProfitMission, input.nowMs)
     : null;
+  const missionEstablishedRealtimeActive = profitMissionIsEstablishedRealtimeActive(lockedProfitMission);
   const remoteMissionReclaimBlocked = false;
   if (lockedProfitMission && (lockedProfitMission.highValue || missionEscortContinuity)) {
     let missionOpportunity = opportunities.find(item => profitMissionMatchesChoice(lockedProfitMission, item)) || null;
@@ -8220,11 +8373,33 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
         lockedProfitMission = null;
       }
     }
+    const missionRawDrop = Number(
+      missionOpportunity?.sourceTarget?.drop
+        ?? missionOpportunity?.sourceTarget?.Drop
+        ?? missionOpportunity?.reward
+        ?? lockedProfitMission?.reward
+        ?? 0
+    );
+    const currentRawDrop = Number(
+      current?.sourceTarget?.drop
+        ?? current?.sourceTarget?.Drop
+        ?? current?.reward
+        ?? 0
+    );
+    const currentIsLowerValuePassive = Boolean(
+      current
+        && opportunityIsPassiveOrInvulnerable(current)
+        && Number.isFinite(missionRawDrop)
+        && Number.isFinite(currentRawDrop)
+        && missionRawDrop >= currentRawDrop
+    );
     if (lockedProfitMission?.highValue
       && missionOpportunity
       && (!current || !profitMissionMatchesChoice(lockedProfitMission, current))
       && !remoteMissionReclaimBlocked
-      && !realtimeProfitAvailable) {
+      && (!realtimeProfitAvailable
+        || missionEscortContinuity
+        || (missionEstablishedRealtimeActive && currentIsLowerValuePassive))) {
       current = missionOpportunity;
     }
   }
@@ -9064,14 +9239,96 @@ function suppressLowValuePostKillCoinForProfitMission(input = {}, stateful = {},
   };
 }
 
-function buildPostKillSettlementWaitDecision(input, stateful = {}, combat = null) {
+function postKillSettlementMovement(input = {}, settlement = null, options = {}) {
+  if (!input?.self || !settlement) return null;
+  const x = coordinateOrNull(settlement.x);
+  const y = coordinateOrNull(settlement.y);
+  if (x === null || y === null) return null;
+  const distance = distanceBetween(input.self, { x, y });
+  if (!Number.isFinite(distance)) return null;
+  const stopDistance = Math.max(0, Number(
+    options.playerDropPickupRadiusCm
+      ?? BROWSER_RUNTIME_DEFAULTS.playerDropPickupRadiusCm
+      ?? 150
+  ));
+  if (!(distance > stopDistance)) {
+    return {
+      active: true,
+      arrived: true,
+      x,
+      y,
+      distance: Math.round(distance),
+      stopDistanceCm: Math.round(stopDistance),
+      dx: 0,
+      dy: 0,
+      reason: 'post-kill-settlement-arrived'
+    };
+  }
+  const dx = (x - Number(input.self.x)) / distance;
+  const dy = (y - Number(input.self.y)) / distance;
+  return {
+    active: true,
+    arrived: false,
+    x,
+    y,
+    distance: Math.round(distance),
+    stopDistanceCm: Math.round(stopDistance),
+    dx: Math.round(dx * 1000) / 1000,
+    dy: Math.round(dy * 1000) / 1000,
+    reason: 'post-kill-settlement-approach'
+  };
+}
+
+function buildPostKillSettlementWaitDecision(input, stateful = {}, combat = null, options = {}) {
   const settlement = stateful.postKillSettlement || null;
-  if (!input?.self || !settlement || settlement.phase === 'drop-visible') return null;
+  if (!input?.self || !settlement) return null;
+  if (settlement.active === false
+    || ['settled', 'expired', 'picked-up', 'complete'].includes(String(settlement.phase || ''))) {
+    return null;
+  }
   if (postKillSettlementYieldedToProfitMission(input, stateful, settlement)) return null;
+  const matchedCoinVisible = String(settlement.matchedCoinKey || '')
+    && mergeProfitCoinCandidates(
+      input?.realtimeCoins || input?.realtimeObservedCoins || [],
+      input?.snapshotVisibleCoins
+        || input?.snapshotObservedCoins
+        || input?.profitCoins
+        || input?.selfKilledPlayerDropCoins
+        || []
+    ).some(coin => profitCoinKey(coin) === String(settlement.matchedCoinKey));
+  // Once the matched realtime drop is visible, the dedicated loot controller
+  // owns its pickup movement.  Keep the settlement fallback for a temporarily
+  // missing coin so the bot still travels to the retained death point.
+  if (settlement.phase === 'drop-visible' && matchedCoinVisible) return null;
   const currentCombatTarget = combat?.target || combat?.dryRun?.target || null;
-  if (currentCombatTarget
-    && (settlement.reason === 'self-kill-evidence-observed'
-      || settlement.primaryTargetDropPriority === true)) return null;
+  const currentCombatTargetId = String(targetIdForAttackHistory(currentCombatTarget) ?? '');
+  const settlementTargetId = String(settlement.targetId ?? '');
+  if (currentCombatTarget && currentCombatTargetId && currentCombatTargetId === settlementTargetId) return null;
+  const movement = postKillSettlementMovement(input, settlement, options);
+  if (currentCombatTarget && movement) {
+    // A defensive secondary may keep its normal fire cadence, but movement is
+    // now owned by the primary death point until pickup/settlement completes.
+    // Hard exits, Dodge, transport, stamina, and HP-50 gates are arbitrated
+    // before this composite action by the caller.
+    return {
+      kind: 'combat-live',
+      band: 'combat',
+      reason: 'post-kill-settlement-defensive-escort',
+      target: currentCombatTarget,
+      lootTarget: {
+        type: 'post-attack-target',
+        id: settlement.targetId,
+        name: settlement.targetName || '',
+        x: coordinateOrNull(settlement.x),
+        y: coordinateOrNull(settlement.y),
+        drop: numberOrNull(settlement.targetDrop)
+      },
+      postKillSettlement: settlementSummary(settlement, input.nowMs),
+      postKillSettlementMovement: movement,
+      defensiveSettlementComposite: true
+    };
+  }
+  if (currentCombatTarget) return null;
   return {
     kind: 'post-attack-drop-wait',
     band: 'profit',
@@ -9091,8 +9348,40 @@ function buildPostKillSettlementWaitDecision(input, stateful = {}, combat = null
         ageMs: Math.max(0, Math.round(input.nowMs - Number(settlement.startedAt || input.nowMs)))
       }
     },
-    postKillSettlement: settlementSummary(settlement, input.nowMs)
+    postKillSettlement: settlementSummary(settlement, input.nowMs),
+    postKillSettlementMovement: movement
   };
+}
+
+function applyPostKillSettlementMovementToCombat(combat, action) {
+  const movement = action?.postKillSettlementMovement;
+  if (!movement?.active || action?.defensiveSettlementComposite !== true || !combat?.dryRun) {
+    return combat;
+  }
+  const existing = combat.dryRun.movement || {};
+  combat.dryRun = {
+    ...combat.dryRun,
+    movement: {
+      ...existing,
+      dx: Number(movement.dx || 0),
+      dy: Number(movement.dy || 0),
+      reason: movement.arrived
+        ? 'post-kill-settlement-arrived'
+        : 'post-kill-settlement-approach',
+      modifiers: Array.from(new Set([
+        ...(existing.modifiers || []).filter(modifier => modifier !== 'secondary-main-target'),
+        'post-kill-settlement',
+        'settlement-primary-centered'
+      ])),
+      postKillSettlement: {
+        active: true,
+        arrived: Boolean(movement.arrived),
+        distance: Number(movement.distance),
+        stopDistanceCm: Number(movement.stopDistanceCm)
+      }
+    }
+  };
+  return combat;
 }
 
 function safePostAttackCoinCandidates(input, maxDistance, options = {}) {
@@ -11131,7 +11420,7 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
   rememberBrowserlessInjury(input, stateful, options);
   const postKillSettlement = reconcilePostKillSettlement(input, stateful, combat, previousCombatTarget, options);
   decoratePrimaryTargetDropCoins(input, stateful);
-  const postKillSettlementWaitAction = buildPostKillSettlementWaitDecision(input, stateful, combat);
+  const postKillSettlementWaitAction = buildPostKillSettlementWaitDecision(input, stateful, combat, options);
   const combatActionEligible = isCombatActionEligibleForDecision(combat, options) && !realtimeEconomicSuppression;
   const reuseSafetyContextOptions = options?.[INTERNAL_REALTIME_OPTIONS] === true;
   const safetyContextOptions = reuseSafetyContextOptions
@@ -11305,12 +11594,12 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
       ? null
       : safetyActionForArbitration)
     || defensiveLootCompositeAction
+    || postKillSettlementWaitAction
     || dynamicDefensiveCombatAction
     || dynamicProximityCombatAction
     || ordinaryLootControlAction
     || closePressureCombatAction
     || defensiveCombatAction
-    || postKillSettlementWaitAction
     || combatAction
     || null;
   let centerHardBoundary = applyCenterActivityHardBoundary(input, action, options);
@@ -11319,6 +11608,7 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     centerHardBoundary = applyCenterActivityHardBoundary(input, highValueCoinAction, options);
   }
   if (centerHardBoundary.applied) action = centerHardBoundary.action;
+  applyPostKillSettlementMovementToCombat(combat, action);
   let dangerousCombatExit = selectedCombatExitAction
     ? rememberDangerousCombatExitTarget(input, combat, stateful, options)
     : null;
@@ -13621,8 +13911,11 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     : null;
   const staminaBudgetExitAction = rawCoinStaminaBudgetExitAction || eligibleProfitStaminaBudgetExitAction;
   const postAttackDropCoinAction = (profitLive || nonCombatProfit) ? buildPostAttackDropCoinDecision(profitSelectionInput, stateful, options, combat) : null;
+  const postKillSettlementWaitAction = (profitLive || nonCombatProfit)
+    ? buildPostKillSettlementWaitDecision(input, stateful, combat, options)
+    : null;
   const postAttackDropWaitAction = (profitLive || nonCombatProfit)
-    ? (buildPostAttackDropWaitDecision(input, stateful, options, combat) || buildPostKillSettlementWaitDecision(input, stateful, combat))
+    ? buildPostAttackDropWaitDecision(input, stateful, options, combat)
     : null;
   const recoveryFootCoinAction = (profitLive || nonCombatProfit) && !whitelistSafetyCombat
     ? buildRecoveryFootCoinDecision(profitSelectionInput, options)
@@ -13780,6 +14073,15 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
         staminaCost: combat.dryRun?.metrics?.totalStaminaSpent,
         riskScore: combat.target?.combatIntent === 'defensive' ? 80 : 60
       }),
+      candidate(
+        postKillSettlementWaitAction,
+        postKillSettlementWaitAction?.kind === 'combat-live' ? 55 : 89,
+        'post-kill-settlement-continuity',
+        postKillSettlementWaitAction?.kind === 'combat-live',
+        postKillSettlementWaitAction?.kind === 'combat-live'
+          ? { riskScore: 40, staminaCost: combat.dryRun?.metrics?.totalStaminaSpent }
+          : { commitmentRank: 20 }
+      ),
       candidate(ordinaryCombatAction, 60, 'engaged-defensive-combat-stick', combatHardGate, {
         roiScore: activeCombatOpportunity?.combatScore,
         staminaCost: combat.dryRun?.metrics?.totalStaminaSpent,
@@ -13939,6 +14241,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     band = action.band || band || 'wait';
     reason = action.reason || reason || 'no-profitable-candidate';
   }
+  applyPostKillSettlementMovementToCombat(combat, action);
   const ignoredActionCoinId = action?.ignoredCoin?.id || '';
   const rememberedOpportunityKey = coinDecisionKey(opportunity.opportunityChoice?.sourceCoin || opportunity.opportunityChoice);
   const selectedProfitTargetId = action?.finalCandidate?.priorityBand === 'profit'
@@ -14578,6 +14881,9 @@ module.exports = {
   establishedCombatLootPriority,
   buildBrowserlessDecision,
   buildOpportunityDecision,
+  buildPostKillSettlementWaitDecision,
+  postKillSettlementMovement,
+  applyPostKillSettlementMovementToCombat,
   buildBrowserlessCombatStrategyInput,
   buildBrowserlessRealtimeControlDecision,
   buildBrowserlessRuntimeDefaults,

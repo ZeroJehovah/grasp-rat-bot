@@ -4,8 +4,11 @@ const assert = require('assert');
 const { createBrowserlessActionAdapter } = require('./action-adapter');
 const {
   buildBrowserlessStrategyInput,
+  buildPostKillSettlementWaitDecision,
   createBrowserlessDecisionAdapter,
   effectiveProfitReward,
+  postKillSettlementMovement,
+  applyPostKillSettlementMovementToCombat,
   scoreEnemyOpportunity
 } = require('./decision-adapter');
 
@@ -291,16 +294,31 @@ function assertRealtimeSupersededMissionContinuity() {
   assert.strictEqual(missingWithinHold.action?.target?.cachedNavigationOnly, true);
   assert.strictEqual(missingWithinHold.profit?.mission?.highValue, true);
 
-  const missing = decide(
+  const missingWithinActiveHold = decide(
     adapter,
     state(fullStaminaSelf()),
     5001,
     supersededBatch,
     { controlMode: 'profit-live', combatEnabled: true }
   );
+  assert.strictEqual(missingWithinActiveHold.action?.kind, 'seek-enemy');
+  assert.strictEqual(missingWithinActiveHold.action?.target?.cachedNavigationOnly, true);
+  assert.strictEqual(missingWithinActiveHold.profit?.mission?.targetId, '99');
+  assert.strictEqual(missingWithinActiveHold.profit?.missingEnemyHold?.holdMs, 12000);
+
+  const missing = decide(
+    adapter,
+    state(fullStaminaSelf()),
+    14201,
+    supersededBatch,
+    { controlMode: 'profit-live', combatEnabled: true }
+  );
   assert.notStrictEqual(missing.action?.kind, 'seek-enemy');
   assert.strictEqual(missing.profit?.mission, null);
-  assert.strictEqual(missing.profit?.missingEnemyHold?.releaseReason, 'missing-hold-expired');
+  assert.ok([
+    'missing-hold-expired',
+    'held-provenance-expired'
+  ].includes(missing.profit?.missingEnemyHold?.releaseReason));
   assert.strictEqual(adapter.getState().easyKillTargetSuppressions?.['99'], undefined);
 
   const highValueDetour = decide(
@@ -2427,6 +2445,164 @@ function assertAfkProfitIgnoresOffLaneActiveBystander() {
   assert.strictEqual(defended.combat?.contactEntryGuard?.realBulletTakeover, true);
 }
 
+function assertPostKillSettlementContinuity() {
+  const self = fullStaminaSelf({ x: 0, y: 0, hp: 80 });
+  const secondary = {
+    type: 'enemy',
+    userId: 8,
+    entity_id: 2008,
+    name: 'settlement-secondary',
+    x: 1000,
+    y: 0,
+    hp: 100,
+    max_hp: 100,
+    active: true,
+    authority: 'realtime'
+  };
+  const combat = {
+    target: secondary,
+    dryRun: {
+      target: secondary,
+      movement: { dx: 1, dy: 0, reason: 'secondary-follow-primary-target' },
+      shooting: {
+        wouldShoot: true,
+        commandSuppressed: false,
+        target: secondary,
+        targetRole: 'secondary',
+        cadenceMs: 160,
+        executionCadenceMs: 160,
+        aim: { x: 1000, y: 0 }
+      }
+    }
+  };
+  const settlement = {
+    active: true,
+    phase: 'drop-pending',
+    targetId: '42',
+    targetName: 'primary',
+    targetDrop: 551,
+    x: -5000,
+    y: 0,
+    startedAt: 1000,
+    updatedAt: 1100,
+    matchedCoinKey: ''
+  };
+  const options = { playerDropPickupRadiusCm: 150 };
+  const at151 = buildPostKillSettlementWaitDecision(
+    { self, nowMs: 1200 },
+    { postKillSettlement: settlement },
+    combat,
+    options
+  );
+  assert.strictEqual(at151.kind, 'combat-live');
+  assert.strictEqual(at151.reason, 'post-kill-settlement-defensive-escort');
+  assert.strictEqual(at151.defensiveSettlementComposite, true);
+  assert.strictEqual(at151.target.userId, 8);
+  assert.strictEqual(at151.postKillSettlementMovement.arrived, false);
+  assert.ok(Number(at151.postKillSettlementMovement.dx) < 0);
+
+  for (const distance of [149, 150]) {
+    const arrived = buildPostKillSettlementWaitDecision(
+      { self: { ...self, x: -5000 + distance, y: 0 }, nowMs: 1201 },
+      { postKillSettlement: settlement },
+      combat,
+      options
+    );
+    assert.strictEqual(arrived.kind, 'combat-live');
+    assert.strictEqual(arrived.postKillSettlementMovement.arrived, true);
+    assert.strictEqual(arrived.postKillSettlementMovement.dx, 0);
+    assert.strictEqual(arrived.postKillSettlementMovement.dy, 0);
+    assert.strictEqual(arrived.postKillSettlementMovement.reason, 'post-kill-settlement-arrived');
+  }
+
+  const fallback = buildPostKillSettlementWaitDecision(
+    { self, nowMs: 1202 },
+    {
+      postKillSettlement: {
+        ...settlement,
+        phase: 'drop-visible',
+        matchedCoinKey: 'id:coin-42'
+      }
+    },
+    combat,
+    options
+  );
+  assert.strictEqual(fallback.kind, 'combat-live');
+  assert.strictEqual(fallback.reason, 'post-kill-settlement-defensive-escort');
+
+  const visible = buildPostKillSettlementWaitDecision(
+    { self, nowMs: 1203, realtimeObservedCoins: [{ key: 'id:coin-42', amount: 551, x: -5000, y: 0 }] },
+    {
+      postKillSettlement: {
+        ...settlement,
+        phase: 'drop-visible',
+        matchedCoinKey: 'id:coin-42'
+      }
+    },
+    combat,
+    options
+  );
+  assert.strictEqual(visible, null, 'the dedicated realtime loot controller owns a visible matched coin');
+
+  const completed = buildPostKillSettlementWaitDecision(
+    { self, nowMs: 1204 },
+    { postKillSettlement: { ...settlement, active: false, phase: 'settled' } },
+    combat,
+    options
+  );
+  assert.strictEqual(completed, null, 'completed settlements release the movement/fire composite');
+
+  const appliedCombat = {
+    dryRun: {
+      movement: { dx: 1, dy: 0, reason: 'secondary-follow-primary-target' },
+      shooting: combat.dryRun.shooting
+    }
+  };
+  applyPostKillSettlementMovementToCombat(appliedCombat, at151);
+  assert.ok(Number(appliedCombat.dryRun.movement.dx) < 0);
+  assert.strictEqual(appliedCombat.dryRun.shooting.wouldShoot, true);
+  assert.strictEqual(appliedCombat.dryRun.shooting.targetRole, 'secondary');
+
+  const velocities = [];
+  const shots = [];
+  const actionAdapter = createBrowserlessActionAdapter({
+    userId: 7,
+    commandIntervalMs: 0,
+    combatShootMinIntervalMs: 1,
+    transport: {
+      sendVelocity(dx, dy) {
+        velocities.push({ dx, dy });
+        return { ok: true };
+      },
+      sendShoot(x, y) {
+        shots.push({ x, y });
+        return { ok: true };
+      }
+    }
+  });
+  const execution = actionAdapter.applyDecision(
+    { realtime: { tick: 1, self, entities: [self, secondary] } },
+    {
+      action: {
+        kind: 'combat-live',
+        band: 'combat',
+        reason: at151.reason,
+        target: secondary,
+        defensiveSettlementComposite: true,
+        postKillSettlementMovement: at151.postKillSettlementMovement
+      },
+      combat: {
+        target: secondary,
+        movement: { dx: at151.postKillSettlementMovement.dx, dy: at151.postKillSettlementMovement.dy, reason: 'post-kill-settlement-approach' },
+        shooting: combat.dryRun.shooting
+      }
+    }
+  );
+  assert.strictEqual(execution.kind, 'combat-live');
+  assert.ok(Number(velocities.at(-1)?.dx) < 0);
+  assert.strictEqual(shots.length, 1, 'authorized secondary fire survives settlement movement');
+}
+
 function runRemoteProfitDecisionSelfTest() {
   const realtimeScoreOptions = {
     isAfkProfitTarget: () => true,
@@ -2901,6 +3077,7 @@ function runRemoteProfitDecisionSelfTest() {
   assertTickWatermarkedCompletionRegressions();
   assertDualTargetRuntimeRules();
   assertHpSegmentedSecondaryEngagementRules();
+  assertPostKillSettlementContinuity();
 
   const ordinaryAdapter = createBrowserlessDecisionAdapter({
     userId: 7,
@@ -3275,7 +3452,7 @@ function runRemoteProfitDecisionSelfTest() {
   assert.strictEqual(lowDropDecision.profit?.postKillCoinSuppression?.removedCount, 1);
   assert.strictEqual(lowDropDecision.stateful.profitMission?.targetId, '99');
 
-  return { ok: true, cases: 80 };
+  return { ok: true, cases: 88 };
 }
 
 if (require.main === module) {

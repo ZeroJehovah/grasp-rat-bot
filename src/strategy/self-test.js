@@ -6285,6 +6285,78 @@ function runStrategyModuleSelfTests() {
       && opportunityOscillationCurrentMissing.chosen?.oscillationReleaseReason === 'current-missing'
   });
 
+  const activeOscillationCurrent = {
+    type: 'enemy',
+    id: 'active-primary',
+    targetActive: true,
+    sourceTarget: {
+      authority: 'realtime',
+      alive: true,
+      active: true,
+      joinModeActive: true,
+      invulnerable: false
+    }
+  };
+  const activeOscillationCompetitor = {
+    type: 'enemy',
+    id: 'passive-detour',
+    score: 100,
+    priorityTier: 1,
+    sourceTarget: {
+      authority: 'realtime',
+      alive: true,
+      active: false,
+      joinModeActive: false,
+      invulnerable: false
+    }
+  };
+  const activeOscillationLock = {
+    pairKey: 'enemy:active-primary|enemy:passive-detour',
+    lastKey: 'enemy:passive-detour',
+    switchCount: 2,
+    windowStartedAt: 900,
+    lockedKey: 'enemy:active-primary',
+    blockedKey: 'enemy:passive-detour',
+    lockedAt: 1000,
+    lockUntil: 31000,
+    updatedAt: 1000,
+    releaseReason: ''
+  };
+  const activeOscillationMissing = chooseStableOpportunityCore(
+    [activeOscillationCompetitor],
+    { ...activeOscillationCurrent, key: 'enemy:active-primary' },
+    activeOscillationLock,
+    {
+      nowMs: 1200,
+      switchMargin: 0,
+      switchRelativeMargin: 0,
+      oscillationSwitchLimit: 2,
+      oscillationWindowMs: 30000,
+      oscillationLockMs: 30000
+    }
+  );
+  const activeOscillationExpired = chooseStableOpportunityCore(
+    [activeOscillationCompetitor],
+    { ...activeOscillationCurrent, key: 'enemy:active-primary' },
+    activeOscillationLock,
+    {
+      nowMs: 31001,
+      switchMargin: 0,
+      switchRelativeMargin: 0,
+      oscillationSwitchLimit: 2,
+      oscillationWindowMs: 30000,
+      oscillationLockMs: 30000
+    }
+  );
+  results.push({
+    name: 'opportunity-choice-active-realtime-lock-holds-through-missing-pair-member',
+    passed: activeOscillationMissing.chosen?.id === 'active-primary'
+      && activeOscillationMissing.chosen?.missingHold === true
+      && activeOscillationMissing.chosen?.missingHoldReason === 'oscillation-lock-missing-target'
+      && activeOscillationExpired.chosen?.id === 'passive-detour'
+      && activeOscillationExpired.chosen?.oscillationReleaseReason === 'lock-expired'
+  });
+
   const rememberedChoice = rememberOpportunityChoiceCore(
     {
       type: 'coin',

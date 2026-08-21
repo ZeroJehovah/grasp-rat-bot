@@ -35,6 +35,28 @@ function opportunityPairKey(a, b) {
   return [String(a || ''), String(b || '')].sort().join('|');
 }
 
+function opportunitySupportsMissingContinuityCore(item) {
+  if (String(item?.type || '') !== 'enemy') return false;
+  const target = item?.sourceTarget || item?.target || null;
+  if (target) {
+    const authority = String(item?.authority || target.authority || '');
+    if (authority
+      && authority !== 'realtime'
+      && authority !== 'native'
+      && authority !== 'realtime-visible'
+      && target.realtimeActiveProvenance !== true) return false;
+    if (target.alive === false || target.invulnerable === true) return false;
+    return target.active === true
+      || target.joinModeActive === true
+      || target.realtimeActiveProvenance === true;
+  }
+  return item?.targetActive === true
+    && (!item?.heldCandidateSource
+      || item.heldCandidateSource === 'realtime-visible'
+      || item.heldCandidateSource === 'realtime'
+      || item.heldCandidateSource === 'native');
+}
+
 function opportunityByKey(opportunities, key) {
   return (opportunities || []).find(item => opportunityKey(item) === key) || null;
 }
@@ -333,6 +355,20 @@ function lockedOpportunityChoiceCore(sorted, switchLock, options = {}) {
   }
   const pairKeys = String(lock.pairKey || '').split('|').filter(Boolean);
   if (pairKeys.length === 2 && pairKeys.some(key => !opportunityByKey(sorted, key))) {
+    const current = options.current || null;
+    const currentKey = opportunityKey(current);
+    if (currentKey === lockedKey && opportunitySupportsMissingContinuityCore(current)) {
+      return {
+        choice: opportunityOscillationMetadataCore({
+          ...current,
+          held: true,
+          missingHold: true,
+          missingHoldReason: 'oscillation-lock-missing-target',
+          competingScore: current.competingScore
+        }, lock),
+        switchLock: lock
+      };
+    }
     return { choice: null, switchLock: releasedOpportunitySwitchLockCore(lock, 'pair-ineligible', t) };
   }
   const locked = opportunityByKey(sorted, lockedKey);
@@ -356,7 +392,7 @@ function applyOpportunityOscillationLockCore(sorted, current, chosen, switchLock
       : switchLock;
     return { chosen: opportunityOscillationMetadataCore(chosen, released), switchLock: released };
   }
-  const locked = lockedOpportunityChoiceCore(sorted, switchLock, options);
+  const locked = lockedOpportunityChoiceCore(sorted, switchLock, { ...options, current });
   if (locked.choice) return { chosen: locked.choice, switchLock: locked.switchLock };
   let nextSwitchLock = locked.switchLock;
   if (!chosen) return { chosen, switchLock: nextSwitchLock };
