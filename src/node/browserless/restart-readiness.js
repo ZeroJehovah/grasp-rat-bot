@@ -100,6 +100,7 @@ function capturedProfitCommitmentBlocker(context = {}) {
 function evaluateRestartReadiness(context = {}, options = {}) {
   if (context.online === false) return { ready: true, reason: 'offline', blocker: null };
   if (context.leavePending?.active) return { ready: false, reason: 'leave-pending', blocker: context.leavePending };
+  const commitmentKey = valueId(context.commitmentKey ?? context.restartDrain?.commitmentKey);
   const settlement = context.decisionState?.postKillSettlement || context.postKillSettlement || null;
   if (settlement?.active !== false && settlement?.targetId) {
     return { ready: false, reason: 'post-kill-settlement', blocker: settlement };
@@ -119,6 +120,16 @@ function evaluateRestartReadiness(context = {}, options = {}) {
   const band = String(action?.band || decision.band || '');
   const reason = String(action?.reason || decision.reason || '');
   const target = action?.target || {};
+  if (commitmentKey.startsWith('player:') && (kind === 'coin' || kind === 'seek-coin')) {
+    const committedTargetKey = actionTargetKey(action);
+    if (committedTargetKey !== commitmentKey) {
+      return {
+        ready: false,
+        reason: 'captured-player-commitment-pickup-pending',
+        blocker: { commitmentKey, kind, targetId: commitmentKey.slice('player:'.length) }
+      };
+    }
+  }
   if (!kind) return { ready: false, reason: 'unknown-action', blocker: { kind, band, reason } };
   if (action?.shouldLeave || kind === 'leave' || kind === 'safety-exit') {
     return { ready: false, exiting: true, reason: 'exit-in-progress', blocker: { kind, reason } };

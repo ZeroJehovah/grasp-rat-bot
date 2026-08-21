@@ -7164,6 +7164,11 @@ async function runBrowserlessRunnerSelfTest() {
       online: true,
       decision: { action: { kind: 'coin', band: 'profit', target: { id: 7293, amount: 1 } } }
     });
+    const restartDrainUnlinkedPickup = evaluateRestartReadiness({
+      online: true,
+      commitmentKey: 'player:9667',
+      decision: { action: { kind: 'coin', band: 'profit', target: { id: 7293, amount: 1 } } }
+    });
     const retainedDrop41Mission = {
       active: true,
       type: 'enemy',
@@ -9321,6 +9326,8 @@ async function runBrowserlessRunnerSelfTest() {
         && forcedStatusConnectionsClosed
         && restartDrainCombat.ready === false
         && restartDrainIdle.ready === true
+        && restartDrainUnlinkedPickup.ready === false
+        && restartDrainUnlinkedPickup.reason === 'captured-player-commitment-pickup-pending'
         && capturedProfitWait.ready === false
         && capturedProfitWait.reason === 'captured-profit-commitment-active'
         && capturedProfitWait.blocker?.targetId === '895'
