@@ -772,10 +772,18 @@ function summarizeSnapshotSafety(payload, loginPoint, options = {}) {
     };
   }
   const healthyHpThreshold = Math.max(0, Number(options.healthyHpThreshold ?? 80));
-  const healthyRadius = Math.max(0, Number(options.healthyRadius ?? 17000));
+  const lowHpThreshold = Math.max(0, Number(options.lowHpThreshold ?? 50));
+  const healthyRadius = Math.max(0, Number(options.healthyRadius ?? 15000));
+  const lowHpBaseRadius = Math.max(0, Number(options.lowHpBaseRadius ?? healthyRadius));
+  const lowHpRadiusIncrement = Math.max(0, Number(options.lowHpRadiusIncrement ?? 500));
   const lowRadius = Math.max(0, Number(options.lowRadius ?? 30000));
   const healthy = Number.isFinite(point.hp) && point.hp >= healthyHpThreshold;
-  const radius = healthy ? healthyRadius : lowRadius;
+  const lowHp = Number.isFinite(point.hp) && point.hp < lowHpThreshold;
+  const radius = healthy
+    ? healthyRadius
+    : (lowHp
+        ? Math.min(lowRadius, lowHpBaseRadius + (lowHpThreshold - point.hp) * lowHpRadiusIncrement)
+        : healthyRadius);
   const nearby = [];
   const activeNearby = [];
   const damageActorNearby = [];
@@ -857,7 +865,9 @@ function summarizeSnapshotSafety(payload, loginPoint, options = {}) {
     freshness: fresh,
     point,
     radius,
-    radiusReason: healthy ? 'last-self-healthy' : 'last-self-low-or-unknown',
+    radiusReason: healthy
+      ? 'last-self-healthy'
+      : (lowHp ? 'last-self-low-hp-scaled' : 'last-self-medium-hp'),
     entityCount: entities.length,
     nearbyCount: nearby.length,
     activeNearbyCount: activeNearby.length,
