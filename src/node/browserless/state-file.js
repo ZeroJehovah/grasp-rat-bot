@@ -12,6 +12,10 @@ const {
   dailyStaminaExitExemptAt,
   effectiveLongStaminaExhaustedWindows
 } = require('../../shared/daily-stamina-window');
+const {
+  boundedRecoveryAttemptId,
+  normalizePendingLoginRecovery
+} = require('./login-recovery-association');
 
 const SCHEMA_VERSION = 1;
 const KILL_ACCOUNTING_VERSION = 3;
@@ -53,6 +57,8 @@ function defaultBrowserlessState() {
       combatEnabled: false,
       confirmedLeave: null,
       pendingExit: null,
+      pendingLoginRecovery: null,
+      recoveredFromExitAttemptId: '',
       lastLoginAt: '',
       restartDrain: null,
       currentAction: null,
@@ -313,6 +319,12 @@ function normalizeBrowserlessState(state, file = '') {
   normalized.runner.pendingExit = normalized.runner.pendingExit && typeof normalized.runner.pendingExit === 'object'
     ? cloneJson(normalized.runner.pendingExit)
     : null;
+  normalized.runner.pendingLoginRecovery = normalizePendingLoginRecovery(
+    normalized.runner.pendingLoginRecovery
+  );
+  normalized.runner.recoveredFromExitAttemptId = boundedRecoveryAttemptId(
+    normalized.runner.recoveredFromExitAttemptId
+  );
   normalized.lastKnown = normalizeBrowserlessLastKnown(
     normalized.lastKnown,
     normalized.current,

@@ -142,6 +142,12 @@ const {
   runPendingExitRecoverySelfTest
 } = require('./pending-exit-recovery');
 const {
+  armLoginRecoveryAssociation,
+  consumeLoginRecoveryAssociation,
+  normalizePendingLoginRecovery,
+  runLoginRecoveryAssociationSelfTest
+} = require('./login-recovery-association');
+const {
   buildSnapshotProbeUrl,
   readResponseBody,
   redactSecrets,
@@ -2850,7 +2856,10 @@ async function runBrowserlessRunner(config, deps = {}) {
     const patchKey = `${runId}\u0000${loginAt}`;
     if (patchKey === lastLoginSuccessStatePatchKey) return false;
     lastLoginSuccessStatePatchKey = patchKey;
-    const current = liveState || persisted;
+    const current = liveState || readBrowserlessStateFile(stateFile) || persisted;
+    const loginRecoveryAssociation = consumeLoginRecoveryAssociation(
+      current.runner?.pendingLoginRecovery
+    );
     const preflight = normalizeSourceIpPreflight(
       current.network?.sourceIpPreflight,
       Object.keys(current.network?.sourceIpRisk || {}).length
@@ -2874,6 +2883,8 @@ async function runBrowserlessRunner(config, deps = {}) {
     const loginPatch = {
       runner: {
         lastLoginAt: loginAt,
+        recoveredFromExitAttemptId: loginRecoveryAssociation.recoveredFromExitAttemptId,
+        pendingLoginRecovery: loginRecoveryAssociation.pendingLoginRecovery,
         ...(sourceIpPreflight ? { currentAction: sourceIpPreflightAction(sourceIpPreflight) } : {})
       },
       ...(sourceIpPreflight ? { network: { sourceIpPreflight } } : {})
@@ -2887,6 +2898,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       queuedAtMs,
       loginAt,
       patchBytes,
+      recoveredFromExitAttemptId: loginRecoveryAssociation.recoveredFromExitAttemptId,
       persistence: '',
       persisted: false,
       backgroundOperationErrorCount: 0
@@ -2925,6 +2937,7 @@ async function runBrowserlessRunner(config, deps = {}) {
     logStore.append('runner', 'source-ip-login-success', {
       runId,
       loginAt,
+      recoveredFromExitAttemptId: loginRecoveryAssociation.recoveredFromExitAttemptId,
       sourceIp: current.network.sourceIp || '',
       lifecycleSourceIps,
       statePatch: {
@@ -2932,6 +2945,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         patchBytes,
         backgroundQueued,
         lifecycleMerged: Boolean(sourceIpPreflight),
+        recoveredFromExitAttemptId: loginRecoveryAssociation.recoveredFromExitAttemptId,
         queueDelayMs: Math.max(0, now() - queuedAtMs)
       }
     });
@@ -3570,6 +3584,12 @@ async function runBrowserlessRunner(config, deps = {}) {
       && !priorExitRecoveryOutcomes.some(item => String(item?.exitAttemptId || '') === String(pendingResolution.outcome.exitAttemptId))
       ? pendingResolution.outcome
       : null;
+    const loginRecoveryAssociation = outcome
+      ? armLoginRecoveryAssociation(
+          outcome,
+          snapshotSafety?.checkedAt || new Date(now()).toISOString()
+        )
+      : null;
     const exitRecoveryOutcomes = outcome
       ? [...priorExitRecoveryOutcomes, outcome].slice(-64)
       : priorExitRecoveryOutcomes;
@@ -3582,7 +3602,8 @@ async function runBrowserlessRunner(config, deps = {}) {
         runner: {
           ...(clearsConfirmedLeave ? { confirmedLeave: null } : {}),
           ...(pendingResolution.cleared ? { pendingExit: null } : {}),
-          ...(outcome ? { exitRecoveryOutcomes } : {})
+          ...(outcome ? { exitRecoveryOutcomes } : {}),
+          ...(loginRecoveryAssociation ? { pendingLoginRecovery: loginRecoveryAssociation } : {})
         }
       } : {})
     });
@@ -4802,6 +4823,21 @@ async function runBrowserlessRunner(config, deps = {}) {
     const currentExitRecoveryOutcomes = Array.isArray(canary?.recovery?.exitOutcomes)
       ? canary.recovery.exitOutcomes
       : [];
+    const confirmedAbsentExitRecoveryOutcome = currentExitRecoveryOutcomes.find(item => (
+      String(item?.outcome || '') === 'confirmed-absent'
+        && String(item?.exitAttemptId || '')
+    ));
+    const persistedLoginRecoveryAssociation = normalizePendingLoginRecovery(
+      finalStateBase?.runner?.pendingLoginRecovery
+    );
+    const newlyConfirmedLoginRecoveryAssociation = sourceIpLoginSucceeded
+      ? null
+      : armLoginRecoveryAssociation(
+          confirmedAbsentExitRecoveryOutcome,
+          canary?.completedAt || new Date(now()).toISOString()
+        );
+    const finalPendingLoginRecovery = newlyConfirmedLoginRecoveryAssociation
+      || persistedLoginRecoveryAssociation;
     const exitRecoveryOutcomes = Array.from(new Map([
       ...priorExitRecoveryOutcomes,
       ...currentExitRecoveryOutcomes
@@ -4827,6 +4863,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           : activeTransportRecovery,
         connectionFailure: canary?.connectionFailure || null,
         exitRecoveryOutcomes,
+        pendingLoginRecovery: finalPendingLoginRecovery,
         lastRun: result,
         lastError: result.ok ? '' : (canary?.error || 'read-only-canary-failed')
       },
@@ -4900,6 +4937,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         logStore.append('runner', 'login-success-state-patch-ack', {
           generation: patch.generation,
           loginAt: patch.loginAt,
+          recoveredFromExitAttemptId: patch.recoveredFromExitAttemptId,
           patchBytes: patch.patchBytes,
           persistence: patch.persistence,
           queueDelayMs: Math.max(0, ackAtMs - patch.queuedAtMs),
@@ -4909,6 +4947,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         logStore.append('runner', 'login-success-state-patch-error', {
           generation: patch.generation,
           loginAt: patch.loginAt,
+          recoveredFromExitAttemptId: patch.recoveredFromExitAttemptId,
           persistence: patch.persistence,
           error: 'login-success state patch was not confirmed on disk'
         });
@@ -6001,6 +6040,7 @@ async function runLoginSuccessStatePatchPersistenceSelfTest(tmp, testOptions = {
   const loginCount = Math.max(13, Math.round(Number(testOptions.loginCount || 13)));
   const paddingBytes = Math.max(2 * 1024 * 1024, Math.round(Number(testOptions.paddingBytes || 0)));
   const selectedIps = ['10.0.0.70', '10.0.0.71', '10.0.0.72'];
+  const recoveryAttemptId = 'exit:login-success-state-patch-recovery:123:0';
   writeBrowserlessStateFile(stateFile, {
     updatedAt: new Date(baseNowMs - 60000).toISOString(),
     diagnostics: {
@@ -6011,7 +6051,11 @@ async function runLoginSuccessStatePatchPersistenceSelfTest(tmp, testOptions = {
       sessionToken: 'login-success-state-patch-self-test-token'
     },
     runner: {
-      lastLoginAt: ''
+      lastLoginAt: '',
+      pendingLoginRecovery: {
+        recoveredFromExitAttemptId: recoveryAttemptId,
+        armedAt: new Date(baseNowMs - 30000).toISOString()
+      }
     },
     loginPointSafety: {
       ok: true,
@@ -6162,13 +6206,23 @@ async function runLoginSuccessStatePatchPersistenceSelfTest(tmp, testOptions = {
       }
     });
     const persistedAfterCycle = readBrowserlessStateFile(stateFile);
+    const expectedRecoveredFromExitAttemptId = index === 0 ? recoveryAttemptId : '';
     cycleResults.push({
       cycle: index + 1,
-      ok: Boolean(result.ok && callbackCount === 1 && persistedAfterCycle.runner.lastLoginAt === loginAt),
+      ok: Boolean(
+        result.ok
+          && callbackCount === 1
+          && persistedAfterCycle.runner.lastLoginAt === loginAt
+          && persistedAfterCycle.runner.recoveredFromExitAttemptId === expectedRecoveredFromExitAttemptId
+          && persistedAfterCycle.runner.pendingLoginRecovery === null
+      ),
       runnerOk: Boolean(result.ok),
       callbackCount,
       expectedLastLoginAt: loginAt,
-      persistedLastLoginAt: persistedAfterCycle.runner.lastLoginAt
+      persistedLastLoginAt: persistedAfterCycle.runner.lastLoginAt,
+      expectedRecoveredFromExitAttemptId,
+      persistedRecoveredFromExitAttemptId: persistedAfterCycle.runner.recoveredFromExitAttemptId,
+      pendingLoginRecovery: persistedAfterCycle.runner.pendingLoginRecovery
     });
   }
   const finalLoginAtMs = baseNowMs + (loginCount - 1) * 61000;
@@ -6239,6 +6293,10 @@ async function runLoginSuccessStatePatchPersistenceSelfTest(tmp, testOptions = {
         && successRows.length === loginCount
         && ackRows.length === loginCount
         && errorRows.length === 0
+        && successRows[0]?.detail?.recoveredFromExitAttemptId === recoveryAttemptId
+        && successRows[0]?.detail?.statePatch?.recoveredFromExitAttemptId === recoveryAttemptId
+        && successRows.slice(1).every(row => row.detail?.recoveredFromExitAttemptId === '')
+        && successRows.slice(1).every(row => row.detail?.statePatch?.recoveredFromExitAttemptId === '')
         && successRows.every(row => row.detail?.statePatch?.backgroundQueued === true)
         && ackRows.every(row => row.detail?.persistence === 'background-worker')
         && maximumPatchBytes !== null
@@ -6256,6 +6314,12 @@ async function runLoginSuccessStatePatchPersistenceSelfTest(tmp, testOptions = {
     callbackSamples,
     cycleResults,
     finalLastLoginAt: finalState.runner.lastLoginAt,
+    recoveryAssociation: {
+      attemptId: recoveryAttemptId,
+      firstLoginId: successRows[0]?.detail?.recoveredFromExitAttemptId || '',
+      laterLoginIds: successRows.slice(1).map(row => row.detail?.recoveredFromExitAttemptId || ''),
+      pendingAfterFinalLogin: finalState.runner.pendingLoginRecovery
+    },
     intervalGate: {
       remainingAt15SecondsMs: remainingAt15Seconds?.delayMs ?? null,
       remainingAt59999Ms: remainingAt59999?.delayMs ?? null,
@@ -9196,6 +9260,7 @@ async function runBrowserlessRunnerSelfTest() {
     })();
     const pendingExitRecovery = runPendingExitRecoverySelfTest();
     const pendingExitCanaryGate = await runPendingExitCanaryGateSelfTest();
+    const loginRecoveryAssociation = runLoginRecoveryAssociationSelfTest();
     const snapshotAuditPersistence = runSnapshotAuditPersistenceSelfTest(tmp);
     const combatBattleLog = runCombatBattleLogSelfTest();
     const combatAttackClock = runCombatAttackClockSelfTest();
@@ -9297,6 +9362,7 @@ async function runBrowserlessRunnerSelfTest() {
         && transportRecoveryCloudflare.ok
         && pendingExitRecovery.ok
         && pendingExitCanaryGate.ok
+        && loginRecoveryAssociation.ok
         && snapshotAuditPersistence.ok
         && combatBattleLog.ok
         && combatAttackClock.ok
@@ -9390,6 +9456,7 @@ async function runBrowserlessRunnerSelfTest() {
       transportRecoveryCloudflare,
       pendingExitRecovery,
       pendingExitCanaryGate,
+      loginRecoveryAssociation,
       snapshotAuditPersistence,
       combatBattleLog,
       combatAttackClock,
