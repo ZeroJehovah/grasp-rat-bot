@@ -686,7 +686,7 @@ async function runSelfTest() {
     recoverHpThreshold: 95,
     staminaFullRatio: 0.98,
     conserveStaminaThreshold: 6500,
-    staminaBudgetReloginDelayMs: 1800000,
+    staminaBudgetReloginDelayMs: 300000,
     pursuitLeaveMs: 300000,
     pursuitLeaveNonFullHpThreshold: 90,
     pursuitLeaveNonFullHpMs: 90000,
@@ -1867,7 +1867,7 @@ async function runSelfTest() {
       budgetMs: Math.max(0, Math.round(budget)),
       requiredMs: Math.max(0, Math.round(staminaCost)),
       shortageMs: Math.max(0, Math.round(staminaCost - budget)),
-      reloginDelayMs: Math.max(1000, Number(cfg.staminaBudgetReloginDelayMs || 1800000))
+      reloginDelayMs: Math.max(1000, Number(cfg.staminaBudgetReloginDelayMs || 300000))
     };
   }
   function staminaBudgetCoinLeaveAction(staminaBudgetExit) {
@@ -1878,7 +1878,7 @@ async function runSelfTest() {
       dy: 0,
       offline: true,
       staminaBudgetExit,
-      reloginDelayMs: staminaBudgetExit?.reloginDelayMs || Math.max(1000, Number(cfg.staminaBudgetReloginDelayMs || 1800000))
+      reloginDelayMs: staminaBudgetExit?.reloginDelayMs || Math.max(1000, Number(cfg.staminaBudgetReloginDelayMs || 300000))
     };
   }
   function opportunityValueScore(value, staminaCost, weight = cfg.coinOpportunityValue) {
@@ -16686,7 +16686,7 @@ async function runSelfTest() {
           decision.action.reloginDelayMs
         ].join('|');
       })(),
-      want: 'leave|safety|stamina-budget-coin-leave|leave|true|budget-coin|4500|1800000'
+      want: 'leave|safety|stamina-budget-coin-leave|leave|true|budget-coin|4500|300000'
     },
     {
       name: 'browserless profit live exits instead of waiting for eligible afk 1h budget recovery',
@@ -16774,7 +16774,7 @@ async function runSelfTest() {
           decision.profit.best === null
         ].join('|');
       })(),
-      want: 'leave|safety|stamina-budget-coin-leave|true|enemy|27165|iShareOne|12778|42745|29967|1800000|526|true'
+      want: 'leave|safety|stamina-budget-coin-leave|true|enemy|27165|iShareOne|12778|42745|29967|300000|526|true'
     },
     {
       name: 'browserless profit live keeps taking realtime foot coin when only 1d budget is low',
@@ -16891,7 +16891,7 @@ async function runSelfTest() {
           afterGrace.action.staminaExhausted.exhausted.join(',')
         ].join('|');
       })(),
-      want: 'no-profitable-candidate|true|stamina-exhausted-leave|1h|1800000|stamina-exhausted-leave|1d'
+      want: 'no-profitable-candidate|true|stamina-exhausted-leave|1h|300000|stamina-exhausted-leave|1d'
     },
     {
       name: 'browserless profit live honors browserless stamina exhausted threshold alias',
@@ -16962,7 +16962,7 @@ async function runSelfTest() {
           decision.action.reloginDelayMs
         ].join('|');
       })(),
-      want: 'leave|safety|stamina-exhausted-leave|1h|31|1800000'
+      want: 'leave|safety|stamina-exhausted-leave|1h|31|300000'
     },
     {
       name: 'browserless profit live keeps acting on guarded snapshot fallback when only 1d budget is low',
@@ -17053,7 +17053,7 @@ async function runSelfTest() {
           decision.action.staminaBlocked === undefined
         ].join('|');
       })(),
-      want: 'leave|safety|stamina-budget-coin-leave|true|1h|dual-low-budget-coin|1800000|true'
+      want: 'leave|safety|stamina-budget-coin-leave|true|1h|dual-low-budget-coin|300000|true'
     },
     {
       name: 'browserless profit live admits fresh in-view snapshot coin fallback',
