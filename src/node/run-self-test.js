@@ -10404,13 +10404,12 @@ async function runSelfTest() {
           browserless.attackMinAfkDrop === browser.attackMinAfkDrop,
           browserless.globalCoinMaxDistance === browser.globalCoinMaxDistance,
           browserless.coinPrecisionTolerance === browser.coinPrecisionTolerance,
-          browserless.activeProfitTargetMissingHoldMs,
           browserless.afkAttackApproachReserveMaxMs,
           configured.afkAttackApproachReserveMaxMs,
           browserless.attackEngageRange
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|3000|5000|4200|11000'
+      want: 'true|true|true|true|true|5000|4200|11000'
     },
     {
       name: 'browserless profit live ranks a closer coin above costlier high-drop AFK',

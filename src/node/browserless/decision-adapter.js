@@ -203,7 +203,6 @@ const DEFAULT_DANGEROUS_TARGET_COOLDOWN_MS = BROWSER_RUNTIME_DEFAULTS.browserles
 const DEFAULT_EASY_KILL_APPROACH_WINDOW_MS = BROWSER_RUNTIME_DEFAULTS.browserlessEasyKillApproachWindowMs ?? 8000;
 const DEFAULT_EASY_KILL_APPROACH_MIN_CLOSING_CM = BROWSER_RUNTIME_DEFAULTS.browserlessEasyKillApproachMinClosingCm ?? 1000;
 const DEFAULT_PROFIT_MISSION_TTL_MS = 180000;
-const DEFAULT_ACTIVE_PROFIT_TARGET_MISSING_HOLD_MS = BROWSER_RUNTIME_DEFAULTS.activeProfitTargetMissingHoldMs ?? 3000;
 const DEFAULT_COMPLETED_PROFIT_TARGET_TTL_MS = 210000;
 const DEFAULT_PROFIT_TICK_REGRESSION_TOLERANCE = 5;
 const DEFAULT_ACTIVE_COIN_COMPETITION_MIN_SELF_DISTANCE_CM = BROWSER_RUNTIME_DEFAULTS.activeCoinCompetitionMinSelfDistanceCm ?? 18000;
@@ -7466,20 +7465,7 @@ function realtimeEnemyMissionMissingState(input = {}, mission = {}, nowMs = Date
   const realtimeProvenance = authority === 'realtime-visible'
     || String(source.authority || mission.navigationAuthority || '') === 'realtime'
     || source.realtimeActiveProvenance === true;
-  const ordinaryHoldMs = Math.max(0, Number(options.enemyMissingHoldMs ?? 1800));
-  const activeHoldMs = Math.max(0, Number(
-    options.activeProfitTargetMissingHoldMs
-      ?? BROWSER_RUNTIME_DEFAULTS.activeProfitTargetMissingHoldMs
-      ?? DEFAULT_ACTIVE_PROFIT_TARGET_MISSING_HOLD_MS
-  ));
-  const sourceIsRealtimeActive = source.realtimeActiveProvenance === true
-    || (source.active === true || source.joinModeActive === true)
-    && source.invulnerable !== true
-    && (!source.authority
-      || source.authority === 'realtime'
-      || source.authority === 'native'
-      || source.authority === 'realtime-visible');
-  const holdMs = sourceIsRealtimeActive ? Math.max(ordinaryHoldMs, activeHoldMs) : ordinaryHoldMs;
+  const holdMs = Math.max(0, Number(options.enemyMissingHoldMs ?? 1800));
   const observedAt = numberOrNull(
     mission.heldRewardObservedAt
       ?? choice.heldRewardObservedAt
@@ -7849,11 +7835,6 @@ function releaseProfitMissionForPickups(stateful = {}, pickups = [], nowMs = 0, 
 function buildOpportunityDecision(input, stateful = {}, options = {}) {
   const thresholdContext = options.profitThresholdContext || buildProfitThresholdContext(input, options);
   const enemyMissingHoldMs = Math.max(0, Number(options.enemyMissingHoldMs ?? 1800));
-  const activeProfitTargetMissingHoldMs = Math.max(0, Number(
-    options.activeProfitTargetMissingHoldMs
-      ?? BROWSER_RUNTIME_DEFAULTS.activeProfitTargetMissingHoldMs
-      ?? DEFAULT_ACTIVE_PROFIT_TARGET_MISSING_HOLD_MS
-  ));
   if (!input.self) {
     return {
       opportunities: [],
@@ -8075,11 +8056,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
         : '',
       heldRewardKnown: rewardKnown,
       heldRewardObservedAt: input.nowMs,
-      heldProvenanceExpiresAt: input.nowMs + (
-        opportunityIsEstablishedRealtimeActive(item)
-          ? Math.max(enemyMissingHoldMs, activeProfitTargetMissingHoldMs)
-          : enemyMissingHoldMs
-      ),
+      heldProvenanceExpiresAt: input.nowMs + enemyMissingHoldMs,
       targetHp: numberOrNull(item.sourceTarget?.hp),
       targetActive: Boolean(item.sourceTarget?.active)
     };
@@ -8255,9 +8232,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       || (current.targetActive === true && current.heldCandidateSource === 'realtime-visible')
       || (current.heldCandidateSource === 'realtime-visible'
         && profitMissionIsEstablishedRealtimeActive(currentMission));
-    const currentMissingHoldMs = currentIsEstablishedRealtimeActive
-      ? Math.max(enemyMissingHoldMs, activeProfitTargetMissingHoldMs)
-      : enemyMissingHoldMs;
+    const currentMissingHoldMs = enemyMissingHoldMs;
     const ageMs = Math.max(0, input.nowMs - enemyLastSeenAt);
     const cachedTarget = {
       type: 'enemy',

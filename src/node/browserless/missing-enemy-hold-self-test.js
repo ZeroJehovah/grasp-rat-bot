@@ -198,17 +198,17 @@ function runMissingEnemyHoldSelfTest() {
       sourceTarget: legacyMissionSource
     },
     highValue: true,
-    selectedAt: nowMs - 3201,
+    selectedAt: nowMs - 1801,
     expiresAt: nowMs + 180000
   };
   const legacyMissionState = { profitMission: legacyMission };
   const releasedLegacyMission = buildOpportunityDecision(
     baseInput(nowMs, { profitCoins: [] }),
     legacyMissionState,
-    { ...decisionOptions(), activeProfitTargetMissingHoldMs: 3000 }
+    decisionOptions()
   );
   checks.push({
-    name: 'high-value-mission-lock-releases-after-bounded-active-missing-window',
+    name: 'legacy-high-value-mission-releases-after-ordinary-missing-window',
     passed: legacyMissionState.profitMission === null
       && releasedLegacyMission.action === null
   });

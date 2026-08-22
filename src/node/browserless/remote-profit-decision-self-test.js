@@ -294,22 +294,22 @@ function assertRealtimeSupersededMissionContinuity() {
   assert.strictEqual(missingWithinHold.action?.target?.cachedNavigationOnly, true);
   assert.strictEqual(missingWithinHold.profit?.mission?.highValue, true);
 
-  const missingWithinActiveHold = decide(
+  const missingWithinOrdinaryHold = decide(
     adapter,
     state(fullStaminaSelf()),
-    5001,
+    3501,
     supersededBatch,
     { controlMode: 'profit-live', combatEnabled: true }
   );
-  assert.strictEqual(missingWithinActiveHold.action?.kind, 'seek-enemy');
-  assert.strictEqual(missingWithinActiveHold.action?.target?.cachedNavigationOnly, true);
-  assert.strictEqual(missingWithinActiveHold.profit?.mission?.targetId, '99');
-  assert.strictEqual(missingWithinActiveHold.profit?.missingEnemyHold?.holdMs, 3000);
+  assert.strictEqual(missingWithinOrdinaryHold.action?.kind, 'seek-enemy');
+  assert.strictEqual(missingWithinOrdinaryHold.action?.target?.cachedNavigationOnly, true);
+  assert.strictEqual(missingWithinOrdinaryHold.profit?.mission?.targetId, '99');
+  assert.strictEqual(missingWithinOrdinaryHold.profit?.missingEnemyHold?.holdMs, 1800);
 
   const missing = decide(
     adapter,
     state(fullStaminaSelf()),
-    5401,
+    4201,
     supersededBatch,
     { controlMode: 'profit-live', combatEnabled: true }
   );
