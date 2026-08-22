@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.18.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.23.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -37,6 +37,18 @@ function mapAnimationProgressCore(elapsedMs, durationMs) {
   const elapsed = Number(elapsedMs);
   const linear = Math.max(0, Math.min(1, Number.isFinite(elapsed) ? elapsed / duration : 1));
   return 1 - Math.pow(1 - linear, 3);
+}
+
+function mapLinePhaseCore(nowMs, cycleMs = 1800) {
+  const now = Number(nowMs);
+  const cycle = Number(cycleMs);
+  if (!Number.isFinite(now) || !Number.isFinite(cycle) || cycle <= 0) return 0;
+  return ((now % cycle) + cycle) % cycle / cycle;
+}
+
+function mapLinePulseCore(nowMs, periodMs = 1500) {
+  const phase = mapLinePhaseCore(nowMs, periodMs);
+  return 0.5 + 0.5 * Math.sin(phase * Math.PI * 2 - Math.PI / 2);
 }
 
 function interpolateMapMarkerCore(marker, previous, progress) {
@@ -763,6 +775,9 @@ function renderBrowserlessWebPanel() {
     const MAP_MOVE_ANIMATION_MS = 260;
     const MAP_TRAIL_MAX_AGE_MS = 30000;
     const MAP_TRAIL_LINE_WIDTH = 2;
+    const MAP_LINE_ANIMATION_CYCLE_MS = 1800;
+    const MAP_LINE_PULSE_PERIOD_MS = 1500;
+    const MAP_LINE_FRAME_INTERVAL_MS = 40;
     let autoRefreshTimer = 0;
     let countdownTimer = 0;
     let refreshInFlight = null;
@@ -775,6 +790,8 @@ function renderBrowserlessWebPanel() {
     let mapHitTargets = [];
     let mapEmptyReason = '';
     let mapAnimationFrame = 0;
+    let mapLineAnimationFrame = 0;
+    let mapLineAnimationGeneration = 0;
     let mapRenderedMarkerPositions = new Map();
     let mapRenderedCanvasSize = 0;
     let mapTrailRenderHistory = new Map();
@@ -795,6 +812,8 @@ function renderBrowserlessWebPanel() {
     const mapMarkerKey = ${mapMarkerKeyCore.toString()};
     const mapRemoteTargetPosition = ${mapRemoteTargetPositionCore.toString()};
     const mapAnimationProgress = ${mapAnimationProgressCore.toString()};
+    const mapLinePhase = ${mapLinePhaseCore.toString()};
+    const mapLinePulse = ${mapLinePulseCore.toString().replace('mapLinePhaseCore', 'mapLinePhase')};
     const interpolateMapMarker = ${interpolateMapMarkerCore.toString()};
     const mapTrailOpacity = ${mapTrailOpacityCore.toString()};
     const transportMetricValueClass = ${transportMetricValueClassCore.toString()};
@@ -2317,11 +2336,48 @@ function renderBrowserlessWebPanel() {
       }
       mapTrailRenderHistory = next;
     }
+    function traceMapSmoothPath(context, points) {
+      if (!Array.isArray(points) || points.length < 2) return false;
+      context.beginPath();
+      context.moveTo(points[0].px, points[0].py);
+      if (points.length === 2) {
+        context.lineTo(points[1].px, points[1].py);
+        return true;
+      }
+      for (let index = 1; index < points.length - 1; index += 1) {
+        const point = points[index];
+        const next = points[index + 1];
+        context.quadraticCurveTo(
+          point.px,
+          point.py,
+          (point.px + next.px) / 2,
+          (point.py + next.py) / 2
+        );
+      }
+      const last = points[points.length - 1];
+      context.quadraticCurveTo(last.px, last.py, last.px, last.py);
+      return true;
+    }
+    function mapTrailPathSamples(samples) {
+      const paths = [];
+      let current = [];
+      for (const sample of samples) {
+        if (sample.breakBefore && current.length) {
+          paths.push(current);
+          current = [];
+        }
+        current.push(sample);
+      }
+      if (current.length) paths.push(current);
+      return paths.filter(path => path.length >= 2);
+    }
     function drawMapTrails(context, scene, markers, frame) {
       const currentMarkers = new Map(
         markers.filter(marker => marker.mapKey).map(marker => [marker.mapKey, marker])
       );
       currentMarkers.set(scene.selfMapKey, { px: frame.center, py: frame.center });
+      const lineNowMs = Number.isFinite(Number(scene.lineNowMs)) ? Number(scene.lineNowMs) : mapAnimationNow();
+      const flowPhase = mapLinePhase(lineNowMs, MAP_LINE_ANIMATION_CYCLE_MS);
       context.save();
       context.lineCap = 'round';
       context.lineJoin = 'round';
@@ -2331,39 +2387,61 @@ function renderBrowserlessWebPanel() {
         if (samples.length < 2) continue;
         const currentMarker = currentMarkers.get(key);
         if (!currentMarker) continue;
-        for (let index = 1; index < samples.length; index += 1) {
-          const previous = samples[index - 1];
-          const sample = samples[index];
-          if (sample.breakBefore) continue;
-          const previousX = frame.center + (Number(previous.x) - scene.selfX) * scene.scale;
-          const previousY = frame.center + (Number(previous.y) - scene.selfY) * scene.scale;
-          const sampleX = currentMarker && index === samples.length - 1
-            ? currentMarker.px
-            : frame.center + (Number(sample.x) - scene.selfX) * scene.scale;
-          const sampleY = currentMarker && index === samples.length - 1
-            ? currentMarker.py
-            : frame.center + (Number(sample.y) - scene.selfY) * scene.scale;
-          if (Math.hypot(sampleX - previousX, sampleY - previousY) < .2) continue;
-          context.globalAlpha = mapTrailOpacity(sample.at, scene.trailNowMs, MAP_TRAIL_MAX_AGE_MS);
+        const paths = mapTrailPathSamples(samples);
+        for (const pathSamples of paths) {
+          const points = pathSamples.map((sample, index) => ({
+            px: currentMarker && index === pathSamples.length - 1
+              ? currentMarker.px
+              : frame.center + (Number(sample.x) - scene.selfX) * scene.scale,
+            py: currentMarker && index === pathSamples.length - 1
+              ? currentMarker.py
+              : frame.center + (Number(sample.y) - scene.selfY) * scene.scale
+          }));
+          const pathLength = points.reduce((sum, point, index) => (
+            index === 0 ? sum : sum + Math.hypot(point.px - points[index - 1].px, point.py - points[index - 1].py)
+          ), 0);
+          if (!(pathLength >= .2) || !traceMapSmoothPath(context, points)) continue;
+          const opacity = mapTrailOpacity(pathSamples.at(-1).at, scene.trailNowMs, MAP_TRAIL_MAX_AGE_MS);
           context.strokeStyle = entry.color;
-          context.beginPath();
-          context.moveTo(previousX, previousY);
-          context.lineTo(sampleX, sampleY);
+          context.globalAlpha = opacity * .42;
+          context.setLineDash([]);
+          context.stroke();
+          traceMapSmoothPath(context, points);
+          context.globalAlpha = opacity;
+          context.setLineDash([7, 13]);
+          context.lineDashOffset = -flowPhase * 20;
           context.stroke();
         }
       }
+      context.setLineDash([]);
+      context.lineDashOffset = 0;
       context.restore();
     }
-    function drawMapTargetPath(context, center, markers, color, dashed = false) {
+    function drawMapTargetPath(context, center, markers, color, dashed = false, lineNowMs = 0) {
       if (!markers.length) return;
+      const points = [{ px: center, py: center }, ...markers.map(marker => ({ px: marker.px, py: marker.py }))];
+      if (!traceMapSmoothPath(context, points)) return;
+      const phase = mapLinePhase(lineNowMs, MAP_LINE_ANIMATION_CYCLE_MS);
+      const pulse = mapLinePulse(lineNowMs, MAP_LINE_PULSE_PERIOD_MS);
       context.save();
       context.strokeStyle = color;
-      context.lineWidth = .75;
-      if (dashed) context.setLineDash([5, 4]);
-      context.beginPath();
-      context.moveTo(center, center);
-      for (const marker of markers) context.lineTo(marker.px, marker.py);
+      context.lineCap = 'round';
+      context.lineJoin = 'round';
+      context.lineWidth = dashed ? 1 : 1.1;
+      context.globalAlpha = dashed ? .72 : .78 + pulse * .12;
+      if (dashed) context.setLineDash([6, 5]);
+      context.lineDashOffset = dashed ? -phase * 11 : 0;
       context.stroke();
+      if (!dashed) {
+        traceMapSmoothPath(context, points);
+        context.globalAlpha = .2 + pulse * .22;
+        context.lineWidth = 2.2;
+        context.setLineDash([2, 14]);
+        context.lineDashOffset = -phase * 20;
+        context.stroke();
+      }
+      context.setLineDash([]);
+      context.lineDashOffset = 0;
       context.restore();
     }
     function mapTargetPathColor(marker) {
@@ -2413,6 +2491,7 @@ function renderBrowserlessWebPanel() {
       context.fillText(marker.label, x, y);
     }
     function cancelMapMarkerAnimation(resetPositions = false) {
+      cancelMapLineAnimation();
       if (mapAnimationFrame && typeof cancelAnimationFrame === 'function') {
         cancelAnimationFrame(mapAnimationFrame);
       }
@@ -2441,6 +2520,28 @@ function renderBrowserlessWebPanel() {
       return !(typeof window.matchMedia === 'function'
         && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
     }
+    function cancelMapLineAnimation() {
+      if (mapLineAnimationFrame && typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(mapLineAnimationFrame);
+      }
+      mapLineAnimationFrame = 0;
+      mapLineAnimationGeneration += 1;
+    }
+    function mapHasRenderableLines(scene, markers) {
+      const hasTrail = [...mapTrailRenderHistory.values()].some(entry => (
+        Array.isArray(entry?.samples) && entry.samples.filter(sample => (
+          scene.trailNowMs - Number(sample.at) <= MAP_TRAIL_MAX_AGE_MS
+        )).length >= 2
+      ));
+      if (hasTrail) return true;
+      const coinMarkers = markers.filter(marker => marker.kind === 'coin');
+      if (coinMarkers.some(marker => marker.routeOrder > 0 || marker.selected)) return true;
+      const targetRoles = panelTargetRoles(scene.status);
+      return markers.some(marker => marker.role || marker.targetRole)
+        || [targetRoles?.primary, targetRoles?.secondary].some(target => (
+          Number.isFinite(Number(target?.x)) && Number.isFinite(Number(target?.y))
+        ));
+    }
     function mapMarkerPositionsMoved(markers, previousPositions) {
       return markers.some(marker => {
         const previous = marker.mapKey ? previousPositions.get(marker.mapKey) : null;
@@ -2458,7 +2559,14 @@ function renderBrowserlessWebPanel() {
       drawMapTrails(context, scene, markers, frame);
       const coinMarkers = markers.filter(marker => marker.kind === 'coin');
       const routeMarkers = coinMarkers.filter(marker => marker.routeOrder > 0).sort((a, b) => a.routeOrder - b.routeOrder);
-      drawMapTargetPath(context, frame.center, routeMarkers.length ? routeMarkers : coinMarkers.filter(marker => marker.selected), '#fbbf24');
+      drawMapTargetPath(
+        context,
+        frame.center,
+        routeMarkers.length ? routeMarkers : coinMarkers.filter(marker => marker.selected),
+        '#fbbf24',
+        false,
+        scene.lineNowMs
+      );
       const playerTarget = markers.find(marker => marker.role === 'primary')
         || markers.find(marker => marker.targetRole === 'combat')
         || markers.find(marker => marker.targetRole === 'afk')
@@ -2475,7 +2583,8 @@ function renderBrowserlessWebPanel() {
           frame.center,
           [primaryPoint],
           mapTargetPathColor(primaryPoint),
-          false
+          false,
+          scene.lineNowMs
         );
       }
       if (secondaryPoint) {
@@ -2484,7 +2593,8 @@ function renderBrowserlessWebPanel() {
           frame.center,
           [secondaryPoint],
           mapTargetPathColor(secondaryPoint),
-          true
+          true,
+          scene.lineNowMs
         );
       }
       for (const marker of markers.filter(marker => !marker.selected)) drawMapMarker(context, marker);
@@ -2509,6 +2619,26 @@ function renderBrowserlessWebPanel() {
         context.fillText(emptyReason, frame.center, frame.center + 24);
       }
     }
+    function startMapLineAnimation(scene, markers, animate = true) {
+      cancelMapLineAnimation();
+      if (!animate || !mapMotionAnimationAllowed() || !mapHasRenderableLines(scene, markers)) return;
+      const generation = mapLineAnimationGeneration;
+      let lastPaintAt = -Infinity;
+      const step = frameAt => {
+        if (generation !== mapLineAnimationGeneration) return;
+        const lineNowMs = Number.isFinite(Number(frameAt)) ? Number(frameAt) : mapAnimationNow();
+        if (lineNowMs - lastPaintAt >= MAP_LINE_FRAME_INTERVAL_MS) {
+          paintTargetMapScene({
+            ...scene,
+            lineNowMs,
+            trailNowMs: Date.now()
+          }, markers);
+          lastPaintAt = lineNowMs;
+        }
+        mapLineAnimationFrame = requestAnimationFrame(step);
+      };
+      mapLineAnimationFrame = requestAnimationFrame(step);
+    }
     function startMapMarkerAnimation(scene, markers, animate = true) {
       cancelMapMarkerAnimation(false);
       const previousPositions = mapRenderedMarkerPositions;
@@ -2520,11 +2650,16 @@ function renderBrowserlessWebPanel() {
         const renderedMarkers = markers.map(marker => (
           interpolateMapMarker(marker, marker.mapKey ? previousPositions.get(marker.mapKey) : null, progress)
         ));
-        paintTargetMapScene(scene, renderedMarkers);
+        paintTargetMapScene({
+          ...scene,
+          lineNowMs: mapAnimationNow(),
+          trailNowMs: Date.now()
+        }, renderedMarkers);
         rememberMapMarkerPositions(renderedMarkers, scene.size);
       };
       if (!shouldAnimate) {
         renderAtProgress(1);
+        startMapLineAnimation(scene, markers, animate);
         return;
       }
       renderAtProgress(0);
@@ -2538,6 +2673,7 @@ function renderBrowserlessWebPanel() {
           mapAnimationFrame = requestAnimationFrame(step);
         } else {
           mapAnimationFrame = 0;
+          startMapLineAnimation(scene, markers, animate);
         }
       };
       mapAnimationFrame = requestAnimationFrame(step);
@@ -3994,6 +4130,8 @@ module.exports = {
   isStaminaExhaustionExitReasonCore,
   lastExitPanelVisibleCore,
   mapAnimationProgressCore,
+  mapLinePhaseCore,
+  mapLinePulseCore,
   mapMarkerKeyCore,
   mapRemoteTargetPositionCore,
   pruneMapTrailHistoryCore,

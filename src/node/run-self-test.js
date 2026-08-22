@@ -220,6 +220,8 @@ const {
   groupChatMessagesForDisplay,
   interpolateMapMarkerCore,
   mapAnimationProgressCore,
+  mapLinePhaseCore,
+  mapLinePulseCore,
   mapMarkerKeyCore,
   missCloseExitReasonTextCore,
   nearbyCoinIconCore,
@@ -36887,12 +36889,25 @@ async function runSelfTest() {
           mapAnimationProgressCore(0, 260),
           halfway.toFixed(3),
           mapAnimationProgressCore(260, 260),
+          mapLinePhaseCore(0),
+          mapLinePhaseCore(900, 1800).toFixed(3),
+          mapLinePulseCore(0),
+          mapLinePulseCore(750, 1500),
           interpolated.px.toFixed(1),
           interpolated.py.toFixed(1),
           withoutPrevious.px,
           withoutPrevious.py,
           panelScript.includes('const MAP_MOVE_ANIMATION_MS = 260;'),
+          panelScript.includes('const MAP_LINE_ANIMATION_CYCLE_MS = 1800;'),
+          panelScript.includes('const MAP_LINE_PULSE_PERIOD_MS = 1500;'),
           panelScript.includes('const mapAnimationProgress = function mapAnimationProgressCore'),
+          panelScript.includes('const mapLinePhase = function mapLinePhaseCore'),
+          panelScript.includes('function traceMapSmoothPath(context, points)'),
+          panelScript.includes('context.quadraticCurveTo('),
+          panelScript.includes('context.lineDashOffset = -flowPhase * 20'),
+          panelScript.includes('context.setLineDash([6, 5])'),
+          panelScript.includes('function startMapLineAnimation(scene, markers, animate = true)'),
+          panelScript.includes('mapLineAnimationFrame = requestAnimationFrame(step);'),
           panelScript.includes("mapKey: mapMarkerKey('coin', item?.[0])"),
           panelScript.includes("mapKey: mapMarkerKey('player', item?.[9], name)"),
           panelScript.includes('function startMapMarkerAnimation(scene, markers, animate = true)'),
@@ -36904,7 +36919,7 @@ async function runSelfTest() {
           /function stopAutoRefresh\(\)\s*\{\s*cancelMapMarkerAnimation\(true\);/.test(panelScript)
         ].join('|');
       })(),
-      want: `${BROWSERLESS_WEB_PANEL_VERSION}|coin:0|player:alice||0|0.875|1|97.5|195.0|110|220|true|true|true|true|true|true|true|true|true|true|true`
+      want: `${BROWSERLESS_WEB_PANEL_VERSION}|coin:0|player:alice||0|0.875|1|0|0.500|0|1|97.5|195.0|110|220|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true`
     },
     {
       name: 'browserless status server adds dynamic whitelist players by name',
