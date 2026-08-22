@@ -174,6 +174,45 @@ function runMissingEnemyHoldSelfTest() {
       && reappeared.missingEnemyHold === null
   });
 
+  const legacyMissionSource = {
+    userId: 'legacy-mission-target',
+    x: 1000,
+    y: 0,
+    hp: 50,
+    max_hp: 100,
+    drop: 100,
+    active: true,
+    alive: true
+  };
+  const legacyMission = {
+    active: true,
+    key: 'enemy:legacy-mission-target',
+    missionKey: 'enemy:legacy-mission-target',
+    type: 'enemy',
+    subjectId: 'legacy-mission-target',
+    targetId: 'legacy-mission-target',
+    navigationTarget: legacyMissionSource,
+    choice: {
+      type: 'enemy',
+      id: 'legacy-mission-target',
+      sourceTarget: legacyMissionSource
+    },
+    highValue: true,
+    selectedAt: nowMs - 3201,
+    expiresAt: nowMs + 180000
+  };
+  const legacyMissionState = { profitMission: legacyMission };
+  const releasedLegacyMission = buildOpportunityDecision(
+    baseInput(nowMs, { profitCoins: [] }),
+    legacyMissionState,
+    { ...decisionOptions(), activeProfitTargetMissingHoldMs: 3000 }
+  );
+  checks.push({
+    name: 'high-value-mission-lock-releases-after-bounded-active-missing-window',
+    passed: legacyMissionState.profitMission === null
+      && releasedLegacyMission.action === null
+  });
+
   const arbitration = {
     lastAction: {
       kind: 'seek-enemy',

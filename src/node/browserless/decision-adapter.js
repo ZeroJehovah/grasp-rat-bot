@@ -203,7 +203,7 @@ const DEFAULT_DANGEROUS_TARGET_COOLDOWN_MS = BROWSER_RUNTIME_DEFAULTS.browserles
 const DEFAULT_EASY_KILL_APPROACH_WINDOW_MS = BROWSER_RUNTIME_DEFAULTS.browserlessEasyKillApproachWindowMs ?? 8000;
 const DEFAULT_EASY_KILL_APPROACH_MIN_CLOSING_CM = BROWSER_RUNTIME_DEFAULTS.browserlessEasyKillApproachMinClosingCm ?? 1000;
 const DEFAULT_PROFIT_MISSION_TTL_MS = 180000;
-const DEFAULT_ACTIVE_PROFIT_TARGET_MISSING_HOLD_MS = BROWSER_RUNTIME_DEFAULTS.activeProfitTargetMissingHoldMs ?? 12000;
+const DEFAULT_ACTIVE_PROFIT_TARGET_MISSING_HOLD_MS = BROWSER_RUNTIME_DEFAULTS.activeProfitTargetMissingHoldMs ?? 3000;
 const DEFAULT_COMPLETED_PROFIT_TARGET_TTL_MS = 210000;
 const DEFAULT_PROFIT_TICK_REGRESSION_TOLERANCE = 5;
 const DEFAULT_ACTIVE_COIN_COMPETITION_MIN_SELF_DISTANCE_CM = BROWSER_RUNTIME_DEFAULTS.activeCoinCompetitionMinSelfDistanceCm ?? 18000;
@@ -7437,12 +7437,6 @@ function realtimeEnemyMissionMissingState(input = {}, mission = {}, nowMs = Date
   const realtimeProvenance = authority === 'realtime-visible'
     || String(source.authority || mission.navigationAuthority || '') === 'realtime'
     || source.realtimeActiveProvenance === true;
-  if (!realtimeProvenance) return {
-    missing: true,
-    expired: false,
-    targetId: missionId,
-    reason: 'non-realtime-mission-provenance'
-  };
   const ordinaryHoldMs = Math.max(0, Number(options.enemyMissingHoldMs ?? 1800));
   const activeHoldMs = Math.max(0, Number(
     options.activeProfitTargetMissingHoldMs
@@ -7477,6 +7471,28 @@ function realtimeEnemyMissionMissingState(input = {}, mission = {}, nowMs = Date
     nowMs
   );
   const continuityHold = Boolean(escortContinuity);
+  if (!realtimeProvenance) {
+    // Older or compacted missions may not retain explicit realtime authority.
+    // Keep that route bounded by the same last-seen clock instead of allowing
+    // the high-value mission TTL to turn a stale target into an open-ended
+    // navigation lock. A missing timestamp is not evidence of a live target.
+    const expired = !continuityHold && (holdMs <= 0
+      || (provenanceExpiresAt !== null && provenanceExpiresAt < nowMs)
+      || ageMs === null
+      || ageMs > holdMs);
+    return {
+      missing: true,
+      expired,
+      targetId: missionId,
+      ageMs,
+      holdMs,
+      continuityHold,
+      continuityExpiresAt: continuityHold ? Number(escortContinuity.expiresAt || 0) : null,
+      provenanceExpiresAt,
+      observedAt,
+      reason: expired ? 'mission-provenance-expired' : 'non-realtime-mission-provenance'
+    };
+  }
   const expired = !continuityHold && (holdMs <= 0
     || (provenanceExpiresAt !== null && provenanceExpiresAt < nowMs)
     || (ageMs !== null && ageMs > holdMs));
