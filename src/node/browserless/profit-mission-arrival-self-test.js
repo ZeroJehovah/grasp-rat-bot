@@ -10,7 +10,11 @@ const {
   buildCombatMovementPlan,
   normalizeCombatBullet
 } = require('./combat-adapter');
-const { createBrowserlessActionAdapter } = require('./action-adapter');
+const {
+  coinArrivalRetryVector,
+  createBrowserlessActionAdapter
+} = require('./action-adapter');
+const { buildCompactBrowserlessStatus } = require('./state-file');
 const {
   profitMissionArrivalStateCore,
   isOrdinarySnapshotProfitMissionCore
@@ -205,6 +209,65 @@ function assertArrivalCoreBoundaries() {
   return { at149, at150, at220, at250, at251 };
 }
 
+function assertArrivalRetryCore() {
+  const mission = snapshotMission('retry-core');
+  const arrived = profitMissionArrivalStateCore({
+    mission,
+    self: selfAtDistance(100),
+    nowMs: 1000
+  });
+  const beforeSettlement = profitMissionArrivalStateCore({
+    mission,
+    self: selfAtDistance(100),
+    previous: arrived,
+    nowMs: 1999
+  });
+  const retryReady = profitMissionArrivalStateCore({
+    mission,
+    self: selfAtDistance(100),
+    previous: arrived,
+    nowMs: 2000
+  });
+  const active = profitMissionArrivalStateCore({
+    mission,
+    self: selfAtDistance(100, { x: 200 }),
+    previous: {
+      ...retryReady,
+      retryCount: 1,
+      retryActive: true,
+      retryActiveUntilMs: 2045,
+      nextRetryAtMs: 2295,
+      retryDirection: { dx: 1, dy: 0 }
+    },
+    nowMs: 2020
+  });
+  const expiredPulse = profitMissionArrivalStateCore({
+    mission,
+    self: selfAtDistance(100, { x: 200 }),
+    previous: {
+      ...retryReady,
+      retryCount: 1,
+      retryActive: true,
+      retryActiveUntilMs: 2045,
+      nextRetryAtMs: 2295,
+      retryDirection: { dx: 1, dy: 0 }
+    },
+    nowMs: 2050
+  });
+  assert.strictEqual(arrived.arrived, true);
+  assert.strictEqual(arrived.retryReady, false);
+  assert.strictEqual(beforeSettlement.retryReady, false);
+  assert.strictEqual(retryReady.retryReady, true);
+  assert.deepStrictEqual([retryReady.retryDirection.dx, retryReady.retryDirection.dy], [1, 0]);
+  assert.strictEqual(active.retryActive, true);
+  assert.deepStrictEqual([active.retryDirection.dx, active.retryDirection.dy], [1, 0]);
+  assert.strictEqual(expiredPulse.retryActive, false);
+  assert.strictEqual(expiredPulse.heldByHysteresis, false);
+  assert.strictEqual(expiredPulse.retryReady, false);
+  assert.deepStrictEqual([expiredPulse.retryDirection.dx, expiredPulse.retryDirection.dy], [1, 0]);
+  return { retryReady, active, expiredPulse };
+}
+
 function assertDecisionArrivalAndCleanup() {
   const options = decisionOptions();
   const adapter = createBrowserlessDecisionAdapter(options);
@@ -283,6 +346,121 @@ function assertDecisionArrivalAndCleanup() {
   };
 }
 
+function assertBoundedArrivalRetry() {
+  const options = decisionOptions({
+    profitMissionArrivalSettlementWaitMs: 1000,
+    profitMissionArrivalRetryPulseMs: 45,
+    profitMissionArrivalRetryCooldownMs: 250,
+    profitMissionArrivalMaxRetries: 3,
+    profitMissionArrivalRetryExhaustedCooldownMs: 30000
+  });
+  const retryAdapter = createBrowserlessDecisionAdapter(options);
+  retryAdapter.decide(coinState(500, { nowMs: 1000 }), { ...options, nowMs: 1000 });
+  const arrived = retryAdapter.decide(coinState(149, { nowMs: 1100 }), { ...options, nowMs: 1100 });
+  assert.strictEqual(arrived.action?.reason, 'profit-mission-arrival-hold');
+
+  const unobserved = retryAdapter.decide(
+    coinState(149, { nowMs: 2100, observed: false }),
+    { ...options, nowMs: 2100 }
+  );
+  assert.strictEqual(unobserved.action?.reason, 'profit-mission-arrival-hold');
+  assert.strictEqual(unobserved.stateful?.profitMission?.arrival?.retryCount, 0);
+  assert.strictEqual(unobserved.stateful?.profitMission?.arrival?.retryActive, false);
+
+  const firstRetry = retryAdapter.decide(
+    coinState(149, { nowMs: 2200 }),
+    { ...options, nowMs: 2200 }
+  );
+  assert.strictEqual(firstRetry.action?.reason, 'profit-mission-arrival-retry');
+  assert.strictEqual(firstRetry.action?.target?.arrivalRetry, true);
+  assert.deepStrictEqual([
+    firstRetry.action?.target?.arrivalRetryDirection?.dx,
+    firstRetry.action?.target?.arrivalRetryDirection?.dy
+  ], [1, 0]);
+
+  const crossedDuringCooldown = retryAdapter.decide(
+    coinState(100, { nowMs: 2300, self: { x: 200 } }),
+    { ...options, nowMs: 2300 }
+  );
+  assert.strictEqual(crossedDuringCooldown.action?.reason, 'profit-mission-arrival-hold');
+  assert.deepStrictEqual([
+    crossedDuringCooldown.stateful?.profitMission?.arrival?.retryDirection?.dx,
+    crossedDuringCooldown.stateful?.profitMission?.arrival?.retryDirection?.dy
+  ], [1, 0]);
+
+  const secondRetry = retryAdapter.decide(
+    coinState(100, { nowMs: 2500, self: { x: 200 } }),
+    { ...options, nowMs: 2500 }
+  );
+  assert.strictEqual(secondRetry.action?.reason, 'profit-mission-arrival-retry');
+  assert.deepStrictEqual([
+    secondRetry.action?.target?.arrivalRetryDirection?.dx,
+    secondRetry.action?.target?.arrivalRetryDirection?.dy
+  ], [1, 0]);
+
+  const cleanupAdapter = createBrowserlessDecisionAdapter(options);
+  cleanupAdapter.decide(coinState(500, { nowMs: 3000 }), { ...options, nowMs: 3000 });
+  cleanupAdapter.decide(coinState(149, { nowMs: 3100 }), { ...options, nowMs: 3100 });
+  const retry = cleanupAdapter.decide(coinState(149, { nowMs: 4100 }), { ...options, nowMs: 4100 });
+  assert.strictEqual(retry.action?.reason, 'profit-mission-arrival-retry');
+  const disappeared = cleanupAdapter.decide(
+    coinState(149, { nowMs: 4200, includeCoin: false, observed: true }),
+    { ...options, nowMs: 4200 }
+  );
+  assert.strictEqual(disappeared.stateful?.profitMission, null);
+  assert.notStrictEqual(disappeared.action?.reason, 'profit-mission-arrival-retry');
+
+  const exhaustedAdapter = createBrowserlessDecisionAdapter(options);
+  exhaustedAdapter.decide(coinState(500, { nowMs: 5000 }), { ...options, nowMs: 5000 });
+  exhaustedAdapter.decide(coinState(149, { nowMs: 5100 }), { ...options, nowMs: 5100 });
+  const retryTimes = [6100, 6400, 6700];
+  for (const nowMs of retryTimes) {
+    const output = exhaustedAdapter.decide(coinState(149, { nowMs }), { ...options, nowMs });
+    assert.strictEqual(output.action?.reason, 'profit-mission-arrival-retry');
+  }
+  const exhausted = exhaustedAdapter.decide(
+    coinState(149, { nowMs: 7000 }),
+    { ...options, nowMs: 7000 }
+  );
+  assert.strictEqual(exhausted.stateful?.profitMission, null);
+  assert.notStrictEqual(exhausted.action?.reason, 'profit-mission-arrival-hold');
+  assert.notStrictEqual(exhausted.action?.reason, 'profit-mission-arrival-retry');
+  assert.strictEqual(exhausted.action?.kind, 'wait');
+  const stillSuppressed = exhaustedAdapter.decide(
+    coinState(149, { nowMs: 20000 }),
+    { ...options, nowMs: 20000 }
+  );
+  assert.strictEqual(stillSuppressed.action?.kind, 'wait');
+  assert.notStrictEqual(stillSuppressed.action?.reason, 'profit-mission-arrival-hold');
+
+  const staminaWaitAdapter = createBrowserlessDecisionAdapter(options);
+  staminaWaitAdapter.decide(coinState(500, { nowMs: 8000 }), { ...options, nowMs: 8000 });
+  staminaWaitAdapter.decide(coinState(149, { nowMs: 8100 }), { ...options, nowMs: 8100 });
+  const staminaWait = staminaWaitAdapter.decide(
+    coinState(149, {
+      nowMs: 9100,
+      self: {
+        stamina_1h_remaining_milli: 1,
+        stamina_1d_remaining_milli: 1
+      }
+    }),
+    {
+      ...options,
+      nowMs: 9100,
+      opportunityMoveStaminaPerCm: 1
+    }
+  );
+  assert.notStrictEqual(staminaWait.action?.reason, 'profit-mission-arrival-retry');
+  assert.strictEqual(staminaWait.action?.staminaBlocked || staminaWait.action?.kind === 'leave', true);
+  return {
+    firstRetry: firstRetry.action.reason,
+    fixedDirection: secondRetry.action.target.arrivalRetryDirection,
+    exhaustedReason: exhausted.action.reason,
+    suppressedReason: stillSuppressed.action.reason,
+    staminaWaitReason: staminaWait.action.reason
+  };
+}
+
 function assertCombatMovementArbitration() {
   const deadZoneMission = snapshotMission('dead-zone', { x: 500, y: 0 });
   const leftSelf = selfAtDistance(400);
@@ -350,6 +528,61 @@ function assertCombatMovementArbitration() {
   assert.strictEqual(arrival.reason, 'profit-mission-arrival-hold');
   assert.strictEqual(arrival.profitMissionArrivalHold, true);
 
+  const retryArrival = profitMissionArrivalStateCore({
+    mission: arrivalMission,
+    self: selfAtDistance(100),
+    nowMs: 1000
+  });
+  const retryMission = {
+    ...arrivalMission,
+    arrival: {
+      ...retryArrival,
+      retryCount: 1,
+      retryActive: true,
+      retryActiveUntilMs: 1045,
+      nextRetryAtMs: 1295,
+      retryDirection: { dx: 1, dy: 0 }
+    }
+  };
+  const retryPlan = buildCombatMovementPlan(
+    selfAtDistance(100, { x: 200 }),
+    secondaryTarget(),
+    [],
+    combatMovementOptions(retryMission, { nowMs: 1020 })
+  );
+  assert.deepStrictEqual([retryPlan.dx, retryPlan.dy], [1, 0]);
+  assert.strictEqual(retryPlan.reason, 'profit-mission-arrival-retry');
+  assert.strictEqual(retryPlan.profitMissionArrivalRetry, true);
+  assert.strictEqual(retryPlan.secondaryTarget?.arrivalRetry, true);
+
+  const retryExpiredPlan = buildCombatMovementPlan(
+    selfAtDistance(100, { x: 200 }),
+    secondaryTarget(),
+    [],
+    combatMovementOptions(retryMission, { nowMs: 1050 })
+  );
+  assert.deepStrictEqual([retryExpiredPlan.dx, retryExpiredPlan.dy], [0, 0]);
+  assert.strictEqual(retryExpiredPlan.reason, 'profit-mission-arrival-hold');
+  assert.strictEqual(retryExpiredPlan.profitMissionArrivalRetry, false);
+
+  const exhaustedPlan = buildCombatMovementPlan(
+    selfAtDistance(100, { x: 200 }),
+    secondaryTarget(),
+    [],
+    combatMovementOptions({
+      ...retryMission,
+      arrival: {
+        ...retryMission.arrival,
+        retryActive: false,
+        retryExhausted: true,
+        retryCount: 3,
+        retryActiveUntilMs: 0
+      }
+    }, { nowMs: 2000 })
+  );
+  assert.notDeepStrictEqual([exhaustedPlan.dx, exhaustedPlan.dy], [0, 0]);
+  assert.strictEqual(exhaustedPlan.secondaryTarget?.deadZoneHold, false);
+
   const incomingRaw = {
     bullet_id: 'arrival-priority-bullet',
     owner_user_id: 8,
@@ -373,6 +606,17 @@ function assertCombatMovementArbitration() {
   assert.notDeepStrictEqual([dodged.dx, dodged.dy], [0, 0]);
   assert.notStrictEqual(dodged.reason, 'profit-mission-arrival-hold');
 
+  const retryDodged = buildCombatMovementPlan(
+    arrivalSelf,
+    secondaryTarget(),
+    [incomingBullet],
+    combatMovementOptions(retryMission, { nowMs: 1020 })
+  );
+  assert.strictEqual(retryDodged.profitMissionArrivalRetry, true);
+  assert.ok(retryDodged.modifiers.includes('dodge'));
+  assert.notDeepStrictEqual([retryDodged.dx, retryDodged.dy], [1, 0]);
+  assert.notStrictEqual(retryDodged.reason, 'profit-mission-arrival-retry');
+
   const safeHold = selectCombatMovementArbitrationCore({
     threatField: [
       { dx: 1, dy: 0, directHits: 1, minCPA: 50 },
@@ -391,8 +635,108 @@ function assertCombatMovementArbitration() {
     arrivalReason: arrival.reason,
     dodgeReason: dodged.reason,
     dodgeDirection: [dodged.dx, dodged.dy],
-    safeHoldSource: safeHold.source
+    safeHoldSource: safeHold.source,
+    retryReason: retryPlan.reason,
+    retryExpiredReason: retryExpiredPlan.reason,
+    exhaustedDirection: [exhaustedPlan.dx, exhaustedPlan.dy]
   };
+}
+
+function assertArrivalRetryActionAdapter() {
+  const velocities = [];
+  const timers = [];
+  const actionAdapter = createBrowserlessActionAdapter({
+    userId: 7,
+    commandIntervalMs: 0,
+    velocityRepeatEnabled: true,
+    setTimeout(callback, delayMs) {
+      const timer = { callback, delayMs, unref() {} };
+      timers.push(timer);
+      return timer;
+    },
+    clearTimeout() {},
+    transport: {
+      sendVelocity(dx, dy) {
+        velocities.push({ dx, dy });
+        return { ok: true };
+      },
+      sendShoot() {
+        return { ok: true };
+      }
+    }
+  });
+  const target = {
+    ...snapshotCoin('retry-action'),
+    type: 'coin',
+    authority: 'snapshot',
+    snapshotOnly: true,
+    arrivalRetry: true,
+    arrivalRetryDirection: { dx: 1, dy: 0 },
+    arrivalRetryPulseMs: 45
+  };
+  const vector = coinArrivalRetryVector(selfAtDistance(100), target, {});
+  assert.strictEqual(vector.ok, true);
+  assert.deepStrictEqual([vector.dx, vector.dy], [1, 0]);
+  assert.strictEqual(vector.precisionPulseMs, 45);
+  const applied = actionAdapter.applyDecision(
+    coinState(100, { nowMs: 8000 }),
+    {
+      kind: 'seek-coin',
+      band: 'profit',
+      reason: 'profit-mission-arrival-retry',
+      target
+    }
+  );
+  assert.strictEqual(applied.reason, 'coin-arrival-retry-pulse');
+  assert.deepStrictEqual(velocities, [{ dx: 1, dy: 0 }]);
+  assert.strictEqual(timers.length, 1);
+  assert.strictEqual(timers[0].delayMs, 45);
+  timers[0].callback();
+  assert.deepStrictEqual(velocities, [{ dx: 1, dy: 0 }, { dx: 0, dy: 0 }]);
+  return { vector: [vector.dx, vector.dy], velocities, pulseMs: timers[0].delayMs };
+}
+
+function assertArrivalRetryStateCompaction() {
+  const compact = buildCompactBrowserlessStatus({
+    session: { userId: 7, sessionToken: 'self-test-token', authenticated: true },
+    runner: { running: true, readOnly: true, dryRun: true, controlMode: 'non-combat-profit' },
+    current: {
+      self: selfAtDistance(100),
+      profit: {
+        mission: {
+          active: true,
+          key: 'coin:id:compact-retry',
+          type: 'coin',
+          navigationAuthority: 'snapshot',
+          navigationTarget: { type: 'coin', id: 'compact-retry', x: 100, y: 0 },
+          arrival: {
+            arrived: true,
+            settlementPending: true,
+            arrivedAtMs: 1000,
+            nextRetryAtMs: 2395,
+            lastRetryAtMs: 2100,
+            retryActiveUntilMs: 2145,
+            retryCount: 1,
+            retryReady: false,
+            retryActive: true,
+            retryExhausted: false,
+            retryPulseMs: 45,
+            retryCooldownMs: 250,
+            maxRetries: 3,
+            retryDirection: { dx: 1, dy: 0 }
+          }
+        }
+      },
+      decision: {}
+    }
+  });
+  assert.strictEqual(compact.profit?.mission?.arrival?.retryActive, true);
+  assert.strictEqual(compact.profit?.mission?.arrival?.retryCount, 1);
+  assert.deepStrictEqual([
+    compact.profit.mission.arrival.retryDirection.dx,
+    compact.profit.mission.arrival.retryDirection.dy
+  ], [1, 0]);
+  return compact.profit.mission.arrival;
 }
 
 function assertSafetyAndSnapshotAuthority() {
@@ -561,19 +905,28 @@ function assertSafetyAndSnapshotAuthority() {
 
 function runProfitMissionArrivalSelfTest() {
   const core = assertArrivalCoreBoundaries();
+  const retryCore = assertArrivalRetryCore();
   const decision = assertDecisionArrivalAndCleanup();
+  const boundedRetry = assertBoundedArrivalRetry();
   const combat = assertCombatMovementArbitration();
+  const retryAction = assertArrivalRetryActionAdapter();
+  const compactedRetry = assertArrivalRetryStateCompaction();
   const safety = assertSafetyAndSnapshotAuthority();
   return {
     ok: true,
-    cases: 27,
+    cases: 41,
     core: {
       arrivalRadiusCm: core.at150.arrivalRadiusCm,
       releaseRadiusCm: core.at250.releaseRadiusCm,
-      releaseReason: core.at251.reason
+      releaseReason: core.at251.reason,
+      retryReadyAtMs: retryCore.retryReady.nextRetryAtMs,
+      retryDirection: [retryCore.active.retryDirection.dx, retryCore.active.retryDirection.dy]
     },
     decision,
+    boundedRetry,
     combat,
+    retryAction,
+    compactedRetry,
     safety
   };
 }

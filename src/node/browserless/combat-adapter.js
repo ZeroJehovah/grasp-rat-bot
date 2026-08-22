@@ -3327,7 +3327,8 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   const profitMissionArrival = profitMissionArrivalStateCore({
     mission: profitMission,
     self,
-    previous: profitMission?.arrival || null
+    previous: profitMission?.arrival || null,
+    nowMs: options.nowMs
   }, options);
   const missionIsDifferentTarget = Boolean(
     missionTargetId
@@ -3462,10 +3463,17 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     secondaryTarget
       && secondarySnapshotNavigation
       && secondaryMainDistance !== null
+      && profitMissionArrival.retryActive !== true
+      && profitMissionArrival.retryExhausted !== true
       && secondaryMainDistance <= secondaryNavigationDeadZoneCm
   );
   const secondaryMainDirection = secondaryTarget && secondaryMainTarget
-    ? (secondaryNavigationDeadZoneHold
+    ? (profitMissionArrival.retryActive === true || profitMissionArrival.retryExhausted === true
+      ? {
+          dx: Math.sign(Number(profitMissionArrival.retryDirection?.dx || 0)),
+          dy: Math.sign(Number(profitMissionArrival.retryDirection?.dy || 0))
+        }
+      : secondaryNavigationDeadZoneHold
       ? { dx: 0, dy: 0 }
       : {
           dx: Math.sign(Number(secondaryMainTarget.x) - Number(self.x)),
@@ -3476,6 +3484,14 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     secondaryTarget
       && profitMissionArrival.active === true
       && profitMissionArrival.arrived === true
+      && profitMissionArrival.retryActive !== true
+      && profitMissionArrival.retryExhausted !== true
+      && !profitKillRace.active
+  );
+  const profitMissionArrivalRetry = Boolean(
+    secondaryTarget
+      && profitMissionArrival.active === true
+      && profitMissionArrival.retryActive === true
       && !profitKillRace.active
   );
   const strategicDirection = profitKillRace.active
@@ -3755,11 +3771,13 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
         ].includes(modifier)),
         profitKillRace.active
           ? 'profit-target-competition'
-          : (profitMissionArrivalHold
+          : (profitMissionArrivalRetry
+            ? 'profit-mission-arrival-retry'
+            : (profitMissionArrivalHold
             ? 'profit-mission-arrival-hold'
             : (secondaryNavigationDeadZoneHold
               ? 'secondary-target-dead-zone-hold'
-              : 'secondary-main-target'))
+              : 'secondary-main-target')))
       ]))
     };
     effectiveDodge = null;
@@ -3778,6 +3796,8 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     ? (effectiveDodge?.reason || 'direct-threat-dodge')
     : lootRaceApplied
     ? 'combat-loot-race-approach'
+    : movement.modifiers.includes('profit-mission-arrival-retry')
+    ? 'profit-mission-arrival-retry'
     : movement.modifiers.includes('profit-mission-arrival-hold')
     ? 'profit-mission-arrival-hold'
     : movement.modifiers.includes('secondary-target-dead-zone-hold')
@@ -3920,10 +3940,12 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       deadZoneCm: Math.round(secondaryNavigationDeadZoneCm),
       deadZoneHold: secondaryNavigationDeadZoneHold,
       arrival: profitMissionArrival.active ? { ...profitMissionArrival } : null,
-      arrivalHold: profitMissionArrivalHold
+      arrivalHold: profitMissionArrivalHold,
+      arrivalRetry: profitMissionArrivalRetry
     } : null,
     profitMissionArrival: profitMissionArrival.active ? { ...profitMissionArrival } : null,
     profitMissionArrivalHold,
+    profitMissionArrivalRetry,
     secondaryNavigationDeadZoneHold,
     profitKillRace,
     competitionApproach: profitKillRace.active ? {
@@ -5712,6 +5734,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
           exitDecision
             || contactEntryOnly
             || movement?.profitMissionArrivalHold
+            || movement?.profitMissionArrivalRetry
             || movement?.secondaryNavigationDeadZoneHold
         ),
         commandUpperBoundExpired: Boolean(stableDirectionPending

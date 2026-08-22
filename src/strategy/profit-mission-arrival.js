@@ -2,6 +2,10 @@
 
 const DEFAULT_PROFIT_MISSION_ARRIVAL_RADIUS_CM = 150;
 const DEFAULT_PROFIT_MISSION_ARRIVAL_HYSTERESIS_CM = 100;
+const DEFAULT_PROFIT_MISSION_ARRIVAL_SETTLEMENT_WAIT_MS = 1000;
+const DEFAULT_PROFIT_MISSION_ARRIVAL_RETRY_PULSE_MS = 45;
+const DEFAULT_PROFIT_MISSION_ARRIVAL_RETRY_COOLDOWN_MS = 250;
+const DEFAULT_PROFIT_MISSION_ARRIVAL_MAX_RETRIES = 3;
 
 function finiteNumber(value) {
   const number = Number(value);
@@ -11,6 +15,11 @@ function finiteNumber(value) {
 function nonNegativeOption(value, fallback) {
   const number = Number(value);
   return Number.isFinite(number) ? Math.max(0, number) : fallback;
+}
+
+function positiveIntegerOption(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, Math.floor(number)) : fallback;
 }
 
 function pointOf(value) {
@@ -23,6 +32,16 @@ function distanceBetween(left, right) {
   const a = pointOf(left);
   const b = pointOf(right);
   return a && b ? Math.hypot(a.x - b.x, a.y - b.y) : null;
+}
+
+function directionBetween(self, target) {
+  const selfPoint = pointOf(self);
+  const targetPoint = pointOf(target);
+  if (!selfPoint || !targetPoint) return { dx: 0, dy: 0 };
+  return {
+    dx: Math.sign(targetPoint.x - selfPoint.x),
+    dy: Math.sign(targetPoint.y - selfPoint.y)
+  };
 }
 
 function missionNavigationTarget(mission = {}) {
@@ -83,6 +102,23 @@ function profitMissionArrivalStateCore(input = {}, options = {}) {
     DEFAULT_PROFIT_MISSION_ARRIVAL_HYSTERESIS_CM
   );
   const releaseRadiusCm = arrivalRadiusCm + hysteresisCm;
+  const settlementWaitMs = nonNegativeOption(
+    options.profitMissionArrivalSettlementWaitMs,
+    DEFAULT_PROFIT_MISSION_ARRIVAL_SETTLEMENT_WAIT_MS
+  );
+  const retryPulseMs = Math.max(20, nonNegativeOption(
+    options.profitMissionArrivalRetryPulseMs,
+    DEFAULT_PROFIT_MISSION_ARRIVAL_RETRY_PULSE_MS
+  ));
+  const retryCooldownMs = nonNegativeOption(
+    options.profitMissionArrivalRetryCooldownMs,
+    DEFAULT_PROFIT_MISSION_ARRIVAL_RETRY_COOLDOWN_MS
+  );
+  const maxRetries = positiveIntegerOption(
+    options.profitMissionArrivalMaxRetries,
+    DEFAULT_PROFIT_MISSION_ARRIVAL_MAX_RETRIES
+  );
+  const nowMs = Number.isFinite(Number(input.nowMs)) ? Number(input.nowMs) : 0;
   const distanceCm = distanceBetween(self, targetPoint);
   const previous = input.previous && typeof input.previous === 'object' ? input.previous : null;
   const previousPoint = pointOf(previous?.targetPoint);
@@ -106,6 +142,14 @@ function profitMissionArrivalStateCore(input = {}, options = {}) {
       releaseRadiusCm: Math.round(releaseRadiusCm),
       phase: 'arrival-pending',
       settlementPending: false,
+      retryCount: 0,
+      retryReady: false,
+      retryActive: false,
+      retryExhausted: false,
+      retryDirection: { dx: 0, dy: 0 },
+      retryPulseMs: Math.round(retryPulseMs),
+      retryCooldownMs: Math.round(retryCooldownMs),
+      maxRetries,
       reason: 'profit-mission-arrival-missing-position'
     };
   }
@@ -116,6 +160,44 @@ function profitMissionArrivalStateCore(input = {}, options = {}) {
     && distanceCm > arrivalRadiusCm
     && distanceCm <= releaseRadiusCm;
   const released = Boolean(previous?.arrived === true && !arrived);
+  const retryCount = targetUnchanged
+    ? Math.max(0, Math.floor(Number(previous?.retryCount || 0)))
+    : 0;
+  const previousRetryDirection = {
+    dx: Math.sign(Number(previous?.retryDirection?.dx || 0)),
+    dy: Math.sign(Number(previous?.retryDirection?.dy || 0))
+  };
+  const retryDirection = targetUnchanged
+    && (previousRetryDirection.dx || previousRetryDirection.dy)
+    ? previousRetryDirection
+    : directionBetween(self, targetPoint);
+  const arrivedAtMs = arrived
+    ? (targetUnchanged
+        ? Math.max(0, Number(previous?.arrivedAtMs || 0))
+        : nowMs)
+    : 0;
+  const retryActive = Boolean(
+    targetUnchanged
+      && arrived
+      && previous?.retryActive === true
+      && Number(previous?.retryActiveUntilMs || 0) > nowMs
+  );
+  const retryExhausted = Boolean(
+    targetUnchanged
+      && arrived
+      && previous?.retryExhausted === true
+  );
+  const nextRetryAtMs = targetUnchanged
+    ? Math.max(0, Number(previous?.nextRetryAtMs || (arrivedAtMs + settlementWaitMs)))
+    : (arrived ? arrivedAtMs + settlementWaitMs : 0);
+  const retryReady = Boolean(
+    arrived
+      && !retryActive
+      && !retryExhausted
+      && retryCount < maxRetries
+      && (retryDirection.dx || retryDirection.dy)
+      && nowMs >= nextRetryAtMs
+  );
   return {
     active: true,
     arrived,
@@ -129,8 +211,24 @@ function profitMissionArrivalStateCore(input = {}, options = {}) {
     releaseRadiusCm: Math.round(releaseRadiusCm),
     phase: arrived ? 'arrived' : (released ? 'released' : 'approach'),
     settlementPending: arrived,
-    reason: arrived
-      ? (heldByHysteresis ? 'profit-mission-arrival-hysteresis-hold' : 'profit-mission-arrival-settlement-pending')
+    arrivedAtMs,
+    nextRetryAtMs,
+    retryCount,
+    retryReady,
+    retryActive,
+    retryExhausted,
+    retryDirection,
+    retryPulseMs: Math.round(retryPulseMs),
+    retryCooldownMs: Math.round(retryCooldownMs),
+    maxRetries,
+    retryActiveUntilMs: retryActive ? Number(previous?.retryActiveUntilMs || 0) : 0,
+    lastRetryAtMs: targetUnchanged ? Math.max(0, Number(previous?.lastRetryAtMs || 0)) : 0,
+    reason: retryActive
+      ? 'profit-mission-arrival-retry'
+      : retryReady
+        ? 'profit-mission-arrival-retry-ready'
+        : arrived
+          ? (heldByHysteresis ? 'profit-mission-arrival-hysteresis-hold' : 'profit-mission-arrival-settlement-pending')
       : (released ? 'profit-mission-arrival-release' : 'profit-mission-approach')
   };
 }
@@ -138,6 +236,10 @@ function profitMissionArrivalStateCore(input = {}, options = {}) {
 module.exports = {
   DEFAULT_PROFIT_MISSION_ARRIVAL_RADIUS_CM,
   DEFAULT_PROFIT_MISSION_ARRIVAL_HYSTERESIS_CM,
+  DEFAULT_PROFIT_MISSION_ARRIVAL_SETTLEMENT_WAIT_MS,
+  DEFAULT_PROFIT_MISSION_ARRIVAL_RETRY_PULSE_MS,
+  DEFAULT_PROFIT_MISSION_ARRIVAL_RETRY_COOLDOWN_MS,
+  DEFAULT_PROFIT_MISSION_ARRIVAL_MAX_RETRIES,
   isOrdinarySnapshotProfitMissionCore,
   profitMissionArrivalStateCore
 };

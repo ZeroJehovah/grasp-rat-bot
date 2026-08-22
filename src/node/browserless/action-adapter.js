@@ -359,6 +359,44 @@ function coinMotionVectorToTarget(self, target, options = {}, state = null, nowM
   };
 }
 
+function coinArrivalRetryVector(self, target, options = {}) {
+  const sx = coordinateOrNull(self?.x);
+  const sy = coordinateOrNull(self?.y);
+  const tx = coordinateOrNull(target?.x);
+  const ty = coordinateOrNull(target?.y);
+  const dx = Math.sign(Number(target?.arrivalRetryDirection?.dx || 0));
+  const dy = Math.sign(Number(target?.arrivalRetryDirection?.dy || 0));
+  if (sx === null || sy === null || tx === null || ty === null) {
+    return { ok: false, reason: 'missing-position', dx: 0, dy: 0, distance: null };
+  }
+  if (!(dx || dy)) {
+    return {
+      ok: false,
+      reason: 'arrival-retry-direction-missing',
+      dx: 0,
+      dy: 0,
+      distance: Math.round(Math.hypot(tx - sx, ty - sy))
+    };
+  }
+  const defaultPulseMs = Number(
+    options.profitMissionArrivalRetryPulseMs
+      ?? BROWSER_RUNTIME_DEFAULTS.profitMissionArrivalRetryPulseMs
+      ?? options.coinPickupStopPulseMs
+      ?? 45
+  );
+  const pulseMs = Math.max(20, Math.round(Number(target?.arrivalRetryPulseMs || defaultPulseMs)));
+  return {
+    ok: true,
+    reason: 'coin-arrival-retry-pulse',
+    dx,
+    dy,
+    distance: Math.round(Math.hypot(tx - sx, ty - sy)),
+    precisionPulseMs: pulseMs,
+    pickupMode: 'arrival-retry',
+    arrivalRetry: true
+  };
+}
+
 function movementVectorToTarget(self, target, options = {}) {
   const sx = coordinateOrNull(self?.x);
   const sy = coordinateOrNull(self?.y);
@@ -3663,7 +3701,11 @@ function createBrowserlessActionAdapter(options = {}) {
       };
     }
     const target = profitAction.target;
-    const vector = coinMotionVectorToTarget(self, target, options, state, now());
+    const arrivalRetry = target?.arrivalRetry === true
+      || (decision?.action || decision)?.profitMissionArrivalRetry === true;
+    const vector = arrivalRetry
+      ? coinArrivalRetryVector(self, target, options)
+      : coinMotionVectorToTarget(self, target, options, state, now());
     if (!vector.ok) {
       clearNearCoinContinuation(vector.reason || 'coin-vector-unavailable');
       const stopped = stop(vector.reason);
@@ -3677,9 +3719,13 @@ function createBrowserlessActionAdapter(options = {}) {
         ...transportFailure(stopped)
       };
     }
-    const feedbackGuided = feedbackGuidedCoinVector(vector);
+    if (arrivalRetry) {
+      clearNearCoinContinuation('arrival-retry-single-pulse');
+      clearCoinFeedbackGate();
+    }
+    const feedbackGuided = !arrivalRetry && feedbackGuidedCoinVector(vector);
     const feedbackPlan = feedbackGuided ? coinFeedbackPlan(stateSnapshot) : null;
-    if (!nearCoinContinuationEligible(target, vector, feedbackPlan)) {
+    if (arrivalRetry || !nearCoinContinuationEligible(target, vector, feedbackPlan)) {
       clearNearCoinContinuation('planner-close-coin-health-unavailable');
     } else {
       beginOrRenewNearCoinContinuation(stateSnapshot, target, vector, feedbackPlan);
@@ -3695,9 +3741,11 @@ function createBrowserlessActionAdapter(options = {}) {
         nearCoinContinuation: nearCoinContinuationSummary()
       };
     }
-    const sent = sendVelocity(vector.dx, vector.dy, vector.reason, target, { suppressRepeat: feedbackGuided });
+    const sent = sendVelocity(vector.dx, vector.dy, vector.reason, target, {
+      suppressRepeat: arrivalRetry || feedbackGuided
+    });
     if (feedbackGuided) armCoinFeedbackGate(stateSnapshot, target, feedbackPlan, sent, self);
-    const continuation = nearCoinContinuationEligible(target, vector, feedbackPlan)
+    const continuation = !arrivalRetry && nearCoinContinuationEligible(target, vector, feedbackPlan)
       ? beginOrRenewNearCoinContinuation(stateSnapshot, target, vector, feedbackPlan, sent)
       : null;
     const opportunisticShot = opportunisticShotFromDecision(decision);
@@ -4518,6 +4566,7 @@ module.exports = {
   combatSummaryFromDecision,
   createBrowserlessActionAdapter,
   coinMotionCoreOptions,
+  coinArrivalRetryVector,
   coinMotionVectorToTarget,
   controlActionFromDecision,
   profitActionFromDecision,

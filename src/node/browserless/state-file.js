@@ -1989,7 +1989,24 @@ function compactProfitMission(value) {
           targetKey: compactString(value.arrival.targetKey, 128),
           distanceCm: compactNumber(value.arrival.distanceCm),
           arrivalRadiusCm: compactNumber(value.arrival.arrivalRadiusCm),
-          releaseRadiusCm: compactNumber(value.arrival.releaseRadiusCm)
+          releaseRadiusCm: compactNumber(value.arrival.releaseRadiusCm),
+          arrivedAtMs: compactNumber(value.arrival.arrivedAtMs),
+          nextRetryAtMs: compactNumber(value.arrival.nextRetryAtMs),
+          lastRetryAtMs: compactNumber(value.arrival.lastRetryAtMs),
+          retryActiveUntilMs: compactNumber(value.arrival.retryActiveUntilMs),
+          retryCount: compactNumber(value.arrival.retryCount),
+          retryReady: compactBoolean(value.arrival.retryReady),
+          retryActive: compactBoolean(value.arrival.retryActive),
+          retryExhausted: compactBoolean(value.arrival.retryExhausted),
+          retryPulseMs: compactNumber(value.arrival.retryPulseMs),
+          retryCooldownMs: compactNumber(value.arrival.retryCooldownMs),
+          maxRetries: compactNumber(value.arrival.maxRetries),
+          retryDirection: value.arrival.retryDirection && typeof value.arrival.retryDirection === 'object'
+            ? {
+                dx: compactNumber(value.arrival.retryDirection.dx),
+                dy: compactNumber(value.arrival.retryDirection.dy)
+              }
+            : null
         }
       : null,
     highValue: compactBoolean(value.highValue),

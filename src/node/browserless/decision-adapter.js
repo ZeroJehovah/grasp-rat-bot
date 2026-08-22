@@ -5638,6 +5638,13 @@ function collectedCoinIgnoreMs(options = {}) {
   ) || 0);
 }
 
+function profitMissionArrivalRetryExhaustedCooldownMs(options = {}) {
+  return Math.max(0, Number(
+    options.profitMissionArrivalRetryExhaustedCooldownMs
+      ?? BROWSER_RUNTIME_DEFAULTS.profitMissionArrivalRetryExhaustedCooldownMs
+  ) || 0);
+}
+
 function inputCoinDecisionKeys(input = {}) {
   const keys = new Set();
   const sources = [
@@ -5700,6 +5707,8 @@ function profitMissionArrivalHoldState(stateful = {}) {
   if (!mission
     || mission.type !== 'coin'
     || mission.arrival?.arrived !== true
+    || mission.arrival?.retryActive === true
+    || mission.arrival?.retryExhausted === true
     || !isOrdinarySnapshotProfitMissionCore(mission)) {
     return null;
   }
@@ -5730,6 +5739,72 @@ function filterProfitMissionArrivalHeldCoins(input, stateful = {}) {
   input.snapshotVisibleCoins = (input.snapshotVisibleCoins || []).filter(keep);
   input.selfKilledPlayerDropCoins = (input.selfKilledPlayerDropCoins || []).filter(keep);
   return hold;
+}
+
+function buildProfitMissionArrivalRetryAction(input = {}, stateful = {}, baseAction = null) {
+  const mission = stateful?.profitMission || null;
+  const arrival = mission?.arrival || null;
+  const source = mission?.navigationTarget
+    || profitMissionChoiceSource(mission?.choice)
+    || mission?.target
+    || null;
+  if (!mission
+    || mission.type !== 'coin'
+    || !arrival
+    || arrival.retryActive !== true
+    || !isOrdinarySnapshotProfitMissionCore(mission)) return null;
+  const currentAction = baseAction && typeof baseAction === 'object' ? baseAction : null;
+  const baseBand = String(currentAction?.band || '');
+  const baseKind = String(currentAction?.kind || '');
+  const baseTarget = currentAction?.target?.type === 'coin' ? currentAction.target : null;
+  const waitReason = String(currentAction?.reason || '');
+  const ordinaryWait = baseKind === 'wait'
+    && baseBand === 'wait'
+    && !currentAction?.shouldLeave
+    && !currentAction?.staminaBlocked
+    && [
+      'no-profitable-candidate',
+      'dynamic-profit-threshold-wait',
+      'profit-mission-arrival-hold'
+    ].includes(waitReason);
+  const ordinaryCoinAction = baseBand === 'profit'
+    && !currentAction?.shouldLeave
+    && baseTarget;
+  const preemptible = ordinaryWait || ordinaryCoinAction;
+  if (!preemptible) return null;
+  const dx = Math.sign(Number(arrival.retryDirection?.dx || 0));
+  const dy = Math.sign(Number(arrival.retryDirection?.dy || 0));
+  if (!(dx || dy)) return null;
+  const target = {
+    ...(source && typeof source === 'object' ? source : {}),
+    ...(baseTarget || {}),
+    type: 'coin',
+    id: source?.id ?? source?.drop_id ?? baseTarget?.id ?? mission.subjectId,
+    drop_id: source?.drop_id ?? source?.id ?? baseTarget?.drop_id ?? baseTarget?.id ?? mission.subjectId,
+    x: Number(source?.x ?? baseTarget?.x),
+    y: Number(source?.y ?? baseTarget?.y),
+    distance: Number.isFinite(Number(input.self && source
+      ? distanceBetween(input.self, source)
+      : arrival.distanceCm))
+      ? Math.round(Number(input.self && source
+        ? distanceBetween(input.self, source)
+        : arrival.distanceCm))
+      : arrival.distanceCm,
+    arrivalRetry: true,
+    arrivalRetryDirection: { dx, dy },
+    arrivalRetryPulseMs: Math.round(Number(arrival.retryPulseMs || 45))
+  };
+  return {
+    kind: 'seek-coin',
+    band: 'profit',
+    reason: 'profit-mission-arrival-retry',
+    target,
+    reward: numberOrNull(mission.reward),
+    expectedReward: numberOrNull(mission.expectedReward ?? mission.reward),
+    staminaCost: numberOrNull(mission.staminaCost),
+    profitMissionArrivalRetry: true,
+    profitMissionArrival: cloneJson(arrival)
+  };
 }
 
 function coinDecisionKeyVariants(value) {
@@ -6255,10 +6330,12 @@ function applyBrowserlessFinalActionArbitration(action, stateful = {}, input = {
   // a yieldable "no candidate" interval, otherwise the generic final-action
   // hysteresis can replay the previous seek-coin action for up to 1.8s and
   // reintroduce the same reversal loop we just stopped.
-  if (action?.profitMissionArrivalHold === true) {
+  if (action?.profitMissionArrivalHold === true || action?.profitMissionArrivalRetry === true) {
     arbitration.lastRelease = {
       at: Number.isFinite(Number(input?.nowMs)) ? Number(input.nowMs) : Date.now(),
-      reason: 'profit-mission-arrival-hold',
+      reason: action.profitMissionArrivalRetry === true
+        ? 'profit-mission-arrival-retry'
+        : 'profit-mission-arrival-hold',
       targetKey: String(action.profitMissionArrival?.targetKey || '')
     };
     arbitration.lastAction = null;
@@ -7708,13 +7785,84 @@ function reconcileProfitMissionState(input = {}, stateful = {}, options = {}, re
       return null;
     }
     if (input.self) {
+      const previousArrival = mission.arrival && typeof mission.arrival === 'object'
+        ? mission.arrival
+        : null;
       const arrival = profitMissionArrivalStateCore({
         mission,
         self: input.self,
-        previous: mission.arrival || null
+        previous: previousArrival,
+        nowMs
       }, options);
       if (arrival.active) {
-        mission.arrival = arrival;
+        const retryExhausted = arrival.arrived === true
+          && previousArrival?.retryExhausted === true
+          && arrival.retryActive !== true
+          && coinState?.observed === true
+          && coinState.missing !== true;
+        if (retryExhausted) {
+          const retryCooldownMs = profitMissionArrivalRetryExhaustedCooldownMs(options);
+          const retryKey = coinState.key || coinDecisionKey(source);
+          if (retryKey) {
+            stateful.ignoredCoins = stateful.ignoredCoins && typeof stateful.ignoredCoins === 'object'
+              ? stateful.ignoredCoins
+              : {};
+            stateful.ignoredCoins[retryKey] = Math.max(
+              Number(stateful.ignoredCoins[retryKey] || 0),
+              nowMs + retryCooldownMs
+            );
+            delete stateful.coinAttempts?.[retryKey];
+            delete stateful.coinProgress?.[retryKey];
+            delete stateful.coinFailures?.[retryKey];
+            if (String(stateful.staleCoinEscape?.id || '') === retryKey) {
+              stateful.staleCoinEscape = null;
+            }
+            clearIgnoredCoinDecisionState(stateful, retryKey);
+            applyIgnoredCoinFilter(input, stateful, options);
+          }
+          clearProfitMission(stateful, 'coin-arrival-retries-exhausted', nowMs);
+          return null;
+        }
+        const canRetry = arrival.retryReady === true
+          && coinState?.observed === true
+          && coinState.missing !== true;
+        if (canRetry) {
+          const retryCount = Math.max(0, Number(arrival.retryCount || 0)) + 1;
+          mission.arrival = {
+            ...arrival,
+            retryCount,
+            retryReady: false,
+            retryActive: true,
+            retryExhausted: retryCount >= Number(arrival.maxRetries || 0),
+            retryActiveUntilMs: nowMs + Math.max(20, Number(arrival.retryPulseMs || 45)),
+            lastRetryAtMs: nowMs,
+            nextRetryAtMs: nowMs
+              + Math.max(20, Number(arrival.retryPulseMs || 45))
+              + Math.max(0, Number(arrival.retryCooldownMs || 0))
+          };
+        } else if (arrival.arrived !== true) {
+          mission.arrival = {
+            ...arrival,
+            retryCount: 0,
+            retryReady: false,
+            retryActive: false,
+            retryExhausted: false,
+            retryActiveUntilMs: 0,
+            lastRetryAtMs: 0,
+            nextRetryAtMs: 0
+          };
+        } else {
+          mission.arrival = {
+            ...arrival,
+            retryCount: Math.max(0, Number(previousArrival?.retryCount || arrival.retryCount || 0)),
+            retryActive: arrival.retryActive === true,
+            retryExhausted: previousArrival?.retryExhausted === true,
+            retryActiveUntilMs: arrival.retryActive === true
+              ? Number(previousArrival?.retryActiveUntilMs || 0)
+              : 0,
+            lastRetryAtMs: Math.max(0, Number(previousArrival?.lastRetryAtMs || arrival.lastRetryAtMs || 0))
+          };
+        }
       }
     }
   }
@@ -7996,6 +8144,8 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     || null;
   const arrivalHeldCoinKey = arrivalMission?.type === 'coin'
     && arrivalMission?.arrival?.arrived === true
+    && arrivalMission?.arrival?.retryActive !== true
+    && arrivalMission?.arrival?.retryExhausted !== true
     && isOrdinarySnapshotProfitMissionCore(arrivalMission)
     ? coinDecisionKey(arrivalSource)
     : '';
@@ -8694,6 +8844,13 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     profitMissionArrivalHold: Boolean(
       stateful.profitMission?.type === 'coin'
         && stateful.profitMission?.arrival?.arrived === true
+        && stateful.profitMission?.arrival?.retryActive !== true
+        && stateful.profitMission?.arrival?.retryExhausted !== true
+        && isOrdinarySnapshotProfitMissionCore(stateful.profitMission)
+    ),
+    profitMissionArrivalRetry: Boolean(
+      stateful.profitMission?.type === 'coin'
+        && stateful.profitMission?.arrival?.retryActive === true
         && isOrdinarySnapshotProfitMissionCore(stateful.profitMission)
     ),
     action: remembered.action || action,
@@ -14407,8 +14564,20 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       band = action.band || band;
       reason = action.reason || reason;
     }
+    const arrivalRetryAction = buildProfitMissionArrivalRetryAction(
+      input,
+      stateful,
+      selectedAction
+    );
+    const actionBeforeProgress = arrivalRetryAction || selectedAction;
+    if (actionBeforeProgress !== selectedAction) {
+      action = actionBeforeProgress;
+      kind = action.kind || kind;
+      band = action.band || band;
+      reason = action.reason || reason;
+    }
     let finalAction = applyStaleCoinEscape(
-      applyCoinProgressToAction(selectedAction, input, stateful, options),
+      applyCoinProgressToAction(actionBeforeProgress, input, stateful, options),
       stateful,
       input.nowMs
     );
@@ -14421,7 +14590,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       singleCoinBait.action = null;
       singleCoinBait.summary = null;
     }
-    if (finalAction !== selectedAction) {
+    if (finalAction !== actionBeforeProgress) {
       action = finalAction;
       kind = action.kind || kind;
       band = action.band || band;
