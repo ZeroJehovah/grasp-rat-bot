@@ -108,6 +108,8 @@ function normalizeEntity(entity, meta, reuse = false) {
     if (typeof entity.max_hp !== 'number' || !Number.isFinite(entity.max_hp)) entity.max_hp = numericOrNull(entity.max_hp);
     entity.authority = meta.authority;
     entity.source = meta.source;
+    if (meta.nativeSnapshot !== undefined) entity.nativeSnapshot = Boolean(meta.nativeSnapshot);
+    if (meta.snapshotSource !== undefined) entity.snapshotSource = String(meta.snapshotSource || '');
     entity.tick = meta.tick;
     entity.receivedAtMs = meta.receivedAtMs;
     return entity;
@@ -122,6 +124,8 @@ function normalizeEntity(entity, meta, reuse = false) {
     max_hp: numericOrNull(entity.max_hp),
     authority: meta.authority,
     source: meta.source,
+    ...(meta.nativeSnapshot !== undefined ? { nativeSnapshot: Boolean(meta.nativeSnapshot) } : {}),
+    ...(meta.snapshotSource !== undefined ? { snapshotSource: String(meta.snapshotSource || '') } : {}),
     tick: meta.tick,
     receivedAtMs: meta.receivedAtMs
   };
@@ -511,6 +515,8 @@ function createInitialState(userId = 0, controlGeneration = '') {
     snapshot: {
       authority: 'snapshot',
       source: 'snapshot',
+      nativeSnapshot: false,
+      snapshotSource: '',
       tick: null,
       receivedAtMs: 0,
       self: null,
@@ -745,7 +751,11 @@ function createBrowserlessStateStore(options = {}) {
     state.frameCounts[state.latestFrameType] = Number(state.frameCounts[state.latestFrameType] || 0) + 1;
     recordTransportDiagnostics(frame, state.latestFrameType);
     if (type === 'pos') ingestRealtimeFrame(frame, { receivedAtMs, tick });
-    else if (type === 'snapshot') ingestSnapshotFrame(frame, { receivedAtMs, tick });
+    else if (type === 'snapshot') ingestSnapshotFrame(frame, {
+      ...meta,
+      receivedAtMs,
+      tick
+    });
     else if (type === 'shoot_ok') ingestShootOk(frame, { receivedAtMs, tick });
     return { ok: true, type: state.latestFrameType, tick };
   }
@@ -987,8 +997,17 @@ function createBrowserlessStateStore(options = {}) {
     const bullets = Array.isArray(frame.bullets) ? frame.bullets : [];
     const coinDrops = coinDropArraysFromFrame(frame);
     const coinDropsObserved = hasCoinDropArrayField(frame);
+    const nativeSnapshot = String(meta?.source || '').toLowerCase() === 'ws'
+      || String(meta?.snapshotKind || '').toLowerCase() === 'ws';
+    const snapshotSource = nativeSnapshot ? 'ws' : String(meta?.source || 'snapshot');
     const normalizedEntities = entities
-      .map(entity => normalizeEntity(entity, { ...meta, authority: 'snapshot', source: 'snapshot' }))
+      .map(entity => normalizeEntity(entity, {
+        ...meta,
+        authority: 'snapshot',
+        source: 'snapshot',
+        nativeSnapshot,
+        snapshotSource
+      }))
       .filter(Boolean);
     const entitiesByKey = {};
     const entitiesByUserId = {};
@@ -1000,14 +1019,28 @@ function createBrowserlessStateStore(options = {}) {
     }
     state.snapshot.tick = meta.tick;
     state.snapshot.receivedAtMs = meta.receivedAtMs;
+    state.snapshot.nativeSnapshot = nativeSnapshot;
+    state.snapshot.snapshotSource = snapshotSource;
     state.snapshot.entities = normalizedEntities;
     state.snapshot.entitiesByKey = entitiesByKey;
     state.snapshot.entitiesByUserId = entitiesByUserId;
     state.snapshot.bullets = bullets
-      .map(bullet => normalizeBullet(bullet, { ...meta, authority: 'snapshot', source: 'snapshot' }))
+      .map(bullet => normalizeBullet(bullet, {
+        ...meta,
+        authority: 'snapshot',
+        source: 'snapshot',
+        nativeSnapshot,
+        snapshotSource
+      }))
       .filter(Boolean);
     state.snapshot.coinDrops = coinDrops
-      .map(drop => normalizeCoinDrop(drop, { ...meta, authority: 'snapshot', source: 'snapshot' }))
+      .map(drop => normalizeCoinDrop(drop, {
+        ...meta,
+        authority: 'snapshot',
+        source: 'snapshot',
+        nativeSnapshot,
+        snapshotSource
+      }))
       .filter(Boolean);
     state.snapshot.coinDropsObserved = coinDropsObserved;
     state.snapshot.messages = Array.isArray(frame.messages) ? cloneJson(frame.messages) : [];
@@ -1429,6 +1462,8 @@ function createBrowserlessStateStore(options = {}) {
     return {
       authority: 'snapshot',
       source: 'snapshot',
+      nativeSnapshot: Boolean(state.snapshot.nativeSnapshot),
+      snapshotSource: String(state.snapshot.snapshotSource || ''),
       tick: state.snapshot.tick,
       receivedAtMs: state.snapshot.receivedAtMs,
       frameAgeMs: frameAge(nowMs, state.snapshot.receivedAtMs),
@@ -1517,6 +1552,8 @@ function createBrowserlessStateStore(options = {}) {
       fallback: {
         authority: 'snapshot',
         source: 'snapshot',
+        nativeSnapshot: Boolean(state.snapshot.nativeSnapshot),
+        snapshotSource: String(state.snapshot.snapshotSource || ''),
         tick: state.snapshot.tick,
         receivedAtMs: state.snapshot.receivedAtMs,
         frameAgeMs: frameAge(nowMs, state.snapshot.receivedAtMs),

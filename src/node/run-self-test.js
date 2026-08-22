@@ -11286,6 +11286,160 @@ async function runSelfTest() {
       want: 'coin|profit|foot-coin-priority|false|foot-coin|0|false'
     },
     {
+      name: 'browserless WS snapshot Active metadata restores realtime candidate admission',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [
+            {
+              entity_id: 1,
+              user_id: 7,
+              name: 'self',
+              x: 0,
+              y: 0,
+              hp: 100,
+              max_hp: 100,
+              stamina_5s_remaining_milli: 5000,
+              stamina_5s_limit_milli: 10000
+            },
+            {
+              entity_id: 2,
+              user_id: 8,
+              name: 'native-active',
+              x: 9000,
+              y: 0,
+              hp: 80,
+              drop: 24,
+              stamina_5s_remaining_milli: 5000,
+              stamina_5s_limit_milli: 10000
+            }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 60,
+          entities: [{
+            entity_id: 22,
+            user_id: 8,
+            name: 'native-active',
+            x: 9010,
+            y: 0,
+            hp: 80,
+            current_join_mode: 'Active',
+            death_drop_coins: 24
+          }],
+          bullets: [],
+          coin_drops: [],
+          messages: []
+        }, { receivedAtMs: 1100, source: 'ws', snapshotKind: 'ws' });
+        const state = store.getState(1200);
+        const input = buildBrowserlessStrategyInput(state, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          singleCoinBaitEnabled: false
+        }, {});
+        const target = input.visibleTargets.find(entity => Number(entity.user_id) === 8);
+        const decision = buildBrowserlessDecision(state, {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          combatEnabled: true,
+          singleCoinBaitEnabled: false
+        });
+        return [
+          state.fallback.nativeSnapshot,
+          target?.current_join_mode,
+          target?.joinModeActive,
+          target?.realtimeActiveProvenance,
+          decision.action?.target?.userId,
+          decision.combat?.target?.userId
+        ].join('|');
+      })(),
+      want: 'true|Active|true|true|8|8'
+    },
+    {
+      name: 'browserless nearby-only realtime observation does not suppress remote candidate',
+      got: (() => {
+        const store = createBrowserlessStateStore({ userId: 7 });
+        store.ingestFrame({
+          type: 'pos',
+          tick: 59,
+          entities: [
+            {
+              entity_id: 1,
+              user_id: 7,
+              name: 'self',
+              x: 0,
+              y: 0,
+              hp: 100,
+              max_hp: 100,
+              stamina_5s_remaining_milli: 10000,
+              stamina_5s_limit_milli: 10000
+            },
+            { entity_id: 2, user_id: 8, name: 'nearby-only', x: 9000, y: 0, hp: 80, drop: 1 }
+          ],
+          bullets: []
+        }, { receivedAtMs: 1000 });
+        store.ingestFrame({
+          type: 'snapshot',
+          tick: 60,
+          entities: [{
+            entity_id: 22,
+            user_id: 8,
+            name: 'nearby-only',
+            x: 9010,
+            y: 0,
+            hp: 80,
+            current_join_mode: 'Passive'
+          }],
+          bullets: [],
+          coin_drops: [],
+          messages: []
+        }, { receivedAtMs: 1100 });
+        const decision = buildBrowserlessDecision(store.getState(1200), {}, {
+          nowMs: 1200,
+          controlMode: 'profit-live',
+          combatEnabled: false,
+          singleCoinBaitEnabled: false,
+          opportunitySwitchConfirmFrames: 1,
+          opportunitySwitchMargin: 0,
+          opportunitySwitchRelativeMargin: 0,
+          remoteProfitBatch: {
+            generation: 1,
+            source: 'gap-http',
+            observedAtMs: 1100,
+            expiresAtMs: 211100,
+            candidates: [{
+              userId: 8,
+              name: 'nearby-only',
+              x: 90000,
+              y: 0,
+              hp: 80,
+              drop: 50,
+              active: true,
+              classification: 'high-drop-afk',
+              expectedReward: 50,
+              staminaCost: 1000,
+              baseScore: 10,
+              adjustedScore: 10
+            }],
+            realtimeSupersededIds: ['8'],
+            missSuppressedIds: []
+          }
+        });
+        return [
+          decision.action?.kind,
+          decision.action?.target?.userId,
+          decision.profit?.remoteProfit?.candidateCount,
+          decision.profit?.remoteProfit?.realtimeSupersededIds?.join(',') || ''
+        ].join('|');
+      })(),
+      want: 'seek-remote-player|8|1|'
+    },
+    {
       name: 'browserless decision input does not filter profit targets by center coordinate',
       got: (() => {
         const state = {

@@ -4310,7 +4310,12 @@ async function runReadOnlyCanary(config, options = {}) {
             if (frame.decodedJson.type === 'snapshot') scheduleSnapshotWork(frame.decodedJson, atMs);
             stageDurations['snapshot-observers'] = performance.now() - stageStarted;
             stageStarted = performance.now();
-            stateStore.ingestFrame(frame.decodedJson, { receivedAtMs: atMs });
+            stateStore.ingestFrame(frame.decodedJson, {
+              receivedAtMs: atMs,
+              ...(frame.decodedJson.type === 'snapshot'
+                ? { source: 'ws', snapshotKind: 'ws' }
+                : {})
+            });
             stageDurations['state-ingest'] = performance.now() - stageStarted;
             stageStarted = performance.now();
             const currentState = stateStore.getDecisionState?.(atMs) || stateStore.getState(atMs);

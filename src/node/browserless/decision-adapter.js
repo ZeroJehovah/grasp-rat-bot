@@ -1606,16 +1606,35 @@ function snapshotEntityByUserId(fallback) {
   return byUserId;
 }
 
+function isNativeSnapshotEntity(entity) {
+  return Boolean(entity?.nativeSnapshot === true
+    || String(entity?.snapshotSource || '').toLowerCase() === 'ws'
+    || String(entity?.source || '').toLowerCase() === 'ws');
+}
+
 function enrichRealtimeEntityWithSnapshotProfitMetadata(entity, snapshotEntity, options = {}) {
   if (!entity || !snapshotEntity) return entity;
   const maxDistance = Math.max(0, Number(options.snapshotEntityMetadataMaxDistanceCm || 5000));
   const metadataDistance = distanceBetween(entity, snapshotEntity);
   if (Number.isFinite(metadataDistance) && maxDistance > 0 && metadataDistance > maxDistance) return entity;
   const snapshotJoinMode = String(snapshotEntity.current_join_mode || snapshotEntity.mode || snapshotEntity.joined || '');
+  const nativeSnapshotActive = isNativeSnapshotEntity(snapshotEntity)
+    && snapshotJoinMode.toLowerCase() === 'active'
+    && !hasOwnUsableValue(entity, 'current_join_mode')
+    && !hasOwnUsableValue(entity, 'mode')
+    && !hasOwnUsableValue(entity, 'joined');
   const modePatch = snapshotJoinMode
     ? {
         profitMetadataMode: snapshotJoinMode,
-        profitMetadataDistance: Number.isFinite(metadataDistance) ? Math.round(metadataDistance) : null
+        profitMetadataDistance: Number.isFinite(metadataDistance) ? Math.round(metadataDistance) : null,
+        ...(nativeSnapshotActive
+          ? {
+              current_join_mode: snapshotJoinMode,
+              realtimeActiveProvenance: true,
+              realtimeActiveMetadataAuthority: 'ws-snapshot',
+              realtimeActiveMetadataObservedAtMs: numberOrNull(snapshotEntity.receivedAtMs)
+            }
+          : {})
       }
     : {
         profitMetadataDistance: Number.isFinite(metadataDistance) ? Math.round(metadataDistance) : null
@@ -2162,7 +2181,10 @@ function refreshRealtimeSnapshotObservation(state, self, stateful = {}, options 
     const fullRatio = Math.max(0, Number(options.staminaFullRatio ?? options.fullRatio ?? 0.98) || 0.98);
     const fullStamina5s = Boolean(stamina5s !== null && stamina5sLimit > 0 && stamina5s >= stamina5sLimit * fullRatio);
     const invulnerable = isInvulnerableEntity(realtimeEntity) || isInvulnerableEntity(metadataSource);
-    const active = moving || firing || (isActiveEntity(activitySource) && (!fullStamina5s || invulnerable));
+    const nativeSnapshotActive = isNativeSnapshotEntity(snapshotEntity)
+      && isActiveEntity(snapshotEntity);
+    const active = moving || firing || ((isActiveEntity(activitySource) || nativeSnapshotActive)
+      && (!fullStamina5s || invulnerable));
     const alive = isAliveEntity(activitySource);
     const dropSource = entityDropKnown(realtimeEntity) ? realtimeEntity : metadataSource;
     const dropKnown = entityDropKnown(dropSource);
@@ -6919,10 +6941,17 @@ function remoteProfitCandidateInput(input, options = {}, stateful = {}) {
     .map(candidate => easyKillTargetUserId(candidate))
     .filter(id => id !== null)
     .map(String));
-  const superseded = new Set((batch.realtimeSupersededIds || []).map(String));
-  const missSuppressed = new Set((batch.missSuppressedIds || []).map(String));
   const currentWhitelistIds = remoteProfitCurrentWhitelistIds(options);
   const realtimeAuthorityIds = realtimeProfitAuthorityIds(input, options);
+  // The worker observes raw realtime entities before the planner has applied
+  // Active/whitelist/range/economic admission. A nearby ID is therefore not
+  // enough to suppress its remote candidate. Keep historical suppression for
+  // targets that are no longer visible, but require current realtime
+  // authority whenever the same ID is still in the nearby projection.
+  const superseded = new Set((batch.realtimeSupersededIds || [])
+    .map(String)
+    .filter(id => !visibleIds.has(id) || realtimeAuthorityIds.has(id)));
+  const missSuppressed = new Set((batch.missSuppressedIds || []).map(String));
   const completedProfitTargets = observeCompletedProfitTargets(input, stateful, options);
   const batchTick = positiveTick(batch?.tick);
   const tickEpoch = currentProfitTickEpoch(stateful);
@@ -6951,7 +6980,7 @@ function remoteProfitCandidateInput(input, options = {}, stateful = {}) {
       reject('target-drop-observed');
       continue;
     }
-    if (visibleIds.has(id) || superseded.has(id)) {
+    if (superseded.has(id) || (visibleIds.has(id) && realtimeAuthorityIds.has(id))) {
       reject('realtime-superseded');
       continue;
     }
