@@ -37,6 +37,9 @@ const {
   selectProfitEscortDirectionCore
 } = require('../../strategy/profit-escort');
 const {
+  profitMissionArrivalStateCore
+} = require('../../strategy/profit-mission-arrival');
+const {
   checkLowConfidenceThrottle,
   classifyFireRiskCore,
   determineCombatFireState,
@@ -3321,6 +3324,11 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       ?? missionTarget?.id
       ?? ''
   );
+  const profitMissionArrival = profitMissionArrivalStateCore({
+    mission: profitMission,
+    self,
+    previous: profitMission?.arrival || null
+  }, options);
   const missionIsDifferentTarget = Boolean(
     missionTargetId
       && currentTargetId
@@ -3352,6 +3360,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   });
   const defensiveEscortEvidence = Boolean(escortEvidence.eligible || continuityMatches);
   const profitEscort = missionIsDifferentTarget && defensiveEscortEvidence
+    && profitMissionArrival.arrived !== true
     ? selectProfitEscortDirectionCore({
         active: profitMission.active !== false,
         self,
@@ -3419,12 +3428,56 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     && [missionTarget?.x, missionTarget?.y].every(value => Number.isFinite(Number(value)))
     ? missionTarget
     : null);
+  const secondaryNavigationAuthority = String(
+    secondaryMainTarget?.authority
+      || profitMission?.navigationAuthority
+      || ''
+  ).toLowerCase();
+  const secondarySnapshotNavigation = [
+    'snapshot',
+    'snapshot-navigation',
+    'last-realtime-position'
+  ].includes(secondaryNavigationAuthority);
+  const secondarySnapshotCoinNavigation = Boolean(
+    secondarySnapshotNavigation
+      && String(secondaryMainTarget?.type || profitMission?.type || '').toLowerCase() === 'coin'
+      && profitMissionArrival.active === true
+  );
+  const secondaryMainDistance = secondaryMainTarget
+    ? Math.hypot(
+        Number(secondaryMainTarget.x) - Number(self.x),
+        Number(secondaryMainTarget.y) - Number(self.y)
+      )
+    : null;
+  const secondaryNavigationDeadZoneCm = secondarySnapshotCoinNavigation
+    ? Math.max(0, Number(profitMissionArrival.releaseRadiusCm || 0))
+    : secondarySnapshotNavigation
+    ? Math.max(0, Number(
+        options.movementTargetDeadZoneCm
+          ?? options.secondaryTargetDeadZoneCm
+          ?? 900
+      ) || 0)
+    : 0;
+  const secondaryNavigationDeadZoneHold = Boolean(
+    secondaryTarget
+      && secondarySnapshotNavigation
+      && secondaryMainDistance !== null
+      && secondaryMainDistance <= secondaryNavigationDeadZoneCm
+  );
   const secondaryMainDirection = secondaryTarget && secondaryMainTarget
-    ? {
-        dx: Math.sign(Number(secondaryMainTarget.x) - Number(self.x)),
-        dy: Math.sign(Number(secondaryMainTarget.y) - Number(self.y))
-      }
+    ? (secondaryNavigationDeadZoneHold
+      ? { dx: 0, dy: 0 }
+      : {
+          dx: Math.sign(Number(secondaryMainTarget.x) - Number(self.x)),
+          dy: Math.sign(Number(secondaryMainTarget.y) - Number(self.y))
+        })
     : { dx: 0, dy: 0 };
+  const profitMissionArrivalHold = Boolean(
+    secondaryTarget
+      && profitMissionArrival.active === true
+      && profitMissionArrival.arrived === true
+      && !profitKillRace.active
+  );
   const strategicDirection = profitKillRace.active
     ? profitKillRace.direction
     : (secondaryTarget ? secondaryMainDirection : baseStrategicDirection);
@@ -3682,7 +3735,11 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     || movement.modifiers.includes('predictive-hold')
     || movement.modifiers.includes('distance-aware-dodge');
   if ((secondaryTarget || profitKillRace.active) && !protectedMovementOverride) {
-    const controlledDirection = profitKillRace.active ? profitKillRace.direction : secondaryMainDirection;
+    const controlledDirection = profitKillRace.active
+      ? profitKillRace.direction
+      : ((profitMissionArrivalHold || secondaryNavigationDeadZoneHold)
+        ? { dx: 0, dy: 0 }
+        : secondaryMainDirection);
     movement = {
       ...movement,
       dx: Number(controlledDirection.dx || 0),
@@ -3696,7 +3753,13 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
           'back-away-mixed',
           'profit-escort'
         ].includes(modifier)),
-        profitKillRace.active ? 'profit-target-competition' : 'secondary-main-target'
+        profitKillRace.active
+          ? 'profit-target-competition'
+          : (profitMissionArrivalHold
+            ? 'profit-mission-arrival-hold'
+            : (secondaryNavigationDeadZoneHold
+              ? 'secondary-target-dead-zone-hold'
+              : 'secondary-main-target'))
       ]))
     };
     effectiveDodge = null;
@@ -3715,6 +3778,10 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     ? (effectiveDodge?.reason || 'direct-threat-dodge')
     : lootRaceApplied
     ? 'combat-loot-race-approach'
+    : movement.modifiers.includes('profit-mission-arrival-hold')
+    ? 'profit-mission-arrival-hold'
+    : movement.modifiers.includes('secondary-target-dead-zone-hold')
+    ? 'secondary-target-dead-zone-hold'
     : movement.modifiers.includes('close-pressure-strafe')
     ? (preDodge ? 'close-pressure-predictive-hold' : (strafe?.reason || 'close-pressure-deterministic-strafe'))
     : movement.modifiers.includes('hold-current')
@@ -3848,8 +3915,16 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       mainTargetVisible: Boolean(secondaryMainTarget),
       mainTargetRealtimeVisible: Boolean(realtimeSecondaryMainTarget),
       navigationAuthority: String(secondaryMainTarget?.authority || profitMission?.navigationAuthority || ''),
-      direction: secondaryMainDirection
+      direction: secondaryMainDirection,
+      distanceCm: secondaryMainDistance === null ? null : Math.round(secondaryMainDistance),
+      deadZoneCm: Math.round(secondaryNavigationDeadZoneCm),
+      deadZoneHold: secondaryNavigationDeadZoneHold,
+      arrival: profitMissionArrival.active ? { ...profitMissionArrival } : null,
+      arrivalHold: profitMissionArrivalHold
     } : null,
+    profitMissionArrival: profitMissionArrival.active ? { ...profitMissionArrival } : null,
+    profitMissionArrivalHold,
+    secondaryNavigationDeadZoneHold,
     profitKillRace,
     competitionApproach: profitKillRace.active ? {
       active: true,
@@ -5633,7 +5708,12 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
         threatField: movement?.dodge?.threatField || [],
         movementTiming,
         previousState: stateful?.combatMovementStability || null,
-        hardGateChanged: Boolean(exitDecision || contactEntryOnly),
+        hardGateChanged: Boolean(
+          exitDecision
+            || contactEntryOnly
+            || movement?.profitMissionArrivalHold
+            || movement?.secondaryNavigationDeadZoneHold
+        ),
         commandUpperBoundExpired: Boolean(stableDirectionPending
           && pendingAgeTicks !== null
           && pendingAgeTicks > timingUpperTicks),

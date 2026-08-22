@@ -48,6 +48,10 @@ const {
   snapshotCoinNavigationReasonCore
 } = require('../../strategy/coin-target');
 const {
+  isOrdinarySnapshotProfitMissionCore,
+  profitMissionArrivalStateCore
+} = require('../../strategy/profit-mission-arrival');
+const {
   dailyStaminaBudgetIsLimitingCore,
   pickNearestDailyStaminaFinalCoinCore,
   summarizeBlockedStaminaOpportunityCore,
@@ -5687,18 +5691,111 @@ function applyIgnoredCoinFilter(input, stateful = {}, options = {}) {
   return input;
 }
 
+function profitMissionArrivalHoldState(stateful = {}) {
+  const mission = stateful?.profitMission || null;
+  const source = mission?.navigationTarget
+    || profitMissionChoiceSource(mission?.choice)
+    || mission?.target
+    || null;
+  if (!mission
+    || mission.type !== 'coin'
+    || mission.arrival?.arrived !== true
+    || !isOrdinarySnapshotProfitMissionCore(mission)) {
+    return null;
+  }
+  const key = coinDecisionKey(source);
+  return key ? {
+    key,
+    targetKey: String(mission.arrival.targetKey || mission.key || key),
+    arrival: cloneJson(mission.arrival),
+    mission: cloneJson(mission)
+  } : null;
+}
+
+function filterProfitMissionArrivalHeldCoins(input, stateful = {}) {
+  const hold = profitMissionArrivalHoldState(stateful);
+  if (!input || !hold) return hold;
+  const keep = coin => !(
+    coinDecisionKey(coin) === hold.key
+      && isOrdinarySnapshotProfitMissionCore({
+        type: 'coin',
+        navigationTarget: coin,
+        navigationAuthority: String(coin?.authority || '')
+      })
+  );
+  input.profitCoins = (input.profitCoins || []).filter(keep);
+  input.panelProfitCoins = (input.panelProfitCoins || []).filter(keep);
+  input.realtimeCoins = (input.realtimeCoins || []).filter(keep);
+  input.snapshotCoins = (input.snapshotCoins || []).filter(keep);
+  input.snapshotVisibleCoins = (input.snapshotVisibleCoins || []).filter(keep);
+  input.selfKilledPlayerDropCoins = (input.selfKilledPlayerDropCoins || []).filter(keep);
+  return hold;
+}
+
+function coinDecisionKeyVariants(value) {
+  const raw = typeof value === 'object' && value !== null
+    ? coinDecisionKey(value)
+    : String(value || '');
+  if (!raw) return new Set();
+  const variants = new Set([raw]);
+  if (raw.startsWith('coin:id:')) {
+    variants.add(raw.slice('coin:'.length));
+    variants.add(raw.slice('coin:id:'.length));
+  } else if (raw.startsWith('coin:')) {
+    variants.add(raw.slice('coin:'.length));
+  } else if (raw.startsWith('id:')) {
+    variants.add(`coin:${raw}`);
+    variants.add(`coin:${raw.slice('id:'.length)}`);
+  }
+  return variants;
+}
+
+function coinDecisionKeysMatch(left, right) {
+  const rightVariants = coinDecisionKeyVariants(right);
+  if (!rightVariants.size) return false;
+  for (const key of coinDecisionKeyVariants(left)) {
+    if (rightVariants.has(key)) return true;
+  }
+  return false;
+}
+
 function clearIgnoredCoinDecisionState(stateful = {}, progressId = '') {
   const cleanup = coinIgnoreCleanupIntentCore(stateful.lastTarget, stateful.coinApproachLock, progressId);
-  if (cleanup.clearLastTarget) {
+  if (cleanup.clearLastTarget || (
+    stateful.lastTarget?.kind === 'coin'
+      && coinDecisionKeysMatch(stateful.lastTarget.id, progressId)
+  )) {
     stateful.lastTarget = null;
     stateful.lastTargetAt = 0;
   }
-  if (cleanup.clearCoinApproachLock) stateful.coinApproachLock = null;
+  if (cleanup.clearCoinApproachLock || (
+    stateful.coinApproachLock?.id !== undefined
+      && coinDecisionKeysMatch(stateful.coinApproachLock.id, progressId)
+  )) stateful.coinApproachLock = null;
   const choiceCoin = stateful.opportunityChoice?.type === 'coin' ? stateful.opportunityChoice : null;
   const choiceKey = coinDecisionKey(choiceCoin?.sourceCoin || choiceCoin);
-  if (choiceKey && choiceKey === progressId) {
+  if (choiceKey && coinDecisionKeysMatch(choiceKey, progressId)) {
     stateful.opportunityChoice = null;
     stateful.opportunitySwitchLock = null;
+  }
+  const currentCoin = stateful.currentOpportunity?.type === 'coin'
+    ? stateful.currentOpportunity
+    : null;
+  const currentKey = coinDecisionKey(currentCoin?.sourceCoin || currentCoin?.target || currentCoin);
+  if (currentKey && coinDecisionKeysMatch(currentKey, progressId)) {
+    stateful.currentOpportunity = null;
+    stateful.switchLock = null;
+  }
+  const lastActionKey = coinDecisionKey(stateful.finalActionArbitration?.lastAction?.target);
+  if (lastActionKey && coinDecisionKeysMatch(lastActionKey, progressId)) {
+    stateful.finalActionArbitration.lastAction = null;
+    stateful.finalActionArbitration.lastFocus = null;
+    stateful.finalActionArbitration.lastSelectedAt = 0;
+    stateful.finalActionArbitration.profitDropout = null;
+  }
+  const lastDecisionKey = coinDecisionKey(stateful.lastDecisionAction?.target);
+  if (lastDecisionKey && coinDecisionKeysMatch(lastDecisionKey, progressId)) {
+    stateful.lastDecisionAction = null;
   }
 }
 
@@ -5710,7 +5807,7 @@ function clearCollectedCoinDecisionState(stateful = {}, key = '') {
   clearIgnoredCoinDecisionState(stateful, key);
   if (String(stateful.staleCoinEscape?.id || '') === key) stateful.staleCoinEscape = null;
   const arbitration = stateful.finalActionArbitration;
-  if (coinDecisionKey(arbitration?.lastAction?.target) === key) {
+  if (coinDecisionKeysMatch(coinDecisionKey(arbitration?.lastAction?.target), key)) {
     arbitration.lastAction = null;
     arbitration.lastFocus = null;
     arbitration.lastSelectedAt = 0;
@@ -6153,6 +6250,22 @@ function applyBrowserlessFinalActionArbitration(action, stateful = {}, input = {
     arbitration.lastAction = null;
     arbitration.lastFocus = null;
     arbitration.lastSelectedAt = 0;
+  }
+  // Arrival hold is an explicit navigation stop.  It must not be treated as
+  // a yieldable "no candidate" interval, otherwise the generic final-action
+  // hysteresis can replay the previous seek-coin action for up to 1.8s and
+  // reintroduce the same reversal loop we just stopped.
+  if (action?.profitMissionArrivalHold === true) {
+    arbitration.lastRelease = {
+      at: Number.isFinite(Number(input?.nowMs)) ? Number(input.nowMs) : Date.now(),
+      reason: 'profit-mission-arrival-hold',
+      targetKey: String(action.profitMissionArrival?.targetKey || '')
+    };
+    arbitration.lastAction = null;
+    arbitration.lastFocus = null;
+    arbitration.lastSelectedAt = 0;
+    arbitration.profitDropout = null;
+    return action;
   }
   const annotatedAction = annotateYieldableProfitDropout(action, arbitration, input, opportunity, options);
   return applyFinalActionArbitrationCore(annotatedAction, arbitration, {
@@ -7263,6 +7376,15 @@ function buildProfitMissionFromChoice(choice, input = {}, previous = null, optio
   if (!type || !key || !point || !navigationTarget) return null;
   const nowMs = Number.isFinite(Number(input.nowMs)) ? Number(input.nowMs) : Date.now();
   const same = previous && String(previous.key || '') === key;
+  const preserveArrival = Boolean(
+    same
+      && isOrdinarySnapshotProfitMissionCore(previous)
+      && isOrdinarySnapshotProfitMissionCore({
+        type,
+        navigationTarget,
+        navigationAuthority: String(navigationTarget.authority || choice.authority || 'navigation')
+      })
+  );
   const currentDistance = input.self
     ? distanceBetween(input.self, point)
     : numberOrNull(choice.distance);
@@ -7311,6 +7433,7 @@ function buildProfitMissionFromChoice(choice, input = {}, previous = null, optio
     navigationPausedAt: same ? Number(previous.navigationPausedAt || 0) : 0,
     navigationPauseGeneration: same ? Number(previous.navigationPauseGeneration || 0) : 0,
     navigationResumedAt: same ? Number(previous.navigationResumedAt || 0) : 0,
+    arrival: preserveArrival ? cloneJson(previous.arrival || null) : null,
     generation: Number(choice.generation || choice.remoteGeneration || previous?.generation || 0)
   };
 }
@@ -7533,8 +7656,10 @@ function profitMissionCoinMissingState(input = {}, mission = {}) {
   const source = mission.navigationTarget || profitMissionChoiceSource(mission.choice) || mission.target || null;
   const key = coinDecisionKey(source);
   if (!key) return null;
+  const authority = String(source?.authority || mission.navigationAuthority || '').toLowerCase();
   const snapshotOnly = source?.snapshotOnly === true
-    || String(source?.authority || mission.navigationAuthority || '') === 'snapshot';
+    || authority === 'snapshot'
+    || authority === 'snapshot-navigation';
   const observed = snapshotOnly
     ? input?.fallback?.coinDropsObserved === true
     : input?.rawRealtime?.coinDropsObserved === true;
@@ -7572,12 +7697,25 @@ function reconcileProfitMissionState(input = {}, stateful = {}, options = {}, re
       clearProfitMission(stateful, 'coin-ignored', nowMs);
       return null;
     }
-    const coinState = mission.highValue === true
-      ? profitMissionCoinMissingState(input, mission)
-      : null;
+    const coinState = profitMissionCoinMissingState(input, mission);
     if (coinState?.missing) {
-      clearProfitMission(stateful, 'coin-disappeared', nowMs);
+      clearIgnoredCoinDecisionState(stateful, coinState.key);
+      clearProfitMission(
+        stateful,
+        mission.arrival?.arrived === true ? 'coin-settled-after-arrival' : 'coin-disappeared',
+        nowMs
+      );
       return null;
+    }
+    if (input.self) {
+      const arrival = profitMissionArrivalStateCore({
+        mission,
+        self: input.self,
+        previous: mission.arrival || null
+      }, options);
+      if (arrival.active) {
+        mission.arrival = arrival;
+      }
     }
   }
   const missingRealtimeEnemy = realtimeEnemyMissionMissingState(input, mission, nowMs, {
@@ -7645,6 +7783,7 @@ function buildProfitMissionHeldOpportunity(input = {}, mission = {}, thresholdCo
     Number(input.nowMs || Date.now())
   );
   if ((!mission?.highValue && !escortContinuity) || !mission.choice || !mission.navigationTarget) return null;
+  if (mission.type === 'coin' && mission.arrival?.arrived === true) return null;
   if (mission.navigationPaused) return null;
   if (Number(mission.expiresAt || 0) <= Number(input.nowMs || Date.now())) return null;
   const held = cloneJson(mission.choice);
@@ -7846,6 +7985,30 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       action: null
     };
   }
+  // The outer decision builder reconciles the mission before entering the
+  // planner.  Keep the mission itself alive until the complete snapshot
+  // confirms disappearance or the self leaves the hysteresis band; do not
+  // use the global ignored-coins TTL for this temporary arrival state.
+  const arrivalMission = stateful?.profitMission || null;
+  const arrivalSource = arrivalMission?.navigationTarget
+    || profitMissionChoiceSource(arrivalMission?.choice)
+    || arrivalMission?.target
+    || null;
+  const arrivalHeldCoinKey = arrivalMission?.type === 'coin'
+    && arrivalMission?.arrival?.arrived === true
+    && isOrdinarySnapshotProfitMissionCore(arrivalMission)
+    ? coinDecisionKey(arrivalSource)
+    : '';
+  const planningProfitCoins = arrivalHeldCoinKey
+    ? input.profitCoins.filter(coin => !(
+        coinDecisionKey(coin) === arrivalHeldCoinKey
+          && isOrdinarySnapshotProfitMissionCore({
+            type: 'coin',
+            navigationTarget: coin,
+            navigationAuthority: String(coin?.authority || '')
+          })
+      ))
+    : input.profitCoins;
   const includeAfkProfitTargets = options.includeAfkProfitTargets !== false;
   const explorationConfig = reconcileControlledExplorationSessions(input, stateful, options);
   const coinMaxDistance = Math.max(0, Number(options.coinMaxDistance || BROWSER_RUNTIME_DEFAULTS.coinMaxDistance));
@@ -7853,11 +8016,15 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
   const opportunityThreats = profitOpportunityThreats(input);
   const routeSelectionOptions = { ...options, profitThresholdContext: thresholdContext };
   clearDangerousOpportunityState(stateful, input.nowMs);
-  const fieldMigrationCoin = pickFieldMigrationCoin(input, opportunityThreats, thresholdContext, options);
-  const coinGroups = input.profitCoins.length
+  const fieldMigrationCandidate = pickFieldMigrationCoin(input, opportunityThreats, thresholdContext, options);
+  const fieldMigrationCoin = fieldMigrationCandidate
+    && coinDecisionKey(fieldMigrationCandidate) !== arrivalHeldCoinKey
+    ? fieldMigrationCandidate
+    : null;
+  const coinGroups = planningProfitCoins.length
     ? [
-        { coins: input.profitCoins, maxDistance: coinMaxDistance },
-        { coins: input.profitCoins, maxDistance: globalCoinMaxDistance },
+        { coins: planningProfitCoins, maxDistance: coinMaxDistance },
+        { coins: planningProfitCoins, maxDistance: globalCoinMaxDistance },
         ...(fieldMigrationCoin ? [{ coins: [fieldMigrationCoin], maxDistance: Math.max(0, Number(options.fieldMigrationMaxDistance ?? BROWSER_RUNTIME_DEFAULTS.fieldMigrationMaxDistance)) }] : [])
       ]
     : [];
@@ -8146,6 +8313,11 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
   }
   let opportunities = eligibleOpportunities;
   const storedCurrent = stateful.currentOpportunity || null;
+  const storedCurrentForSelection = arrivalHeldCoinKey
+    && storedCurrent?.type === 'coin'
+    && coinDecisionKey(storedCurrent.sourceCoin || storedCurrent.target || storedCurrent) === arrivalHeldCoinKey
+    ? null
+    : storedCurrent;
   const storedCurrentEligible = storedCurrent && profitTargetEligibleCore(
     profitOpportunityThresholdReward(storedCurrent),
     storedCurrent.staminaCost,
@@ -8163,14 +8335,14 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
   // high-Drop guard, so a lower-value realtime/AFK observation cannot discard
   // an already selected off-screen target.
   const realtimeProfitAvailable = opportunities.some(isRealtimeProfitOpportunity);
-  let current = storedCurrent?.type === 'remote-player-navigation'
+  let current = storedCurrentForSelection?.type === 'remote-player-navigation'
     ? (remoteCurrentPresent
       && (!thresholdContext.active || storedCurrentEligible)
-        ? storedCurrent
+        ? storedCurrentForSelection
         : null)
-    : (storedCurrent?.type === 'enemy'
-        ? storedCurrent
-        : (thresholdContext.active && !storedCurrentEligible ? null : storedCurrent));
+    : (storedCurrentForSelection?.type === 'enemy'
+        ? storedCurrentForSelection
+        : (thresholdContext.active && !storedCurrentEligible ? null : storedCurrentForSelection));
   const currentEnemyPresent = current?.type === 'enemy'
     && opportunities.some(item => String(item.type) === 'enemy' && String(item.id) === String(current.id));
   let visibleHighDropGuard = null;
@@ -8518,6 +8690,12 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     switchDiagnostics: choice.switchDiagnostics || null,
     opportunityChoice: remembered.choice || null,
     profitMission: cloneJson(stateful.profitMission || null),
+    profitMissionArrival: cloneJson(stateful.profitMission?.arrival || null),
+    profitMissionArrivalHold: Boolean(
+      stateful.profitMission?.type === 'coin'
+        && stateful.profitMission?.arrival?.arrived === true
+        && isOrdinarySnapshotProfitMissionCore(stateful.profitMission)
+    ),
     action: remembered.action || action,
     missingEnemyHold,
     coinRouteBaitExclusion,
@@ -13514,6 +13692,15 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   cleanupCoinProgressState(stateful, input.nowMs, options);
   applyIgnoredCoinFilter(input, stateful, options);
   const postKillCoinSuppression = suppressLowValuePostKillCoinForProfitMission(input, stateful, options);
+  // Reconcile coins before candidate construction so an arrived ordinary
+  // snapshot coin can be held out of every navigation branch.  Keep enemy
+  // mission reconciliation in buildOpportunityDecision, after its existing
+  // missing-target hold calculation; doing it here would erase that
+  // diagnostic before it can report its release reason.
+  if (stateful?.profitMission?.type === 'coin') {
+    reconcileProfitMissionState(input, stateful, options);
+  }
+  const profitMissionArrivalHoldState = filterProfitMissionArrivalHeldCoins(input, stateful);
   clearActiveCoinCompetitionDecisionState(input, stateful);
   const easyKillTrackerState = reconcileEasyKillTracker(input, stateful, options);
   const easyKillApproachStopLoss = reconcileEasyKillApproach(input, stateful, options);
@@ -14025,11 +14212,28 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     && Number(singleCoinBait.commitmentRank || 0) > 0
     ? singleCoinBaitAction
     : null;
-  const noCandidateWaitReason = profitThresholdContext.active
+  const profitMissionArrivalHold = opportunity.profitMissionArrivalHold === true;
+  const noCandidateWaitReason = profitMissionArrivalHold
+    ? 'profit-mission-arrival-hold'
+    : (profitThresholdContext.active
     && Number(opportunity.threshold?.filteredCount || 0) > 0
     && Number(opportunity.threshold?.eligibleCount || 0) === 0
     ? 'dynamic-profit-threshold-wait'
-    : 'no-profitable-candidate';
+    : 'no-profitable-candidate');
+  const noCandidateWaitAction = {
+    kind: 'wait',
+    band: 'wait',
+    reason: noCandidateWaitReason,
+    stopMotion: true,
+    profitMissionArrivalHold,
+    profitMissionArrival: cloneJson(opportunity.profitMissionArrival || null),
+    ...(!profitMissionArrivalHold ? {
+      profitDropout: {
+        kind: noCandidateWaitReason,
+        yieldable: true
+      }
+    } : {})
+  };
   let kind = 'wait';
   let band = 'wait';
   let reason = '';
@@ -14140,15 +14344,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       }),
       candidate(opportunisticShotWaitAction, 200, 'opportunistic-shot-wait'),
       candidate(staminaBlockedWaitAction, 210, 'stamina-blocked-wait'),
-      candidate({
-        kind: 'wait',
-        band: 'wait',
-        reason: noCandidateWaitReason,
-        profitDropout: {
-          kind: noCandidateWaitReason,
-          yieldable: true
-        }
-      }, 999, 'no-candidate-wait')
+      candidate(noCandidateWaitAction, 999, 'no-candidate-wait')
     ].filter(Boolean);
     finalSelection = selectFinalActionCandidateCore(candidates);
     action = finalSelection?.action || action;
@@ -14334,6 +14530,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     },
     profit: {
       mission: cloneJson(stateful.profitMission || null),
+      missionArrival: cloneJson(profitMissionArrivalHoldState),
       profitEscortContinuity: cloneJson(stateful.profitEscortContinuity || null),
       profitEscortContinuityRelease: cloneJson(stateful.profitEscortContinuityLastRelease || null),
       best: summarizeOpportunity(

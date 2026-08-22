@@ -161,6 +161,7 @@ const { runRemoteProfitDecisionSelfTest } = require('./remote-profit-decision-se
 const { runMissingEnemyHoldSelfTest } = require('./missing-enemy-hold-self-test');
 const { runInvulnerableProfitCommitmentSelfTest } = require('./invulnerable-profit-commitment-self-test');
 const { runAfkDynamicFireSelfTest } = require('./afk-dynamic-fire-self-test');
+const { runProfitMissionArrivalSelfTest } = require('./profit-mission-arrival-self-test');
 const { runInvulnerableAfkSelfTest } = require('../../strategy/invulnerable-afk-self-test');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -6700,6 +6701,7 @@ async function runBrowserlessRunnerSelfTest() {
     const remoteProfitDecision = runRemoteProfitDecisionSelfTest();
     const invulnerableProfitCommitment = runInvulnerableProfitCommitmentSelfTest();
     const afkDynamicFire = runAfkDynamicFireSelfTest();
+    const profitMissionArrival = runProfitMissionArrivalSelfTest();
     const invulnerableAfk = runInvulnerableAfkSelfTest();
     const missingEnemyHold = runMissingEnemyHoldSelfTest();
     const requestRatePolicy = await runRequestRatePolicySelfTest();
@@ -9285,6 +9287,7 @@ async function runBrowserlessRunnerSelfTest() {
         && remoteProfitDecision.ok
         && invulnerableProfitCommitment.ok
         && afkDynamicFire.ok
+        && profitMissionArrival.ok
         && invulnerableAfk.ok
         && missingEnemyHold.ok
         && requestRateController.ok
@@ -9393,6 +9396,7 @@ async function runBrowserlessRunnerSelfTest() {
       remoteProfitDecision,
       invulnerableProfitCommitment,
       afkDynamicFire,
+      profitMissionArrival,
       invulnerableAfk,
       missingEnemyHold,
       requestRateController,

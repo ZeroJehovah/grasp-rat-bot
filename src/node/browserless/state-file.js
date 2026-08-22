@@ -1977,6 +1977,21 @@ function compactProfitMission(value) {
           distance: currentDistanceCm ?? navigationTarget.distance
         }
       : null,
+    arrival: value.arrival && typeof value.arrival === 'object'
+      ? {
+          arrived: compactBoolean(value.arrival.arrived),
+          heldByHysteresis: compactBoolean(value.arrival.heldByHysteresis),
+          entered: compactBoolean(value.arrival.entered),
+          released: compactBoolean(value.arrival.released),
+          phase: compactString(value.arrival.phase, 32),
+          settlementPending: compactBoolean(value.arrival.settlementPending),
+          reason: compactString(value.arrival.reason, 80),
+          targetKey: compactString(value.arrival.targetKey, 128),
+          distanceCm: compactNumber(value.arrival.distanceCm),
+          arrivalRadiusCm: compactNumber(value.arrival.arrivalRadiusCm),
+          releaseRadiusCm: compactNumber(value.arrival.releaseRadiusCm)
+        }
+      : null,
     highValue: compactBoolean(value.highValue),
     currentDistanceCm,
     selectedAt: compactNumber(value.selectedAt),
