@@ -179,6 +179,7 @@ const {
   runnerResultExitDetail,
   runBrowserlessRunner,
   runBrowserlessRunnerSelfTest,
+  snapshotStatusPatchFromSafety,
   statusWallTimeSpikeDetail
 } = require('./browserless/runner');
 const {
@@ -35149,6 +35150,214 @@ async function runSelfTest() {
       want: 'false|next-login-point-pending-snapshot-safety|0|3|next-login-point-pending-snapshot-safety||false|false|active-near-login-point|2026-07-08T00:00:00.000Z|false|true|safe|3||active-near-login-point|active-near-login-point|0|active-near-login-point|self-present-reentry|true|true|true'
     },
     {
+      name: 'browserless snapshot status distinguishes HTTP failure from safety result',
+      got: (() => {
+        const failed = snapshotStatusPatchFromSafety(null, {
+          ok: false,
+          reason: 'snapshot-http-502',
+          checkedAt: '2026-08-23T07:20:41.520Z',
+          response: {
+            httpOk: false,
+            status: 502,
+            summary: { selfPresent: false }
+          }
+        }, Date.parse('2026-08-23T07:20:41.520Z'));
+        const networkFailure = snapshotStatusPatchFromSafety(null, {
+          ok: false,
+          reason: 'snapshot-error',
+          error: 'fetch failed',
+          checkedAt: '2026-08-23T07:20:42.000Z'
+        }, Date.parse('2026-08-23T07:20:42.000Z'));
+        const exempt = snapshotStatusPatchFromSafety(null, {
+          ok: true,
+          reason: 'login-point-self-hp-exempt',
+          bypassedPreLoginSafety: true,
+          checkedAt: '2026-08-23T07:20:43.000Z'
+        }, Date.parse('2026-08-23T07:20:43.000Z'));
+        return [
+          failed.lastResult,
+          failed.lastFailureAt,
+          failed.lastHttpStatus,
+          failed.lastSuccessAt,
+          networkFailure.lastResult,
+          networkFailure.lastError,
+          exempt.lastResult,
+          exempt.attempted,
+          exempt.lastAttemptAt
+        ].join('|');
+      })(),
+      want: 'failure|2026-08-23T07:20:41.520Z|502||failure|fetch failed|not-requested|false|'
+    },
+    {
+      name: 'browserless incident status keeps actual exit time and exposes recovery evidence',
+      got: (() => {
+        const nowMs = Date.parse('2026-08-23T07:26:24.098Z');
+        const enteredAt = '2026-08-23T07:13:46.300Z';
+        const endedAt = '2026-08-23T07:20:40.538Z';
+        const retryAtMs = nowMs + 12000;
+        const retryAt = new Date(retryAtMs).toISOString();
+        const pendingExit = {
+          active: true,
+          exitAttemptId: 'exit-incident-10',
+          originalReason: 'ws-closed',
+          sourceRunId: 'profit-live-incident',
+          firstAtMs: Date.parse('2026-08-23T07:20:41.048Z'),
+          lastAttemptAtMs: nowMs,
+          attemptCount: 10,
+          requestAttemptCount: 10,
+          startHp: 100,
+          minHp: 100,
+          lastHp: 100,
+          nextRetryAtMs: retryAtMs,
+          retryDelayMs: 12000,
+          httpStatuses: [502],
+          lastError: 'snapshot HTTP 502'
+        };
+        const actualExit = {
+          at: endedAt,
+          reason: 'ws-closed',
+          runId: 'profit-live-incident',
+          shouldLeave: true
+        };
+        const recoveryAttempt = {
+          at: '2026-08-23T07:26:24.098Z',
+          reason: 'exit-recovery',
+          classification: 'exit-recovery',
+          exitRecovery: true,
+          exitAttemptId: pendingExit.exitAttemptId,
+          shouldLeave: true,
+          httpStatuses: [502],
+          error: 'snapshot HTTP 502'
+        };
+        const state = {
+          session: { userId: 28886, sessionToken: 'incident-token' },
+          runner: {
+            running: true,
+            mode: 'exit-recovery',
+            currentAction: {
+              kind: 'exit-recovery',
+              reason: 'exit-recovery',
+              deadlineType: 'pending-exit-retry',
+              explicitCooldown: false,
+              nextRunAt: retryAt,
+              pendingExit
+            },
+            pendingExit,
+            snapshotStatus: {
+              purpose: 'exit-recovery-confirmation',
+              lastResult: 'failure',
+              lastAttemptAt: '2026-08-23T07:26:24.098Z',
+              lastCompletedAt: '2026-08-23T07:26:24.127Z',
+              lastFailureAt: '2026-08-23T07:26:24.127Z',
+              lastHttpStatus: 502,
+              lastReason: 'snapshot-http-502',
+              lastError: 'snapshot HTTP 502',
+              attempted: true
+            },
+            snapshotScheduler: {
+              sequence: 10,
+              lastStartedAtMs: nowMs,
+              lastCompletedAtMs: nowMs + 29,
+              lastFailureAtMs: nowMs + 29,
+              lastFailureHttpStatus: 502,
+              lastFailureError: 'snapshot HTTP 502',
+              lastResult: {
+                ok: false,
+                observedAtMs: nowMs + 29,
+                status: 502,
+                requestSequence: 10,
+                requestClass: 'login',
+                purpose: 'exit-recovery-confirmation'
+              }
+            },
+            snapshotPoller: {
+              intervalMs: 30000,
+              nextAttemptAtMs: nowMs + 30000,
+              lastAttemptAtMs: nowMs,
+              lastCompletedAtMs: nowMs + 29,
+              lastFailureAtMs: nowMs + 29,
+              lastFailureHttpStatus: 502,
+              lastError: 'snapshot HTTP 502'
+            }
+          },
+          current: { self: null },
+          stats: {
+            currentSession: {
+              online: false,
+              enteredAt,
+              lastSeenAt: endedAt,
+              exitedAt: endedAt,
+              exitReason: 'ws-closed'
+            },
+            lastExit: {
+              at: '2026-08-23T07:26:24.098Z',
+              reason: 'exit-recovery',
+              classification: 'exit-recovery',
+              exitRecovery: true,
+              runId: 'profit-live-incident',
+              nextRunAt: retryAt
+            }
+          },
+          loginPointSafety: {
+            ok: true,
+            reason: 'login-point-self-hp-exempt',
+            checkedAt: '2026-08-23T07:13:46.787Z',
+            point: { x: 5999, y: 66268, hp: 100 },
+            detail: {
+              ok: true,
+              reason: 'login-point-self-hp-exempt',
+              checkedAt: '2026-08-23T07:13:46.787Z',
+              bypassedPreLoginSafety: true
+            }
+          },
+          recentExits: [actualExit, recoveryAttempt]
+        };
+        const pending = buildCompactBrowserlessStatus(state, { nowMs });
+        const confirmedState = JSON.parse(JSON.stringify(state));
+        confirmedState.runner.pendingExit = null;
+        confirmedState.runner.currentAction = { kind: 'loop-wait', reason: 'login-interval', explicitCooldown: true };
+        confirmedState.runner.exitRecoveryOutcomes = [{
+          exitAttemptId: pendingExit.exitAttemptId,
+          originalReason: 'ws-closed',
+          outcome: 'confirmed-absent',
+          authority: 'HTTP',
+          startedAt: '2026-08-23T07:26:24.098Z',
+          completedAt: '2026-08-23T07:28:01.928Z',
+          durationMs: 97830,
+          httpStatuses: [502, 200],
+          lastHp: 100,
+          minHp: 100,
+          reloginAllowed: true,
+          sourceRunId: 'profit-live-incident'
+        }];
+        const confirmed = buildCompactBrowserlessStatus(confirmedState, { nowMs: Date.parse('2026-08-23T07:28:02.000Z') });
+        return [
+          pending.stats.currentSession.enteredAt,
+          pending.stats.currentSession.endedAt,
+          pending.stats.currentSession.durationMs,
+          pending.stats.offline.lastExitAt,
+          pending.recentExit.reason,
+          pending.recentExit.at,
+          pending.exitRecovery.state,
+          pending.exitRecovery.lastKnownHp,
+          pending.exitRecovery.httpStatuses.join(','),
+          pending.exitRecovery.remainingMs,
+          pending.action.pendingExit.remainingMs,
+          pending.snapshot.status.lastResult,
+          pending.snapshot.status.lastHttpStatus,
+          pending.snapshot.status.lastCompletedAt,
+          pending.snapshot.poller.nextAttemptAt,
+          pending.stats.offline.nextReconnectAt,
+          confirmed.exitRecovery.state,
+          confirmed.exitRecovery.confirmationAt,
+          confirmed.exitRecovery.confirmedHp,
+          confirmed.exitRecovery.reloginAllowed,
+          confirmed.exitRecovery.lastOutcome.httpStatuses.join(',')
+        ].join('|');
+      })(),
+      want: '2026-08-23T07:13:46.300Z|2026-08-23T07:20:40.538Z|414238|2026-08-23T07:20:40.538Z|ws-closed|2026-08-23T07:20:40.538Z|unconfirmed|100|502|12000|12000|failure|502|2026-08-23T07:26:24.127Z|2026-08-23T07:26:54.098Z|2026-08-23T07:26:36.098Z|confirmed-absent|2026-08-23T07:28:01.928Z|100|true|502,200'
+    },
+    {
       name: 'browserless compact status exposes symmetric live battle details',
       got: (() => {
         const startedAt = '2026-07-12T01:13:00.000Z';
@@ -36976,7 +37185,12 @@ async function runSelfTest() {
           /function stopAutoRefresh\(\)\s*\{\s*cancelMapMarkerAnimation\(true\);/.test(panelScript)
         ].join('|');
       })(),
-      want: `${BROWSERLESS_WEB_PANEL_VERSION}|coin:0|player:alice||0|0.875|1|97.5|195.0|97.5|195.0|3|60.0|170.0|3|30|25|40|25|110|220|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true`
+      want: [
+        BROWSERLESS_WEB_PANEL_VERSION,
+        'coin:0', 'player:alice', '', 0, '0.875', 1, '97.5', '195.0', '97.5', '195.0',
+        3, '60.0', '170.0', 3, 30, 25, 40, 25, 110, 220,
+        ...Array(40).fill(true)
+      ].join('|')
     },
     {
       name: 'browserless status server adds dynamic whitelist players by name',

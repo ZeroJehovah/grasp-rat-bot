@@ -2671,7 +2671,7 @@ async function runReadOnlyCanary(config, options = {}) {
     targetId: pending.targetId || '',
     httpStatuses: Array.isArray(pending.httpStatuses) ? pending.httpStatuses.slice(-16) : [],
     requestResultCount: Math.max(0, Number(pending.requestResultCount || 0)),
-    reloginAllowed: false,
+    reloginAllowed: Boolean(pending.settled && pending.ok === true),
     lastCover: compactLeavePendingCover(pending.lastCover),
     settled: Boolean(pending.settled),
     ok: pending.ok === null ? null : Boolean(pending.ok),
@@ -2861,6 +2861,18 @@ async function runReadOnlyCanary(config, options = {}) {
         return { ok: true, actionSeal, transportClose, pendingConnectCancel };
       }
     }).then(exit => {
+      const confirmedAttempt = (exit?.leave?.attempts || []).find(attempt => (
+        attempt?.ok === true
+          && attempt?.response
+          && typeof attempt.response === 'object'
+      )) || null;
+      const responseHp = Number(confirmedAttempt?.response?.hp);
+      if (exit?.ok && Number.isFinite(responseHp)) {
+        leavePending.lastHp = responseHp;
+        leavePending.minHp = leavePending.minHp === null
+          ? responseHp
+          : Math.min(leavePending.minHp, responseHp);
+      }
       leavePending.settled = true;
       leavePending.ok = Boolean(exit?.ok);
       leavePending.completedAtMs = now();

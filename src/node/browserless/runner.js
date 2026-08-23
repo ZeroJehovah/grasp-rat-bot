@@ -1877,6 +1877,72 @@ function snapshotOfflineTransitionPatch(state, snapshotSafety, nowMs = Date.now(
   return patch;
 }
 
+function snapshotStatusPatchFromSafety(previous = null, snapshotSafety = {}, nowMs = Date.now()) {
+  const response = snapshotSafety?.response && typeof snapshotSafety.response === 'object'
+    ? snapshotSafety.response
+    : null;
+  const attempted = snapshotSafety?.attempted === undefined
+    ? Boolean(
+        response
+          || snapshotSafety?.request
+          || snapshotSafety?.startedAtMs
+          || snapshotSafety?.startedAt
+          || snapshotSafety?.error
+          || Number.isFinite(Number(snapshotSafety?.status))
+      )
+    : Boolean(snapshotSafety.attempted);
+  const checkedAt = String(snapshotSafety?.checkedAt || new Date(nowMs).toISOString());
+  const checkedAtMs = parseIsoTimeMs(checkedAt) || Number(nowMs) || Date.now();
+  const numericOrIsoMs = value => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) && numeric > 0 ? numeric : parseIsoTimeMs(value);
+  };
+  const startedAtMs = numericOrIsoMs(snapshotSafety?.startedAtMs || snapshotSafety?.startedAt)
+    || numericOrIsoMs(snapshotSafety?.observedAtMs || snapshotSafety?.observedAt)
+    || (attempted ? checkedAtMs : 0);
+  const httpStatus = Number(response?.status ?? snapshotSafety?.status);
+  const normalizedStatus = Number.isFinite(httpStatus) && httpStatus > 0 ? Math.round(httpStatus) : null;
+  const fetchOk = response
+    ? (response.ok !== undefined
+        ? response.ok === true
+        : (response.httpOk !== undefined
+            ? response.httpOk === true
+            : (normalizedStatus === null || (normalizedStatus >= 200 && normalizedStatus < 300))))
+    : (attempted && snapshotSafety?.error ? false : null);
+  const safetyOk = snapshotSafety?.ok === true && snapshotSafety?.satisfied !== false;
+  const lastResult = !attempted
+    ? 'not-requested'
+    : (fetchOk === false ? 'failure' : (safetyOk ? 'safe' : 'unsafe'));
+  const error = fetchOk === false
+    ? String(snapshotSafety?.error || `snapshot HTTP ${normalizedStatus || 'error'}`)
+    : String(snapshotSafety?.error || '');
+  const previousStatus = previous && typeof previous === 'object' ? previous : {};
+  return {
+    ...previousStatus,
+    inFlight: false,
+    purpose: String(snapshotSafety?.snapshotPurpose || previousStatus.purpose || ''),
+    source: attempted ? 'http' : 'local',
+    lastResult,
+    lastAttemptAt: attempted ? new Date(startedAtMs).toISOString() : String(previousStatus.lastAttemptAt || ''),
+    lastCompletedAt: attempted ? checkedAt : String(previousStatus.lastCompletedAt || ''),
+    lastSuccessAt: attempted && fetchOk === true
+      ? checkedAt
+      : String(previousStatus.lastSuccessAt || ''),
+    lastFailureAt: attempted && fetchOk === false
+      ? checkedAt
+      : String(previousStatus.lastFailureAt || ''),
+    lastHttpStatus: normalizedStatus,
+    lastReason: String(snapshotSafety?.reason || previousStatus.lastReason || ''),
+    lastError: error,
+    selfPresent: snapshotSafety?.response?.summary?.selfPresent === undefined
+      ? null
+      : Boolean(snapshotSafety.response.summary.selfPresent),
+    checkedAt,
+    attempted,
+    bypassedPreLoginSafety: snapshotSafety?.bypassedPreLoginSafety === true
+  };
+}
+
 function preLoginSnapshotSafetyAction(state = {}) {
   const action = state?.runner?.currentAction || {};
   const safetyReason = String(state?.loginPointSafety?.reason || '');
@@ -2559,6 +2625,19 @@ async function runBrowserlessRunner(config, deps = {}) {
       };
     },
     onRequest: detail => {
+      const startedAt = new Date(Number(detail.startedAtMs || now())).toISOString();
+      const currentState = liveState || readBrowserlessStateFile(stateFile);
+      patchLiveState({
+        runner: {
+          snapshotStatus: {
+            ...(currentState?.runner?.snapshotStatus || {}),
+            inFlight: true,
+            lastAttemptAt: startedAt,
+            purpose: String(detail.purpose || ''),
+            source: 'http'
+          }
+        }
+      });
       logStore.append('runner', 'snapshot-request-start', {
         requestSequence: Number(detail.requestSequence || 0),
         requestClass: detail.requestClass || '',
@@ -2569,6 +2648,31 @@ async function runBrowserlessRunner(config, deps = {}) {
       });
     },
     onResult: result => {
+      const currentState = liveState || readBrowserlessStateFile(stateFile);
+      const completedAt = new Date(now()).toISOString();
+      const failed = result?.ok === false;
+      const status = Number(result?.status);
+      patchLiveState({
+        runner: {
+          snapshotStatus: {
+            ...(currentState?.runner?.snapshotStatus || {}),
+            inFlight: false,
+            lastCompletedAt: completedAt,
+            lastResult: failed ? 'failure' : 'fetch-success',
+            lastSuccessAt: failed
+              ? String(currentState?.runner?.snapshotStatus?.lastSuccessAt || '')
+              : completedAt,
+            lastFailureAt: failed ? completedAt : String(currentState?.runner?.snapshotStatus?.lastFailureAt || ''),
+            lastHttpStatus: Number.isFinite(status) && status > 0 ? Math.round(status) : null,
+            lastReason: failed ? String(result?.error || `snapshot HTTP ${status || 'error'}`) : '',
+            lastError: failed ? String(result?.error || '') : '',
+            purpose: String(result?.purpose || currentState?.runner?.snapshotStatus?.purpose || ''),
+            source: 'http',
+            attempted: true,
+            checkedAt: completedAt
+          }
+        }
+      });
       if (result?.ok !== false) return;
       logStore.append('runner', 'snapshot-request-error', {
         requestSequence: Number(result.requestSequence || 0),
@@ -3216,6 +3320,11 @@ async function runBrowserlessRunner(config, deps = {}) {
           reason: currentActionReason,
           delayMs: effectiveDelayMs,
           nextRunAt,
+          deadlineType: String(
+            scheduledLoopPlan.deadlineType
+              || (exitRecoveryWait ? 'exit-recovery-retry' : '')
+          ),
+          explicitCooldown: Boolean(scheduledLoopPlan.explicitCooldown),
           explicitDelay: Boolean(scheduledLoopPlan.explicitDelay),
           dailyFirstLoginDeadlineApplied,
           previousRunId: loopPlan.previousRunId || '',
@@ -3596,6 +3705,13 @@ async function runBrowserlessRunner(config, deps = {}) {
       : priorExitRecoveryOutcomes;
     const recoverySnapshot = snapshotSafety.snapshotPurpose === 'exit-recovery-confirmation';
     const patch = mergeState(snapshotOfflineTransitionPatch(currentState, snapshotSafety, now()), {
+      runner: {
+        snapshotStatus: snapshotStatusPatchFromSafety(
+          currentState?.runner?.snapshotStatus,
+          snapshotSafety,
+          now()
+        )
+      },
       ...(recoverySnapshot ? {} : {
         loginPointSafety: loginPointSafetyPatchFromSnapshot(snapshotSafety)
       }),
@@ -4108,6 +4224,9 @@ async function runBrowserlessRunner(config, deps = {}) {
                 reason: pendingExit ? 'exit-recovery' : 'self-present-reentry',
                 delayMs: 0,
                 nextRunAt: '',
+                deadlineType: pendingExit ? 'exit-recovery-retry' : '',
+                explicitCooldown: false,
+                explicitDelay: false,
                 previousRunId: persistedDelayPlan.previousRunId || '',
                 persisted: true,
                 ...(pendingExit ? { pendingExit } : {})
@@ -4157,6 +4276,12 @@ async function runBrowserlessRunner(config, deps = {}) {
           reason: persistedDelayPlan.reason,
           delayMs: persistedDelayPlan.delayMs,
           nextRunAt: persistedDelayPlan.nextRunAt,
+          deadlineType: String(
+            persistedDelayPlan.deadlineType
+              || (persistedPendingExit ? 'exit-recovery-retry' : '')
+          ),
+          explicitCooldown: Boolean(persistedDelayPlan.explicitCooldown),
+          explicitDelay: Boolean(persistedDelayPlan.explicitDelay),
           previousRunId: persistedDelayPlan.previousRunId || '',
           persisted: true,
           ...(persistedPendingExit ? { pendingExit: persistedPendingExit } : {})
@@ -9511,6 +9636,7 @@ module.exports = {
   sourceIpPreflightAction,
   sourceIpPreflightCanReuse,
   snapshotSafetyAllowsImmediateResume,
+  snapshotStatusPatchFromSafety,
   statusWallTimeSpikeDetail,
   persistedReconnectDelayPlan,
   preserveOnlineSessionForLoopWait,

@@ -65,6 +65,8 @@ function defaultBrowserlessState() {
       lastRun: null,
       connectionFailure: null,
       remoteProfit: null,
+      snapshotStatus: null,
+      exitRecoveryOutcomes: [],
       lastError: ''
     },
     probes: {
@@ -319,6 +321,13 @@ function normalizeBrowserlessState(state, file = '') {
   normalized.runner.pendingExit = normalized.runner.pendingExit && typeof normalized.runner.pendingExit === 'object'
     ? cloneJson(normalized.runner.pendingExit)
     : null;
+  normalized.runner.snapshotStatus = normalized.runner.snapshotStatus
+    && typeof normalized.runner.snapshotStatus === 'object'
+    ? cloneJson(normalized.runner.snapshotStatus)
+    : null;
+  normalized.runner.exitRecoveryOutcomes = Array.isArray(normalized.runner.exitRecoveryOutcomes)
+    ? normalized.runner.exitRecoveryOutcomes.slice(-64).map(cloneJson)
+    : [];
   normalized.runner.pendingLoginRecovery = normalizePendingLoginRecovery(
     normalized.runner.pendingLoginRecovery
   );
@@ -1519,19 +1528,20 @@ function compactBrowserlessStats(normalized, game, action, options = {}, lastKno
   // projection necessarily catches up. Prefer that newer actual exit for the
   // public status so a new cooldown cannot display an older process-restart
   // timestamp. Safety/preflight observations are excluded by shouldLeave.
+  const persistedActualExit = isExitRecoveryEvent(stats.lastExit) ? {} : stats.lastExit;
   const recentActualExit = latestMatchingRecentActualExit(
     normalized.recentExits,
-    {}
+    persistedActualExit
   );
   const recentExitAt = parseTimeMs(recentActualExit?.at || recentActualExit?.time || recentActualExit?.createdAt);
-  const persistedExitAt = parseTimeMs(stats.lastExit.at);
+  const persistedExitAt = parseTimeMs(persistedActualExit.at);
   const effectiveLastExit = recentActualExit && recentExitAt > persistedExitAt
     ? {
         at: compactString(recentActualExit.at || recentActualExit.time || recentActualExit.createdAt, 48),
         reason: compactString(recentActualExit.reason || recentActualExit.type, 160),
         runId: compactString(recentExitRunId(recentActualExit), 96)
       }
-    : stats.lastExit;
+    : persistedActualExit;
   const rawNextRunAtMs = parseTimeMs(rawNextRunAt);
   const blockerReadyAtMs = parseTimeMs(offlineBlocker?.nextReadyAt);
   const dailyOnlyStaminaBlocker = offlineBlocker?.reason === 'stamina-exhausted-leave'
@@ -1568,6 +1578,8 @@ function compactBrowserlessStats(normalized, game, action, options = {}, lastKno
       online,
       realtimeOnline,
       enteredAt: session.enteredAt || '',
+      endedAt: session.exitedAt || '',
+      lastSeenAt: session.lastSeenAt || '',
       durationMs: enteredMs ? Math.max(0, Math.round(durationEndMs - enteredMs)) : 0,
       staminaSpentMs: compactNumber(session.staminaSpentMs),
       coinsGained: pickedCoinsFromStatsValue(session.coinsGained),
@@ -2029,7 +2041,211 @@ function compactCommand(command) {
   };
 }
 
-function compactAction(action) {
+function compactIsoValue(value, maxLength = 48) {
+  if (value === null || value === undefined || value === '') return '';
+  if (Number.isFinite(Number(value)) && Number(value) > 0) return isoFromMs(Number(value));
+  return compactString(value, maxLength);
+}
+
+function compactPendingExit(value, nowMs = Date.now()) {
+  if (!value || typeof value !== 'object') return null;
+  const nextRetryAt = compactIsoValue(value.nextRetryAtMs || value.nextRetryAt);
+  const nextRetryAtMs = parseTimeMs(nextRetryAt);
+  const currentMs = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  return {
+    active: value.active !== false,
+    exitAttemptId: compactString(value.exitAttemptId, 128),
+    recoveredFromExitAttemptId: compactString(value.recoveredFromExitAttemptId, 128),
+    reason: compactString(value.reason || value.originalReason, 160),
+    originalReason: compactString(value.originalReason || value.reason, 160),
+    sourceRunId: compactString(value.sourceRunId || value.runId, 96),
+    firstAt: compactIsoValue(value.firstAtMs || value.firstAt),
+    lastAttemptAt: compactIsoValue(value.lastAttemptAtMs || value.lastAttemptAt),
+    attemptCount: compactNumber(value.attemptCount),
+    requestAttemptCount: compactNumber(value.requestAttemptCount),
+    startHp: compactNumber(value.startHp),
+    minHp: compactNumber(value.minHp),
+    lastHp: compactNumber(value.lastHp),
+    nextRetryAt,
+    remainingMs: nextRetryAtMs > 0 ? Math.max(0, Math.round(nextRetryAtMs - currentMs)) : null,
+    retryDelayMs: compactNumber(value.retryDelayMs),
+    lastError: compactString(value.lastError || value.error, 240),
+    httpStatuses: Array.isArray(value.httpStatuses ?? value.statuses)
+      ? (value.httpStatuses ?? value.statuses)
+          .map(item => Math.round(Number(item)))
+          .filter(Number.isFinite)
+          .slice(-16)
+      : [],
+    reloginAllowed: value.reloginAllowed === undefined ? null : Boolean(value.reloginAllowed),
+    recoveryMode: compactString(value.recoveryMode || 'exit-recovery', 48)
+  };
+}
+
+function compactSnapshotRequestResult(value) {
+  if (!value || typeof value !== 'object') return null;
+  return {
+    ok: value.ok === undefined ? null : Boolean(value.ok),
+    observedAt: compactIsoValue(value.observedAtMs || value.observedAt),
+    completedAt: compactIsoValue(value.completedAtMs || value.completedAt),
+    status: compactNumber(value.status ?? value.httpStatus),
+    tick: compactNumber(value.tick ?? value.payload?.tick),
+    requestSequence: compactNumber(value.requestSequence),
+    requestClass: compactString(value.requestClass, 48),
+    purpose: compactString(value.purpose, 80),
+    error: compactString(value.error, 240)
+  };
+}
+
+function compactSnapshotScheduler(value) {
+  if (!value || typeof value !== 'object') return null;
+  return {
+    enabled: value.enabled !== false,
+    inFlight: Boolean(value.inFlight),
+    sequence: compactNumber(value.sequence),
+    lastAttemptAt: compactIsoValue(value.lastStartedAtMs || value.lastStartedAt),
+    lastCompletedAt: compactIsoValue(value.lastCompletedAtMs || value.lastCompletedAt),
+    lastSuccessAt: compactIsoValue(value.lastSuccessAtMs || value.lastSuccessAt),
+    lastFailureAt: compactIsoValue(value.lastFailureAtMs || value.lastFailureAt),
+    lastHttpStatus: compactNumber(value.lastFailureHttpStatus ?? value.lastHttpStatus),
+    lastRequestClass: compactString(value.lastRequestClass, 48),
+    lastPurpose: compactString(value.lastPurpose, 80),
+    lastError: compactString(value.lastError || value.lastFailureError, 240),
+    lastFailure: value.lastFailure ? {
+      at: compactIsoValue(value.lastFailure.atMs || value.lastFailure.at),
+      httpStatus: compactNumber(value.lastFailure.httpStatus ?? value.lastFailure.status),
+      error: compactString(value.lastFailure.error, 240),
+      requestSequence: compactNumber(value.lastFailure.requestSequence),
+      requestClass: compactString(value.lastFailure.requestClass, 48),
+      purpose: compactString(value.lastFailure.purpose, 80)
+    } : null,
+    lastResult: compactSnapshotRequestResult(value.lastResult)
+  };
+}
+
+function compactSnapshotPoller(value) {
+  if (!value || typeof value !== 'object') return null;
+  return {
+    inFlight: Boolean(value.inFlight),
+    stopped: Boolean(value.stopped),
+    intervalMs: compactNumber(value.intervalMs),
+    currentIntervalMs: compactNumber(value.currentIntervalMs),
+    globalIntervalMs: compactNumber(value.globalIntervalMs),
+    currentGlobalIntervalMs: compactNumber(value.currentGlobalIntervalMs),
+    lastAttemptAt: compactIsoValue(value.lastAttemptAtMs || value.lastAttemptAt),
+    nextAttemptAt: compactIsoValue(value.nextAttemptAtMs || value.nextAttemptAt),
+    lastCompletedAt: compactIsoValue(value.lastCompletedAtMs || value.lastCompletedAt),
+    lastSuccessAt: compactIsoValue(value.lastSuccessAtMs || value.lastSuccessAt),
+    lastFailureAt: compactIsoValue(value.lastFailureAtMs || value.lastFailureAt),
+    lastHttpStatus: compactNumber(value.lastFailureHttpStatus ?? value.lastHttpStatus),
+    lastError: compactString(value.lastError, 240),
+    lastSnapshotAt: compactIsoValue(value.lastSnapshotAtMs || value.lastSnapshotAt),
+    lastGlobalSnapshotAt: compactIsoValue(value.lastGlobalSnapshotAtMs || value.lastGlobalSnapshotAt)
+  };
+}
+
+function compactSnapshotStatus(value) {
+  if (!value || typeof value !== 'object') return null;
+  return {
+    inFlight: Boolean(value.inFlight),
+    purpose: compactString(value.purpose, 80),
+    source: compactString(value.source, 48),
+    lastResult: compactString(value.lastResult, 32),
+    lastAttemptAt: compactIsoValue(value.lastAttemptAt),
+    lastCompletedAt: compactIsoValue(value.lastCompletedAt),
+    lastSuccessAt: compactIsoValue(value.lastSuccessAt),
+    lastFailureAt: compactIsoValue(value.lastFailureAt),
+    lastHttpStatus: compactNumber(value.lastHttpStatus),
+    lastReason: compactString(value.lastReason || value.reason, 160),
+    lastError: compactString(value.lastError || value.error, 240),
+    selfPresent: value.selfPresent === undefined || value.selfPresent === null
+      ? null
+      : Boolean(value.selfPresent),
+    checkedAt: compactIsoValue(value.checkedAt),
+    attempted: value.attempted === undefined ? null : Boolean(value.attempted),
+    bypassedPreLoginSafety: value.bypassedPreLoginSafety === undefined
+      ? null
+      : Boolean(value.bypassedPreLoginSafety)
+  };
+}
+
+function compactExitRecoveryOutcome(value) {
+  if (!value || typeof value !== 'object') return null;
+  return {
+    exitAttemptId: compactString(value.exitAttemptId, 128),
+    originalReason: compactString(value.originalReason, 160),
+    outcome: compactString(value.outcome, 48),
+    authority: compactString(value.authority, 24),
+    startedAt: compactIsoValue(value.startedAt),
+    completedAt: compactIsoValue(value.completedAt),
+    durationMs: compactNumber(value.durationMs),
+    httpStatuses: Array.isArray(value.httpStatuses)
+      ? value.httpStatuses.map(item => Math.round(Number(item))).filter(Number.isFinite).slice(-16)
+      : [],
+    lastHp: compactNumber(value.lastHp),
+    minHp: compactNumber(value.minHp),
+    reloginAllowed: Boolean(value.reloginAllowed),
+    sourceRunId: compactString(value.sourceRunId, 96),
+    recoveredFromExitAttemptId: compactString(value.recoveredFromExitAttemptId, 128)
+  };
+}
+
+function compactExitRecoveryStatus(normalized, recentExit, action, nowMs = Date.now()) {
+  const runner = normalized?.runner || {};
+  const pending = compactPendingExit(
+    runner.pendingExit || action?.pendingExit,
+    nowMs
+  );
+  const outcomes = Array.isArray(runner.exitRecoveryOutcomes)
+    ? runner.exitRecoveryOutcomes.map(compactExitRecoveryOutcome).filter(Boolean)
+    : [];
+  const lastOutcome = outcomes.length ? outcomes[outcomes.length - 1] : null;
+  const leaveConfirmation = recentExit?.leaveConfirmation || null;
+  const confirmed = lastOutcome?.outcome === 'confirmed-absent'
+    || Boolean(leaveConfirmation?.at && !pending);
+  const lastRecoveryEvent = (Array.isArray(normalized?.recentExits) ? normalized.recentExits : [])
+    .slice()
+    .reverse()
+    .find(event => isExitRecoveryEvent(event));
+  const recoveryExit = lastRecoveryEvent ? compactExit(lastRecoveryEvent) : null;
+  const effectiveLastHp = compactNumber(
+    lastOutcome?.lastHp
+      ?? leaveConfirmation?.selfHp
+      ?? pending?.lastHp
+      ?? recoveryExit?.selfHp
+  );
+  const httpStatuses = (lastOutcome?.httpStatuses?.length
+    ? lastOutcome.httpStatuses
+    : (pending?.httpStatuses?.length
+        ? pending.httpStatuses
+        : (recoveryExit?.httpStatuses || [])));
+  return {
+    active: Boolean(pending),
+    state: pending ? 'unconfirmed' : (confirmed ? 'confirmed-absent' : 'none'),
+    pending,
+    lastOutcome,
+    lastRecoveryEvent: recoveryExit,
+    triggerReason: compactString(
+      pending?.originalReason
+        || lastOutcome?.originalReason
+        || recoveryExit?.reason,
+      160
+    ),
+    lastAttemptAt: pending?.lastAttemptAt || recoveryExit?.at || '',
+    confirmationAt: lastOutcome?.completedAt || leaveConfirmation?.at || '',
+    confirmedHp: confirmed ? effectiveLastHp : null,
+    lastKnownHp: effectiveLastHp,
+    minHp: compactNumber(lastOutcome?.minHp ?? pending?.minHp ?? recoveryExit?.injury?.currentHp),
+    lastError: compactString(pending?.lastError || recoveryExit?.lastError, 240),
+    httpStatuses,
+    nextRetryAt: pending?.nextRetryAt || '',
+    remainingMs: pending?.remainingMs ?? null,
+    reloginAllowed: pending
+      ? false
+      : (lastOutcome ? Boolean(lastOutcome.reloginAllowed) : (confirmed ? true : null))
+  };
+}
+
+function compactAction(action, nowMs = Date.now()) {
   if (!action || typeof action !== 'object') return null;
   const state = action.actionState && typeof action.actionState === 'object' ? action.actionState : {};
   return {
@@ -2039,6 +2255,9 @@ function compactAction(action) {
     delayMs: compactNumber(action.delayMs),
     nextRunAt: compactString(action.nextRunAt, 48),
     nextSnapshotCheckAt: compactString(action.nextSnapshotCheckAt, 48),
+    deadlineType: compactString(action.deadlineType, 48),
+    explicitCooldown: compactBoolean(action.explicitCooldown),
+    pendingExit: compactPendingExit(action.pendingExit, nowMs),
     explicitDelay: compactBoolean(action.explicitDelay),
     target: compactTarget(action.target),
     blockedAction: action.blockedAction && typeof action.blockedAction === 'object'
@@ -2123,7 +2342,7 @@ function compactCenterActivity(centerActivity) {
   };
 }
 
-function compactDecision(decision) {
+function compactDecision(decision, nowMs = Date.now()) {
   if (!decision || typeof decision !== 'object') return null;
   const dataGaps = Array.isArray(decision.input?.dataGaps) ? decision.input.dataGaps : [];
   const kind = String(decision.kind || decision.action?.kind || '');
@@ -2143,7 +2362,7 @@ function compactDecision(decision) {
     at: compactString(decision.at, 48),
     tick: compactNumber(decision.tick),
     actionKind: compactString(decision.action?.kind, 48),
-    action: compactAction(decision.action),
+    action: compactAction(decision.action, nowMs),
     target: compactTarget(decision.target || decision.action?.target || (shouldExposeProfitTarget ? (decision.profit?.best?.target || decision.profit?.best?.coin) : null)),
     threshold: decision.profit?.threshold && typeof decision.profit.threshold === 'object'
       ? {
@@ -2905,6 +3124,10 @@ function reconcileBrowserlessExitKillEvidence(event, evidence = [], options = {}
 function compactExit(event) {
   if (!event || typeof event !== 'object') return null;
   const detail = event.detail && typeof event.detail === 'object' ? event.detail : {};
+  const exitRecovery = isExitRecoveryEvent(event);
+  const recoveryPending = detail.pendingExit && typeof detail.pendingExit === 'object'
+    ? detail.pendingExit
+    : {};
   const decision = detail.decision && typeof detail.decision === 'object'
     ? detail.decision
     : (detail.lastDecision && typeof detail.lastDecision === 'object' ? detail.lastDecision : {});
@@ -3136,7 +3359,17 @@ function compactExit(event) {
     at,
     reason,
     runId: compactString(event.runId || event.detail?.runId, 96),
+    classification: compactString(event.classification, 48),
+    exitRecovery,
+    exitAttemptId: compactString(event.exitAttemptId || detail.exitAttemptId || recoveryPending.exitAttemptId, 128),
     shouldLeave: event.shouldLeave === undefined ? null : Boolean(event.shouldLeave),
+    httpStatuses: Array.isArray(event.httpStatuses || recoveryPending.httpStatuses)
+      ? (event.httpStatuses || recoveryPending.httpStatuses)
+          .map(item => Math.round(Number(item)))
+          .filter(Number.isFinite)
+          .slice(-16)
+      : [],
+    lastError: compactString(event.error || detail.error || recoveryPending.lastError || recoveryPending.error, 240),
     target: compactTarget(sourceTarget),
     selfHp: compactNumber(event.selfHp ?? detail.selfHp ?? combatExit.selfHp),
     targetHp: compactNumber(event.targetHp ?? detail.targetHp ?? combatExit.targetHp ?? sourceTarget?.hp),
@@ -3294,9 +3527,22 @@ function recentExitMatchesLastExit(event, lastExit = {}) {
   return Boolean(lastReason && eventReason && lastReason === eventReason);
 }
 
+function isExitRecoveryEvent(event) {
+  return Boolean(
+    event
+      && typeof event === 'object'
+      && (
+        String(event.classification || '') === 'exit-recovery'
+        || event.detail?.exitRecovery === true
+        || String(event.recoveryMode || '') === 'exit-recovery'
+        || String(event.reason || event.type || '') === 'exit-recovery'
+      )
+  );
+}
+
 function latestMatchingRecentActualExit(recentExits, lastExit = {}) {
   const actualExits = (Array.isArray(recentExits) ? recentExits : [])
-    .filter(event => event?.shouldLeave !== false)
+    .filter(event => event?.shouldLeave !== false && !isExitRecoveryEvent(event))
     .reverse();
   if (!actualExits.length) return null;
   const hasLastExitIdentity = Boolean(lastExit?.at || lastExit?.reason || lastExit?.runId);
@@ -3370,6 +3616,7 @@ function compactGameStatus(normalized) {
     'loop-wait',
     'stopped',
     'snapshot-wait',
+    'exit-recovery',
     'source-ip-preflight',
     'source-ip-preflight-cooldown',
     'source-ip-preflight-login',
@@ -3606,9 +3853,9 @@ function compactRemoteProfitStatus(value) {
   };
 }
 
-function compactDecisionSource(decision) {
+function compactDecisionSource(decision, nowMs = Date.now()) {
   if (!decision || typeof decision !== 'object') return null;
-  const compact = compactDecision(decision);
+  const compact = compactDecision(decision, nowMs);
   const dataGaps = Array.isArray(decision.input?.dataGaps) ? decision.input.dataGaps : [];
   return {
     kind: compact?.kind || '',
@@ -3633,7 +3880,8 @@ function compactDecisionSource(decision) {
   };
 }
 
-function browserlessCompactStatusSource(state = {}) {
+function browserlessCompactStatusSource(state = {}, config = {}) {
+  const nowMs = Number.isFinite(Number(config.nowMs)) ? Number(config.nowMs) : Date.now();
   const runner = state.runner && typeof state.runner === 'object' ? state.runner : {};
   const probes = state.probes && typeof state.probes === 'object' ? state.probes : {};
   const current = state.current && typeof state.current === 'object' ? state.current : {};
@@ -3656,10 +3904,17 @@ function browserlessCompactStatusSource(state = {}) {
       canaryProfile: runner.canaryProfile || '',
       dryRun: runner.dryRun !== false,
       combatEnabled: Boolean(runner.combatEnabled),
+      pendingExit: compactPendingExit(runner.pendingExit, nowMs),
       lastError: runner.lastError || '',
+      snapshotStatus: compactSnapshotStatus(runner.snapshotStatus),
+      snapshotScheduler: compactSnapshotScheduler(runner.snapshotScheduler),
+      snapshotPoller: compactSnapshotPoller(runner.snapshotPoller),
+      exitRecoveryOutcomes: Array.isArray(runner.exitRecoveryOutcomes)
+        ? runner.exitRecoveryOutcomes.map(compactExitRecoveryOutcome).filter(Boolean).slice(-8)
+        : [],
       connectionFailure: compactConnectionFailure(runner.connectionFailure),
       restartDrain: runner.restartDrain || null,
-      currentAction: compactAction(runner.currentAction),
+      currentAction: compactAction(runner.currentAction, nowMs),
       remoteProfit: compactRemoteProfitStatus(runner.remoteProfit || state.remoteProfit),
       lastRun: compactLastRunSource(runner.lastRun)
     },
@@ -3671,8 +3926,8 @@ function browserlessCompactStatusSource(state = {}) {
     current: {
       self: compactSelf(current.self),
       stamina: compactStamina(current.stamina, current.self),
-      action: compactAction(current.action),
-      decision: compactDecisionSource(current.decision),
+      action: compactAction(current.action, nowMs),
+      decision: compactDecisionSource(current.decision, nowMs),
       profit: compactProfitSource(current.profit || current.decision?.profit),
       combatSummary: compactCombat(current.combatSummary || current.decision?.combat),
       battlePresentation: current.battlePresentation && typeof current.battlePresentation === 'object'
@@ -3727,16 +3982,18 @@ function browserlessCompactStatusSource(state = {}) {
 
 function buildCompactBrowserlessStatus(state, config = {}) {
   const normalized = normalizeBrowserlessState(state, state?.logs?.stateFile || '');
+  const nowMs = Number.isFinite(Number(config.nowMs)) ? Number(config.nowMs) : Date.now();
   const inputSession = state?.session && typeof state.session === 'object' ? state.session : {};
   const tokenPresent = Boolean(normalized.session.sessionToken || inputSession.tokenPresent);
   const authenticated = Boolean(inputSession.authenticated || (normalized.session.userId && tokenPresent));
   const auth = compactAuthStatus(normalized, { tokenPresent, authenticated });
   const current = normalized.current || {};
   const inputCurrent = state?.current && typeof state.current === 'object' ? state.current : {};
-  const decision = compactDecision(inputCurrent.decision || current.decision);
+  const decision = compactDecision(inputCurrent.decision || current.decision, nowMs);
   const game = compactGameStatus(normalized);
   const combat = compactCombat(current.combatSummary || current.decision?.combat);
-  const executedAction = compactAction(normalized.runner.currentAction) || compactAction(current.action);
+  const executedAction = compactAction(normalized.runner.currentAction, nowMs)
+    || compactAction(current.action, nowMs);
   const rejectedCombatDecision = rejectedTargetlessCombatDecision(decision, combat);
   // The decision input and nearby panel are one realtime observation. Prefer
   // its action summary so a later action-result callback cannot leave the UI
@@ -3750,7 +4007,10 @@ function buildCompactBrowserlessStatus(state, config = {}) {
       : (decision?.action || executedAction))
     : (executedAction || decision?.action);
   const recentExits = Array.isArray(normalized.recentExits) ? normalized.recentExits : [];
-  const recentActualExit = latestMatchingRecentActualExit(recentExits, normalized.stats?.lastExit);
+  const persistedActualExit = isExitRecoveryEvent(normalized.stats?.lastExit)
+    ? {}
+    : normalized.stats?.lastExit;
+  const recentActualExit = latestMatchingRecentActualExit(recentExits, persistedActualExit);
   const loginPointSafetyDetail = compactLoginPointSafetyDetail(normalized.loginPointSafety || {}, normalized);
   const loginPoint = compactPoint(normalized.loginPointSafety?.point) || loginPointSafetyDetail?.point || null;
   const lastKnown = compactLastKnown(normalized);
@@ -3761,6 +4021,10 @@ function buildCompactBrowserlessStatus(state, config = {}) {
     : (Array.isArray(normalized.network.sourceIps) ? normalized.network.sourceIps.slice(0, 3) : []);
   const sourceIpIndex = sourceIp ? sourceIps.findIndex(item => item === sourceIp) + 1 : 0;
   const recentExit = compactExit(recentActualExit);
+  const snapshotStatus = compactSnapshotStatus(normalized.runner.snapshotStatus);
+  const snapshotScheduler = compactSnapshotScheduler(normalized.runner.snapshotScheduler);
+  const snapshotPoller = compactSnapshotPoller(normalized.runner.snapshotPoller);
+  const exitRecovery = compactExitRecoveryStatus(normalized, recentExit, action, nowMs);
   const displayCombat = !game.inGame && recentExit?.battle?.target
     ? {
         ...(combat || {}),
@@ -3790,6 +4054,13 @@ function buildCompactBrowserlessStatus(state, config = {}) {
       canaryProfile: normalized.runner.canaryProfile || '',
       dryRun: normalized.runner.dryRun,
       combatEnabled: Boolean(normalized.runner.combatEnabled),
+      pendingExit: compactPendingExit(normalized.runner.pendingExit, nowMs),
+      snapshotStatus,
+      snapshotScheduler,
+      snapshotPoller,
+      exitRecoveryOutcomes: Array.isArray(normalized.runner.exitRecoveryOutcomes)
+        ? normalized.runner.exitRecoveryOutcomes.map(compactExitRecoveryOutcome).filter(Boolean).slice(-8)
+        : [],
       connectionFailure: compactConnectionFailure(
         normalized.runner.connectionFailure
           || normalized.runner.lastRun?.canary?.connectionFailure
@@ -3803,6 +4074,12 @@ function buildCompactBrowserlessStatus(state, config = {}) {
     lastKnown,
     decision,
     action,
+    snapshot: {
+      status: snapshotStatus,
+      scheduler: snapshotScheduler,
+      poller: snapshotPoller
+    },
+    exitRecovery,
     profit: displayProfit,
     combat: displayCombat,
     targets,

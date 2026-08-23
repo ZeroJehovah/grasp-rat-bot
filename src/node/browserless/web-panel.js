@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.23.4';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.23.5';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -273,7 +273,11 @@ function lastExitPanelVisibleCore(status = {}) {
   const offline = status?.stats?.offline || {};
   return Boolean(
     !online
-      && (offline.lastExitAt || offline.lastExitReason || status?.recentExit)
+      && (offline.lastExitAt
+        || offline.lastExitReason
+        || status?.recentExit
+        || status?.exitRecovery?.active
+        || status?.runner?.pendingExit)
   );
 }
 
@@ -1504,9 +1508,11 @@ function renderBrowserlessWebPanel() {
       'non-player-blocking-factor': '存在玩家以外的安全阻碍',
       'self-present-reentry': '已经在游戏中，直接连接',
       'cycle-complete': '本轮结束，等待下一轮',
-      'ws-closed': '连接断开，准备重连',
-      'ws-error': '连接异常，准备重连',
-      'frame-gap': '画面更新中断，准备重连',
+      'ws-closed': '连接断开',
+      'ws-error': '连接异常',
+      'frame-gap': '画面更新中断',
+      'exit-recovery': '等待退出确认重试',
+      'pending-exit-retry': '等待退出确认重试',
       'action-settlement-stalled': '非战斗移动指令未产生位置变化，正在重连',
       'stale-self': '自身状态太久没更新，准备重连',
       'no-self': '没有看到自己，等待恢复',
@@ -1843,12 +1849,53 @@ function renderBrowserlessWebPanel() {
       if ((kind === 'attack' || kind === 'combat-live') && status.combat?.target) return status.combat.target;
       return null;
     }
+    function snapshotPanelStatus(status) {
+      const snapshot = status.snapshot || {};
+      return {
+        status: snapshot.status || status.runner?.snapshotStatus || {},
+        scheduler: snapshot.scheduler || status.runner?.snapshotScheduler || {},
+        poller: snapshot.poller || status.runner?.snapshotPoller || {}
+      };
+    }
+    function latestSnapshotFetchFailure(status) {
+      const snapshot = snapshotPanelStatus(status);
+      const scheduler = snapshot.scheduler || {};
+      const persisted = snapshot.status || {};
+      const failureAt = String(scheduler.lastFailureAt || persisted.lastFailureAt || '');
+      const checkedAt = String(persisted.checkedAt || persisted.lastCompletedAt || status.loginPointSafety?.checkedAt || '');
+      const failureAtMs = Date.parse(failureAt);
+      const checkedAtMs = Date.parse(checkedAt);
+      if (persisted.lastResult === 'failure'
+        && (!failureAtMs || !checkedAtMs || failureAtMs >= checkedAtMs)) {
+        return {
+          at: failureAt || persisted.lastCompletedAt || checkedAt,
+          status: number(scheduler.lastHttpStatus ?? persisted.lastHttpStatus),
+          error: String(scheduler.lastError || persisted.lastError || persisted.lastReason || '')
+        };
+      }
+      if (failureAt && (!checkedAtMs || (failureAtMs > 0 && failureAtMs >= checkedAtMs))) {
+        return {
+          at: failureAt,
+          status: number(scheduler.lastHttpStatus),
+          error: String(scheduler.lastError || '')
+        };
+      }
+      return null;
+    }
+    function snapshotFailureText(status) {
+      const failure = latestSnapshotFetchFailure(status);
+      if (!failure) return '--';
+      const httpStatus = failure.status === null ? '' : 'HTTP ' + failure.status;
+      return joinNonBlank(['快照拉取失败', httpStatus, failure.error]);
+    }
     function loginPointSafetyCheckInFlight(status) {
       const action = status.action || status.decision || {};
       const kind = String(action.kind || '');
       const reason = String(action.reason || '');
       const nextRunAt = String(action.nextRunAt || '');
       const preflightPhase = String(status.network?.sourceIpPreflight?.phase || '');
+      const snapshot = snapshotPanelStatus(status);
+      if (snapshot.scheduler?.inFlight || snapshot.status?.inFlight) return true;
       if (kind === 'snapshot-wait') return true;
       if (preflightPhase === 'snapshot-wait') return true;
       if (nextRunAt) return false;
@@ -1865,7 +1912,8 @@ function renderBrowserlessWebPanel() {
       const action = status.action || status.decision || {};
       const blockerReason = String(offline.blocker?.reason || '');
       const reasonText = [action.reason, blockerReason].filter(Boolean).join(' ');
-      const actualCooldown = action.explicitDelay === true
+      const actualCooldown = action.explicitCooldown === true
+        || action.explicitDelay === true
         || action.kind === 'source-ip-preflight-cooldown'
         || Boolean(offline.blocker)
         || /login-interval|daily-first-login-delay|stamina-(?:budget|exhausted)|source-ip-preflight-insufficient/i.test(reasonText);
@@ -1876,6 +1924,9 @@ function renderBrowserlessWebPanel() {
       const action = status.action || status.decision || {};
       const scheduled = String(action.nextSnapshotCheckAt || '');
       if (scheduled && Date.parse(scheduled) > Date.now()) return scheduled;
+      const snapshot = snapshotPanelStatus(status);
+      const pollerNext = String(snapshot.poller?.nextAttemptAt || '');
+      if (pollerNext && Date.parse(pollerNext) > Date.now()) return pollerNext;
       const nextRunAt = String(action.nextRunAt || '');
       const reasonText = [action.reason, status.loginPointSafety?.reason].filter(Boolean).join(' ');
       if (!offlineCooldownAt(status)
@@ -1895,6 +1946,8 @@ function renderBrowserlessWebPanel() {
       const originalReason = String(detail.originalReason || '');
       const reasonText = [reason, detailReason, originalReason].join(' ');
       const checkInFlight = loginPointSafetyCheckInFlight(status);
+      const snapshot = snapshotPanelStatus(status);
+      const fetchFailure = latestSnapshotFetchFailure(status);
       const pendingResult = /pending-snapshot-safety|snapshot-safety-streak-pending/i.test(reasonText);
       const checkedAt = String(status.loginPointSafety?.checkedAt || detail.checkedAt || '');
       const completedResult = Boolean(checkedAt && !pendingResult);
@@ -1906,6 +1959,19 @@ function renderBrowserlessWebPanel() {
           text: display.text + '（重登冷却中）'
         };
       };
+      if (fetchFailure) {
+        const httpStatus = fetchFailure.status === null ? '' : '（HTTP ' + fetchFailure.status + '）';
+        return {
+          state: 'error',
+          checking: checkInFlight,
+          text: '快照拉取失败' + httpStatus
+        };
+      }
+      if (snapshot.status?.lastResult === 'not-requested'
+        && snapshot.status?.bypassedPreLoginSafety === true
+        && !checkInFlight) {
+        return withCooldown({ state: 'pending', text: '满血豁免，未拉取快照' });
+      }
       if (cooldownActive && !checkInFlight && !completedResult) {
         return { state: 'cooldown', cooldown: true, text: '重登冷却中，冷却结束后再检查' };
       }
@@ -1921,6 +1987,9 @@ function renderBrowserlessWebPanel() {
       if (checkInFlight) {
         const currentCheckOk = status.loginPointSafety?.ok ?? detail.ok;
         const previousCheck = detail.previousCheck || null;
+        if (!completedResult && !previousCheck) {
+          return { state: 'pending', checking: true, text: '正在拉取新快照' };
+        }
         if (completedResult && currentCheckOk === false) {
           return { state: 'unsafe', reviewing: true, checking: true, text: '上次检查不安全，正在检查新快照' };
         }
@@ -2108,9 +2177,18 @@ function renderBrowserlessWebPanel() {
       }
       if (status.auth?.needsReauth) return '等待重新授权';
       const offline = status.stats?.offline || {};
-      const reconnectRemainingMs = number(offline.reconnectRemainingMs);
-      if (reconnectRemainingMs !== null && reconnectRemainingMs > 1000) return '等待重登冷却时间';
+      const recovery = status.exitRecovery || {};
       const action = status.action || status.decision || {};
+      if (recovery.active
+        || action.kind === 'exit-recovery'
+        || action.deadlineType === 'pending-exit-retry'
+        || action.deadlineType === 'exit-recovery-retry') {
+        return '等待退出确认重试';
+      }
+      const reconnectRemainingMs = number(offline.reconnectRemainingMs);
+      if (reconnectRemainingMs !== null
+        && reconnectRemainingMs > 1000
+        && offlineCooldownAt(status)) return '等待重登冷却时间';
       const reason = String(action.reason || status.decision?.reason || '');
       const preflightPhase = String(status.network?.sourceIpPreflight?.phase || '');
       if (action.kind === 'source-ip-preflight' || action.kind === 'source-ip-preflight-cooldown'
@@ -2118,6 +2196,7 @@ function renderBrowserlessWebPanel() {
         return sourceIpPreflightPhaseText(status.network);
       }
       if (reason === 'login-point-safe-connecting') return '登录点已安全，正在连接游戏';
+      if (latestSnapshotFetchFailure(status)) return '等待快照拉取恢复';
       if (loginPointSafetyCheckInFlight(status)) return '正在检查登录点安全';
       const loginState = loginPointDisplay(status).state;
       if (/snapshot|login-point|prelogin|edge/i.test(reason) || loginState === 'pending') {
@@ -3487,6 +3566,31 @@ function renderBrowserlessWebPanel() {
       return !status.game?.inGame
         || /safety|safe|unsafe|threat|danger|flee|leave|injury|pursuit|stamina|offline|stop/.test(text);
     }
+    function snapshotResultDisplay(status) {
+      const snapshot = snapshotPanelStatus(status);
+      if (latestSnapshotFetchFailure(status)) return snapshotFailureText(status);
+      const result = String(snapshot.status?.lastResult || '');
+      if (result === 'safe') return '快照已拉取，登录点安全';
+      if (result === 'unsafe') return '快照已拉取，登录点不安全';
+      if (result === 'not-requested') return '未拉取快照（本地满血豁免）';
+      if (result === 'fetch-success') return '快照已拉取，等待安全判定';
+      if (snapshot.scheduler?.inFlight || snapshot.status?.inFlight) return '正在拉取快照';
+      return '--';
+    }
+    function exitRecoveryDisplay(status) {
+      const recovery = status.exitRecovery || {};
+      if (recovery.active) return '尚未确认离场，正在重试退出确认';
+      if (recovery.state === 'confirmed-absent') return '已确认离场';
+      if (recovery.lastOutcome?.outcome === 'self-present-recovered') return '发现角色仍在线，未获重登许可';
+      if (recovery.lastOutcome?.outcome === 'timeout-unconfirmed') return '超时仍未确认离场';
+      return '--';
+    }
+    function exitRecoveryHttpText(status) {
+      const statuses = Array.isArray(status.exitRecovery?.httpStatuses)
+        ? status.exitRecovery.httpStatuses
+        : [];
+      return statuses.length ? statuses.map(item => 'HTTP ' + item).join('、') : '--';
+    }
     function actionDetailRows(status) {
       const action = status.action || {};
       const decision = status.decision || {};
@@ -3540,6 +3644,40 @@ function renderBrowserlessWebPanel() {
           ? (cloudflareChallenge.leaveConfirmed ? '已调用并确认' : '已调用但未确认')
           : '未调用 leave');
       }
+      const snapshot = snapshotPanelStatus(status);
+      const hasSnapshotActivity = Boolean(
+        snapshot.status?.lastCompletedAt
+          || snapshot.status?.lastAttemptAt
+          || snapshot.scheduler?.lastCompletedAt
+          || snapshot.scheduler?.lastAttemptAt
+          || snapshot.poller?.nextAttemptAt
+      );
+      if (!online && hasSnapshotActivity) {
+        addRow(rowsOut, '快照状态', snapshotResultDisplay(status), true,
+          latestSnapshotFetchFailure(status) ? classAttrs('bad') : classAttrs('info'));
+        addRow(rowsOut, '最近拉取时间', fullStamp(
+          snapshot.scheduler?.lastAttemptAt || snapshot.status?.lastAttemptAt
+        ));
+        addRow(rowsOut, '最近完成时间', fullStamp(
+          snapshot.scheduler?.lastCompletedAt || snapshot.status?.lastCompletedAt
+        ));
+      }
+      const recovery = status.exitRecovery || {};
+      if (!online && (recovery.active || recovery.state !== 'none' || action.kind === 'exit-recovery')) {
+        addRow(rowsOut, '退出确认', exitRecoveryDisplay(status), true,
+          recovery.active ? classAttrs('warn') : classAttrs(recovery.state === 'confirmed-absent' ? 'ok' : 'bad'));
+        addRow(rowsOut, '退出触发', reasonText(recovery.triggerReason), true);
+        addRow(rowsOut, '最近退出请求', fullStamp(recovery.lastAttemptAt));
+        if (number(recovery.lastKnownHp) !== null) addRow(rowsOut, '最后已知血量', number(recovery.lastKnownHp));
+        if (recovery.httpStatuses?.length) addRow(rowsOut, '最近响应', exitRecoveryHttpText(status));
+        if (recovery.lastError) addRow(rowsOut, '退出确认失败', recovery.lastError, true, classAttrs('bad'));
+        if (recovery.active && recovery.nextRetryAt) {
+          addRow(rowsOut, '下次退出确认', fullStamp(recovery.nextRetryAt));
+          addRow(rowsOut, '重试剩余', countdownUntil(recovery.nextRetryAt), false, { countdownAt: recovery.nextRetryAt });
+        }
+        addRow(rowsOut, '重登许可', recovery.reloginAllowed === true ? '是' : '否', true,
+          recovery.reloginAllowed === true ? classAttrs('ok') : classAttrs('warn'));
+      }
       if (online && !liveCombat) addRow(rowsOut, '原因', actionReasonDisplay(status), true);
       const decisionText = targetDecisionBasisText(status, targetRoles);
       if (online && decisionText !== '--') addRow(rowsOut, '判断', decisionText);
@@ -3570,15 +3708,25 @@ function renderBrowserlessWebPanel() {
           addRow(rowsOut, '阻碍因素', blockingFactorsText(status));
           const singleBlocker = singleBlockerHoldText(status);
           if (singleBlocker !== '--') addRow(rowsOut, '单人阻挡', singleBlocker);
+        } else if (loginDisplay.state === 'error') {
+          addRow(rowsOut, '快照状态', snapshotFailureText(status), true, classAttrs('bad'));
         } else if (loginDisplay.state === 'pending') {
           addRow(rowsOut, '等待原因', loginPointPendingReasonText(status));
         }
         addRow(rowsOut, '保持离线', offlineBlockerText(status), false, status.stats?.offline?.blocker ? classAttrs('warn') : null);
         if (!loginDisplay.afterOffline && !loginDisplay.cooldown) {
+          const snapshot = snapshotPanelStatus(status);
+          const latestCheckAt = snapshot.scheduler?.lastCompletedAt
+            || snapshot.status?.lastCompletedAt
+            || status.loginPointSafety?.checkedAt
+            || status.loginPointSafety?.detail?.checkedAt
+            || status.loginPointSafety?.detail?.previousCheck?.checkedAt;
           addRow(
             rowsOut,
-            reentry ? '状态确认时间' : (loginDisplay.reviewing ? '上次检查时间' : '检查时间'),
-            fullStamp(status.loginPointSafety?.checkedAt || status.loginPointSafety?.detail?.checkedAt || status.loginPointSafety?.detail?.previousCheck?.checkedAt)
+            latestSnapshotFetchFailure(status)
+              ? '最近快照完成时间'
+              : (reentry ? '状态确认时间' : (loginDisplay.reviewing ? '上次检查时间' : '检查时间')),
+            fullStamp(latestCheckAt)
           );
         }
       }
@@ -3603,6 +3751,21 @@ function renderBrowserlessWebPanel() {
       const rowsOut = [];
       addRow(rowsOut, '退出原因', lastExitReasonText(status, reason), true);
       addRow(rowsOut, '退出时间', fullStamp(offlineStats.lastExitAt), true);
+      const recovery = status.exitRecovery || {};
+      if (recovery.active || recovery.state !== 'none' || recovery.lastOutcome) {
+        addRow(rowsOut, '退出确认', exitRecoveryDisplay(status), true,
+          recovery.active ? classAttrs('warn') : classAttrs(recovery.state === 'confirmed-absent' ? 'ok' : 'bad'));
+        if (recovery.confirmationAt) addRow(rowsOut, '退出确认时间', fullStamp(recovery.confirmationAt));
+        if (number(recovery.confirmedHp) !== null) addRow(rowsOut, '离场确认血量', '我方 ' + number(recovery.confirmedHp));
+        else if (number(recovery.lastKnownHp) !== null) addRow(rowsOut, '最后已知血量', '我方 ' + number(recovery.lastKnownHp));
+        if (recovery.httpStatuses?.length) addRow(rowsOut, '退出请求响应', exitRecoveryHttpText(status));
+        if (recovery.active && recovery.nextRetryAt) {
+          addRow(rowsOut, '下次退出确认', fullStamp(recovery.nextRetryAt));
+          addRow(rowsOut, '重试剩余', countdownUntil(recovery.nextRetryAt), false, { countdownAt: recovery.nextRetryAt });
+        }
+        addRow(rowsOut, '重登许可', recovery.reloginAllowed === true ? '是' : '否', true,
+          recovery.reloginAllowed === true ? classAttrs('ok') : classAttrs('warn'));
+      }
       const exitThreat = recentExitThreat(status);
       if (battle && !staminaExhausted) {
         addRow(rowsOut, '交战对手', targetLabel(battle.target), true);
@@ -3633,7 +3796,9 @@ function renderBrowserlessWebPanel() {
       if (!staminaExhausted && exitHpText && exitHpText !== '--') {
         addRow(rowsOut, hpTriggeredExit(status, reason) ? '退出触发血量' : '退出时血量', exitHpText);
       }
-      const confirmedHpText = confirmedLeaveHpText(status);
+      const confirmedHpText = recovery.confirmedHp === null || recovery.confirmedHp === undefined
+        ? confirmedLeaveHpText(status)
+        : '';
       if (confirmedHpText) addRow(rowsOut, '离场确认血量', confirmedHpText);
       return rowsOut;
     }
@@ -4025,7 +4190,8 @@ function renderBrowserlessWebPanel() {
       setText('sessionPanelTitle', online ? '本次游戏' : '上次游戏');
       rows('currentSession', [
         ['进入时间', fullStamp(currentSession.enteredAt), true],
-        ['持续时间', durationClock(currentSession.durationMs)]
+        ['持续时间', durationClock(currentSession.durationMs)],
+        ['游戏结束', fullStamp(currentSession.endedAt)]
       ]);
       rows('todayStats', [
         ['日期', todayStats.day],

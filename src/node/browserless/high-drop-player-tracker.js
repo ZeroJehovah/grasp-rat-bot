@@ -349,6 +349,12 @@ function createSnapshotGapPoller(options = {}) {
   let lastSnapshotAtMs = Math.max(0, Number(options.lastSnapshotAtMs || 0));
   let lastGlobalSnapshotAtMs = Math.max(0, Number(options.lastGlobalSnapshotAtMs || 0));
   let lastAttemptAtMs = 0;
+  let nextAttemptAtMs = 0;
+  let lastCompletedAtMs = 0;
+  let lastSuccessAtMs = 0;
+  let lastFailureAtMs = 0;
+  let lastFailureHttpStatus = null;
+  let lastError = '';
   let lifecycleGeneration = 0;
   let nextRequestAllowBurst = false;
 
@@ -394,6 +400,7 @@ function createSnapshotGapPoller(options = {}) {
     const delay = delayMs === null
       ? Math.min(snapshotDelay, globalDelay)
       : Math.max(0, Number(delayMs));
+    nextAttemptAtMs = t + Math.max(0, Number(delay) || 0);
     timer = setTimer(run, delay);
     timer?.unref?.();
   }
@@ -414,6 +421,7 @@ function createSnapshotGapPoller(options = {}) {
 
   async function run() {
     timer = null;
+    nextAttemptAtMs = 0;
     if (stopped || inFlight) return;
     const runGeneration = lifecycleGeneration;
     if (typeof options.isReady === 'function' && !options.isReady()) {
@@ -450,7 +458,16 @@ function createSnapshotGapPoller(options = {}) {
           global: true
         });
       }
+      lastCompletedAtMs = now();
+      lastSuccessAtMs = lastCompletedAtMs;
+      lastError = '';
     } catch (err) {
+      lastCompletedAtMs = now();
+      lastFailureAtMs = lastCompletedAtMs;
+      lastFailureHttpStatus = Number.isFinite(Number(err?.status ?? err?.statusCode))
+        ? Math.round(Number(err.status ?? err.statusCode))
+        : null;
+      lastError = err?.message || String(err);
       if (!stopped && runGeneration === lifecycleGeneration && typeof options.onError === 'function') {
         options.onError(err);
       }
@@ -468,6 +485,12 @@ function createSnapshotGapPoller(options = {}) {
       lastSnapshotAtMs = snapshotAtMs;
       lastGlobalSnapshotAtMs = globalSnapshotAtMs;
       lastAttemptAtMs = 0;
+      nextAttemptAtMs = 0;
+      lastCompletedAtMs = 0;
+      lastSuccessAtMs = 0;
+      lastFailureAtMs = 0;
+      lastFailureHttpStatus = null;
+      lastError = '';
     }
     nextRequestAllowBurst = detail.allowBurst === true;
     stopped = false;
@@ -480,6 +503,7 @@ function createSnapshotGapPoller(options = {}) {
     nextRequestAllowBurst = false;
     if (timer) clearTimer(timer);
     timer = null;
+    nextAttemptAtMs = 0;
   }
 
   return {
@@ -497,6 +521,13 @@ function createSnapshotGapPoller(options = {}) {
         lastSnapshotAtMs,
         lastGlobalSnapshotAtMs,
         lastAttemptAtMs,
+        nextAttemptAtMs,
+        nextAttemptAt: nextAttemptAtMs > 0 ? new Date(nextAttemptAtMs).toISOString() : '',
+        lastCompletedAtMs,
+        lastSuccessAtMs,
+        lastFailureAtMs,
+        lastFailureHttpStatus,
+        lastError,
         inFlight,
         stopped,
         lifecycleGeneration

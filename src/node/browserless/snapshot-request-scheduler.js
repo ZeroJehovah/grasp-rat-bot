@@ -38,6 +38,42 @@ function createSnapshotRequestScheduler(options = {}) {
   let lastPurpose = '';
   let lastError = '';
   let lastResult = null;
+  let lastSuccessAtMs = null;
+  let lastFailureAtMs = null;
+  let lastFailureHttpStatus = null;
+  let lastFailureError = '';
+  let lastFailure = null;
+
+  function httpStatusFrom(value) {
+    const candidates = [
+      value?.status,
+      value?.httpStatus,
+      value?.statusCode,
+      value?.response?.status,
+      value?.error?.status,
+      value?.error?.statusCode
+    ];
+    for (const candidate of candidates) {
+      const number = Number(candidate);
+      if (Number.isFinite(number) && number > 0) return Math.round(number);
+    }
+    return null;
+  }
+
+  function recordFailure(detail = {}) {
+    const failedAtMs = finiteNow(now);
+    lastFailureAtMs = failedAtMs;
+    lastFailureHttpStatus = httpStatusFrom(detail);
+    lastFailureError = String(detail.error || detail.message || 'snapshot request failed');
+    lastFailure = {
+      atMs: failedAtMs,
+      httpStatus: lastFailureHttpStatus,
+      error: lastFailureError,
+      requestSequence: Number(detail.requestSequence || 0) || null,
+      requestClass: String(detail.requestClass || ''),
+      purpose: String(detail.purpose || '')
+    };
+  }
 
   function latestCanSatisfy(detail = {}) {
     if (detail.reuseLatest !== true || !lastResult || lastResult.ok === false) return false;
@@ -89,20 +125,28 @@ function createSnapshotRequestScheduler(options = {}) {
       };
       lastResult = result;
       lastCompletedAtMs = finiteNow(now);
+      if (result.ok === false) {
+        recordFailure(result);
+      } else {
+        lastSuccessAtMs = lastCompletedAtMs;
+      }
       onResult?.(result);
       return result;
     } catch (error) {
       lastCompletedAtMs = finiteNow(now);
       lastError = error?.message || String(error);
-      onResult?.({
+      const failedResult = {
         ok: false,
         requestSequence,
         startedAtMs,
         waitMs,
         requestClass: String(detail.requestClass || ''),
         purpose: String(detail.purpose || ''),
+        status: httpStatusFrom(error),
         error: lastError
-      });
+      };
+      recordFailure(failedResult);
+      onResult?.(failedResult);
       throw error;
     }
   }
@@ -135,10 +179,25 @@ function createSnapshotRequestScheduler(options = {}) {
       lastRequestClass,
       lastPurpose,
       lastError,
+      lastSuccessAtMs,
+      lastFailureAtMs,
+      lastFailureHttpStatus,
+      lastFailureError,
+      lastFailure: lastFailure
+        ? {
+            atMs: lastFailure.atMs,
+            httpStatus: lastFailure.httpStatus,
+            error: lastFailure.error,
+            requestSequence: lastFailure.requestSequence,
+            requestClass: lastFailure.requestClass,
+            purpose: lastFailure.purpose
+          }
+        : null,
       lastResult: lastResult
         ? {
             ok: lastResult.ok !== false,
             observedAtMs: Number(lastResult.observedAtMs || 0) || null,
+            status: httpStatusFrom(lastResult),
             tick: snapshotTick(lastResult),
             requestSequence: Number(lastResult.requestSequence || 0) || null,
             requestClass: String(lastResult.requestClass || ''),
