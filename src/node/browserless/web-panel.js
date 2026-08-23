@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.23.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.23.2';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -39,18 +39,6 @@ function mapAnimationProgressCore(elapsedMs, durationMs) {
   return 1 - Math.pow(1 - linear, 3);
 }
 
-function mapLinePhaseCore(nowMs, cycleMs = 1800) {
-  const now = Number(nowMs);
-  const cycle = Number(cycleMs);
-  if (!Number.isFinite(now) || !Number.isFinite(cycle) || cycle <= 0) return 0;
-  return ((now % cycle) + cycle) % cycle / cycle;
-}
-
-function mapLinePulseCore(nowMs, periodMs = 1500) {
-  const phase = mapLinePhaseCore(nowMs, periodMs);
-  return 0.5 + 0.5 * Math.sin(phase * Math.PI * 2 - Math.PI / 2);
-}
-
 function interpolateMapMarkerCore(marker, previous, progress) {
   const nextX = Number(marker?.px);
   const nextY = Number(marker?.py);
@@ -67,6 +55,73 @@ function interpolateMapMarkerCore(marker, previous, progress) {
     px: previousX + (nextX - previousX) * clampedProgress,
     py: previousY + (nextY - previousY) * clampedProgress
   };
+}
+
+function interpolateMapPointCore(point, previous, progress) {
+  const nextX = Number(point?.px);
+  const nextY = Number(point?.py);
+  if (!Number.isFinite(nextX) || !Number.isFinite(nextY)) return point;
+  const previousX = Number(previous?.px);
+  const previousY = Number(previous?.py);
+  if (!Number.isFinite(previousX) || !Number.isFinite(previousY)) {
+    return { ...point, px: nextX, py: nextY };
+  }
+  const parsedProgress = Number(progress);
+  const clampedProgress = Math.max(0, Math.min(1, Number.isFinite(parsedProgress) ? parsedProgress : 1));
+  return {
+    ...point,
+    px: previousX + (nextX - previousX) * clampedProgress,
+    py: previousY + (nextY - previousY) * clampedProgress
+  };
+}
+
+function resampleMapPolylineCore(points, count) {
+  const source = (Array.isArray(points) ? points : [])
+    .filter(point => Number.isFinite(Number(point?.px)) && Number.isFinite(Number(point?.py)))
+    .map(point => ({ px: Number(point.px), py: Number(point.py) }));
+  const targetCount = Math.max(1, Math.round(Number(count) || source.length || 1));
+  if (!source.length) return [];
+  if (source.length === 1 || targetCount === 1) {
+    return Array.from({ length: targetCount }, () => ({ ...source[0] }));
+  }
+  const lengths = [0];
+  for (let index = 1; index < source.length; index += 1) {
+    lengths.push(lengths[index - 1] + Math.hypot(
+      source[index].px - source[index - 1].px,
+      source[index].py - source[index - 1].py
+    ));
+  }
+  const totalLength = lengths.at(-1);
+  if (!(totalLength > 0)) return Array.from({ length: targetCount }, () => ({ ...source[0] }));
+  return Array.from({ length: targetCount }, (_, targetIndex) => {
+    const wanted = totalLength * targetIndex / (targetCount - 1);
+    let segment = 1;
+    while (segment < lengths.length && lengths[segment] < wanted) segment += 1;
+    const right = Math.min(lengths.length - 1, segment);
+    const left = Math.max(0, right - 1);
+    const span = lengths[right] - lengths[left];
+    const ratio = span > 0 ? (wanted - lengths[left]) / span : 0;
+    return {
+      px: source[left].px + (source[right].px - source[left].px) * ratio,
+      py: source[left].py + (source[right].py - source[left].py) * ratio
+    };
+  });
+}
+
+function interpolateMapPolylineCore(nextPoints, previousPoints, progress) {
+  const next = Array.isArray(nextPoints) ? nextPoints : [];
+  if (!next.length) return [];
+  if (!Array.isArray(previousPoints) || !previousPoints.length) {
+    return next.map(point => ({ px: Number(point.px), py: Number(point.py) }));
+  }
+  const count = Math.max(next.length, previousPoints.length);
+  const nextResampled = resampleMapPolylineCore(next, count);
+  const previousResampled = resampleMapPolylineCore(previousPoints, count);
+  return nextResampled.map((point, index) => interpolateMapPointCore(
+    point,
+    previousResampled[index],
+    progress
+  ));
 }
 
 function appendMapTrailSampleCore(samples, sample, nowMs, maxAgeMs = 30000, maxSamples = 16) {
@@ -775,9 +830,6 @@ function renderBrowserlessWebPanel() {
     const MAP_MOVE_ANIMATION_MS = 260;
     const MAP_TRAIL_MAX_AGE_MS = 30000;
     const MAP_TRAIL_LINE_WIDTH = 2;
-    const MAP_LINE_ANIMATION_CYCLE_MS = 1800;
-    const MAP_LINE_PULSE_PERIOD_MS = 1500;
-    const MAP_LINE_FRAME_INTERVAL_MS = 40;
     let autoRefreshTimer = 0;
     let countdownTimer = 0;
     let refreshInFlight = null;
@@ -790,11 +842,11 @@ function renderBrowserlessWebPanel() {
     let mapHitTargets = [];
     let mapEmptyReason = '';
     let mapAnimationFrame = 0;
-    let mapLineAnimationFrame = 0;
-    let mapLineAnimationGeneration = 0;
     let mapRenderedMarkerPositions = new Map();
     let mapRenderedCanvasSize = 0;
     let mapTrailRenderHistory = new Map();
+    let mapRenderedTrailPaths = new Map();
+    let mapRenderedTargetLinePositions = new Map();
     let highDropSortField = 'drop';
     let panelCollapseState = readPanelCollapseState();
 
@@ -812,8 +864,11 @@ function renderBrowserlessWebPanel() {
     const mapMarkerKey = ${mapMarkerKeyCore.toString()};
     const mapRemoteTargetPosition = ${mapRemoteTargetPositionCore.toString()};
     const mapAnimationProgress = ${mapAnimationProgressCore.toString()};
-    const mapLinePhase = ${mapLinePhaseCore.toString()};
-    const mapLinePulse = ${mapLinePulseCore.toString().replace('mapLinePhaseCore', 'mapLinePhase')};
+    const interpolateMapPoint = ${interpolateMapPointCore.toString()};
+    const resampleMapPolyline = ${resampleMapPolylineCore.toString()};
+    const interpolateMapPolyline = ${interpolateMapPolylineCore.toString()
+      .replaceAll('resampleMapPolylineCore', 'resampleMapPolyline')
+      .replaceAll('interpolateMapPointCore', 'interpolateMapPoint')};
     const interpolateMapMarker = ${interpolateMapMarkerCore.toString()};
     const mapTrailOpacity = ${mapTrailOpacityCore.toString()};
     const transportMetricValueClass = ${transportMetricValueClassCore.toString()};
@@ -2300,6 +2355,7 @@ function renderBrowserlessWebPanel() {
     }
     function clearMapTrails() {
       mapTrailRenderHistory = new Map();
+      mapRenderedTrailPaths = new Map();
     }
     function mapTrailSampleFromBackend(sample) {
       const array = Array.isArray(sample) ? sample : null;
@@ -2307,7 +2363,7 @@ function renderBrowserlessWebPanel() {
       const y = number(array ? array[1] : sample?.y);
       const at = number(array ? array[2] : sample?.at);
       if (x === null || y === null || at === null) return null;
-      return { x, y, at };
+      return { x, y, at, breakBefore: Boolean(!array && sample?.breakBefore) };
     }
     function syncMapTrailHistory(status, markers, nowMs) {
       const backend = status?.mapTrails;
@@ -2336,28 +2392,6 @@ function renderBrowserlessWebPanel() {
       }
       mapTrailRenderHistory = next;
     }
-    function traceMapSmoothPath(context, points) {
-      if (!Array.isArray(points) || points.length < 2) return false;
-      context.beginPath();
-      context.moveTo(points[0].px, points[0].py);
-      if (points.length === 2) {
-        context.lineTo(points[1].px, points[1].py);
-        return true;
-      }
-      for (let index = 1; index < points.length - 1; index += 1) {
-        const point = points[index];
-        const next = points[index + 1];
-        context.quadraticCurveTo(
-          point.px,
-          point.py,
-          (point.px + next.px) / 2,
-          (point.py + next.py) / 2
-        );
-      }
-      const last = points[points.length - 1];
-      context.quadraticCurveTo(last.px, last.py, last.px, last.py);
-      return true;
-    }
     function mapTrailPathSamples(samples) {
       const paths = [];
       let current = [];
@@ -2371,77 +2405,89 @@ function renderBrowserlessWebPanel() {
       if (current.length) paths.push(current);
       return paths.filter(path => path.length >= 2);
     }
-    function drawMapTrails(context, scene, markers, frame) {
+    function buildMapTrailGeometry(scene, markers, frame, history = mapTrailRenderHistory) {
       const currentMarkers = new Map(
         markers.filter(marker => marker.mapKey).map(marker => [marker.mapKey, marker])
       );
       currentMarkers.set(scene.selfMapKey, { px: frame.center, py: frame.center });
-      const lineNowMs = Number.isFinite(Number(scene.lineNowMs)) ? Number(scene.lineNowMs) : mapAnimationNow();
-      const flowPhase = mapLinePhase(lineNowMs, MAP_LINE_ANIMATION_CYCLE_MS);
-      context.save();
-      context.lineCap = 'round';
-      context.lineJoin = 'round';
-      context.lineWidth = MAP_TRAIL_LINE_WIDTH;
-      for (const [key, entry] of mapTrailRenderHistory.entries()) {
+      const geometry = new Map();
+      for (const [key, entry] of history.entries()) {
         const samples = entry.samples.filter(sample => scene.trailNowMs - Number(sample.at) <= MAP_TRAIL_MAX_AGE_MS);
         if (samples.length < 2) continue;
         const currentMarker = currentMarkers.get(key);
         if (!currentMarker) continue;
         const paths = mapTrailPathSamples(samples);
-        for (const pathSamples of paths) {
-          const points = pathSamples.map((sample, index) => ({
-            px: currentMarker && index === pathSamples.length - 1
-              ? currentMarker.px
-              : frame.center + (Number(sample.x) - scene.selfX) * scene.scale,
-            py: currentMarker && index === pathSamples.length - 1
-              ? currentMarker.py
-              : frame.center + (Number(sample.y) - scene.selfY) * scene.scale
-          }));
-          const pathLength = points.reduce((sum, point, index) => (
-            index === 0 ? sum : sum + Math.hypot(point.px - points[index - 1].px, point.py - points[index - 1].py)
-          ), 0);
-          if (!(pathLength >= .2) || !traceMapSmoothPath(context, points)) continue;
-          const opacity = mapTrailOpacity(pathSamples.at(-1).at, scene.trailNowMs, MAP_TRAIL_MAX_AGE_MS);
-          context.strokeStyle = entry.color;
-          context.globalAlpha = opacity * .42;
-          context.setLineDash([]);
-          context.stroke();
-          traceMapSmoothPath(context, points);
-          context.globalAlpha = opacity;
-          context.setLineDash([7, 13]);
-          context.lineDashOffset = -flowPhase * 20;
+        const points = paths.map((pathSamples, pathIndex) => pathSamples.map((sample, index) => ({
+          px: pathIndex === paths.length - 1 && index === pathSamples.length - 1
+            ? currentMarker.px
+            : frame.center + (Number(sample.x) - scene.selfX) * scene.scale,
+          py: pathIndex === paths.length - 1 && index === pathSamples.length - 1
+            ? currentMarker.py
+            : frame.center + (Number(sample.y) - scene.selfY) * scene.scale
+        })));
+        const drawablePaths = points.filter(path => path.length >= 2);
+        if (!drawablePaths.length) continue;
+        geometry.set(key, {
+          color: entry.color,
+          opacity: mapTrailOpacity(samples.at(-1).at, scene.trailNowMs, MAP_TRAIL_MAX_AGE_MS),
+          paths: drawablePaths
+        });
+      }
+      return geometry;
+    }
+    function interpolateMapTrailGeometry(previous, next, progress) {
+      const geometry = new Map();
+      for (const [key, entry] of next.entries()) {
+        const previousEntry = previous instanceof Map ? previous.get(key) : null;
+        geometry.set(key, {
+          ...entry,
+          paths: entry.paths.map((path, index) => interpolateMapPolyline(
+            path,
+            previousEntry?.paths?.[index],
+            progress
+          ))
+        });
+      }
+      return geometry;
+    }
+    function drawMapTrails(context, scene, markers, frame, progress = 1) {
+      const nextGeometry = buildMapTrailGeometry(
+        scene,
+        scene.nextMarkers || markers,
+        frame,
+        mapTrailRenderHistory
+      );
+      const geometry = interpolateMapTrailGeometry(scene.previousTrailPaths, nextGeometry, progress);
+      context.save();
+      context.lineCap = 'round';
+      context.lineJoin = 'round';
+      context.lineWidth = MAP_TRAIL_LINE_WIDTH;
+      for (const entry of geometry.values()) {
+        context.globalAlpha = entry.opacity;
+        context.strokeStyle = entry.color;
+        for (const points of entry.paths) {
+          if (!Array.isArray(points) || points.length < 2) continue;
+          context.beginPath();
+          context.moveTo(points[0].px, points[0].py);
+          for (let index = 1; index < points.length; index += 1) {
+            context.lineTo(points[index].px, points[index].py);
+          }
           context.stroke();
         }
       }
-      context.setLineDash([]);
-      context.lineDashOffset = 0;
       context.restore();
     }
-    function drawMapTargetPath(context, center, markers, color, dashed = false, lineNowMs = 0) {
+    function drawMapTargetPath(context, center, markers, color, dashed = false) {
       if (!markers.length) return;
-      const points = [{ px: center, py: center }, ...markers.map(marker => ({ px: marker.px, py: marker.py }))];
-      if (!traceMapSmoothPath(context, points)) return;
-      const phase = mapLinePhase(lineNowMs, MAP_LINE_ANIMATION_CYCLE_MS);
-      const pulse = mapLinePulse(lineNowMs, MAP_LINE_PULSE_PERIOD_MS);
       context.save();
       context.strokeStyle = color;
-      context.lineCap = 'round';
-      context.lineJoin = 'round';
-      context.lineWidth = dashed ? 1 : 1.1;
-      context.globalAlpha = dashed ? .72 : .78 + pulse * .12;
-      if (dashed) context.setLineDash([6, 5]);
-      context.lineDashOffset = dashed ? -phase * 11 : 0;
+      context.lineWidth = .75;
+      if (dashed) context.setLineDash([5, 4]);
+      context.beginPath();
+      context.moveTo(center, center);
+      for (const marker of markers) context.lineTo(marker.px, marker.py);
       context.stroke();
-      if (!dashed) {
-        traceMapSmoothPath(context, points);
-        context.globalAlpha = .2 + pulse * .22;
-        context.lineWidth = 2.2;
-        context.setLineDash([2, 14]);
-        context.lineDashOffset = -phase * 20;
-        context.stroke();
-      }
       context.setLineDash([]);
-      context.lineDashOffset = 0;
       context.restore();
     }
     function mapTargetPathColor(marker) {
@@ -2460,6 +2506,105 @@ function renderBrowserlessWebPanel() {
       const projected = mapRemoteTargetPosition(x - selfX, y - selfY, scene.visibleRange);
       if (!projected) return null;
       return { px: frame.center + projected.dx * scene.scale, py: frame.center + projected.dy * scene.scale };
+    }
+    function mapTargetLineKey(role) {
+      return 'target-line:' + role;
+    }
+    function mapTargetLineEntries(status, markers, scene, frame) {
+      const entries = [];
+      const targetRoles = panelTargetRoles(status);
+      const playerTarget = markers.find(marker => marker.role === 'primary')
+        || markers.find(marker => marker.targetRole === 'combat')
+        || markers.find(marker => marker.targetRole === 'afk')
+        || markers.find(marker => marker.targetRole === 'remote-snapshot');
+      const secondaryTarget = markers.find(marker => marker.role === 'secondary');
+      const add = (role, target, marker, fallbackPoint, color, dashed) => {
+        const point = marker || fallbackPoint;
+        if (!point) return;
+        entries.push({
+          key: mapTargetLineKey(role, target, point),
+          point: { px: point.px, py: point.py },
+          fromMarker: Boolean(marker),
+          color: mapTargetPathColor(point),
+          dashed
+        });
+      };
+      const primaryMarker = playerTarget?.role === 'primary' ? playerTarget : null;
+      const primaryProjected = mapTargetPathPoint(targetRoles?.primary, scene, frame);
+      add(
+        'primary',
+        targetRoles?.primary,
+        primaryMarker,
+        primaryProjected || (playerTarget?.role !== 'primary' ? playerTarget : null),
+        mapTargetPathColor(primaryMarker || primaryProjected),
+        false
+      );
+      const secondaryMarker = secondaryTarget?.role === 'secondary' ? secondaryTarget : null;
+      const secondaryProjected = mapTargetPathPoint(targetRoles?.secondary, scene, frame);
+      add(
+        'secondary',
+        targetRoles?.secondary,
+        secondaryMarker,
+        secondaryProjected,
+        mapTargetPathColor(secondaryMarker || secondaryProjected),
+        true
+      );
+      return entries;
+    }
+    function interpolateMapTargetLinePoint(entry, scene, progress) {
+      if (entry.fromMarker) return entry.point;
+      return interpolateMapPoint(
+        entry.point,
+        scene.previousTargetLinePositions?.get(entry.key),
+        progress
+      );
+    }
+    function mapLineFrame(scene) {
+      return {
+        center: scene.size / 2,
+        radius: Math.max(1, scene.size / 2 - 2)
+      };
+    }
+    function mapTrailGeometryMoved(previous, next) {
+      if (!(previous instanceof Map)) return next.size > 0;
+      for (const [key, entry] of next.entries()) {
+        const previousEntry = previous.get(key);
+        if (!previousEntry || previousEntry.paths.length !== entry.paths.length) return true;
+        for (let pathIndex = 0; pathIndex < entry.paths.length; pathIndex += 1) {
+          const previousPath = previousEntry.paths[pathIndex];
+          const nextPath = entry.paths[pathIndex];
+          if (!previousPath || previousPath.length !== nextPath.length) return true;
+          for (let pointIndex = 0; pointIndex < nextPath.length; pointIndex += 1) {
+            if (Math.hypot(
+              nextPath[pointIndex].px - previousPath[pointIndex].px,
+              nextPath[pointIndex].py - previousPath[pointIndex].py
+            ) > .35) return true;
+          }
+        }
+      }
+      return false;
+    }
+    function mapTargetLineGeometryMoved(scene, markers, frame) {
+      const entries = mapTargetLineEntries(scene.status, markers, scene, frame);
+      for (const entry of entries) {
+        const previous = mapRenderedTargetLinePositions.get(entry.key);
+        if (!previous || Math.hypot(entry.point.px - previous.px, entry.point.py - previous.py) > .35) return true;
+      }
+      return false;
+    }
+    function mapLineGeometryMoved(scene, markers) {
+      const frame = mapLineFrame(scene);
+      const nextTrailPaths = buildMapTrailGeometry(scene, markers, frame, mapTrailRenderHistory);
+      return mapTrailGeometryMoved(mapRenderedTrailPaths, nextTrailPaths)
+        || mapTargetLineGeometryMoved(scene, markers, frame);
+    }
+    function rememberMapLineGeometry(scene, markers) {
+      const frame = mapLineFrame(scene);
+      mapRenderedTrailPaths = buildMapTrailGeometry(scene, markers, frame, mapTrailRenderHistory);
+      mapRenderedTargetLinePositions = new Map(
+        mapTargetLineEntries(scene.status, markers, scene, frame)
+          .map(entry => [entry.key, { px: entry.point.px, py: entry.point.py }])
+      );
     }
     function drawMapLabel(context, marker, size) {
       if (!marker.label) return;
@@ -2491,7 +2636,6 @@ function renderBrowserlessWebPanel() {
       context.fillText(marker.label, x, y);
     }
     function cancelMapMarkerAnimation(resetPositions = false) {
-      cancelMapLineAnimation();
       if (mapAnimationFrame && typeof cancelAnimationFrame === 'function') {
         cancelAnimationFrame(mapAnimationFrame);
       }
@@ -2499,6 +2643,8 @@ function renderBrowserlessWebPanel() {
       if (resetPositions) {
         mapRenderedMarkerPositions = new Map();
         mapRenderedCanvasSize = 0;
+        mapRenderedTrailPaths = new Map();
+        mapRenderedTargetLinePositions = new Map();
       }
     }
     function rememberMapMarkerPositions(markers, canvasSize) {
@@ -2520,28 +2666,6 @@ function renderBrowserlessWebPanel() {
       return !(typeof window.matchMedia === 'function'
         && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
     }
-    function cancelMapLineAnimation() {
-      if (mapLineAnimationFrame && typeof cancelAnimationFrame === 'function') {
-        cancelAnimationFrame(mapLineAnimationFrame);
-      }
-      mapLineAnimationFrame = 0;
-      mapLineAnimationGeneration += 1;
-    }
-    function mapHasRenderableLines(scene, markers) {
-      const hasTrail = [...mapTrailRenderHistory.values()].some(entry => (
-        Array.isArray(entry?.samples) && entry.samples.filter(sample => (
-          scene.trailNowMs - Number(sample.at) <= MAP_TRAIL_MAX_AGE_MS
-        )).length >= 2
-      ));
-      if (hasTrail) return true;
-      const coinMarkers = markers.filter(marker => marker.kind === 'coin');
-      if (coinMarkers.some(marker => marker.routeOrder > 0 || marker.selected)) return true;
-      const targetRoles = panelTargetRoles(scene.status);
-      return markers.some(marker => marker.role || marker.targetRole)
-        || [targetRoles?.primary, targetRoles?.secondary].some(target => (
-          Number.isFinite(Number(target?.x)) && Number.isFinite(Number(target?.y))
-        ));
-    }
     function mapMarkerPositionsMoved(markers, previousPositions) {
       return markers.some(marker => {
         const previous = marker.mapKey ? previousPositions.get(marker.mapKey) : null;
@@ -2550,13 +2674,14 @@ function renderBrowserlessWebPanel() {
     }
     function paintTargetMapScene(scene, markers) {
       const { context, size, status, visibleRange, attackRange, emptyReason } = scene;
+      const lineProgress = Number.isFinite(Number(scene.lineProgress)) ? Number(scene.lineProgress) : 1;
       context.clearRect(0, 0, size, size);
       const frame = drawMapBase(context, size, attackRange, visibleRange || 1);
       context.save();
       context.beginPath();
       context.arc(frame.center, frame.center, frame.radius, 0, Math.PI * 2);
       context.clip();
-      drawMapTrails(context, scene, markers, frame);
+      drawMapTrails(context, scene, markers, frame, lineProgress);
       const coinMarkers = markers.filter(marker => marker.kind === 'coin');
       const routeMarkers = coinMarkers.filter(marker => marker.routeOrder > 0).sort((a, b) => a.routeOrder - b.routeOrder);
       drawMapTargetPath(
@@ -2564,37 +2689,15 @@ function renderBrowserlessWebPanel() {
         frame.center,
         routeMarkers.length ? routeMarkers : coinMarkers.filter(marker => marker.selected),
         '#fbbf24',
-        false,
-        scene.lineNowMs
+        false
       );
-      const playerTarget = markers.find(marker => marker.role === 'primary')
-        || markers.find(marker => marker.targetRole === 'combat')
-        || markers.find(marker => marker.targetRole === 'afk')
-        || markers.find(marker => marker.targetRole === 'remote-snapshot');
-      const secondaryTarget = markers.find(marker => marker.role === 'secondary');
-      const targetRoles = panelTargetRoles(status);
-      const primaryPoint = (playerTarget?.role === 'primary' ? playerTarget : mapTargetPathPoint(targetRoles?.primary, scene, frame))
-        || (playerTarget?.role !== 'primary' ? playerTarget : null);
-      const secondaryPoint = (secondaryTarget?.role === 'secondary' ? secondaryTarget : mapTargetPathPoint(targetRoles?.secondary, scene, frame))
-        || (secondaryTarget?.role === 'secondary' ? secondaryTarget : null);
-      if (primaryPoint) {
+      for (const entry of mapTargetLineEntries(status, markers, scene, frame)) {
         drawMapTargetPath(
           context,
           frame.center,
-          [primaryPoint],
-          mapTargetPathColor(primaryPoint),
-          false,
-          scene.lineNowMs
-        );
-      }
-      if (secondaryPoint) {
-        drawMapTargetPath(
-          context,
-          frame.center,
-          [secondaryPoint],
-          mapTargetPathColor(secondaryPoint),
-          true,
-          scene.lineNowMs
+          [interpolateMapTargetLinePoint(entry, scene, lineProgress)],
+          entry.color,
+          entry.dashed
         );
       }
       for (const marker of markers.filter(marker => !marker.selected)) drawMapMarker(context, marker);
@@ -2619,47 +2722,33 @@ function renderBrowserlessWebPanel() {
         context.fillText(emptyReason, frame.center, frame.center + 24);
       }
     }
-    function startMapLineAnimation(scene, markers, animate = true) {
-      cancelMapLineAnimation();
-      if (!animate || !mapMotionAnimationAllowed() || !mapHasRenderableLines(scene, markers)) return;
-      const generation = mapLineAnimationGeneration;
-      let lastPaintAt = -Infinity;
-      const step = frameAt => {
-        if (generation !== mapLineAnimationGeneration) return;
-        const lineNowMs = Number.isFinite(Number(frameAt)) ? Number(frameAt) : mapAnimationNow();
-        if (lineNowMs - lastPaintAt >= MAP_LINE_FRAME_INTERVAL_MS) {
-          paintTargetMapScene({
-            ...scene,
-            lineNowMs,
-            trailNowMs: Date.now()
-          }, markers);
-          lastPaintAt = lineNowMs;
-        }
-        mapLineAnimationFrame = requestAnimationFrame(step);
-      };
-      mapLineAnimationFrame = requestAnimationFrame(step);
-    }
     function startMapMarkerAnimation(scene, markers, animate = true) {
       cancelMapMarkerAnimation(false);
       const previousPositions = mapRenderedMarkerPositions;
+      const animationScene = {
+        ...scene,
+        nextMarkers: markers,
+        previousTrailPaths: mapRenderedTrailPaths,
+        previousTargetLinePositions: mapRenderedTargetLinePositions
+      };
+      const lineGeometryMoved = mapLineGeometryMoved(animationScene, markers);
       const shouldAnimate = animate
         && mapRenderedCanvasSize === scene.size
         && mapMotionAnimationAllowed()
-        && mapMarkerPositionsMoved(markers, previousPositions);
+        && (mapMarkerPositionsMoved(markers, previousPositions) || lineGeometryMoved);
       const renderAtProgress = progress => {
         const renderedMarkers = markers.map(marker => (
           interpolateMapMarker(marker, marker.mapKey ? previousPositions.get(marker.mapKey) : null, progress)
         ));
         paintTargetMapScene({
-          ...scene,
-          lineNowMs: mapAnimationNow(),
-          trailNowMs: Date.now()
+          ...animationScene,
+          lineProgress: progress
         }, renderedMarkers);
         rememberMapMarkerPositions(renderedMarkers, scene.size);
       };
       if (!shouldAnimate) {
         renderAtProgress(1);
-        startMapLineAnimation(scene, markers, animate);
+        rememberMapLineGeometry(animationScene, markers);
         return;
       }
       renderAtProgress(0);
@@ -2673,7 +2762,7 @@ function renderBrowserlessWebPanel() {
           mapAnimationFrame = requestAnimationFrame(step);
         } else {
           mapAnimationFrame = 0;
-          startMapLineAnimation(scene, markers, animate);
+          rememberMapLineGeometry(animationScene, markers);
         }
       };
       mapAnimationFrame = requestAnimationFrame(step);
@@ -4126,15 +4215,16 @@ module.exports = {
   groupChatMessagesForDisplay,
   highDropRankValueCore,
   highDropSortValueCore,
+  interpolateMapPointCore,
   interpolateMapMarkerCore,
+  interpolateMapPolylineCore,
   isStaminaExhaustionExitReasonCore,
   lastExitPanelVisibleCore,
   mapAnimationProgressCore,
-  mapLinePhaseCore,
-  mapLinePulseCore,
   mapMarkerKeyCore,
   mapRemoteTargetPositionCore,
   pruneMapTrailHistoryCore,
+  resampleMapPolylineCore,
   mapTrailOpacityCore,
   missCloseExitReasonTextCore,
   recoveryContactExitReasonTextCore,
