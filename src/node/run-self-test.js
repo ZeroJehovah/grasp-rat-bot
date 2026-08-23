@@ -214,6 +214,7 @@ const {
   startStatusServer
 } = require('./browserless/status-server');
 const {
+  advanceMapTrailSamplesCore,
   BROWSERLESS_WEB_PANEL_VERSION,
   estimatedHighDropQuotaCore,
   formatSpentStaminaCore,
@@ -36897,6 +36898,17 @@ async function runSelfTest() {
           ],
           0.5
         );
+        const advancedTrailSamples = advanceMapTrailSamplesCore(
+          [
+            { x: 10, y: 20, at: 1000 },
+            { x: 20, y: 20, at: 2000 },
+            { x: 30, y: 20, at: 3000 }
+          ],
+          { x: 40, y: 25, at: 4000 },
+          4000,
+          30000,
+          3
+        );
         const withoutPrevious = interpolateMapMarkerCore({ px: 110, py: 220 }, null, 0);
         return [
           BROWSERLESS_WEB_PANEL_VERSION,
@@ -36913,13 +36925,22 @@ async function runSelfTest() {
           halfwayPolyline.length,
           halfwayPolyline[1].px.toFixed(1),
           halfwayPolyline[1].py.toFixed(1),
+          advancedTrailSamples.length,
+          advancedTrailSamples[0].x,
+          advancedTrailSamples[0].y,
+          advancedTrailSamples.at(-1).x,
+          advancedTrailSamples.at(-1).y,
           withoutPrevious.px,
           withoutPrevious.py,
           panelScript.includes('const MAP_MOVE_ANIMATION_MS = 260;'),
+          panelScript.includes('const MAP_TRAIL_MAX_SAMPLES = 16;'),
           panelScript.includes('const mapAnimationProgress = function mapAnimationProgressCore'),
           panelScript.includes('const interpolateMapPoint = function interpolateMapPointCore'),
-          panelScript.includes('const resampleMapPolyline = function resampleMapPolylineCore'),
           panelScript.includes('const interpolateMapPolyline = function interpolateMapPolylineCore'),
+          panelScript.includes('const advanceMapTrailSamples = function advanceMapTrailSamplesCore'),
+          panelScript.includes('advanceMapTrailSamples(previous.samples, latestSample'),
+          panelScript.includes('const deltaX = nextEndpoint.px - previousEndpoint.px'),
+          !panelScript.includes('resampleMapPolyline'),
           panelScript.includes('function buildMapTrailGeometry(scene, markers, frame'),
           panelScript.includes('function interpolateMapTrailGeometry(previous, next, progress)'),
           panelScript.includes('function drawMapTrails(context, scene, markers, frame, progress = 1)'),
@@ -36953,7 +36974,7 @@ async function runSelfTest() {
           /function stopAutoRefresh\(\)\s*\{\s*cancelMapMarkerAnimation\(true\);/.test(panelScript)
         ].join('|');
       })(),
-      want: `${BROWSERLESS_WEB_PANEL_VERSION}|coin:0|player:alice||0|0.875|1|97.5|195.0|97.5|195.0|3|85.0|170.0|110|220|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true`
+      want: `${BROWSERLESS_WEB_PANEL_VERSION}|coin:0|player:alice||0|0.875|1|97.5|195.0|97.5|195.0|3|60.0|170.0|3|30|25|40|25|110|220|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true`
     },
     {
       name: 'browserless status server adds dynamic whitelist players by name',

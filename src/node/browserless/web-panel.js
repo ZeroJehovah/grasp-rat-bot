@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.23.2';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.23.3';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -75,53 +75,27 @@ function interpolateMapPointCore(point, previous, progress) {
   };
 }
 
-function resampleMapPolylineCore(points, count) {
-  const source = (Array.isArray(points) ? points : [])
-    .filter(point => Number.isFinite(Number(point?.px)) && Number.isFinite(Number(point?.py)))
-    .map(point => ({ px: Number(point.px), py: Number(point.py) }));
-  const targetCount = Math.max(1, Math.round(Number(count) || source.length || 1));
-  if (!source.length) return [];
-  if (source.length === 1 || targetCount === 1) {
-    return Array.from({ length: targetCount }, () => ({ ...source[0] }));
-  }
-  const lengths = [0];
-  for (let index = 1; index < source.length; index += 1) {
-    lengths.push(lengths[index - 1] + Math.hypot(
-      source[index].px - source[index - 1].px,
-      source[index].py - source[index - 1].py
-    ));
-  }
-  const totalLength = lengths.at(-1);
-  if (!(totalLength > 0)) return Array.from({ length: targetCount }, () => ({ ...source[0] }));
-  return Array.from({ length: targetCount }, (_, targetIndex) => {
-    const wanted = totalLength * targetIndex / (targetCount - 1);
-    let segment = 1;
-    while (segment < lengths.length && lengths[segment] < wanted) segment += 1;
-    const right = Math.min(lengths.length - 1, segment);
-    const left = Math.max(0, right - 1);
-    const span = lengths[right] - lengths[left];
-    const ratio = span > 0 ? (wanted - lengths[left]) / span : 0;
-    return {
-      px: source[left].px + (source[right].px - source[left].px) * ratio,
-      py: source[left].py + (source[right].py - source[left].py) * ratio
-    };
-  });
-}
-
 function interpolateMapPolylineCore(nextPoints, previousPoints, progress) {
   const next = Array.isArray(nextPoints) ? nextPoints : [];
-  if (!next.length) return [];
-  if (!Array.isArray(previousPoints) || !previousPoints.length) {
-    return next.map(point => ({ px: Number(point.px), py: Number(point.py) }));
-  }
-  const count = Math.max(next.length, previousPoints.length);
-  const nextResampled = resampleMapPolylineCore(next, count);
-  const previousResampled = resampleMapPolylineCore(previousPoints, count);
-  return nextResampled.map((point, index) => interpolateMapPointCore(
-    point,
-    previousResampled[index],
-    progress
-  ));
+  const normalizedNext = next
+    .filter(point => Number.isFinite(Number(point?.px)) && Number.isFinite(Number(point?.py)))
+    .map(point => ({ px: Number(point.px), py: Number(point.py) }));
+  if (!normalizedNext.length) return [];
+  const previous = (Array.isArray(previousPoints) ? previousPoints : [])
+    .filter(point => Number.isFinite(Number(point?.px)) && Number.isFinite(Number(point?.py)))
+    .map(point => ({ px: Number(point.px), py: Number(point.py) }));
+  if (!previous.length) return normalizedNext;
+  const parsedProgress = Number(progress);
+  const clampedProgress = Math.max(0, Math.min(1, Number.isFinite(parsedProgress) ? parsedProgress : 1));
+  if (clampedProgress >= 1) return normalizedNext;
+  const nextEndpoint = normalizedNext.at(-1);
+  const previousEndpoint = previous.at(-1);
+  const deltaX = nextEndpoint.px - previousEndpoint.px;
+  const deltaY = nextEndpoint.py - previousEndpoint.py;
+  return previous.map(point => ({
+    px: point.px + deltaX * clampedProgress,
+    py: point.py + deltaY * clampedProgress
+  }));
 }
 
 function appendMapTrailSampleCore(samples, sample, nowMs, maxAgeMs = 30000, maxSamples = 16) {
@@ -153,6 +127,34 @@ function appendMapTrailSampleCore(samples, sample, nowMs, maxAgeMs = 30000, maxS
   if (previous && at <= Number(previous.at)) return retained;
   if (previous && !sample?.breakBefore && x === Number(previous.x) && y === Number(previous.y)) return retained;
   return [...retained, { x, y, at, breakBefore: Boolean(sample?.breakBefore) }].slice(-limit);
+}
+
+function advanceMapTrailSamplesCore(samples, sample, nowMs, maxAgeMs = 30000, maxSamples = 16) {
+  const now = Number(nowMs);
+  const maxAge = Math.max(0, Number(maxAgeMs) || 0);
+  const limit = Math.max(2, Math.round(Number(maxSamples) || 16));
+  const retained = appendMapTrailSampleCore(samples, null, now, maxAge, limit);
+  if (!Number.isFinite(now)) return retained;
+  const x = Number(sample?.x);
+  const y = Number(sample?.y);
+  const at = Number(sample?.at);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(at)
+    || at < now - maxAge || at > now) return retained;
+  const latest = { x, y, at, breakBefore: Boolean(sample?.breakBefore) };
+  const previous = retained.at(-1);
+  if (!previous) return [latest];
+  if (at <= Number(previous.at)) return retained;
+  if (latest.breakBefore) return [latest];
+  const deltaX = x - Number(previous.x);
+  const deltaY = y - Number(previous.y);
+  if (deltaX === 0 && deltaY === 0) return retained;
+  const translated = retained.map(item => ({
+    ...item,
+    x: Number(item.x) + deltaX,
+    y: Number(item.y) + deltaY
+  }));
+  const retainedCount = Math.max(1, limit - 1);
+  return [...translated.slice(-retainedCount), latest].slice(-limit);
 }
 
 function pruneMapTrailHistoryCore(history, observedKeys) {
@@ -829,6 +831,7 @@ function renderBrowserlessWebPanel() {
     const MAP_STALE_MS = 15000;
     const MAP_MOVE_ANIMATION_MS = 260;
     const MAP_TRAIL_MAX_AGE_MS = 30000;
+    const MAP_TRAIL_MAX_SAMPLES = 16;
     const MAP_TRAIL_LINE_WIDTH = 2;
     let autoRefreshTimer = 0;
     let countdownTimer = 0;
@@ -865,10 +868,9 @@ function renderBrowserlessWebPanel() {
     const mapRemoteTargetPosition = ${mapRemoteTargetPositionCore.toString()};
     const mapAnimationProgress = ${mapAnimationProgressCore.toString()};
     const interpolateMapPoint = ${interpolateMapPointCore.toString()};
-    const resampleMapPolyline = ${resampleMapPolylineCore.toString()};
     const interpolateMapPolyline = ${interpolateMapPolylineCore.toString()
-      .replaceAll('resampleMapPolylineCore', 'resampleMapPolyline')
       .replaceAll('interpolateMapPointCore', 'interpolateMapPoint')};
+    const advanceMapTrailSamples = ${advanceMapTrailSamplesCore.toString()};
     const interpolateMapMarker = ${interpolateMapMarkerCore.toString()};
     const mapTrailOpacity = ${mapTrailOpacityCore.toString()};
     const transportMetricValueClass = ${transportMetricValueClassCore.toString()};
@@ -2380,10 +2382,16 @@ function renderBrowserlessWebPanel() {
         const key = String(item?.k ?? item?.key ?? '');
         if (!key) continue;
         if (!key.startsWith('self:') && !markerColors.has(key)) continue;
-        const samples = (Array.isArray(item?.s) ? item.s : (Array.isArray(item?.samples) ? item.samples : []))
+        const backendSamples = (Array.isArray(item?.s) ? item.s : (Array.isArray(item?.samples) ? item.samples : []))
           .map(mapTrailSampleFromBackend)
           .filter(Boolean)
-          .filter(sample => nowMs - sample.at <= maxAgeMs);
+          .filter(sample => nowMs - sample.at <= maxAgeMs && sample.at <= nowMs);
+        const latestSample = backendSamples.at(-1);
+        if (!latestSample) continue;
+        const previous = mapTrailRenderHistory.get(key);
+        const samples = previous?.samples?.length
+          ? advanceMapTrailSamples(previous.samples, latestSample, nowMs, maxAgeMs, MAP_TRAIL_MAX_SAMPLES)
+          : backendSamples.slice(-MAP_TRAIL_MAX_SAMPLES);
         if (!samples.length) continue;
         next.set(key, {
           color: markerColors.get(key) || (key.startsWith('self:') ? '#eef2f5' : '#fb7185'),
@@ -4208,6 +4216,7 @@ function renderBrowserlessWebPanel() {
 
 module.exports = {
   BROWSERLESS_WEB_PANEL_VERSION,
+  advanceMapTrailSamplesCore,
   appendMapTrailSampleCore,
   estimatedHighDropQuotaCore,
   formatSpentStaminaCore,
@@ -4224,7 +4233,6 @@ module.exports = {
   mapMarkerKeyCore,
   mapRemoteTargetPositionCore,
   pruneMapTrailHistoryCore,
-  resampleMapPolylineCore,
   mapTrailOpacityCore,
   missCloseExitReasonTextCore,
   recoveryContactExitReasonTextCore,
