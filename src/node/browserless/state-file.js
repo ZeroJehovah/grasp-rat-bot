@@ -2586,9 +2586,12 @@ function compactCombat(combat) {
   const targetIsSecondary = target?.combatRole === 'secondary' || target?.secondaryTarget === true;
   const targetIsPrimary = target?.combatRole === 'primary' || target?.sameAsProfitMission === true;
   const fireTargetIsSecondary = fireTarget?.combatRole === 'secondary' || fireTarget?.secondaryTarget === true;
+  const hasCombatObservation = Boolean(target || fireTarget);
   const primaryTarget = targetIsPrimary
     ? target
-    : (compactTarget(candidatePrimary) || profitMission?.navigationTarget || null);
+    : (hasCombatObservation
+      ? (compactTarget(candidatePrimary) || profitMission?.navigationTarget || null)
+      : null);
   const secondaryTarget = targetIsSecondary
     ? target
     : (fireTargetIsSecondary ? fireTarget : null);
@@ -2650,10 +2653,19 @@ function compactStatusTargets(action, combat, profit) {
   const actionTarget = compactTarget(action?.target);
   const actionIsSecondary = actionTarget?.combatRole === 'secondary'
     || actionTarget?.secondaryTarget === true;
-  let primary = compactTarget(combat?.primaryTarget)
-    || compactTarget(profit?.mission?.navigationTarget)
-    || null;
-  let secondary = compactTarget(combat?.secondaryTarget) || null;
+  const actionKind = String(action?.kind || '');
+  // Recovery and ordinary waits may retain a profit mission for the next
+  // decision, but that retained mission is not a current target. An explicit
+  // action target remains authoritative (for example, a bounded profit hold).
+  const suppressRetainedTargets = ['recover', 'wait', 'loop-wait', 'snapshot-wait'].includes(actionKind);
+  let primary = suppressRetainedTargets
+    ? null
+    : (compactTarget(combat?.primaryTarget)
+      || compactTarget(profit?.mission?.navigationTarget)
+      || null);
+  let secondary = suppressRetainedTargets
+    ? null
+    : (compactTarget(combat?.secondaryTarget) || null);
   if (!actionIsSecondary && !primary && actionTarget) primary = actionTarget;
   if (actionIsSecondary && !secondary) secondary = actionTarget;
 

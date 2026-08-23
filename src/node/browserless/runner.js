@@ -8733,6 +8733,97 @@ async function runBrowserlessRunnerSelfTest() {
       {}
     );
     const panelDualTargetRoles = panelTargetRolesCore(panelDualTargetCompact);
+    const retainedRecoveryMission = {
+      active: true,
+      targetId: '6091',
+      type: 'coin',
+      navigationAuthority: 'snapshot',
+      navigationTarget: {
+        type: 'coin',
+        id: '6091',
+        amount: 1,
+        x: 10056,
+        y: 0,
+        distance: 10056,
+        authority: 'snapshot'
+      }
+    };
+    const panelRecoveryCompact = buildCompactBrowserlessStatus(
+      browserlessCompactStatusSource({
+        session: { userId: 7, sessionToken: 'panel-recovery-self-test-token' },
+        runner: {
+          running: true,
+          currentAction: {
+            kind: 'recover',
+            band: 'recover',
+            reason: 'wait-for-full-stamina-and-hp',
+            stopMotion: true
+          }
+        },
+        current: {
+          self: { userId: 7, name: 'self', x: 0, y: 0, hp: 88, maxHp: 100 },
+          action: {
+            kind: 'recover',
+            band: 'recover',
+            reason: 'wait-for-full-stamina-and-hp',
+            stopMotion: true
+          },
+          decision: {
+            kind: 'recover',
+            band: 'recover',
+            reason: 'wait-for-full-stamina-and-hp',
+            action: {
+              kind: 'recover',
+              band: 'recover',
+              reason: 'wait-for-full-stamina-and-hp',
+              stopMotion: true
+            },
+            profit: { mission: retainedRecoveryMission }
+          },
+          profit: { mission: retainedRecoveryMission },
+          combatSummary: { target: null, fireTarget: null, profitMission: retainedRecoveryMission }
+        }
+      }),
+      {}
+    );
+    const panelRecoveryRoles = panelTargetRolesCore(panelRecoveryCompact);
+    const panelProfitHoldCompact = buildCompactBrowserlessStatus(
+      browserlessCompactStatusSource({
+        session: { userId: 7, sessionToken: 'panel-profit-hold-self-test-token' },
+        runner: {
+          running: true,
+          currentAction: {
+            kind: 'wait',
+            band: 'profit',
+            reason: 'single-coin-bait-hold',
+            target: { type: 'coin', id: 'hold-coin', amount: 1, x: 200, y: 0, distance: 200 }
+          }
+        },
+        current: {
+          self: { userId: 7, name: 'self', x: 0, y: 0, hp: 100, maxHp: 100 },
+          action: {
+            kind: 'wait',
+            band: 'profit',
+            reason: 'single-coin-bait-hold',
+            target: { type: 'coin', id: 'hold-coin', amount: 1, x: 200, y: 0, distance: 200 }
+          },
+          decision: {
+            kind: 'wait',
+            band: 'profit',
+            reason: 'single-coin-bait-hold',
+            action: {
+              kind: 'wait',
+              band: 'profit',
+              reason: 'single-coin-bait-hold',
+              target: { type: 'coin', id: 'hold-coin', amount: 1, x: 200, y: 0, distance: 200 }
+            }
+          },
+          combatSummary: { target: null, fireTarget: null }
+        }
+      }),
+      {}
+    );
+    const panelProfitHoldRoles = panelTargetRolesCore(panelProfitHoldCompact);
     const panelAfkPresentationInitial = browserlessBattlePresentation(null, {
       kind: 'attack',
       band: 'profit',
@@ -9008,6 +9099,15 @@ async function runBrowserlessRunnerSelfTest() {
           && panelDualTargetRoles.mode === 'dual'
           && panelDualTargetRoles.primary?.userId === 9
           && panelDualTargetRoles.secondary?.userId === 8
+          && panelRecoveryCompact.targets?.mode === 'none'
+          && panelRecoveryCompact.targets?.primary === null
+          && panelRecoveryCompact.targets?.secondary === null
+          && panelRecoveryCompact.combat?.primaryTarget === null
+          && panelRecoveryRoles.mode === 'none'
+          && panelRecoveryRoles.primary === null
+          && panelRecoveryRoles.secondary === null
+          && panelProfitHoldCompact.targets?.primary?.id === 'hold-coin'
+          && panelProfitHoldRoles.primary?.id === 'hold-coin'
           && remoteTargetActivityTextCore({ active: true }) === '活动玩家'
           && remoteTargetActivityTextCore({ active: false, moving: false, firing: false }) === '挂机玩家'
           && pageHtml.includes('>Drop排行</h2>')
