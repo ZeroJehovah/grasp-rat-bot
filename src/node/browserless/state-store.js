@@ -678,6 +678,24 @@ function createBrowserlessStateStore(options = {}) {
       segmentGeneration: String(event.segmentGeneration || ''),
       ownerSelfId: event.ownerSelfId ?? state.userId ?? null,
       targetId: event.targetId ?? null,
+      targetRole: String(event.targetRole || ''),
+      primaryFinishRace: event.primaryFinishRace && typeof event.primaryFinishRace === 'object'
+        ? {
+            eligible: event.primaryFinishRace.eligible === true,
+            active: event.primaryFinishRace.active === true,
+            reason: String(event.primaryFinishRace.reason || ''),
+            dispatchCount: optionalNumericOrNull(event.primaryFinishRace.dispatchCount),
+            maxShots: optionalNumericOrNull(event.primaryFinishRace.maxShots),
+            windowStartedAt: optionalNumericOrNull(event.primaryFinishRace.windowStartedAt),
+            windowExpiresAt: optionalNumericOrNull(event.primaryFinishRace.windowExpiresAt),
+            hardBlockers: Array.isArray(event.primaryFinishRace.hardBlockers)
+              ? event.primaryFinishRace.hardBlockers.map(String).filter(Boolean).slice(0, 8)
+              : [],
+            softBlockers: Array.isArray(event.primaryFinishRace.softBlockers)
+              ? event.primaryFinishRace.softBlockers.map(String).filter(Boolean).slice(0, 8)
+              : []
+          }
+        : null,
       wireTarget,
       ownership: event.ownership && typeof event.ownership === 'object'
         ? {

@@ -456,6 +456,96 @@ function runCombatShotExecutionSelfTest() {
   );
   cases.push('primary fire does not increment secondary actual shots');
 
+  let finishNowMs = 10000;
+  let finishWireDispatches = 0;
+  const finishExecutionEvents = [];
+  const finishAdapter = createBrowserlessActionAdapter({
+    now: () => finishNowMs,
+    controlGeneration: actionControl,
+    commandIntervalMs: 0,
+    combatShootMinIntervalMs: 160,
+    shootRepeatEnabled: false,
+    transport: {
+      sendVelocity() {},
+      sendShoot() {
+        finishWireDispatches += 1;
+      }
+    },
+    onShootExecution: event => {
+      finishExecutionEvents.push(event);
+      return event;
+    }
+  });
+  const finishPrimaryTarget = {
+    ...combatTarget(42, 500),
+    hp: 3,
+    combatRole: 'primary',
+    authority: 'realtime'
+  };
+  const finishDecision = combatDecision('finish-generation', 'mixed/unknown', 160, 1000, {
+    controlGeneration: actionControl,
+    tick: 200,
+    target: secondaryTarget,
+    shooting: {
+      target: finishPrimaryTarget,
+      targetRole: 'primary',
+      aim: { x: 500, y: 0, mode: 'exact' },
+      primaryPhysicalEligible: true,
+      primaryCompetitionAllowed: true,
+      primaryFinishRace: {
+        eligible: true,
+        active: true,
+        reason: 'primary-finish-race-soft-reserve-override',
+        dispatchCount: 0,
+        maxShots: 3,
+        windowStartedAt: finishNowMs,
+        windowExpiresAt: finishNowMs + 1800
+      },
+      profitKillRace: { active: false, fireAllowed: true }
+    }
+  });
+  const finishSnapshot = {
+    realtime: {
+      tick: 200,
+      frameAgeMs: 0,
+      receivedAtMs: finishNowMs,
+      self: { user_id: 1, x: 0, y: 0 },
+      entities: [finishPrimaryTarget]
+    },
+    command: { shooting: {} }
+  };
+  const finishDispatch = finishAdapter.applyDecision(finishSnapshot, finishDecision);
+  check('primary finish-race dispatch is allowed by realtime wire state',
+    finishDispatch.shoot?.skipped === false
+      && finishDispatch.fireTarget?.user_id === 42
+      && finishDispatch.shoot?.execution?.targetId === '42'
+      && finishDispatch.shoot?.execution?.targetRole === 'primary'
+      && finishDispatch.shoot?.execution?.primaryFinishRace?.active === true
+      && finishWireDispatches === 1);
+  finishNowMs += 160;
+  const finishMissingTargetSnapshot = {
+    ...finishSnapshot,
+    realtime: {
+      ...finishSnapshot.realtime,
+      tick: 201,
+      receivedAtMs: finishNowMs,
+      entities: []
+    }
+  };
+  const finishMissingTarget = finishAdapter.applyDecision(
+    finishMissingTargetSnapshot,
+    finishDecision
+  );
+  check('primary finish-race fails closed when realtime target disappears before wire',
+    finishMissingTarget.shoot?.skipped === true
+      && finishMissingTarget.shoot?.reason === 'primary-finish-race-realtime-target-missing'
+      && finishMissingTarget.shoot?.execution?.targetRole === 'primary'
+      && finishWireDispatches === 1
+      && finishExecutionEvents.some(event => (
+        event.type === 'shoot-skip'
+          && event.skipReason === 'primary-finish-race-realtime-target-missing'
+      )));
+
   actionNow += 160;
   const secondaryDispatch = adapter.applyDecision(stateSnapshot, combatDecision(
     secondaryGeneration,

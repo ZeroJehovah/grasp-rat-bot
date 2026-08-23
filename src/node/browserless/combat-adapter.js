@@ -112,11 +112,19 @@ const {
   classifyCombatTargetRole,
   dualTargetFireArbitration,
   missionTargetId,
+  primaryFinishRaceAuthorization,
   primaryRewardSurvivalRacePolicy,
   secondaryCombatExitPolicy,
   secondaryFirePolicy,
   secondaryRetentionPolicy
 } = require('../../strategy/dual-target-policy');
+const {
+  evaluateCoverCandidateCore
+} = require('../../strategy/dual-target-cover');
+const {
+  resolveDodgeOwnershipCore,
+  selectCombatMovementOwnerCore
+} = require('../../strategy/combat-movement-ownership');
 const {
   observeProfitCompetitorEvidence,
   profitKillRacePolicy
@@ -3266,6 +3274,35 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     && !(Array.isArray(dodge?.threatField) && dodge.threatField.length)
     ? options.contactEntryGuard.dodge
     : null;
+  const emergencyThreatBullets = (bullets || []).filter(bullet => (
+    bullet?.incoming === true && incomingBulletHasCollisionRiskCore(bullet, options)
+  ));
+  const threatGenerationIds = emergencyThreatBullets
+    .map(bullet => String(
+      bullet?.bullet_id
+        ?? bullet?.bulletId
+        ?? `${bullet?.createdTick ?? bullet?.created_tick ?? ''}:${bullet?.ownerId ?? ''}`
+    ))
+    .filter(Boolean)
+    .sort();
+  const currentDodgeThreat = Boolean(
+    contactEntryDodge
+      || dodge?.unavoidableCurrentShot === true
+      || (dodge?.threatField || []).some(item => Number(item?.directHits || 0) > 0)
+  );
+  const dodgeThreatGeneration = currentDodgeThreat
+    ? `bullet:${threatGenerationIds.join(',') || String(options.currentTick ?? 'current')}`
+    : '';
+  const dodgeOwnership = resolveDodgeOwnershipCore({
+    nowMs,
+    currentThreat: currentDodgeThreat,
+    threatGeneration: dodgeThreatGeneration,
+    previous: options.previousDodgeOwnership || null,
+    currentTick: options.currentTick,
+    direction: contactEntryDodge || dodge || { dx: 0, dy: 0 }
+  }, {
+    dodgeOwnershipHoldMs: options.combatDodgeOwnershipHoldMs
+  });
   const closeIn = closeAllowed
     && (pressureClose
       || ballisticCloseIn
@@ -3429,6 +3466,47 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     && [missionTarget?.x, missionTarget?.y].every(value => Number.isFinite(Number(value)))
     ? missionTarget
     : null);
+  const coverCandidate = options.combatCoverEnabled === false
+    ? {
+        state: 'released',
+        candidate: false,
+        active: false,
+        authority: 'realtime',
+        coverHypothesis: 'cover-hypothesis-unverified',
+        releaseReason: 'cover-disabled'
+      }
+    : evaluateCoverCandidateCore({
+        nowMs,
+        self,
+        attacker: secondaryTarget ? target : null,
+        primary: secondaryTarget ? realtimeSecondaryMainTarget : null,
+        bullets,
+        previous: options.coverState || options.previousCoverState || null,
+        primaryEstablished: Boolean(
+          realtimeSecondaryMainTarget?.combatRole === 'primary'
+            || realtimeSecondaryMainTarget?.profitPrimaryTarget === true
+            || realtimeSecondaryMainTarget?.combatAdmission?.profitEligible === true
+        ),
+        primaryPassive: Boolean(
+          realtimeSecondaryMainTarget?.active === false
+            || realtimeSecondaryMainTarget?.current_join_mode === 'Passive'
+            || realtimeSecondaryMainTarget?.currentJoinMode === 'Passive'
+        ),
+        primaryAfk: Boolean(
+          realtimeSecondaryMainTarget?.mode === 'afk'
+            || realtimeSecondaryMainTarget?.current_join_mode === 'AFK'
+        ),
+        positionAgeMs: options.realtimeStateAgeMs,
+        positionFresh: options.realtimeStateFresh
+      }, {
+        playerDropPickupRadiusCm: options.playerDropPickupRadiusCm,
+        coverMarginCm: options.combatCoverMarginCm,
+        coverPositionFreshMs: options.combatCoverPositionFreshMs,
+        coverMaxPrimaryDistanceCm: options.combatCoverMaxPrimaryDistanceCm,
+        coverHoldDistanceCm: options.combatCoverHoldDistanceCm,
+        coverDirectionHoldMs: options.combatCoverDirectionHoldMs,
+        coverPulseMs: options.combatCoverPulseMs
+      });
   const secondaryNavigationAuthority = String(
     secondaryMainTarget?.authority
       || profitMission?.navigationAuthority
@@ -3494,9 +3572,11 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       && profitMissionArrival.retryActive === true
       && !profitKillRace.active
   );
-  const strategicDirection = profitKillRace.active
-    ? profitKillRace.direction
-    : (secondaryTarget ? secondaryMainDirection : baseStrategicDirection);
+  const strategicDirection = coverCandidate.active
+    ? coverCandidate.direction
+    : (profitKillRace.active
+      ? profitKillRace.direction
+      : (secondaryTarget ? secondaryMainDirection : baseStrategicDirection));
   const pendingCommands = (options.pendingVelocityCommands || [])
     .filter(command => command && Number.isFinite(Number(command.effectiveAfterTicks)))
     .slice()
@@ -3749,7 +3829,8 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     || movement.modifiers.includes('dodge')
     || movement.modifiers.includes('hold-current')
     || movement.modifiers.includes('predictive-hold')
-    || movement.modifiers.includes('distance-aware-dodge');
+    || movement.modifiers.includes('distance-aware-dodge')
+    || coverCandidate.active;
   if ((secondaryTarget || profitKillRace.active) && !protectedMovementOverride) {
     const controlledDirection = profitKillRace.active
       ? profitKillRace.direction
@@ -3779,6 +3860,47 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
               ? 'secondary-target-dead-zone-hold'
               : 'secondary-main-target')))
       ]))
+    };
+    effectiveDodge = null;
+  }
+  const requestedMovementOwner = coverCandidate.active
+    ? coverCandidate.state
+    : (movement.modifiers.includes('dodge') ? 'emergency-dodge' : 'ordinary-escort');
+  const movementOwner = selectCombatMovementOwnerCore({
+    requestedOwner: requestedMovementOwner,
+    requestedReason: movement.reason || 'combat-movement',
+    dodgeOwnership,
+    coverActive: coverCandidate.active,
+    coverState: coverCandidate.state,
+    coverReason: coverCandidate.coverHypothesis,
+    finishRaceActive: options.primaryFinishRaceActive === true
+  });
+  if (movementOwner.owner === 'emergency-dodge') {
+    const emergencyDirection = dodgeOwnership.direction || effectiveDodge || dodge;
+    if (emergencyDirection) {
+      const dodgeReason = effectiveDodge?.reason || dodge?.reason || 'direct-threat-dodge';
+      movement = {
+        ...movement,
+        dx: Number(emergencyDirection.dx || movement.dx || 0),
+        dy: Number(emergencyDirection.dy || movement.dy || 0),
+        reason: dodgeReason,
+        modifiers: Array.from(new Set([...(movement.modifiers || []), 'dodge']))
+      };
+      effectiveDodge = {
+        ...(effectiveDodge || dodge || {}),
+        dx: movement.dx,
+        dy: movement.dy,
+        active: true,
+        reason: dodgeReason
+      };
+    }
+  } else if (movementOwner.owner === 'cover-candidate' || movementOwner.owner === 'cover-hold') {
+    movement = {
+      ...movement,
+      dx: Number(coverCandidate.direction?.dx || 0),
+      dy: Number(coverCandidate.direction?.dy || 0),
+      reason: coverCandidate.state,
+      modifiers: Array.from(new Set([...(movement.modifiers || []), 'cover']))
     };
     effectiveDodge = null;
   }
@@ -3910,6 +4032,14 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     } : null),
     distanceAwareDodge,
     modifiers: movement.modifiers || [],
+    cover: coverCandidate,
+    dodgeOwnership: {
+      ...dodgeOwnership,
+      currentShotAvoidability: dodge?.unavoidableCurrentShot === true ? 'unavoidable' : 'evaluated',
+      reactionSlackMs: numberOrNull(dodge?.reactionBudgetMs),
+      overriddenBy: movementOwner.owner === 'emergency-dodge' ? '' : movementOwner.owner
+    },
+    ownership: movementOwner,
     safeRetreatIntercept: {
       ...safeRetreatIntercept,
       applied: safeRetreatInterceptApplied
@@ -5562,6 +5692,11 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     profitEscortContinuity: stateful?.profitEscortContinuity || null,
     profitEscortContinuityLastRelease: stateful?.profitEscortContinuityLastRelease || null,
     distanceAwareDodgeState: stateful?.distanceAwareDodgeState || null,
+    previousDodgeOwnership: stateful?.dodgeOwnership || null,
+    previousCoverState: stateful?.coverState || null,
+    realtimeStateAgeMs: numberOrNull(realtime.frameAgeMs),
+    realtimeStateFresh: realtime.frameAgeMs === undefined
+      || Number(realtime.frameAgeMs) <= Math.max(1, Number(options.combatRealtimeTargetFreshMs ?? 500)),
     engagementId: stateful?.combatMetrics?.engagementId || '',
     engagementGeneration: stateful?.combatMetrics?.engagementGeneration || '',
     controlGeneration: stateful?.combatMetrics?.controlGeneration || '',
@@ -5594,6 +5729,10 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     stateful.distanceAwareDodgeState = movement?.distanceAwareDodge?.state || null;
   } else if (stateful) {
     stateful.distanceAwareDodgeState = null;
+  }
+  if (stateful) {
+    stateful.dodgeOwnership = movement?.dodgeOwnership || null;
+    stateful.coverState = movement?.cover?.active === true ? movement.cover : null;
   }
   const exitEvaluation = buildCombatExitEvaluation(
     self,
@@ -6147,6 +6286,27 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       && Number.isFinite(primaryTargetDistance)
       && primaryTargetDistance <= Math.max(0, Number(options.attackRange || COMBAT_CONSTANTS.ATTACK_RANGE))
   );
+  const primaryTargetFresh = Boolean(
+    primaryFireTarget
+      && primaryTargetVisible
+      && primaryFireTarget.authority !== 'snapshot'
+      && Number.isFinite(Number(primaryFireTarget.x))
+      && Number.isFinite(Number(primaryFireTarget.y))
+      && (realtime.frameAgeMs === undefined
+        || Number(realtime.frameAgeMs) <= Math.max(1, Number(options.combatRealtimeTargetFreshMs ?? 500)))
+  );
+  const primaryPhysicalFireAuthorization = resolveEstablishedCombatFireAuthorizationCore({
+    targetPresent: Boolean(primaryFireTarget),
+    targetInvulnerable: Boolean(primaryFireTarget && isInvulnerableEntity(primaryFireTarget)),
+    aim: primaryAim,
+    aimOk: primaryAim.ok,
+    inRange: primaryInRange,
+    fireState: {
+      state: 'normal',
+      reason: 'primary-physical-eligibility'
+    },
+    contactEntryOnly: false
+  });
   const primaryFireState = primaryFireTarget ? determineCombatFireState(self || {}, primaryFireTarget, {
     targetPressureFire: false,
     closePressure: false,
@@ -6283,9 +6443,66 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     closePressure: secondaryPolicy?.closePressure,
     nowMs: Number(options.nowMs || Date.now())
   }, options);
+  const primaryCompetitionAllowed = Boolean(
+    !primaryProfitKillRace.active || primaryProfitKillRace.fireAllowed === true
+  );
+  const primaryPhysicalEligible = Boolean(
+    primaryTargetFresh
+      && primaryPhysicalFireAuthorization.wouldShoot
+      && primaryFireTarget?.alive !== false
+      && hpValue(primaryFireTarget) !== null
+      && hpValue(primaryFireTarget) > 0
+      && !isInvulnerableEntity(primaryFireTarget)
+      && primaryCompetitionAllowed
+  );
+  const primaryFinishWindowMs = Math.max(160, Number(
+    options.primaryFinishRaceWindowMs ?? 1800
+  ));
+  const previousPrimaryFinishRace = stateful?.combatTarget?.primaryFinishRace || null;
+  const nowForFinishRace = Number(options.nowMs || Date.now());
+  const previousFinishStartedAt = Number(previousPrimaryFinishRace?.windowStartedAt || 0);
+  const previousFinishExpiresAt = Number(previousPrimaryFinishRace?.windowExpiresAt || 0);
+  const finishRaceWindowStartedAt = previousFinishStartedAt > 0
+    && previousFinishExpiresAt > nowForFinishRace
+    && nowForFinishRace - previousFinishStartedAt <= primaryFinishWindowMs
+    ? previousFinishStartedAt
+    : nowForFinishRace;
+  // Count only dispatches belonging to the current bounded finish window. A
+  // few ordinary primary shots immediately before the race is admitted must
+  // not consume the new burst's independent max-shot allowance.
+  const primaryDispatchTimesInFinishWindow = stateful?.combatExecutionLedger?.dispatchTimesByTarget
+    && Array.isArray(stateful.combatExecutionLedger.dispatchTimesByTarget[primaryTargetId])
+    ? stateful.combatExecutionLedger.dispatchTimesByTarget[primaryTargetId]
+      .filter(at => Number(at) >= finishRaceWindowStartedAt && Number(at) <= nowForFinishRace)
+    : [];
+  const primaryFinishRace = primaryFinishRaceAuthorization({
+    nowMs: Number(options.nowMs || Date.now()),
+    selfHp: hpValue(self),
+    primaryHp: hpValue(primaryFireTarget),
+    primaryTarget: primaryFireTarget,
+    primaryPhysicalEligible,
+    primaryCompetitionAllowed,
+    primaryTargetFresh,
+    primaryNormalAuthorized: primaryAuthorized,
+    normalFireBlocker: primaryFinalFireBlocker,
+    closePressure: secondaryPolicy?.closePressure,
+    rewardRace: primaryRewardSurvivalRace,
+    finishRaceDispatchCount: primaryDispatchTimesInFinishWindow.length,
+    previousWindow: stateful?.combatTarget?.primaryFinishRace || null,
+    stamina5s: hpValue(self) === null
+      ? null
+      : (self?.stamina_5s_remaining_milli ?? self?.stamina5sRemainingMilli ?? self?.stamina5s),
+    hardReserveMs: runtimeHardReserveMs,
+    shotCostMs: options.combatShotStaminaCostMs ?? 500,
+    dodgeActionCostMs
+  }, options);
+  if (stateful?.combatTarget) stateful.combatTarget.primaryFinishRace = primaryFinishRace;
   const dualTargetArbitration = dualTargetFireArbitration({
     secondaryActive: secondaryTargetActive,
     primaryAuthorized,
+    primaryNormalAuthorized: primaryAuthorized,
+    primaryPhysicalEligible,
+    primaryFinishAuthorized: primaryFinishRace.eligible,
     closePressure: secondaryPolicy?.closePressure,
     rewardRace: primaryRewardSurvivalRace
   });
@@ -6298,23 +6515,41 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     ? 'primary'
     : (secondaryTargetActive ? 'secondary' : 'current');
   let resolvedWouldShoot = primarySelected
-    ? primaryAuthorized
+    ? (primaryAuthorized || primaryFinishRace.eligible === true)
     : fireAuthorization.wouldShoot;
   let resolvedFinalFireBlocker = primarySelected
-    ? primaryFinalFireBlocker
+    ? (primaryFinishRace.eligible === true && !primaryAuthorized
+      ? 'primary-finish-race-soft-reserve-override'
+      : primaryFinalFireBlocker)
     : fireAuthorization.finalFireBlocker;
   let resolvedFireAuthorizationClass = primarySelected
-    ? primaryFireAuthorizationClass
+    ? (primaryFinishRace.eligible === true && !primaryAuthorized
+      ? 'primary-finish-race'
+      : primaryFireAuthorizationClass)
     : fireAuthorization.fireAuthorizationClass;
   if (!primarySelected && resolvedWouldShoot && secondaryPolicy && !secondaryPolicy.allowed) {
     resolvedWouldShoot = false;
     resolvedFinalFireBlocker = `secondary:${secondaryPolicy.reason}`;
     resolvedFireAuthorizationClass = 'secondary-defensive-policy-blocked';
   }
+  if (movement?.cover?.active === true && !primarySelected && secondaryTargetActive) {
+    resolvedWouldShoot = false;
+    resolvedFinalFireBlocker = 'cover-hold-no-secondary-fire';
+    resolvedFireAuthorizationClass = 'cover-hypothesis-no-secondary-fire';
+  }
+  if (exitDecision?.shouldLeave === true) {
+    resolvedWouldShoot = false;
+    resolvedFinalFireBlocker = exitDecision.rule === 'low-hp-secondary-unconditional'
+      ? 'secondary-low-hp-exit'
+      : 'combat-exit-priority';
+    resolvedFireAuthorizationClass = 'combat-exit-priority';
+  }
   if (primarySelected) {
-    effectiveExecutionCadenceMs = Number.isFinite(Number(primaryFireState.cadenceMs))
-      ? Number(primaryFireState.cadenceMs)
-      : null;
+    effectiveExecutionCadenceMs = primaryFinishRace.eligible === true
+      ? Math.max(1, Number(options.combatShootMinIntervalMs ?? COMBAT_CONSTANTS.SHOOT_EVERY_MS))
+      : (Number.isFinite(Number(primaryFireState.cadenceMs))
+        ? Number(primaryFireState.cadenceMs)
+        : null);
   }
   const effectiveProfitKillRace = primarySelected
     ? primaryProfitKillRace
@@ -6334,6 +6569,51 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     resolvedFinalFireBlocker = `profit-kill-race:${effectiveProfitKillRace.reason}`;
     resolvedFireAuthorizationClass = 'profit-target-competition-position-blocked';
   }
+  const finalMovementOwner = selectCombatMovementOwnerCore({
+    requestedOwner: movement?.ownership?.owner || 'ordinary-escort',
+    requestedReason: movement?.reason || 'combat-movement',
+    dodgeOwnership: movement?.dodgeOwnership || null,
+    hardExit: exitDecision?.shouldLeave === true,
+    coverActive: movement?.cover?.active === true,
+    coverState: movement?.cover?.state,
+    coverReason: movement?.cover?.coverHypothesis,
+    finishRaceActive: primaryFinishRace.active === true
+  });
+  if (finalMovementOwner.owner === 'emergency-dodge') {
+    const emergencyDirection = movement?.dodgeOwnership?.direction || movement?.dodge || null;
+    if (emergencyDirection) {
+      movement = {
+        ...movement,
+        dx: Number(emergencyDirection.dx || movement.dx || 0),
+        dy: Number(emergencyDirection.dy || movement.dy || 0),
+        reason: movement?.reason || movement?.dodge?.reason || 'direct-threat-dodge',
+        modifiers: Array.from(new Set([...(movement.modifiers || []), 'dodge']))
+      };
+    }
+  } else if (finalMovementOwner.owner === 'cover-candidate' || finalMovementOwner.owner === 'cover-hold') {
+    movement = {
+      ...movement,
+      dx: Number(movement?.cover?.direction?.dx || 0),
+      dy: Number(movement?.cover?.direction?.dy || 0),
+      reason: movement.cover.state,
+      modifiers: Array.from(new Set([...(movement.modifiers || []), 'cover']))
+    };
+  } else if (finalMovementOwner.owner === 'primary-finish-race') {
+    const finishDirection = movement?.secondaryTarget?.direction || {
+      dx: Math.sign(Number(primaryFireTarget?.x) - Number(self?.x)),
+      dy: Math.sign(Number(primaryFireTarget?.y) - Number(self?.y))
+    };
+    movement = {
+      ...movement,
+      dx: Number(finishDirection.dx || 0),
+      dy: Number(finishDirection.dy || 0),
+      reason: 'primary-finish-race',
+      modifiers: Array.from(new Set([...(movement.modifiers || []), 'primary-finish-race']))
+    };
+  }
+  movement.primaryFinishRace = primaryFinishRace;
+  movement.ownership = finalMovementOwner;
+  if (stateful && movement.dodgeOwnership) stateful.dodgeOwnership = movement.dodgeOwnership;
   if (stateful?.combatMetrics) {
     const metrics = stateful.combatMetrics;
     const observationKey = numberOrNull(realtime.tick) ?? Number(options.nowMs || Date.now());
@@ -6501,6 +6781,10 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
         finalFireBlocker: primaryFinalFireBlocker,
         fireAuthorizationClass: primaryFireAuthorizationClass
       },
+      primaryPhysicalEligible,
+      primaryCompetitionAllowed,
+      primaryNormalAuthorized: primaryAuthorized,
+      primaryFinishRace,
       primaryRewardSurvivalRace,
       secondaryFocusActive: dualTargetArbitration.secondaryFocusActive === true,
       secondaryPolicy: secondaryPolicy ? {

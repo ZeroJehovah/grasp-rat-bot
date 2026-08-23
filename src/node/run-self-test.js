@@ -13474,7 +13474,7 @@ async function runSelfTest() {
           bullet.dodge?.applied
         ].join('|');
       })(),
-      want: 'close-pressure-deterministic-strafe|5000|false|true|true|true|combat-close-pressure-separate|-1|true|true|false|false|0|close-pressure-deterministic-strafe|strategic-safe|false'
+      want: 'close-pressure-deterministic-strafe|5000|false|true|true|true|combat-close-pressure-separate|-1|true|true|true|false|0|tangent-dodge|strategic-safe|true'
     },
     {
       name: 'browserless close pressure keeps Eason-shaped exchange but preserves hard hp exit',
@@ -22824,7 +22824,7 @@ async function runSelfTest() {
           combat.shooting.wouldShoot
         ].join('|');
       })(),
-      want: 'combat-hp-disadvantage-leave|20|true|4|true'
+      want: 'combat-hp-disadvantage-leave|20|true|4|false'
     },
     {
       name: 'browserless low hp disadvantage exits on any real deficit',

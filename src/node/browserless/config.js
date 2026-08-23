@@ -103,6 +103,18 @@ const DEFAULTS = {
   combatClosePressureReserveMs: 2600,
   combatClosePressureMinSelfHp: 60,
   combatClosePressureMaxHpGap: 20,
+  primaryFinishRaceWindowMs: 1800,
+  primaryFinishRaceMaxShots: 3,
+  primaryFinishRaceTargetHpMax: 55,
+  combatRealtimeTargetFreshMs: 500,
+  combatDodgeOwnershipHoldMs: 500,
+  combatCoverEnabled: true,
+  combatCoverMarginCm: 140,
+  combatCoverPositionFreshMs: 500,
+  combatCoverMaxPrimaryDistanceCm: 3000,
+  combatCoverHoldDistanceCm: 100,
+  combatCoverDirectionHoldMs: 500,
+  combatCoverPulseMs: 120,
   combatLootRacePositioningEnabled: true,
   combatLootRaceMinDrop: 10,
   combatLootRaceMaxKillHorizonMs: 1200,
@@ -326,6 +338,54 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     combatClosePressureReserveMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_RESERVE_MS, DEFAULTS.combatClosePressureReserveMs),
     combatClosePressureMinSelfHp: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_MIN_SELF_HP, DEFAULTS.combatClosePressureMinSelfHp),
     combatClosePressureMaxHpGap: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_MAX_HP_GAP, DEFAULTS.combatClosePressureMaxHpGap),
+    primaryFinishRaceWindowMs: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_PRIMARY_FINISH_RACE_WINDOW_MS,
+      DEFAULTS.primaryFinishRaceWindowMs
+    ),
+    primaryFinishRaceMaxShots: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_PRIMARY_FINISH_RACE_MAX_SHOTS,
+      DEFAULTS.primaryFinishRaceMaxShots
+    ),
+    primaryFinishRaceTargetHpMax: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_PRIMARY_FINISH_RACE_TARGET_HP_MAX,
+      DEFAULTS.primaryFinishRaceTargetHpMax
+    ),
+    combatRealtimeTargetFreshMs: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_COMBAT_REALTIME_TARGET_FRESH_MS,
+      DEFAULTS.combatRealtimeTargetFreshMs
+    ),
+    combatDodgeOwnershipHoldMs: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_COMBAT_DODGE_OWNERSHIP_HOLD_MS,
+      DEFAULTS.combatDodgeOwnershipHoldMs
+    ),
+    combatCoverEnabled: boolEnv(
+      env.GRASP_RAT_BROWSERLESS_COMBAT_COVER_ENABLED,
+      DEFAULTS.combatCoverEnabled
+    ),
+    combatCoverMarginCm: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_COMBAT_COVER_MARGIN_CM,
+      DEFAULTS.combatCoverMarginCm
+    ),
+    combatCoverPositionFreshMs: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_COMBAT_COVER_POSITION_FRESH_MS,
+      DEFAULTS.combatCoverPositionFreshMs
+    ),
+    combatCoverMaxPrimaryDistanceCm: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_COMBAT_COVER_MAX_PRIMARY_DISTANCE_CM,
+      DEFAULTS.combatCoverMaxPrimaryDistanceCm
+    ),
+    combatCoverHoldDistanceCm: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_COMBAT_COVER_HOLD_DISTANCE_CM,
+      DEFAULTS.combatCoverHoldDistanceCm
+    ),
+    combatCoverDirectionHoldMs: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_COMBAT_COVER_DIRECTION_HOLD_MS,
+      DEFAULTS.combatCoverDirectionHoldMs
+    ),
+    combatCoverPulseMs: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_COMBAT_COVER_PULSE_MS,
+      DEFAULTS.combatCoverPulseMs
+    ),
     combatLootRacePositioningEnabled: boolEnv(
       env.GRASP_RAT_BROWSERLESS_COMBAT_LOOT_RACE_POSITIONING_ENABLED,
       DEFAULTS.combatLootRacePositioningEnabled

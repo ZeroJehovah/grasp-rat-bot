@@ -719,6 +719,9 @@ function summarizeCommand(command) {
     baseCadenceMs: command.baseCadenceMs ?? null,
     executionCadenceMs: command.executionCadenceMs ?? command.cadenceMs ?? null,
     advisoryCadenceMs: command.advisoryCadenceMs ?? null,
+    targetId: command.targetId ?? null,
+    targetRole: command.targetRole || '',
+    primaryFinishRace: command.primaryFinishRace || null,
     evasiveAimModelVersion: command.evasiveAimModelVersion || '',
     evasiveAimStrategy: command.evasiveAimStrategy || '',
     evasiveAimTriggerReason: command.evasiveAimTriggerReason || '',
@@ -869,6 +872,24 @@ function createBrowserlessActionAdapter(options = {}) {
           }
         : null,
       targetId: event.targetId ?? null,
+      targetRole: String(event.targetRole || ''),
+      primaryFinishRace: event.primaryFinishRace && typeof event.primaryFinishRace === 'object'
+        ? {
+            eligible: event.primaryFinishRace.eligible === true,
+            active: event.primaryFinishRace.active === true,
+            reason: String(event.primaryFinishRace.reason || ''),
+            dispatchCount: optionalNumber(event.primaryFinishRace.dispatchCount),
+            maxShots: optionalNumber(event.primaryFinishRace.maxShots),
+            windowStartedAt: optionalNumber(event.primaryFinishRace.windowStartedAt),
+            windowExpiresAt: optionalNumber(event.primaryFinishRace.windowExpiresAt),
+            hardBlockers: Array.isArray(event.primaryFinishRace.hardBlockers)
+              ? event.primaryFinishRace.hardBlockers.map(String).filter(Boolean).slice(0, 8)
+              : [],
+            softBlockers: Array.isArray(event.primaryFinishRace.softBlockers)
+              ? event.primaryFinishRace.softBlockers.map(String).filter(Boolean).slice(0, 8)
+              : []
+          }
+        : null,
       baseCadenceMs: optionalNumber(event.baseCadenceMs),
       executionCadenceMs: optionalNumber(event.executionCadenceMs),
       advisoryCadenceMs: optionalNumber(event.advisoryCadenceMs),
@@ -911,6 +932,8 @@ function createBrowserlessActionAdapter(options = {}) {
       executionClass: shotMeta.executionClass,
       engagementGeneration: shotMeta.engagementGeneration,
       targetId: targetRepeatKey(target),
+      targetRole: shotMeta.targetRole,
+      primaryFinishRace: shotMeta.primaryFinishRace,
       baseCadenceMs: shotMeta.baseCadenceMs,
       executionCadenceMs: shotMeta.executionCadenceMs,
       advisoryCadenceMs: shotMeta.advisoryCadenceMs,
@@ -2665,6 +2688,88 @@ function createBrowserlessActionAdapter(options = {}) {
     return entities.find(entity => targetRepeatKey(entity) === key) || null;
   }
 
+  function primaryFinishRaceWireGate(stateSnapshot, target, shotMeta, startX, startY, targetX, targetY) {
+    const finishRace = shotMeta?.primaryFinishRace;
+    const finishRaceActive = finishRace?.active === true || finishRace?.eligible === true;
+    if (shotMeta?.targetRole !== 'primary' || !finishRaceActive) return { ok: true };
+    const realtimeTarget = shotMeta.realtimeTarget || null;
+    if (!realtimeTarget) {
+      return { ok: false, reason: 'primary-finish-race-realtime-target-missing' };
+    }
+    const targetId = targetRepeatKey(target);
+    const realtimeTargetId = targetRepeatKey(realtimeTarget);
+    if (!targetId || !realtimeTargetId || targetId !== realtimeTargetId) {
+      return { ok: false, reason: 'primary-finish-race-wire-target-mismatch' };
+    }
+    if (realtimeTarget.authority === 'snapshot' || realtimeTarget.authority === 'snapshot-navigation') {
+      return { ok: false, reason: 'primary-finish-race-snapshot-target' };
+    }
+    const frameAgeMs = optionalNumber(stateSnapshot?.realtime?.frameAgeMs);
+    const freshMs = Math.max(1, Number(
+      options.combatRealtimeTargetFreshMs
+        ?? BROWSER_RUNTIME_DEFAULTS.combatRealtimeTargetFreshMs
+        ?? 500
+    ));
+    if (frameAgeMs !== null && frameAgeMs > freshMs) {
+      return { ok: false, reason: 'primary-finish-race-realtime-state-stale', frameAgeMs, freshMs };
+    }
+    const hp = numberOrNull(realtimeTarget.hp);
+    if (realtimeTarget.alive === false || realtimeTarget.dead === true || hp === null || hp <= 0) {
+      return { ok: false, reason: 'primary-finish-race-target-dead-or-empty', hp };
+    }
+    const mergedTarget = mergeRealtimeTargetInvulnerability(target, realtimeTarget, now());
+    if (isInvulnerableEntity(mergedTarget)) {
+      return { ok: false, reason: 'primary-finish-race-target-invulnerable' };
+    }
+    if (shotMeta.primaryPhysicalEligible !== true || finishRace.eligible !== true) {
+      return { ok: false, reason: 'primary-finish-race-authorization-stale' };
+    }
+    if (shotMeta.primaryCompetitionAllowed === false) {
+      return { ok: false, reason: 'primary-finish-race-competition-blocked' };
+    }
+    const selfX = numberOrNull(startX);
+    const selfY = numberOrNull(startY);
+    const entityX = numberOrNull(realtimeTarget.x);
+    const entityY = numberOrNull(realtimeTarget.y);
+    const aimX = numberOrNull(targetX);
+    const aimY = numberOrNull(targetY);
+    if ([selfX, selfY, entityX, entityY, aimX, aimY].some(value => value === null)) {
+      return { ok: false, reason: 'primary-finish-race-wire-coordinates-missing' };
+    }
+    const attackRange = Math.max(0, Number(
+      shotMeta.attackRangeCm
+        ?? options.combatAttackRange
+        ?? options.attackRange
+        ?? BROWSER_RUNTIME_DEFAULTS.combatAttackRange
+        ?? BROWSER_RUNTIME_DEFAULTS.attackRange
+        ?? 14500
+    ));
+    const targetDistanceCm = Math.hypot(entityX - selfX, entityY - selfY);
+    if (targetDistanceCm > attackRange) {
+      return {
+        ok: false,
+        reason: 'primary-finish-race-target-out-of-range',
+        targetDistanceCm,
+        attackRangeCm: attackRange
+      };
+    }
+    const transportHealth = currentTransportHealth();
+    if (transportHealth && (transportHealth.connected === false
+      || transportHealth.exit?.triggered === true
+      || transportHealth.exit?.latencyTriggered === true
+      || transportHealth.exit?.frameLossTriggered === true)) {
+      return { ok: false, reason: 'primary-finish-race-transport-unavailable' };
+    }
+    return {
+      ok: true,
+      targetId,
+      targetDistanceCm,
+      attackRangeCm: attackRange,
+      frameAgeMs,
+      freshMs
+    };
+  }
+
   function realtimeAfkTarget(stateSnapshot, target) {
     const key = targetRepeatKey(target);
     const entity = findRealtimeEntity(stateSnapshot, key);
@@ -3202,9 +3307,35 @@ function createBrowserlessActionAdapter(options = {}) {
       advisoryCadenceMs: shotMeta.advisoryCadenceMs,
       lastDispatchAt: state.lastShootCommand?.sentAtMs,
       observedTick: shotMeta.observedTick ?? state.latestObservedTick,
-      advisoryReasons: shotMeta.advisoryReasons
+      advisoryReasons: shotMeta.advisoryReasons,
+      targetRole: shotMeta.targetRole,
+      primaryFinishRace: shotMeta.primaryFinishRace
     };
     expirePendingShootCommands(atMs);
+    const primaryFinishRaceGate = primaryFinishRaceWireGate(
+      shotMeta.stateSnapshot,
+      target,
+      shotMeta,
+      startX,
+      startY,
+      targetX,
+      targetY
+    );
+    if (!primaryFinishRaceGate.ok) {
+      state.skippedCount += 1;
+      return {
+        ok: true,
+        skipped: true,
+        reason: primaryFinishRaceGate.reason,
+        execution: emitShootExecution({
+          ...executionContext,
+          type: 'shoot-skip',
+          skipReason: primaryFinishRaceGate.reason,
+          outcome: 'hard-gate-blocked',
+          wireGate: primaryFinishRaceGate
+        })
+      };
+    }
     if (isInvulnerableEntity(target) || invulnerableProtectionLeaseActive(target, atMs)) {
       state.skippedCount += 1;
       const skipReason = 'target-invulnerable-wire-gate';
@@ -3332,6 +3463,8 @@ function createBrowserlessActionAdapter(options = {}) {
       commandId: nextCommandId,
       requestedAtMs: atMs,
       targetId: targetRepeatKey(target),
+      targetRole: String(shotMeta.targetRole || ''),
+      primaryFinishRace: shotMeta.primaryFinishRace || null,
       cadenceMs: intervalMs,
       baseCadenceMs: numberOrNull(shotMeta.baseCadenceMs),
       executionCadenceMs: intervalMs,
@@ -3410,6 +3543,8 @@ function createBrowserlessActionAdapter(options = {}) {
           ownerSelfId: command.ownerSelfId,
           requestedAtMs: command.sentAtMs,
           targetId: targetRepeatKey(target),
+          targetRole: command.targetRole,
+          primaryFinishRace: command.primaryFinishRace,
           targetX: command.targetX,
           targetY: command.targetY,
           startX: command.startX,
@@ -3483,6 +3618,8 @@ function createBrowserlessActionAdapter(options = {}) {
       segmentGeneration: command.segmentGeneration,
       ownerSelfId: command.ownerSelfId,
       wireTarget: command.wireTarget,
+      targetRole: command.targetRole,
+      primaryFinishRace: command.primaryFinishRace,
       executionCadenceMs: intervalMs,
       lastDispatchAt: command.sentAtMs,
       evasiveAimModelVersion: command.evasiveAimModelVersion,
@@ -4241,7 +4378,10 @@ function createBrowserlessActionAdapter(options = {}) {
       const metadataFireTarget = shooting.target || combat.fireTarget || combat.target;
       const realtimeFireTarget = findRealtimeEntity(stateSnapshot, targetRepeatKey(metadataFireTarget));
       const fireTarget = realtimeFireTarget
-        ? mergeRealtimeTargetInvulnerability(metadataFireTarget, realtimeFireTarget, now())
+        ? {
+            ...mergeRealtimeTargetInvulnerability(metadataFireTarget, realtimeFireTarget, now()),
+            authority: 'realtime'
+          }
         : metadataFireTarget;
       const fireTargetRole = String(shooting.targetRole || fireTarget?.combatRole || fireTarget?.role || '');
       const primaryFireTarget = fireTargetRole === 'primary'
@@ -4270,7 +4410,14 @@ function createBrowserlessActionAdapter(options = {}) {
             baseCadenceMs: shooting.cadenceMs,
             executionCadenceMs: shooting.executionCadenceMs ?? shooting.cadenceMs,
             advisoryCadenceMs: shooting.advisoryCadenceMs,
-            advisoryReasons: shooting.advisoryCadenceReasons
+            advisoryReasons: shooting.advisoryCadenceReasons,
+            targetRole: fireTargetRole,
+            primaryFinishRace: shooting.primaryFinishRace,
+            primaryPhysicalEligible: shooting.primaryPhysicalEligible,
+            primaryCompetitionAllowed: shooting.primaryCompetitionAllowed,
+            realtimeTarget: realtimeFireTarget,
+            stateSnapshot,
+            attackRangeCm: options.combatAttackRange ?? options.attackRange
           };
           shoot = {
             ok: true,
@@ -4325,6 +4472,13 @@ function createBrowserlessActionAdapter(options = {}) {
                 executionCadenceMs: shooting.executionCadenceMs || shooting.cadenceMs,
                 advisoryCadenceMs: shooting.advisoryCadenceMs,
                 advisoryReasons: shooting.advisoryCadenceReasons,
+                targetRole: fireTargetRole,
+                primaryFinishRace: shooting.primaryFinishRace,
+                primaryPhysicalEligible: shooting.primaryPhysicalEligible,
+                primaryCompetitionAllowed: shooting.primaryCompetitionAllowed,
+                realtimeTarget: realtimeFireTarget,
+                stateSnapshot,
+                attackRangeCm: options.combatAttackRange ?? options.attackRange,
                 combatDecision: combat
               }
             );

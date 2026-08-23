@@ -8,6 +8,9 @@ const DEFAULT_SECONDARY_CLOSE_DISTANCE_CM = 2000;
 const DEFAULT_SECONDARY_PRESSURE_WINDOW_MS = 1500;
 const DEFAULT_SECONDARY_PRESSURE_MIN_SHOTS = 2;
 const DEFAULT_SECONDARY_PRESSURE_MAX_LAST_SHOT_AGE_MS = 750;
+const DEFAULT_PRIMARY_FINISH_RACE_WINDOW_MS = 1800;
+const DEFAULT_PRIMARY_FINISH_RACE_MAX_SHOTS = 3;
+const DEFAULT_PRIMARY_FINISH_RACE_TARGET_HP_MAX = 55;
 
 function idOf(value) {
   const id = value?.user_id ?? value?.userId ?? value?.targetId ?? value?.id ?? value?.entity_id ?? value?.entityId;
@@ -264,9 +267,148 @@ function primaryRewardSurvivalRacePolicy(input = {}, options = {}) {
   };
 }
 
+function uniqueStrings(values = []) {
+  return Array.from(new Set((values || []).map(value => String(value || '')).filter(Boolean)));
+}
+
+function isSoftReserveBlocker(value) {
+  const blocker = String(value || '');
+  return blocker === 'fire-state:dodge-reserve'
+    || blocker === 'fire-state:pressure-dodge-reserve'
+    || blocker === 'fire-state:close-pressure-movement-reserve'
+    || blocker === 'fire-state:close-pressure-reserve-band'
+    || blocker === 'fire-state:reserve-band'
+    || blocker === 'fire-state:finish-reserve';
+}
+
+/**
+ * Decide whether a low-HP primary may use a bounded finish burst while a
+ * defensive secondary is applying pressure. This sits below
+ * physical/realtime gates and above the ordinary Dodge reserve. It never
+ * changes the secondary shot quota; that quota is owned by secondary
+ * dispatches only.
+ */
+function primaryFinishRaceAuthorization(input = {}, options = {}) {
+  const nowMs = Number.isFinite(Number(input.nowMs)) ? Number(input.nowMs) : Date.now();
+  const selfHp = Number(input.selfHp ?? input.self?.hp);
+  const primaryHp = Number(input.primaryHp ?? input.primaryTarget?.hp);
+  const stamina5s = Number(input.stamina5s ?? input.self?.stamina5s ?? input.self?.stamina_5s_remaining_milli);
+  const targetId = idOf(input.primaryTarget);
+  const targetAlive = input.primaryTarget?.alive !== false && (!Number.isFinite(primaryHp) || primaryHp > 0);
+  const targetInvulnerable = input.primaryTarget?.invulnerable === true || input.targetInvulnerable === true;
+  const physicalEligible = input.primaryPhysicalEligible === true;
+  const competitionAllowed = input.primaryCompetitionAllowed !== false;
+  const targetFresh = input.primaryTargetFresh !== false;
+  const closePressure = input.closePressure?.active === true;
+  const rewardRace = input.rewardRace || {};
+  const maxTargetHp = Math.max(1, Number(
+    options.primaryFinishRaceTargetHpMax ?? DEFAULT_PRIMARY_FINISH_RACE_TARGET_HP_MAX
+  ));
+  const maxShots = Math.max(1, Math.round(Number(
+    options.primaryFinishRaceMaxShots ?? DEFAULT_PRIMARY_FINISH_RACE_MAX_SHOTS
+  )));
+  const windowMs = Math.max(160, Number(
+    options.primaryFinishRaceWindowMs ?? DEFAULT_PRIMARY_FINISH_RACE_WINDOW_MS
+  ));
+  const previous = input.previousWindow && typeof input.previousWindow === 'object'
+    ? input.previousWindow
+    : {};
+  const previousStartedAt = Number(previous.windowStartedAt || 0);
+  const previousExpiresAt = Number(previous.windowExpiresAt || 0);
+  const previousShots = Math.max(0, Math.round(Number(
+    input.finishRaceDispatchCount ?? previous.dispatchCount ?? 0
+  )));
+  const windowPreviouslyActive = previousStartedAt > 0
+    && previousExpiresAt > nowMs
+    && nowMs - previousStartedAt <= windowMs;
+  const hardBlockers = uniqueStrings(input.hardBlockers);
+  const softBlockers = uniqueStrings(input.softBlockers);
+  if (!targetId) hardBlockers.push('primary-target-missing-id');
+  if (!targetAlive) hardBlockers.push('primary-target-dead');
+  if (targetInvulnerable) hardBlockers.push('primary-target-invulnerable');
+  if (!Number.isFinite(selfHp) || selfHp <= 50) hardBlockers.push('self-hp-at-or-below-50');
+  if (!Number.isFinite(primaryHp) || primaryHp <= 0) hardBlockers.push('primary-hp-unknown');
+  else if (primaryHp > maxTargetHp) hardBlockers.push('primary-target-not-low-hp');
+  if (!physicalEligible) hardBlockers.push('primary-physical-ineligible');
+  if (!competitionAllowed) hardBlockers.push('primary-competition-blocked');
+  if (!targetFresh) hardBlockers.push('primary-realtime-state-stale');
+  if (!closePressure) hardBlockers.push('secondary-pressure-not-active');
+  if (rewardRace.evaluated !== true) hardBlockers.push('primary-race-rate-evidence-insufficient');
+  else if (rewardRace.continuePrimary !== true) hardBlockers.push('primary-reward-race-failed');
+
+  const hardReserveMs = Math.max(0, Number(
+    input.hardReserveMs ?? options.combatShootHardReserveMs ?? 1800
+  ));
+  const shotCostMs = Math.max(0, Number(input.shotCostMs ?? options.combatShotStaminaCostMs ?? 500));
+  const dodgeActionCostMs = Math.max(0, Number(input.dodgeActionCostMs || 0));
+  const requiredHardStaminaMs = hardReserveMs + shotCostMs + dodgeActionCostMs;
+  if (!Number.isFinite(stamina5s)) hardBlockers.push('stamina-unknown');
+  else if (stamina5s < requiredHardStaminaMs) hardBlockers.push('below-hard-reserve');
+
+  const normalBlocker = String(input.normalFireBlocker || '');
+  if (input.primaryNormalAuthorized !== true && isSoftReserveBlocker(normalBlocker)) {
+    softBlockers.push(normalBlocker);
+  }
+  if (input.primaryNormalAuthorized !== true && !isSoftReserveBlocker(normalBlocker)) {
+    hardBlockers.push(normalBlocker || 'primary-normal-fire-not-authorized');
+  }
+  const uniqueHardBlockers = uniqueStrings(hardBlockers);
+  const uniqueSoftBlockers = uniqueStrings(softBlockers).filter(value => !uniqueHardBlockers.includes(value));
+  const exhausted = previousShots >= maxShots;
+  if (exhausted) uniqueHardBlockers.push('finish-race-shot-window-exhausted');
+  const eligible = uniqueHardBlockers.length === 0;
+  const windowStartedAt = eligible
+    ? (windowPreviouslyActive ? previousStartedAt : nowMs)
+    : (windowPreviouslyActive ? previousStartedAt : null);
+  const windowExpiresAt = windowStartedAt === null
+    ? null
+    : Math.min(
+        Number.isFinite(previousExpiresAt) && previousExpiresAt > windowStartedAt
+          ? previousExpiresAt
+          : windowStartedAt + windowMs,
+        windowStartedAt + windowMs
+      );
+  const active = eligible && windowExpiresAt !== null && nowMs < windowExpiresAt;
+  const reason = active
+    ? (input.primaryNormalAuthorized === true ? 'primary-finish-race-window' : 'primary-finish-race-soft-reserve-override')
+    : (uniqueHardBlockers[0] || uniqueSoftBlockers[0] || 'primary-finish-race-not-authorized');
+  return {
+    eligible: active,
+    active,
+    targetId,
+    selfHp: Number.isFinite(selfHp) ? selfHp : null,
+    primaryHp: Number.isFinite(primaryHp) ? primaryHp : null,
+    targetMaxHp: maxTargetHp,
+    primaryPhysicalEligible: physicalEligible,
+    primaryNormalAuthorized: input.primaryNormalAuthorized === true,
+    normalFireBlocker: normalBlocker,
+    closePressure,
+    rewardRaceEvaluated: rewardRace.evaluated === true,
+    rewardRaceContinuePrimary: rewardRace.continuePrimary === true,
+    hardReserveMs,
+    shotCostMs,
+    dodgeActionCostMs,
+    requiredHardStaminaMs,
+    stamina5s: Number.isFinite(stamina5s) ? stamina5s : null,
+    maxShots,
+    dispatchCount: previousShots,
+    windowMs,
+    windowStartedAt,
+    windowExpiresAt,
+    hardBlockers: uniqueStrings(uniqueHardBlockers),
+    softBlockers: uniqueSoftBlockers,
+    reason
+  };
+}
+
 function dualTargetFireArbitration(input = {}) {
   const secondaryActive = input.secondaryActive === true;
   const primaryAuthorized = input.primaryAuthorized === true;
+  const primaryNormalAuthorized = input.primaryNormalAuthorized === undefined
+    ? primaryAuthorized
+    : input.primaryNormalAuthorized === true;
+  const primaryPhysicalEligible = input.primaryPhysicalEligible !== false;
+  const primaryFinishAuthorized = input.primaryFinishAuthorized === true;
   const closePressure = input.closePressure || { active: false };
   const rewardRace = input.rewardRace || { evaluated: false, continuePrimary: true };
   if (!secondaryActive) {
@@ -275,24 +417,45 @@ function dualTargetFireArbitration(input = {}) {
       fireTargetRole: 'current',
       primarySelected: false,
       secondaryFocusActive: false,
+      primaryPhysicalEligible,
+      primaryNormalAuthorized,
+      primaryFinishAuthorized: false,
       reason: 'no-defensive-secondary'
     };
   }
-  if (primaryAuthorized && closePressure.active && rewardRace.shouldFocusSecondary) {
+  if (primaryFinishAuthorized) {
+    return {
+      mode: 'primary-finish-race',
+      fireTargetRole: 'primary',
+      primarySelected: true,
+      secondaryFocusActive: false,
+      primaryPhysicalEligible,
+      primaryNormalAuthorized,
+      primaryFinishAuthorized: true,
+      reason: 'primary-finish-race-authorized'
+    };
+  }
+  if (primaryNormalAuthorized && closePressure.active && rewardRace.shouldFocusSecondary) {
     return {
       mode: 'secondary-focus',
       fireTargetRole: 'secondary',
       primarySelected: false,
       secondaryFocusActive: true,
+      primaryPhysicalEligible,
+      primaryNormalAuthorized,
+      primaryFinishAuthorized: false,
       reason: 'secondary-close-pressure-hp50-race'
     };
   }
-  if (primaryAuthorized) {
+  if (primaryNormalAuthorized) {
     return {
       mode: 'primary-profit',
       fireTargetRole: 'primary',
       primarySelected: true,
       secondaryFocusActive: false,
+      primaryPhysicalEligible,
+      primaryNormalAuthorized,
+      primaryFinishAuthorized: false,
       reason: closePressure.active
         ? 'primary-reward-race-safe'
         : 'primary-fire-authorized'
@@ -303,6 +466,9 @@ function dualTargetFireArbitration(input = {}) {
     fireTargetRole: 'secondary',
     primarySelected: false,
     secondaryFocusActive: false,
+    primaryPhysicalEligible,
+    primaryNormalAuthorized,
+    primaryFinishAuthorized: false,
     reason: 'primary-fire-not-authorized'
   };
 }
@@ -382,6 +548,9 @@ module.exports = {
   DEFAULT_SECONDARY_PRESSURE_MIN_SHOTS,
   DEFAULT_SECONDARY_PRESSURE_WINDOW_MS,
   DEFAULT_SECONDARY_WINDOW_MS,
+  DEFAULT_PRIMARY_FINISH_RACE_MAX_SHOTS,
+  DEFAULT_PRIMARY_FINISH_RACE_TARGET_HP_MAX,
+  DEFAULT_PRIMARY_FINISH_RACE_WINDOW_MS,
   classifyCombatTargetRole,
   dualTargetFireArbitration,
   hpLossRateInWindow,
@@ -390,6 +559,7 @@ module.exports = {
   missionTargetId,
   opponentShotCountInWindow,
   ownDispatchCountInWindow,
+  primaryFinishRaceAuthorization,
   primaryRewardSurvivalRacePolicy,
   secondaryCombatExitPolicy,
   secondaryCadenceMs,

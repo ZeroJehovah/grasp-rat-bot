@@ -65,6 +65,7 @@ const {
 const {
   classifyCombatTargetRole,
   dualTargetFireArbitration,
+  primaryFinishRaceAuthorization,
   primaryRewardSurvivalRacePolicy,
   secondaryCadenceMs,
   secondaryCombatExitPolicy,
@@ -72,6 +73,11 @@ const {
   secondaryFirePolicy,
   secondaryRetentionPolicy
 } = require('./dual-target-policy');
+const { evaluateCoverCandidateCore } = require('./dual-target-cover');
+const {
+  resolveDodgeOwnershipCore,
+  selectCombatMovementOwnerCore
+} = require('./combat-movement-ownership');
 const {
   observeProfitCompetitorEvidence,
   profitKillRacePolicy
@@ -457,6 +463,196 @@ function runStrategyModuleSelfTests() {
       && primaryArbitration.mode === 'primary-profit'
       && defensiveArbitration.mode === 'secondary-defensive'
       && focusArbitration.mode === 'secondary-focus'
+  });
+
+  const finishRaceReward = primaryRewardSurvivalRacePolicy({
+    nowMs: 10000,
+    selfHp: 80,
+    primaryHp: 7,
+    primaryDistanceCm: 100,
+    secondarySamples: [
+      { at: 9000, newBulletCount: 1, selfHp: 80 },
+      { at: 10000, newBulletCount: 1, selfHp: 79 }
+    ],
+    primarySamples: [
+      { at: 9000, hp: 10 },
+      { at: 10000, hp: 7 }
+    ],
+    closePressure: { active: true }
+  });
+  const finishRaceSoftReserve = primaryFinishRaceAuthorization({
+    nowMs: 10000,
+    selfHp: 80,
+    primaryHp: 7,
+    primaryTarget: { user_id: 7, alive: true, hp: 7 },
+    primaryPhysicalEligible: true,
+    primaryCompetitionAllowed: true,
+    primaryTargetFresh: true,
+    primaryNormalAuthorized: false,
+    normalFireBlocker: 'fire-state:dodge-reserve',
+    closePressure: { active: true },
+    rewardRace: finishRaceReward,
+    stamina5s: 3000,
+    hardReserveMs: 1800,
+    shotCostMs: 500,
+    dodgeActionCostMs: 0
+  });
+  const finishRaceAtFifty = primaryFinishRaceAuthorization({
+    nowMs: 10000,
+    selfHp: 50,
+    primaryHp: 7,
+    primaryTarget: { user_id: 7, alive: true, hp: 7 },
+    primaryPhysicalEligible: true,
+    primaryCompetitionAllowed: true,
+    primaryTargetFresh: true,
+    primaryNormalAuthorized: true,
+    closePressure: { active: true },
+    rewardRace: finishRaceReward,
+    stamina5s: 3000,
+    hardReserveMs: 1800,
+    shotCostMs: 500
+  });
+  const finishRaceMissingEvidence = primaryFinishRaceAuthorization({
+    nowMs: 10000,
+    selfHp: 80,
+    primaryHp: 7,
+    primaryTarget: { user_id: 7, alive: true, hp: 7 },
+    primaryPhysicalEligible: true,
+    primaryCompetitionAllowed: true,
+    primaryTargetFresh: true,
+    primaryNormalAuthorized: true,
+    closePressure: { active: true },
+    rewardRace: { evaluated: false, continuePrimary: true },
+    stamina5s: 3000,
+    hardReserveMs: 1800,
+    shotCostMs: 500
+  });
+  const finishRaceHardReserve = primaryFinishRaceAuthorization({
+    nowMs: 10000,
+    selfHp: 80,
+    primaryHp: 7,
+    primaryTarget: { user_id: 7, alive: true, hp: 7 },
+    primaryPhysicalEligible: true,
+    primaryCompetitionAllowed: true,
+    primaryTargetFresh: true,
+    primaryNormalAuthorized: false,
+    normalFireBlocker: 'fire-state:dodge-reserve',
+    closePressure: { active: true },
+    rewardRace: finishRaceReward,
+    stamina5s: 2299,
+    hardReserveMs: 1800,
+    shotCostMs: 500
+  });
+  const finishRaceArbitration = dualTargetFireArbitration({
+    secondaryActive: true,
+    primaryPhysicalEligible: true,
+    primaryNormalAuthorized: false,
+    primaryFinishAuthorized: finishRaceSoftReserve.eligible,
+    closePressure: { active: true },
+    rewardRace: finishRaceReward
+  });
+  results.push({
+    name: 'primary-finish-race-requires-realtime-physical-eligibility-and-keeps-hard-hp-stamina-gates',
+    passed: finishRaceReward.continuePrimary === true
+      && finishRaceSoftReserve.eligible === true
+      && finishRaceSoftReserve.reason === 'primary-finish-race-soft-reserve-override'
+      && finishRaceArbitration.mode === 'primary-finish-race'
+      && finishRaceAtFifty.eligible === false
+      && finishRaceAtFifty.hardBlockers.includes('self-hp-at-or-below-50')
+      && finishRaceMissingEvidence.eligible === false
+      && finishRaceMissingEvidence.hardBlockers.includes('primary-race-rate-evidence-insufficient')
+      && finishRaceHardReserve.eligible === false
+      && finishRaceHardReserve.hardBlockers.includes('below-hard-reserve')
+  });
+
+  const coverHold = evaluateCoverCandidateCore({
+    nowMs: 1000,
+    self: { user_id: 1, x: 600, y: 0 },
+    attacker: { user_id: 2, x: 0, y: 0 },
+    primary: { user_id: 7, x: 500, y: 0, hp: 100, alive: true, active: false },
+    primaryPassive: true,
+    bullets: [{
+      incoming: true,
+      ownerId: 2,
+      startX: 0,
+      startY: 0,
+      dirX: 1,
+      dirY: 0
+    }]
+  });
+  const coverSideMiss = evaluateCoverCandidateCore({
+    nowMs: 1000,
+    self: { user_id: 1, x: 600, y: 0 },
+    attacker: { user_id: 2, x: 0, y: 0 },
+    primary: { user_id: 7, x: 500, y: 900, hp: 100, alive: true, active: false },
+    primaryPassive: true,
+    bullets: [{ incoming: true, ownerId: 2, dirX: 1, dirY: 0 }]
+  });
+  const coverInvulnerable = evaluateCoverCandidateCore({
+    nowMs: 1000,
+    self: { user_id: 1, x: 600, y: 0 },
+    attacker: { user_id: 2, x: 0, y: 0 },
+    primary: {
+      user_id: 7,
+      x: 500,
+      y: 0,
+      hp: 100,
+      alive: true,
+      active: false,
+      invulnerableProtectionLeaseUntilMs: 1100
+    },
+    primaryPassive: true,
+    bullets: [{ incoming: true, ownerId: 2, dirX: 1, dirY: 0 }]
+  });
+  const coverStale = evaluateCoverCandidateCore({
+    nowMs: 1000,
+    positionAgeMs: 501,
+    self: { user_id: 1, x: 600, y: 0 },
+    attacker: { user_id: 2, x: 0, y: 0 },
+    primary: { user_id: 7, x: 500, y: 0, hp: 100, alive: true, active: false },
+    primaryPassive: true,
+    bullets: [{ incoming: true, ownerId: 2, dirX: 1, dirY: 0 }]
+  });
+  results.push({
+    name: 'cover-hypothesis-is-realtime-geometric-and-never-claims-server-immunity',
+    passed: coverHold.state === 'cover-hold'
+      && coverHold.coverHypothesis === 'cover-hypothesis-unverified'
+      && coverHold.bulletCorridor === true
+      && coverSideMiss.state === 'released'
+      && coverSideMiss.releaseReason === 'primary-outside-cover-corridor'
+      && coverInvulnerable.releaseReason === 'primary-invulnerable'
+      && coverStale.releaseReason === 'realtime-position-stale'
+  });
+
+  const dodgeGeneration = resolveDodgeOwnershipCore({
+    nowMs: 1000,
+    currentThreat: true,
+    threatGeneration: 'bullet:1',
+    direction: { dx: 1, dy: 0 }
+  });
+  const heldDodgeGeneration = resolveDodgeOwnershipCore({
+    nowMs: 1200,
+    currentThreat: false,
+    previous: dodgeGeneration
+  });
+  const releasedDodgeGeneration = resolveDodgeOwnershipCore({
+    nowMs: 1600,
+    currentThreat: false,
+    previous: heldDodgeGeneration
+  });
+  const dodgeOwner = selectCombatMovementOwnerCore({
+    requestedOwner: 'secondary-follow-primary-target',
+    dodgeOwnership: heldDodgeGeneration,
+    coverActive: true,
+    finishRaceActive: true
+  });
+  results.push({
+    name: 'emergency-dodge-ownership-outlives-one-frame-and-preempts-cover-finish-escort',
+    passed: dodgeGeneration.owner === 'emergency-dodge'
+      && heldDodgeGeneration.active === true
+      && heldDodgeGeneration.threatGeneration === 'bullet:1'
+      && releasedDodgeGeneration.active === false
+      && dodgeOwner.owner === 'emergency-dodge'
   });
 
   const killRaceBlocked = profitKillRacePolicy({

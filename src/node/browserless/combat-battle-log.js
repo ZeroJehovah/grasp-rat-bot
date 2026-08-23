@@ -1658,6 +1658,24 @@ function createCombatBattleLog(options = {}) {
       segmentGeneration: String(detail?.segmentGeneration || ''),
       ownerSelfId: detail?.ownerSelfId ?? null,
       targetId: detail?.targetId ?? null,
+      targetRole: String(detail?.targetRole || '').slice(0, 24),
+      primaryFinishRace: detail?.primaryFinishRace && typeof detail.primaryFinishRace === 'object'
+        ? {
+            eligible: detail.primaryFinishRace.eligible === true,
+            active: detail.primaryFinishRace.active === true,
+            reason: String(detail.primaryFinishRace.reason || '').slice(0, 96),
+            dispatchCount: numberOrNull(detail.primaryFinishRace.dispatchCount),
+            maxShots: numberOrNull(detail.primaryFinishRace.maxShots),
+            windowStartedAt: numberOrNull(detail.primaryFinishRace.windowStartedAt),
+            windowExpiresAt: numberOrNull(detail.primaryFinishRace.windowExpiresAt),
+            hardBlockers: Array.isArray(detail.primaryFinishRace.hardBlockers)
+              ? detail.primaryFinishRace.hardBlockers.map(value => String(value).slice(0, 96)).slice(0, 8)
+              : [],
+            softBlockers: Array.isArray(detail.primaryFinishRace.softBlockers)
+              ? detail.primaryFinishRace.softBlockers.map(value => String(value).slice(0, 96)).slice(0, 8)
+              : []
+          }
+        : null,
       wireTarget,
       ownership,
       baseCadenceMs: numberOrNull(detail?.baseCadenceMs),

@@ -1269,8 +1269,11 @@ function assertDualTargetRuntimeRules() {
     100
   );
   assert.strictEqual(safePressure.combat?.shooting?.secondaryPolicy?.closePressure?.active, true);
-  assert.strictEqual(safePressure.combat?.shooting?.mode, 'primary-profit');
+  assert.strictEqual(safePressure.combat?.shooting?.mode, 'primary-finish-race');
   assert.strictEqual(safePressure.combat?.fireTarget?.userId, 42);
+  assert.strictEqual(safePressure.combat?.shooting?.primaryFinishRace?.eligible, true);
+  assert.strictEqual(safePressure.combat?.shooting?.targetRole, 'primary');
+  assert.strictEqual(safePressure.combat?.shooting?.secondaryPolicy?.dispatchCountInWindow, 0);
   assert.strictEqual(safePressure.combat?.shooting?.primaryRewardSurvivalRace?.continuePrimary, true);
 
   const primaryDrop = {
