@@ -36937,7 +36937,9 @@ async function runSelfTest() {
           panelScript.includes('const mapAnimationProgress = function mapAnimationProgressCore'),
           panelScript.includes('const interpolateMapPoint = function interpolateMapPointCore'),
           panelScript.includes('const interpolateMapPolyline = function interpolateMapPolylineCore'),
-          panelScript.includes('const advanceMapTrailSamples = function advanceMapTrailSamplesCore'),
+          panelScript.includes('const appendMapTrailSample = function appendMapTrailSampleCore')
+            && panelScript.includes('const advanceMapTrailSamples = function advanceMapTrailSamplesCore')
+            && panelScript.includes('const retained = appendMapTrailSample(samples, null'),
           panelScript.includes('advanceMapTrailSamples(previous.samples, latestSample'),
           panelScript.includes('const deltaX = nextEndpoint.px - previousEndpoint.px'),
           !panelScript.includes('resampleMapPolyline'),
