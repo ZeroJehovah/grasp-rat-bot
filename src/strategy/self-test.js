@@ -65,6 +65,7 @@ const {
 const {
   classifyCombatTargetRole,
   dualTargetFireArbitration,
+  incomingPressureEvidencePolicy,
   primaryFinishRaceAuthorization,
   primaryRewardSurvivalRacePolicy,
   secondaryCadenceMs,
@@ -463,6 +464,76 @@ function runStrategyModuleSelfTests() {
       && primaryArbitration.mode === 'primary-profit'
       && defensiveArbitration.mode === 'secondary-defensive'
       && focusArbitration.mode === 'secondary-focus'
+  });
+
+  const outsideClosePressureEvidence = incomingPressureEvidencePolicy({
+    nowMs: 10000,
+    ownerIds: ['32551'],
+    recentAttributableDamageAt: 9800,
+    residualThreatAt: 9900,
+    established: true
+  });
+  const dualOwnerFinishRace = primaryRewardSurvivalRacePolicy({
+    nowMs: 10000,
+    selfHp: 91,
+    primaryHp: 1,
+    primaryDistanceCm: 392,
+    closePressure: { active: false, distanceCm: 2046 },
+    pressureEvidence: outsideClosePressureEvidence,
+    ownerIds: ['32551', '31361'],
+    incomingSamplesByOwner: {
+      '32551': [
+        { at: 9000, newBulletCount: 1, selfHp: 91, attributableSelfDamage: false },
+        { at: 9900, newBulletCount: 1, selfHp: 91, attributableSelfDamage: false }
+      ],
+      '31361': [
+        { at: 9300, newBulletCount: 1, selfHp: 94, selfDamageAmount: 3, attributableSelfDamage: true },
+        { at: 9800, newBulletCount: 1, selfHp: 91, selfDamageAmount: 3, attributableSelfDamage: true }
+      ]
+    }
+  });
+  const outsideCloseFinishRace = primaryFinishRaceAuthorization({
+    nowMs: 10000,
+    selfHp: 91,
+    primaryHp: 1,
+    primaryTarget: { user_id: 7, alive: true, hp: 1 },
+    primaryPhysicalEligible: true,
+    primaryCompetitionAllowed: true,
+    primaryTargetFresh: true,
+    primaryNormalAuthorized: false,
+    normalFireBlocker: 'fire-state:dodge-reserve',
+    closePressure: { active: false },
+    pressureEvidence: outsideClosePressureEvidence,
+    rewardRace: dualOwnerFinishRace,
+    stamina5s: 3000,
+    hardReserveMs: 1800,
+    shotCostMs: 500
+  });
+  const expiredOutsideCloseEvidence = incomingPressureEvidencePolicy({
+    nowMs: 13000,
+    ownerIds: ['32551'],
+    residualThreatAt: 9900,
+    established: true
+  });
+  const futureOutsideCloseEvidence = incomingPressureEvidencePolicy({
+    nowMs: 10000,
+    ownerIds: ['32551'],
+    residualThreatAt: 10001,
+    established: true
+  });
+  results.push({
+    name: 'finish-race-uses-recent-multi-owner-pressure-outside-close-distance',
+    passed: outsideClosePressureEvidence.active === true
+      && outsideClosePressureEvidence.ownerKnown === true
+      && outsideClosePressureEvidence.evidenceTypes.includes('residual-threat')
+      && dualOwnerFinishRace.evaluated === true
+      && dualOwnerFinishRace.continuePrimary === true
+      && dualOwnerFinishRace.incomingOwnerCount === 2
+      && outsideCloseFinishRace.eligible === true
+      && outsideCloseFinishRace.closePressure === false
+      && outsideCloseFinishRace.pressureEvidenceActive === true
+      && expiredOutsideCloseEvidence.active === false
+      && futureOutsideCloseEvidence.active === false
   });
 
   const finishRaceReward = primaryRewardSurvivalRacePolicy({

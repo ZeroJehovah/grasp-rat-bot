@@ -8,6 +8,7 @@ const DEFAULT_SECONDARY_CLOSE_DISTANCE_CM = 2000;
 const DEFAULT_SECONDARY_PRESSURE_WINDOW_MS = 1500;
 const DEFAULT_SECONDARY_PRESSURE_MIN_SHOTS = 2;
 const DEFAULT_SECONDARY_PRESSURE_MAX_LAST_SHOT_AGE_MS = 750;
+const DEFAULT_INCOMING_PRESSURE_EVIDENCE_LEASE_MS = 2500;
 const DEFAULT_PRIMARY_FINISH_RACE_WINDOW_MS = 1800;
 const DEFAULT_PRIMARY_FINISH_RACE_MAX_SHOTS = 3;
 const DEFAULT_PRIMARY_FINISH_RACE_TARGET_HP_MAX = 55;
@@ -125,6 +126,132 @@ function hpLossRateInWindow(samples = [], field, nowMs = Date.now(), windowMs = 
   return loss > 0 ? loss * 1000 / elapsedMs : 0;
 }
 
+function attributedHpLossRateInWindow(samples = [], nowMs = Date.now(), windowMs = DEFAULT_SECONDARY_WINDOW_MS) {
+  const rows = attributedHpLossRows(samples, nowMs, windowMs);
+  if (!rows.length) return 0;
+  const elapsedMs = Math.max(1000, Number(nowMs) - rows[0].at);
+  return rows.reduce((total, row) => total + row.amount, 0) * 1000 / elapsedMs;
+}
+
+function attributedHpLossRows(samples = [], nowMs = Date.now(), windowMs = DEFAULT_SECONDARY_WINDOW_MS) {
+  const rows = samplesInWindow(samples, nowMs, windowMs)
+    .map(sample => {
+      const explicitAmount = Number(sample?.selfDamageAmount);
+      const amount = Number.isFinite(explicitAmount)
+        ? Math.max(0, explicitAmount)
+        : (sample?.attributableSelfDamage === true
+            ? Math.max(0, Number(sample?.selfHpLoss || sample?.damage || 0))
+            : 0);
+      return {
+        at: Number(sample?.at || 0),
+        amount,
+        selfHp: Number(sample?.selfHp)
+      };
+    })
+    .filter(sample => Number.isFinite(sample.at) && sample.amount > 0)
+    .sort((left, right) => left.at - right.at);
+  return deduplicateDamageRows(rows);
+}
+
+function deduplicateDamageRows(rows = []) {
+  const unique = new Map();
+  for (const row of rows) {
+    const hpKey = Number.isFinite(row.selfHp) ? `|hp:${row.selfHp}` : '';
+    const key = `${row.at}${hpKey || `|amount:${row.amount}`}`;
+    const previous = unique.get(key);
+    if (!previous || row.amount > previous.amount) unique.set(key, row);
+  }
+  return Array.from(unique.values()).sort((left, right) => left.at - right.at);
+}
+
+function attributedHpLossRateAcrossOwnerGroups(ownerGroups = [], nowMs = Date.now(), windowMs = DEFAULT_SECONDARY_WINDOW_MS) {
+  const rows = deduplicateDamageRows((ownerGroups || []).flatMap(samples => (
+    attributedHpLossRows(samples, nowMs, windowMs)
+  )));
+  if (!rows.length) return 0;
+  const elapsedMs = Math.max(1000, Number(nowMs) - rows[0].at);
+  return rows.reduce((total, row) => total + row.amount, 0) * 1000 / elapsedMs;
+}
+
+function hpLossRateAcrossOwnerGroups(ownerGroups = [], nowMs = Date.now(), windowMs = DEFAULT_SECONDARY_WINDOW_MS) {
+  const rows = (ownerGroups || []).flatMap(samples => samplesInWindow(samples, nowMs, windowMs)
+    .map(sample => ({
+      at: Number(sample?.at || 0),
+      hp: Number(sample?.selfHp)
+    }))
+    .filter(sample => Number.isFinite(sample.at) && Number.isFinite(sample.hp)))
+    .sort((left, right) => left.at - right.at);
+  const unique = [];
+  const seen = new Set();
+  for (const row of rows) {
+    const key = `${row.at}|${row.hp}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(row);
+  }
+  if (unique.length < 2) return 0;
+  let loss = 0;
+  for (let index = 1; index < unique.length; index += 1) {
+    loss += Math.max(0, unique[index - 1].hp - unique[index].hp);
+  }
+  const elapsedMs = Math.max(1000, unique.at(-1).at - unique[0].at);
+  return loss > 0 ? loss * 1000 / elapsedMs : 0;
+}
+
+function incomingPressureEvidencePolicy(input = {}, options = {}) {
+  const nowMs = Number.isFinite(Number(input.nowMs)) ? Number(input.nowMs) : Date.now();
+  const leaseMs = Math.max(250, Number(
+    options.incomingPressureEvidenceLeaseMs ?? DEFAULT_INCOMING_PRESSURE_EVIDENCE_LEASE_MS
+  ));
+  const collisionBullets = Array.isArray(input.collisionBullets)
+    ? input.collisionBullets
+    : (Array.isArray(input.incomingBullets) ? input.incomingBullets : []);
+  const ownerIds = uniqueStrings([
+    ...(Array.isArray(input.ownerIds) ? input.ownerIds : []),
+    ...collisionBullets.map(bullet => bullet?.ownerId ?? bullet?.owner_id)
+  ]);
+  const currentCollision = collisionBullets.length > 0;
+  const evidence = [
+    ['attributable-damage', input.recentAttributableDamageAt],
+    ['recent-self-damage', input.recentSelfDamageAt],
+    ['retained-defensive-evidence', input.retainedDefensiveEvidenceAt],
+    ['residual-threat', input.residualThreatAt],
+    ['known-owner-attack', input.knownOwnerAttackAt]
+  ]
+    .map(([type, at]) => ({ type, at: Number(at || 0) }))
+    .filter(item => Number.isFinite(item.at) && item.at > 0 && item.at <= nowMs)
+    .sort((left, right) => right.at - left.at);
+  const latest = evidence[0] || null;
+  const latestAgeMs = latest ? Math.max(0, nowMs - latest.at) : null;
+  const recentEvidence = Boolean(latest && latestAgeMs <= leaseMs);
+  const established = input.established === true;
+  const active = Boolean(currentCollision || (recentEvidence && (ownerIds.length > 0 || established)));
+  const evidenceTypes = uniqueStrings([
+    currentCollision ? 'collision-path-bullet' : '',
+    recentEvidence ? latest.type : '',
+    input.residualThreatActive === true ? 'residual-threat-generation' : '',
+    established ? 'established-defensive-owner' : ''
+  ]);
+  return {
+    active,
+    currentCollision,
+    recentEvidence,
+    established,
+    ownerIds,
+    ownerKnown: ownerIds.length > 0,
+    leaseMs,
+    latestEvidenceAt: latest?.at || null,
+    latestEvidenceType: latest?.type || '',
+    latestAgeMs,
+    evidenceTypes,
+    reason: active
+      ? (currentCollision
+          ? 'incoming-collision-path-pressure'
+          : (latest?.type || (established ? 'established-defensive-pressure' : 'recent-incoming-pressure')))
+      : 'incoming-pressure-evidence-expired'
+  };
+}
+
 function secondaryClosePressurePolicy(input = {}, options = {}) {
   const nowMs = Number(input.nowMs || Date.now());
   const target = input.target || {};
@@ -180,6 +307,34 @@ function primaryRewardSurvivalRacePolicy(input = {}, options = {}) {
   const primaryDistanceCm = Number(input.primaryDistanceCm ?? input.primaryTarget?.distance);
   const nowMs = Number(input.nowMs || Date.now());
   const pressure = input.closePressure || secondaryClosePressurePolicy(input, options);
+  const pressureEvidence = input.pressureEvidence || (pressure.active === true
+    ? {
+        active: true,
+        currentCollision: false,
+        recentEvidence: true,
+        established: true,
+        ownerIds: uniqueStrings(input.ownerIds),
+        ownerKnown: uniqueStrings(input.ownerIds).length > 0,
+        leaseMs: Math.max(250, Number(
+          options.incomingPressureEvidenceLeaseMs ?? DEFAULT_INCOMING_PRESSURE_EVIDENCE_LEASE_MS
+        )),
+        latestEvidenceAt: nowMs,
+        latestEvidenceType: 'close-pressure-compatibility',
+        latestAgeMs: 0,
+        evidenceTypes: ['close-pressure-compatibility'],
+        reason: 'secondary-close-sustained-fire'
+      }
+    : incomingPressureEvidencePolicy({
+        nowMs,
+        ownerIds: input.ownerIds,
+        collisionBullets: input.collisionBullets,
+        recentAttributableDamageAt: input.recentAttributableDamageAt,
+        recentSelfDamageAt: input.recentSelfDamageAt,
+        retainedDefensiveEvidenceAt: input.retainedDefensiveEvidenceAt,
+        residualThreatAt: input.residualThreatAt,
+        knownOwnerAttackAt: input.knownOwnerAttackAt,
+        established: input.established
+      }, options));
   const pickupRadiusCm = Math.max(1, Number(options.playerDropPickupRadiusCm ?? 150));
   const axisSpeedCmPerSec = Math.max(1, Number(
     options.invulnerableProfitAxisSpeedCmPerSec ?? 950
@@ -189,20 +344,42 @@ function primaryRewardSurvivalRacePolicy(input = {}, options = {}) {
   ));
   const secondarySamples = input.secondarySamples || input.combatTargetState?.motionSamples || [];
   const primarySamples = input.primarySamples || [];
-  const observedIncomingRate = hpLossRateInWindow(secondarySamples, 'selfHp', nowMs, damageWindowMs);
-  const opponentShots = opponentShotCountInWindow(secondarySamples, nowMs, damageWindowMs);
-  const shotObservationRows = samplesInWindow(secondarySamples, nowMs, damageWindowMs);
+  const incomingSamplesByOwner = input.incomingSamplesByOwner
+    && typeof input.incomingSamplesByOwner === 'object'
+    ? input.incomingSamplesByOwner
+    : null;
+  const ownerSampleGroups = incomingSamplesByOwner
+    ? Object.values(incomingSamplesByOwner).filter(Array.isArray)
+    : [];
+  const sampleGroups = ownerSampleGroups.length ? ownerSampleGroups : [secondarySamples];
+  const hasAttributedSamples = sampleGroups.some(samples => samples.some(sample => (
+    Number(sample?.selfDamageAmount) > 0 || sample?.attributableSelfDamage === true
+  )));
+  const observedIncomingRate = hasAttributedSamples
+    ? attributedHpLossRateAcrossOwnerGroups(sampleGroups, nowMs, damageWindowMs)
+    : hpLossRateAcrossOwnerGroups(sampleGroups, nowMs, damageWindowMs);
+  const opponentShots = sampleGroups.reduce(
+    (total, samples) => total + opponentShotCountInWindow(samples, nowMs, damageWindowMs),
+    0
+  );
+  const shotObservationRows = sampleGroups.flatMap(samples => samplesInWindow(samples, nowMs, damageWindowMs));
+  const shotObservationMinAt = shotObservationRows.length
+    ? shotObservationRows.reduce((min, row) => Math.min(min, Number(row?.at || nowMs)), nowMs)
+    : nowMs;
+  const shotObservationMaxAt = shotObservationRows.length
+    ? shotObservationRows.reduce((max, row) => Math.max(max, Number(row?.at || 0)), 0)
+    : nowMs;
   const shotObservationSpanMs = shotObservationRows.length > 1
-    ? Math.max(1000, Number(shotObservationRows.at(-1)?.at || nowMs) - Number(shotObservationRows[0]?.at || nowMs))
+    ? Math.max(1000, shotObservationMaxAt - shotObservationMinAt)
     : 1000;
   const opponentShotsPerSec = opponentShots * 1000 / shotObservationSpanMs;
   const estimatedIncomingRate = opponentShotsPerSec
     * Math.max(0.05, Number(options.secondaryTargetRaceAssumedHitRate ?? 0.2))
     * Math.max(0.1, Number(options.secondaryTargetRaceShotDamageHp ?? 3));
   const incomingRateHpPerSec = Math.min(
-    Math.max(1, Number(options.secondaryTargetRaceIncomingRateCapHpPerSec ?? 12)),
-    Math.max(
-      pressure.active ? Math.max(0.1, Number(options.secondaryTargetRaceIncomingRateFloorHpPerSec ?? 1.5)) : 0,
+      Math.max(1, Number(options.secondaryTargetRaceIncomingRateCapHpPerSec ?? 12)),
+      Math.max(
+      pressureEvidence.active ? Math.max(0.1, Number(options.secondaryTargetRaceIncomingRateFloorHpPerSec ?? 1.5)) : 0,
       observedIncomingRate,
       estimatedIncomingRate
     )
@@ -230,7 +407,7 @@ function primaryRewardSurvivalRacePolicy(input = {}, options = {}) {
     : (Number.isFinite(selfHp) && selfHp <= 50 ? 0 : Infinity);
   const safetyMarginMs = Math.max(0, Number(options.secondaryTargetRaceSafetyMarginMs ?? 1000));
   const evaluated = Boolean(
-    pressure.active
+    pressureEvidence.active
       && Number.isFinite(selfHp)
       && Number.isFinite(primaryHp)
       && primaryHp > 0
@@ -246,6 +423,10 @@ function primaryRewardSurvivalRacePolicy(input = {}, options = {}) {
     primaryHp: Number.isFinite(primaryHp) ? primaryHp : null,
     primaryDistanceCm: Number.isFinite(primaryDistanceCm) ? primaryDistanceCm : null,
     pickupRadiusCm,
+    closePressureActive: pressure.active === true,
+    pressureEvidence,
+    incomingOwnerCount: sampleGroups.length,
+    attributedSamples: hasAttributedSamples,
     observedIncomingRateHpPerSec: observedIncomingRate,
     estimatedIncomingRateHpPerSec: estimatedIncomingRate,
     incomingRateHpPerSec,
@@ -260,7 +441,7 @@ function primaryRewardSurvivalRacePolicy(input = {}, options = {}) {
     selfHp50EtaMs: Number.isFinite(selfHp50EtaMs) ? selfHp50EtaMs : null,
     safetyMarginMs,
     reason: !evaluated
-      ? 'secondary-close-pressure-race-not-applicable'
+      ? 'incoming-pressure-race-not-applicable'
       : (continuePrimary
           ? 'primary-reward-before-hp50-margin'
           : 'hp50-before-primary-reward-margin')
@@ -300,6 +481,11 @@ function primaryFinishRaceAuthorization(input = {}, options = {}) {
   const competitionAllowed = input.primaryCompetitionAllowed !== false;
   const targetFresh = input.primaryTargetFresh !== false;
   const closePressure = input.closePressure?.active === true;
+  const pressureEvidence = input.pressureEvidence || {
+    active: closePressure,
+    reason: closePressure ? 'close-pressure-compatibility' : 'incoming-pressure-evidence-missing',
+    evidenceTypes: closePressure ? ['close-pressure-compatibility'] : []
+  };
   const rewardRace = input.rewardRace || {};
   const maxTargetHp = Math.max(1, Number(
     options.primaryFinishRaceTargetHpMax ?? DEFAULT_PRIMARY_FINISH_RACE_TARGET_HP_MAX
@@ -332,7 +518,7 @@ function primaryFinishRaceAuthorization(input = {}, options = {}) {
   if (!physicalEligible) hardBlockers.push('primary-physical-ineligible');
   if (!competitionAllowed) hardBlockers.push('primary-competition-blocked');
   if (!targetFresh) hardBlockers.push('primary-realtime-state-stale');
-  if (!closePressure) hardBlockers.push('secondary-pressure-not-active');
+  if (pressureEvidence.active !== true) hardBlockers.push('incoming-pressure-not-active');
   if (rewardRace.evaluated !== true) hardBlockers.push('primary-race-rate-evidence-insufficient');
   else if (rewardRace.continuePrimary !== true) hardBlockers.push('primary-reward-race-failed');
 
@@ -383,6 +569,8 @@ function primaryFinishRaceAuthorization(input = {}, options = {}) {
     primaryNormalAuthorized: input.primaryNormalAuthorized === true,
     normalFireBlocker: normalBlocker,
     closePressure,
+    pressureEvidenceActive: pressureEvidence.active === true,
+    pressureEvidence: { ...pressureEvidence },
     rewardRaceEvaluated: rewardRace.evaluated === true,
     rewardRaceContinuePrimary: rewardRace.continuePrimary === true,
     hardReserveMs,
@@ -410,6 +598,7 @@ function dualTargetFireArbitration(input = {}) {
   const primaryPhysicalEligible = input.primaryPhysicalEligible !== false;
   const primaryFinishAuthorized = input.primaryFinishAuthorized === true;
   const closePressure = input.closePressure || { active: false };
+  const pressureEvidence = input.pressureEvidence || closePressure;
   const rewardRace = input.rewardRace || { evaluated: false, continuePrimary: true };
   if (!secondaryActive) {
     return {
@@ -435,7 +624,7 @@ function dualTargetFireArbitration(input = {}) {
       reason: 'primary-finish-race-authorized'
     };
   }
-  if (primaryNormalAuthorized && closePressure.active && rewardRace.shouldFocusSecondary) {
+  if (primaryNormalAuthorized && pressureEvidence.active && rewardRace.shouldFocusSecondary) {
     return {
       mode: 'secondary-focus',
       fireTargetRole: 'secondary',
@@ -540,6 +729,7 @@ function secondaryRetentionPolicy(combatTargetState = null, nowMs = Date.now(), 
 }
 
 module.exports = {
+  DEFAULT_INCOMING_PRESSURE_EVIDENCE_LEASE_MS,
   DEFAULT_SECONDARY_BASE_CADENCE_MS,
   DEFAULT_SECONDARY_CLOSE_DISTANCE_CM,
   DEFAULT_SECONDARY_MAX_CADENCE_MS,
@@ -553,7 +743,9 @@ module.exports = {
   DEFAULT_PRIMARY_FINISH_RACE_WINDOW_MS,
   classifyCombatTargetRole,
   dualTargetFireArbitration,
+  attributedHpLossRateInWindow,
   hpLossRateInWindow,
+  incomingPressureEvidencePolicy,
   idOf,
   isWhitelistTarget,
   missionTargetId,

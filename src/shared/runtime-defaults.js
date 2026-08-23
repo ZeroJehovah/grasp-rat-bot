@@ -155,6 +155,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     primaryFinishRaceWindowMs: numberDefault(config.primaryFinishRaceWindowMs, 1800),
     primaryFinishRaceMaxShots: numberDefault(config.primaryFinishRaceMaxShots, 3),
     primaryFinishRaceTargetHpMax: numberDefault(config.primaryFinishRaceTargetHpMax, 55),
+    incomingPressureEvidenceLeaseMs: numberDefault(config.incomingPressureEvidenceLeaseMs, 2500),
     combatRealtimeTargetFreshMs: numberDefault(config.combatRealtimeTargetFreshMs, 500),
     combatDodgeOwnershipHoldMs: numberDefault(config.combatDodgeOwnershipHoldMs, 500),
     combatCoverEnabled: config.combatCoverEnabled !== false,

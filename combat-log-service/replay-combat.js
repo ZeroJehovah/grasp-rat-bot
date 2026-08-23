@@ -26,6 +26,7 @@ const DEFAULTS = {
   primaryFinishRaceWindowMs: DEFAULT_PRIMARY_FINISH_RACE_WINDOW_MS,
   primaryFinishRaceMaxShots: DEFAULT_PRIMARY_FINISH_RACE_MAX_SHOTS,
   primaryFinishRaceTargetHpMax: DEFAULT_PRIMARY_FINISH_RACE_TARGET_HP_MAX,
+  incomingPressureEvidenceLeaseMs: 2500,
   combatShootHardReserveMs: 1800,
   combatShotStaminaCostMs: 500,
   liveDivergencePrecisionCm: 1200,
@@ -227,6 +228,93 @@ function targetRealBulletPressure(frame) {
 
 function incomingBulletFromFrame(frame) {
   return frame?.entry?.incomingBullet || frame?.entry?.decision?.incomingBullet || null;
+}
+
+function replayPressureEvidenceFromLiveDetail(at, target, secondaryRetention = {}, shooting = {}, movement = {}) {
+  const logged = shooting.primaryFinishRace?.pressureEvidence
+    || shooting.primaryRewardSurvivalRace?.pressureEvidence
+    || null;
+  if (logged && typeof logged === 'object' && typeof logged.active === 'boolean') {
+    return logged;
+  }
+
+  const secondaryId = target?.user_id ?? target?.userId ?? target?.id ?? null;
+  const ownerIds = secondaryId === null || secondaryId === undefined || secondaryId === ''
+    ? []
+    : [String(secondaryId)];
+  const latestEvidenceAt = numberOrNull(secondaryRetention.latestEvidenceAt);
+  const ageMs = numberOrNull(secondaryRetention.ageMs);
+  const leaseMs = Math.max(
+    250,
+    Number(shooting.primaryRewardSurvivalRace?.pressureEvidence?.leaseMs
+      || DEFAULTS.incomingPressureEvidenceLeaseMs)
+  );
+  const retained = secondaryRetention.retained === true
+    && Number.isFinite(Number(at))
+    && Number.isFinite(latestEvidenceAt)
+    && latestEvidenceAt <= Number(at)
+    && Number.isFinite(ageMs)
+    && ageMs >= 0
+    && ageMs <= leaseMs;
+  const currentDodgeThreat = movement.dodgeOwnership?.currentThreat === true
+    || (Array.isArray(movement.dodge?.threatField)
+      && movement.dodge.threatField.some(item => Number(item?.directHits || 0) > 0));
+  if (!retained && !currentDodgeThreat) return null;
+
+  const evidenceTypes = [];
+  if (currentDodgeThreat) evidenceTypes.push('collision-path-bullet');
+  if (retained) evidenceTypes.push('retained-defensive-evidence');
+  return {
+    active: true,
+    currentCollision: currentDodgeThreat,
+    recentEvidence: retained,
+    established: retained,
+    ownerIds,
+    ownerKnown: ownerIds.length > 0,
+    leaseMs,
+    latestEvidenceAt: retained ? latestEvidenceAt : Number(at),
+    latestEvidenceType: retained
+      ? String(secondaryRetention.latestEvidenceType || 'retained-defensive-evidence')
+      : 'collision-path-bullet',
+    latestAgeMs: retained ? ageMs : 0,
+    evidenceTypes,
+    reason: currentDodgeThreat
+      ? 'incoming-collision-path-pressure'
+      : 'retained-defensive-evidence',
+    replayDerived: true
+  };
+}
+
+function replayRewardRaceFromLiveDetail(rewardRace = {}, pressureEvidence = null) {
+  if (!pressureEvidence?.active || rewardRace.evaluated === true) return rewardRace;
+
+  const primaryRewardEtaMs = Number(rewardRace.primaryRewardEtaMs);
+  const selfHp50EtaMs = Number(rewardRace.selfHp50EtaMs);
+  const safetyMarginMs = Math.max(0, Number(rewardRace.safetyMarginMs ?? 1000));
+  const incomingRateHpPerSec = Number(rewardRace.incomingRateHpPerSec);
+  const evaluated = Number.isFinite(incomingRateHpPerSec)
+    && incomingRateHpPerSec > 0
+    && Number.isFinite(primaryRewardEtaMs)
+    && Number.isFinite(selfHp50EtaMs);
+  if (!evaluated) {
+    return {
+      ...rewardRace,
+      replayDerived: true,
+      replayDerivationReason: 'retained-pressure-without-complete-race-rates'
+    };
+  }
+  const continuePrimary = primaryRewardEtaMs + safetyMarginMs < selfHp50EtaMs;
+  return {
+    ...rewardRace,
+    evaluated: true,
+    continuePrimary,
+    shouldFocusSecondary: !continuePrimary,
+    reason: continuePrimary
+      ? 'primary-reward-before-hp50-margin-replay-derived'
+      : 'hp50-before-primary-reward-margin-replay-derived',
+    replayDerived: true,
+    replayDerivationReason: 'secondary-retention-reconstructed-pressure-evidence'
+  };
 }
 
 function combatMoveVelocityForDirection(dx, dy, options) {
@@ -531,6 +619,26 @@ function normalizeBrowserlessCombatLiveEntry(entry, state = {}) {
     && typeof shooting.secondaryPolicy.closePressure === 'object'
     ? shooting.secondaryPolicy.closePressure
     : { active: false };
+  const at = entryAtMs(entry?.at);
+  const pressureEvidence = replayPressureEvidenceFromLiveDetail(
+    at,
+    target,
+    secondaryRetention,
+    shooting,
+    movement
+  );
+  const replayRewardRace = replayRewardRaceFromLiveDetail(
+    primaryRewardSurvivalRace,
+    pressureEvidence
+  );
+  const primaryAimReachable = Boolean(
+    primaryAim.ok === true
+      && primaryAim.fireReachability?.reachable === true
+  );
+  const primaryAimProofValid = Boolean(
+    primaryAimReachable
+      && primaryAim.trajectoryAimProof?.valid === true
+  );
   const loggedFireTargetRole = String(
     shooting.targetRole
       || detail.fireTargetRole
@@ -539,7 +647,7 @@ function normalizeBrowserlessCombatLiveEntry(entry, state = {}) {
   return {
     type: 'combat-frame',
     sourceType: 'combat-live',
-    at: entryAtMs(entry?.at),
+    at,
     self,
     target,
     nearbyEntities: target.user_id === undefined ? [] : [target],
@@ -604,7 +712,12 @@ function normalizeBrowserlessCombatLiveEntry(entry, state = {}) {
           primaryFinishRaceWindowExpiresAt: numberOrNull(primaryFinishRace?.windowExpiresAt),
           normalFireBlocker: String(primaryFireAuthorization.finalFireBlocker || ''),
           closePressure,
-          rewardRace: primaryRewardSurvivalRace,
+          pressureEvidence,
+          replayDerivedPressureEvidence: pressureEvidence?.replayDerived === true,
+          rewardRace: replayRewardRace,
+          replayDerivedRewardRace: replayRewardRace?.replayDerived === true,
+          primaryAimReachable,
+          primaryAimProofValid,
           selfStamina5s: numberOrNull(self.stamina5s ?? self.stamina_5s_remaining_milli),
           hardReserveMs: numberOrNull(shooting.hardReserveMs),
           shotCostMs: numberOrNull(shooting.shotCostMs),
@@ -810,15 +923,35 @@ function runLoadFramesSelfTest() {
           self: { userId: '7', x: 0, y: 0, hp: 100, stamina5s: 8500 },
           target: { userId: '8', name: 'target', x: 5010, y: 0, hp: 100, vx: 20, vy: 0, distance: 5010 },
           aim: { x: 5110, y: 0, noDamageMs: 50 },
+          profitMission: {
+            targetId: '9',
+            navigationTarget: { ...primaryTarget, invulnerable: false }
+          },
+          primaryAim: {
+            ok: true,
+            fireReachability: { reachable: true },
+            trajectoryAimProof: { valid: true }
+          },
+          secondaryRetention: {
+            retained: true,
+            ageMs: 50,
+            latestEvidenceAt: Date.parse('2026-07-29T00:00:00.050Z') - 50,
+            latestEvidenceType: 'collision-path-bullet',
+            windowMs: 5000
+          },
           shooting: {
             reason: 'normal-cadence',
             wouldShoot: false,
             finalFireBlocker: 'secondary:primary-target-fire-available',
+            primaryRewardSurvivalRace: {
+              primaryHp: 100,
+              primaryDistanceCm: 4500,
+              primaryRewardEtaMs: 1000,
+              selfHp50EtaMs: 5000,
+              incomingRateHpPerSec: 3,
+              safetyMarginMs: 1000
+            },
             secondaryPolicy: { primaryCanAttack: true }
-          },
-          profitMission: {
-            targetId: '9',
-            navigationTarget: { ...primaryTarget, invulnerable: false }
           },
           metrics: { engagementId: '8:1', acceptedShots: 1, confirmedHits: 0 }
         }
@@ -843,9 +976,11 @@ function runLoadFramesSelfTest() {
     const dualTarget = runDualTargetFireArbitrationReplay(live.frames, live.sourceEvents);
     assert('browserless dual-target replay preserves pre-unlock defense and corrects post-unlock selection',
       dualTarget?.preservedSecondarySelectionFrames === 1
-        && dualTarget?.correctedPrimarySelectionFrames === 1
-        && dualTarget?.loggedDispatches?.primary === 0
-        && dualTarget?.loggedDispatches?.secondaryBeforePrimaryAuthorization === 1
+      && dualTarget?.correctedPrimarySelectionFrames === 1
+      && dualTarget?.loggedDispatches?.primary === 0
+      && dualTarget?.loggedDispatches?.secondaryBeforePrimaryAuthorization === 1
+        && dualTarget?.pressureEvidenceFrames === 1
+        && dualTarget?.replayDerivedPressureEvidenceFrames === 1
         && dualTarget?.improved === true);
 
     const avoidanceEntries = [
@@ -2270,10 +2405,18 @@ function runDualTargetFireArbitrationReplay(frames = [], sourceEvents = []) {
   let correctedPrimarySelectionFrames = 0;
   let loggedNoFireFramesCorrected = 0;
   let firstCorrectedFrame = null;
+  let pressureEvidenceFrames = 0;
+  let replayDerivedPressureEvidenceFrames = 0;
+  let reachablePrimaryFinishDispatches = 0;
+  let aimProofPrimaryFinishDispatches = 0;
 
   for (const frame of candidates) {
     const replay = frame.entry.dualTargetReplay;
     const primaryNormalAuthorized = replay.primaryNormalAuthorized === true;
+    const pressureEvidence = replay.pressureEvidence || null;
+    const rewardRace = replay.rewardRace || {};
+    if (pressureEvidence?.active === true) pressureEvidenceFrames += 1;
+    if (replay.replayDerivedPressureEvidence === true) replayDerivedPressureEvidenceFrames += 1;
     let hypotheticalDispatchAdded = false;
     const finishRace = primaryFinishRaceAuthorization({
       nowMs: frame.at,
@@ -2286,7 +2429,8 @@ function runDualTargetFireArbitrationReplay(frames = [], sourceEvents = []) {
       primaryNormalAuthorized,
       normalFireBlocker: replay.normalFireBlocker,
       closePressure: replay.closePressure,
-      rewardRace: replay.rewardRace,
+      pressureEvidence,
+      rewardRace,
       finishRaceDispatchCount: finishRaceState?.dispatchCount || 0,
       previousWindow: finishRaceState,
       stamina5s: replay.selfStamina5s ?? frame.selfHp,
@@ -2306,8 +2450,12 @@ function runDualTargetFireArbitrationReplay(frames = [], sourceEvents = []) {
           selfHp: frame.selfHp,
           primaryHp: replay.primaryTarget?.hp ?? null,
           secondaryDistanceCm: replay.secondaryDistanceCm ?? null,
-          dispatchCount: Number(finishRace.dispatchCount || 0) + 1
+          dispatchCount: Number(finishRace.dispatchCount || 0) + 1,
+          reachableAim: replay.primaryAimReachable === true,
+          aimProofValid: replay.primaryAimProofValid === true
         });
+        if (replay.primaryAimReachable === true) reachablePrimaryFinishDispatches += 1;
+        if (replay.primaryAimProofValid === true) aimProofPrimaryFinishDispatches += 1;
         lastHypotheticalFinishDispatchAt = frame.at;
         hypotheticalDispatchAdded = true;
       }
@@ -2331,7 +2479,8 @@ function runDualTargetFireArbitrationReplay(frames = [], sourceEvents = []) {
       primaryPhysicalEligible: replay.primaryPhysicalEligible === true,
       primaryFinishAuthorized: finishRace.eligible === true,
       closePressure: replay.closePressure,
-      rewardRace: replay.rewardRace
+      pressureEvidence,
+      rewardRace
     });
     if (!primaryNormalAuthorized && finishRace.eligible !== true
       && arbitration.fireTargetRole === 'secondary') {
@@ -2377,6 +2526,10 @@ function runDualTargetFireArbitrationReplay(frames = [], sourceEvents = []) {
     preservedSecondarySelectionFrames,
     correctedPrimarySelectionFrames,
     loggedNoFireFramesCorrected,
+    pressureEvidenceFrames,
+    replayDerivedPressureEvidenceFrames,
+    reachablePrimaryFinishDispatches,
+    aimProofPrimaryFinishDispatches,
     finishRaceCandidateFrames,
     firstFinishRaceAuthorization: firstFinishRaceAuthorization ? {
       line: firstFinishRaceAuthorization.lineNo,
@@ -2408,11 +2561,13 @@ function runDualTargetFireArbitrationReplay(frames = [], sourceEvents = []) {
       loggedFinalFireBlocker: firstReplay?.finalFireBlocker || ''
     } : null,
     improved: (hypotheticalFinishDispatches.length > loggedPrimaryDispatchesDuringFinishWindow
+      && aimProofPrimaryFinishDispatches > 0
       && correctedPrimarySelectionFrames > 0)
       || (loggedPrimaryDispatches === 0 && correctedPrimarySelectionFrames > 0),
     reason: hypotheticalFinishDispatches.length > loggedPrimaryDispatchesDuringFinishWindow
+      && aimProofPrimaryFinishDispatches > 0
       && correctedPrimarySelectionFrames > 0
-      ? 'bounded-primary-finish-race-adds-wire-fire'
+      ? 'bounded-primary-finish-race-adds-aim-proof-wire-fire-opportunity'
       : (loggedPrimaryDispatches === 0 && correctedPrimarySelectionFrames > 0
           ? 'restored-primary-fire-selection-after-authorization'
           : 'no-demonstrated-primary-selection-improvement')
@@ -2621,6 +2776,7 @@ function printReport(result) {
     const dual = result.dualTargetFire;
     console.log(`Dual-target replay primary ${dual.primaryTargetName || '-'} (${dual.primaryTargetId}) vs secondary ${dual.secondaryTargetId}: logged dispatches primary=${dual.loggedDispatches.primary}, secondary before/after authorization=${dual.loggedDispatches.secondaryBeforePrimaryAuthorization}/${dual.loggedDispatches.secondaryAfterPrimaryAuthorization}`);
     console.log(`Dual-target policy selections preservedSecondary=${dual.preservedSecondarySelectionFrames}, correctedPrimaryOutside${dual.closePressureDistanceCm}cm=${dual.correctedPrimarySelectionFrames}, correctedLoggedNoFire=${dual.loggedNoFireFramesCorrected}, improved=${dual.improved}`);
+    console.log(`Pressure evidence frames=${dual.pressureEvidenceFrames}, replayDerived=${dual.replayDerivedPressureEvidenceFrames}, reachableFinishDispatches=${dual.reachablePrimaryFinishDispatches}, aimProofFinishDispatches=${dual.aimProofPrimaryFinishDispatches}`);
     if (dual.firstCorrectedSelection) {
       console.log(`First corrected primary selection line ${dual.firstCorrectedSelection.line} at ${dual.firstCorrectedSelection.time}, HP self/primary=${dual.firstCorrectedSelection.selfHp}/${dual.firstCorrectedSelection.primaryHp}, secondaryDistance=${dual.firstCorrectedSelection.secondaryDistanceCm}cm, loggedBlocker=${dual.firstCorrectedSelection.loggedFinalFireBlocker || '-'}`);
     }

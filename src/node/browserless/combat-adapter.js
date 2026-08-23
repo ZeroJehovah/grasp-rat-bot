@@ -111,6 +111,7 @@ const { lootRacePositioningCore } = require('../../strategy/loot-race-positionin
 const {
   classifyCombatTargetRole,
   dualTargetFireArbitration,
+  incomingPressureEvidencePolicy,
   missionTargetId,
   primaryFinishRaceAuthorization,
   primaryRewardSurvivalRacePolicy,
@@ -182,6 +183,213 @@ function combatBulletIdentity(bullet = {}) {
       ?? bullet?.bulletId
       ?? `${bullet?.createdTick ?? ''}:${bullet?.startX ?? bullet?.x ?? ''}:${bullet?.startY ?? bullet?.y ?? ''}`
   );
+}
+
+function combatTargetRoleIsSecondary(target = null) {
+  return Boolean(target?.combatRole === 'secondary' || target?.secondaryTarget === true);
+}
+
+function latestCombatThreatEvidenceAt(value = {}) {
+  return Math.max(
+    0,
+    Number(value?.lastThreatAt || 0),
+    Number(value?.lastIncomingBulletAt || 0),
+    Number(value?.lastSelfDamageAt || 0),
+    Number(value?.lastFiringAt || 0)
+  );
+}
+
+function latestCombatResidualThreatAt(value = {}) {
+  return Math.max(
+    0,
+    Number(value?.lastThreatAt || 0),
+    Number(value?.lastIncomingBulletAt || 0),
+    Number(value?.lastSelfDamageAt || 0)
+  );
+}
+
+function combatStateLastDodgeDirection(stateful, targetId, state = null) {
+  const metrics = stateful?.combatMetricsByTarget?.[String(targetId)]
+    || (String(stateful?.combatMetrics?.targetId || '') === String(targetId)
+      ? stateful.combatMetrics
+      : null);
+  const direction = state?.lastDodgeDirection
+    || metrics?.lastSelectedDodgeDirection
+    || (String(stateful?.combatMetrics?.targetId || '') === String(targetId)
+      ? stateful.combatMetrics?.lastSelectedDodgeDirection
+      : null)
+    || null;
+  return direction ? {
+    dx: Math.sign(Number(direction.dx || 0)),
+    dy: Math.sign(Number(direction.dy || 0))
+  } : { dx: 0, dy: 0 };
+}
+
+function buildIncomingPressureContext(stateful, target, bullets = [], nowMs = Date.now(), options = {}) {
+  const leaseMs = Math.max(250, Number(
+    options.incomingPressureEvidenceLeaseMs ?? 2500
+  ));
+  const stateById = new Map();
+  for (const [id, value] of Object.entries(stateful?.combatEngagements || {})) {
+    if (value && typeof value === 'object') stateById.set(String(id), value);
+  }
+  if (stateful?.combatTarget?.id !== null && stateful?.combatTarget?.id !== undefined) {
+    stateById.set(String(stateful.combatTarget.id), stateful.combatTarget);
+  }
+  const currentTargetId = String(combatTargetId(target) || '');
+  if (currentTargetId && target && !stateById.has(currentTargetId)) {
+    stateById.set(currentTargetId, target);
+  }
+  const collisionBullets = (bullets || []).filter(bullet => (
+    bullet?.incoming === true && incomingBulletHasCollisionRiskCore(bullet, options)
+  ));
+  const collisionOwnerIds = Array.from(new Set(collisionBullets
+    .map(bullet => String(bullet?.ownerId ?? bullet?.owner_id ?? ''))
+    .filter(Boolean)));
+  const incomingSamplesByOwner = {};
+  const ownerStates = [];
+  let recentAttributableDamageAt = 0;
+  let recentSelfDamageAt = 0;
+  let retainedDefensiveEvidenceAt = 0;
+  let residualThreatAt = 0;
+  let knownOwnerAttackAt = 0;
+  let establishedSecondary = false;
+  for (const [id, state] of stateById.entries()) {
+    const secondary = combatTargetRoleIsSecondary(state)
+      || (id === currentTargetId && combatTargetRoleIsSecondary(target));
+    const samples = Array.isArray(state?.motionSamples) ? state.motionSamples : [];
+    const evidenceAt = latestCombatThreatEvidenceAt(state);
+    const validEvidenceAt = evidenceAt > 0 && evidenceAt <= nowMs ? evidenceAt : 0;
+    const residualEvidenceAt = latestCombatResidualThreatAt(state);
+    const validResidualEvidenceAt = residualEvidenceAt > 0 && residualEvidenceAt <= nowMs
+      ? residualEvidenceAt
+      : 0;
+    const recent = validEvidenceAt > 0 && nowMs - validEvidenceAt <= leaseMs;
+    const recentShot = samples.some(sample => (
+      Number(sample?.newBulletCount || 0) > 0
+        && Number(sample?.at || 0) > 0
+        && Number(sample?.at || 0) <= nowMs
+        && nowMs - Number(sample?.at || 0) <= Math.max(1000, Number(options.secondaryTargetRaceDamageWindowMs ?? 5000))
+    ));
+    const incomingOwner = secondary || recent || recentShot || collisionOwnerIds.includes(id);
+    if (incomingOwner && samples.length) incomingSamplesByOwner[id] = samples;
+    if (!incomingOwner && id !== currentTargetId) continue;
+    if (secondary) {
+      establishedSecondary = true;
+      if (state?.hasDamagedSelf === true && Number(state?.lastSelfDamageAt || 0) > 0) {
+        const damageAt = Number(state.lastSelfDamageAt || 0);
+        if (damageAt <= nowMs) {
+          recentAttributableDamageAt = Math.max(recentAttributableDamageAt, damageAt);
+        }
+      }
+      const selfDamageAt = Number(state.lastSelfDamageAt || 0);
+      if (selfDamageAt > 0 && selfDamageAt <= nowMs) {
+        recentSelfDamageAt = Math.max(recentSelfDamageAt, selfDamageAt);
+      }
+      retainedDefensiveEvidenceAt = Math.max(retainedDefensiveEvidenceAt, validEvidenceAt);
+    }
+    residualThreatAt = Math.max(residualThreatAt, validResidualEvidenceAt);
+    const knownAttackAt = state?.firing === true && id === currentTargetId
+      ? nowMs
+      : (Number(state?.lastFiringAt || 0) <= nowMs ? Number(state?.lastFiringAt || 0) : 0);
+    if (knownAttackAt > 0) {
+      knownOwnerAttackAt = Math.max(knownOwnerAttackAt, knownAttackAt);
+    }
+    if (recent || id === currentTargetId) {
+      ownerStates.push({
+        id,
+        state,
+        recent,
+        evidenceAt: validEvidenceAt,
+        residualEvidenceAt: validResidualEvidenceAt
+      });
+    }
+  }
+  for (const ownerId of collisionOwnerIds) {
+    if (!incomingSamplesByOwner[ownerId]) {
+      const state = stateById.get(ownerId);
+      if (Array.isArray(state?.motionSamples)) incomingSamplesByOwner[ownerId] = state.motionSamples;
+    }
+  }
+  if (establishedSecondary && currentTargetId && combatTargetRoleIsSecondary(target)
+    && !incomingSamplesByOwner[currentTargetId]
+    && Array.isArray(stateful?.combatTarget?.motionSamples)) {
+    incomingSamplesByOwner[currentTargetId] = stateful.combatTarget.motionSamples;
+  }
+  const activeOwnerIds = Array.from(new Set([
+    ...collisionOwnerIds,
+    ...Object.keys(incomingSamplesByOwner),
+    ...ownerStates
+      .filter(item => item.residualEvidenceAt > 0)
+      .map(item => item.id)
+  ].map(String).filter(Boolean)));
+  const residualCandidates = ownerStates
+    .filter(item => item.residualEvidenceAt > 0 && nowMs - item.residualEvidenceAt <= leaseMs)
+    .sort((left, right) => Number(right.residualEvidenceAt) - Number(left.residualEvidenceAt));
+  const currentBulletGeneration = collisionBullets
+    .map(bullet => combatBulletIdentity(bullet))
+    .filter(Boolean)
+    .sort()
+    .join(',');
+  const currentState = currentTargetId ? stateById.get(currentTargetId) : null;
+  const residualCandidate = residualCandidates[0] || null;
+  const residualThreatLease = collisionBullets.length || residualCandidate
+    ? {
+        active: true,
+        source: collisionBullets.length ? 'current-collision-bullet' : 'retained-owner-evidence',
+        ownerIds: collisionOwnerIds.length
+          ? collisionOwnerIds
+          : (residualCandidate ? [String(residualCandidate.id)] : []),
+        threatGeneration: currentBulletGeneration
+          ? `bullet:${currentBulletGeneration}`
+          : String(residualCandidate?.state?.lastThreatGeneration || `residual:${residualCandidate?.id || 'unknown'}:${Math.round(Number(residualCandidate?.evidenceAt || nowMs) / 50)}`),
+        evidenceAt: collisionBullets.length ? nowMs : Number(residualCandidate?.residualEvidenceAt || nowMs),
+        ageMs: collisionBullets.length ? 0 : Math.max(0, nowMs - Number(residualCandidate?.residualEvidenceAt || nowMs)),
+        leaseMs,
+        direction: collisionBullets.length
+          ? combatStateLastDodgeDirection(stateful, currentTargetId, currentState)
+          : combatStateLastDodgeDirection(stateful, residualCandidate?.id, residualCandidate?.state),
+        currentCollision: collisionBullets.length > 0
+      }
+    : {
+        active: false,
+        source: 'none',
+        ownerIds: [],
+        threatGeneration: '',
+        evidenceAt: null,
+        ageMs: null,
+        leaseMs,
+        direction: { dx: 0, dy: 0 },
+        currentCollision: false
+      };
+  const pressureEvidence = incomingPressureEvidencePolicy({
+    nowMs,
+    collisionBullets,
+    ownerIds: activeOwnerIds,
+    recentAttributableDamageAt,
+    recentSelfDamageAt,
+    retainedDefensiveEvidenceAt,
+    residualThreatAt,
+    knownOwnerAttackAt,
+    residualThreatActive: residualThreatLease.active === true,
+    established: establishedSecondary
+  }, options);
+  return {
+    pressureEvidence,
+    incomingSamplesByOwner,
+    residualThreatLease,
+    collisionBullets,
+    ownerIds: pressureEvidence.ownerIds,
+    evidence: {
+      recentAttributableDamageAt: recentAttributableDamageAt || null,
+      recentSelfDamageAt: recentSelfDamageAt || null,
+      retainedDefensiveEvidenceAt: retainedDefensiveEvidenceAt || null,
+      residualThreatAt: residualThreatAt || null,
+      knownOwnerAttackAt: knownOwnerAttackAt || null,
+      ownerStateCount: ownerStates.length,
+      secondaryOwnerCount: Object.keys(incomingSamplesByOwner).length
+    }
+  };
 }
 
 function withOptionOverrides(options, overrides, callback) {
@@ -3026,6 +3234,12 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       && String(bullet?.ownerId ?? '') === currentTargetId
       && incomingBulletHasCollisionRiskCore(bullet, options)
   ));
+  const residualThreatLease = options.residualThreatLease || combatTargetState?.residualThreatLease || null;
+  const residualThreatActive = residualThreatLease?.active === true
+    && Number(residualThreatLease.ageMs ?? 0) <= Math.max(
+      250,
+      Number(residualThreatLease.leaseMs ?? options.incomingPressureEvidenceLeaseMs ?? 2500)
+    );
   const nowMs = Number(options.nowMs || Date.now());
   const selfNoDamageMs = Math.max(
     0,
@@ -3289,9 +3503,12 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     contactEntryDodge
       || dodge?.unavoidableCurrentShot === true
       || (dodge?.threatField || []).some(item => Number(item?.directHits || 0) > 0)
+      || residualThreatActive
   );
   const dodgeThreatGeneration = currentDodgeThreat
-    ? `bullet:${threatGenerationIds.join(',') || String(options.currentTick ?? 'current')}`
+    ? (threatGenerationIds.length
+        ? `bullet:${threatGenerationIds.join(',')}`
+        : String(residualThreatLease?.threatGeneration || `residual:${String(residualThreatLease?.ownerIds?.[0] || 'unknown')}:${String(options.currentTick ?? 'current')}`))
     : '';
   const dodgeOwnership = resolveDodgeOwnershipCore({
     nowMs,
@@ -3299,7 +3516,11 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     threatGeneration: dodgeThreatGeneration,
     previous: options.previousDodgeOwnership || null,
     currentTick: options.currentTick,
-    direction: contactEntryDodge || dodge || { dx: 0, dy: 0 }
+    direction: contactEntryDodge
+      || (residualThreatActive && !threatGenerationIds.length
+        ? residualThreatLease?.direction || dodge
+        : dodge)
+      || { dx: 0, dy: 0 }
   }, {
     dodgeOwnershipHoldMs: options.combatDodgeOwnershipHoldMs
   });
@@ -4033,9 +4254,14 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     distanceAwareDodge,
     modifiers: movement.modifiers || [],
     cover: coverCandidate,
+    residualThreatLease: residualThreatActive
+      ? { ...residualThreatLease, active: true }
+      : { ...(residualThreatLease || {}), active: false },
     dodgeOwnership: {
       ...dodgeOwnership,
-      currentShotAvoidability: dodge?.unavoidableCurrentShot === true ? 'unavoidable' : 'evaluated',
+      currentShotAvoidability: residualThreatActive && !threatGenerationIds.length
+        ? 'residual-threat'
+        : (dodge?.unavoidableCurrentShot === true ? 'unavoidable' : 'evaluated'),
       reactionSlackMs: numberOrNull(dodge?.reactionBudgetMs),
       overriddenBy: movementOwner.owner === 'emergency-dodge' ? '' : movementOwner.owner
     },
@@ -4383,6 +4609,17 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
         || threateningTargetBulletIds.length
         || (same && nowMs - Number(previous.lastIncomingBulletAt || 0) <= 1000))
   );
+  const currentThreatGeneration = threateningTargetBulletIds.length
+    ? `bullet:${threateningTargetBulletIds.slice().sort().join(',')}`
+    : '';
+  const lastThreatGeneration = currentThreatGeneration
+    || (same ? String(previous.lastThreatGeneration || '') : '');
+  const lastThreatOwnerIds = threateningTargetBulletIds.length
+    ? Array.from(new Set((options.bullets || [])
+      .filter(bullet => threateningTargetBulletIds.includes(combatBulletIdentity(bullet)))
+      .map(bullet => String(bullet?.ownerId ?? bullet?.owner_id ?? ''))
+      .filter(Boolean)))
+    : (same && Array.isArray(previous.lastThreatOwnerIds) ? previous.lastThreatOwnerIds.slice(0, 8) : []);
   const creditedHits = damaged
     ? creditCombatHitLearning(
         stateful,
@@ -4428,6 +4665,9 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     hasThreateningBullet: targetThreatBulletPressure,
     newBulletCount: Math.max(0, newBulletCount),
     newShotEvents,
+    selfHpLoss: selfDamaged ? Math.max(0, previousSelfHp - currentSelfHp) : 0,
+    selfDamageAmount: attributableSelfDamage ? Math.max(0, previousSelfHp - currentSelfHp) : 0,
+    attributableSelfDamage,
     currentTick: numberOrNull(options.currentTick),
     commandDelayP90Ticks: numberOrNull(options.executionTiming?.p90Ticks),
     targetStamina5s: numberOrNull(target.stamina_5s_remaining_milli ?? target.stamina5sRemainingMilli),
@@ -4538,6 +4778,14 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     incomingHitCount: Math.max(0, Number(same ? previous.incomingHitCount || 0 : 0))
       + (attributableSelfDamage ? Math.max(1, Math.round((previousSelfHp - currentSelfHp) / 3)) : 0),
     lastIncomingBulletAt,
+    lastThreatGeneration,
+    lastThreatOwnerIds,
+    lastDodgeDirection: same && previous.lastDodgeDirection
+      ? {
+          dx: Math.sign(Number(previous.lastDodgeDirection.dx || 0)),
+          dy: Math.sign(Number(previous.lastDodgeDirection.dy || 0))
+        }
+      : null,
     lastInRangeAt: inRange ? nowMs : (same ? Number(previous.lastInRangeAt || previous.at || nowMs) : nowMs),
     seenTargetRealBulletAt: targetOwnsRealBullet ? nowMs : (same ? Number(previous.seenTargetRealBulletAt || 0) : 0),
     disadvantageSinceAt,
@@ -5681,8 +5929,17 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       at: Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now()
     };
   }
+  const incomingPressureContext = buildIncomingPressureContext(
+    stateful,
+    target,
+    bullets,
+    Number(options.nowMs || Date.now()),
+    options
+  );
   let movement = withOptionOverrides(options, {
     combatTargetState,
+    incomingPressureEvidence: incomingPressureContext.pressureEvidence,
+    residualThreatLease: incomingPressureContext.residualThreatLease,
     executionTiming: state?.command?.shooting?.timing || options.executionTiming,
     movementExecutionTiming: state?.command?.movement?.timing || options.movementExecutionTiming,
     pendingVelocityCommands: state?.command?.movement?.pendingVelocityCommands || options.pendingVelocityCommands,
@@ -5721,6 +5978,12 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   if (stateful?.combatTarget) {
     stateful.combatTarget.ballisticClose = movement?.ballisticClose?.state || null;
     stateful.combatTarget.lootRacePositioning = movement?.lootRacePositioning || null;
+    if (movement?.dodgeOwnership?.active === true) {
+      stateful.combatTarget.lastDodgeDirection = {
+        dx: Math.sign(Number(movement.dodgeOwnership.direction?.dx || movement.dodge?.dx || 0)),
+        dy: Math.sign(Number(movement.dodgeOwnership.direction?.dy || movement.dodge?.dy || 0))
+      };
+    }
     if (stateful.combatEngagements && stateful.combatTarget.id !== null && stateful.combatTarget.id !== undefined) {
       stateful.combatEngagements[String(stateful.combatTarget.id)] = stateful.combatTarget;
     }
@@ -6439,8 +6702,12 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     primaryDistanceCm: primaryTargetDistance,
     primaryTarget: primaryFireTarget,
     secondarySamples: combatTargetState?.motionSamples || [],
+    incomingSamplesByOwner: incomingPressureContext.incomingSamplesByOwner,
     primarySamples: primaryTargetObservation?.samples || [],
     closePressure: secondaryPolicy?.closePressure,
+    pressureEvidence: incomingPressureContext.pressureEvidence,
+    ownerIds: incomingPressureContext.ownerIds,
+    ...incomingPressureContext.evidence,
     nowMs: Number(options.nowMs || Date.now())
   }, options);
   const primaryCompetitionAllowed = Boolean(
@@ -6486,6 +6753,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     primaryNormalAuthorized: primaryAuthorized,
     normalFireBlocker: primaryFinalFireBlocker,
     closePressure: secondaryPolicy?.closePressure,
+    pressureEvidence: incomingPressureContext.pressureEvidence,
     rewardRace: primaryRewardSurvivalRace,
     finishRaceDispatchCount: primaryDispatchTimesInFinishWindow.length,
     previousWindow: stateful?.combatTarget?.primaryFinishRace || null,
@@ -6504,6 +6772,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     primaryPhysicalEligible,
     primaryFinishAuthorized: primaryFinishRace.eligible,
     closePressure: secondaryPolicy?.closePressure,
+    pressureEvidence: incomingPressureContext.pressureEvidence,
     rewardRace: primaryRewardSurvivalRace
   });
   const primarySelected = dualTargetArbitration.primarySelected === true;
@@ -6679,6 +6948,14 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     },
     targetFrameGapReset,
     targetFrameGapHold,
+    incomingPressureEvidence: incomingPressureContext.pressureEvidence,
+    incomingPressureContext: {
+      ...incomingPressureContext.evidence,
+      ownerIds: incomingPressureContext.ownerIds,
+      collisionBulletCount: incomingPressureContext.collisionBullets.length,
+      incomingOwnerIds: Object.keys(incomingPressureContext.incomingSamplesByOwner),
+      residualThreatLease: incomingPressureContext.residualThreatLease
+    },
     attackClock: combatTargetState ? {
       state: combatTargetState.attackTimerState || 'not-applicable',
       pauseReason: combatTargetState.attackTimerPauseReason || '',
@@ -6786,6 +7063,8 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       primaryNormalAuthorized: primaryAuthorized,
       primaryFinishRace,
       primaryRewardSurvivalRace,
+      incomingPressureEvidence: incomingPressureContext.pressureEvidence,
+      residualThreatLease: incomingPressureContext.residualThreatLease,
       secondaryFocusActive: dualTargetArbitration.secondaryFocusActive === true,
       secondaryPolicy: secondaryPolicy ? {
         ...secondaryPolicy,
