@@ -9,6 +9,7 @@ const DEFAULT_SECONDARY_PRESSURE_WINDOW_MS = 1500;
 const DEFAULT_SECONDARY_PRESSURE_MIN_SHOTS = 2;
 const DEFAULT_SECONDARY_PRESSURE_MAX_LAST_SHOT_AGE_MS = 750;
 const DEFAULT_INCOMING_PRESSURE_EVIDENCE_LEASE_MS = 2500;
+const DEFAULT_SECONDARY_RETENTION_WINDOW_MS = DEFAULT_INCOMING_PRESSURE_EVIDENCE_LEASE_MS;
 const DEFAULT_PRIMARY_FINISH_RACE_WINDOW_MS = 1800;
 const DEFAULT_PRIMARY_FINISH_RACE_MAX_SHOTS = 3;
 const DEFAULT_PRIMARY_FINISH_RACE_TARGET_HP_MAX = 55;
@@ -702,12 +703,17 @@ function secondaryRetentionPolicy(combatTargetState = null, nowMs = Date.now(), 
   const secondary = combatTargetState?.combatRole === 'secondary'
     || combatTargetState?.secondaryTarget === true;
   const windowMs = Math.max(1000, Number(
-    options.secondaryTargetWindowMs ?? DEFAULT_SECONDARY_WINDOW_MS
+    options.secondaryTargetRetentionWindowMs
+      ?? options.incomingPressureEvidenceLeaseMs
+      ?? DEFAULT_SECONDARY_RETENTION_WINDOW_MS
   ));
   const evidence = [
     ['target-firing', combatTargetState?.lastFiringAt],
     ['collision-path-bullet', combatTargetState?.lastThreatAt],
-    ['incoming-bullet', combatTargetState?.lastIncomingBulletAt]
+    ['incoming-bullet', combatTargetState?.lastIncomingBulletAt],
+    ['attributable-self-damage', combatTargetState?.hasDamagedSelf === true
+      ? combatTargetState?.lastSelfDamageAt
+      : 0]
   ]
     .map(([type, at]) => ({ type, at: Number(at || 0) }))
     .filter(item => item.at > 0)
@@ -730,6 +736,7 @@ function secondaryRetentionPolicy(combatTargetState = null, nowMs = Date.now(), 
 
 module.exports = {
   DEFAULT_INCOMING_PRESSURE_EVIDENCE_LEASE_MS,
+  DEFAULT_SECONDARY_RETENTION_WINDOW_MS,
   DEFAULT_SECONDARY_BASE_CADENCE_MS,
   DEFAULT_SECONDARY_CLOSE_DISTANCE_CM,
   DEFAULT_SECONDARY_MAX_CADENCE_MS,

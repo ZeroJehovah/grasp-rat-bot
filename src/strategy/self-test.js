@@ -376,11 +376,20 @@ function runStrategyModuleSelfTests() {
     combatRole: 'secondary',
     lastFiringAt: 7000,
     lastThreatAt: 6000
+  }, 12000, { secondaryTargetRetentionWindowMs: 5000 });
+  const retainedAtPressureLease = secondaryRetentionPolicy({
+    combatRole: 'secondary',
+    hasDamagedSelf: true,
+    lastSelfDamageAt: 9500
   }, 12000);
   const expiredSecondaryThreat = secondaryRetentionPolicy({
     combatRole: 'secondary',
     lastFiringAt: 6999,
     lastThreatAt: 6000
+  }, 12000);
+  const expiredAtPressureLease = secondaryRetentionPolicy({
+    combatRole: 'secondary',
+    lastFiringAt: 9499
   }, 12000);
   const proximityOnlySecondary = secondaryRetentionPolicy({
     combatRole: 'secondary'
@@ -402,7 +411,13 @@ function runStrategyModuleSelfTests() {
       && secondaryInvulnerableBlocked.reason === 'secondary-invulnerable-dodge-only'
       && retainedSecondaryThreat.retained === true
       && retainedSecondaryThreat.ageMs === 5000
+      && retainedSecondaryThreat.windowMs === 5000
+      && retainedAtPressureLease.retained === true
+      && retainedAtPressureLease.ageMs === 2500
+      && retainedAtPressureLease.latestEvidenceType === 'attributable-self-damage'
+      && retainedAtPressureLease.windowMs === 2500
       && expiredSecondaryThreat.retained === false
+      && expiredAtPressureLease.retained === false
       && proximityOnlySecondary.retained === false
   });
 

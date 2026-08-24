@@ -8,6 +8,7 @@ function numberDefault(value, fallback) {
 
 function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
   const playerDropPickupRadiusCm = numberDefault(config.playerDropPickupRadiusCm, 150);
+  const incomingPressureEvidenceLeaseMs = numberDefault(config.incomingPressureEvidenceLeaseMs, 2500);
   return {
     dryRun: Boolean(config.dryRun),
     once: Boolean(config.once),
@@ -133,6 +134,10 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     combatLowHpNoDamageMinGap: 0,
     combatShootEveryMs: 160,
     secondaryTargetWindowMs: numberDefault(config.secondaryTargetWindowMs, 5000),
+    secondaryTargetRetentionWindowMs: numberDefault(
+      config.secondaryTargetRetentionWindowMs,
+      incomingPressureEvidenceLeaseMs
+    ),
     secondaryTargetBaseCadenceMs: numberDefault(config.secondaryTargetBaseCadenceMs, 160),
     secondaryTargetMaxCadenceMs: numberDefault(config.secondaryTargetMaxCadenceMs, 160),
     secondaryTargetNoDamageStepMs: numberDefault(config.secondaryTargetNoDamageStepMs, 0),
@@ -155,7 +160,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     primaryFinishRaceWindowMs: numberDefault(config.primaryFinishRaceWindowMs, 1800),
     primaryFinishRaceMaxShots: numberDefault(config.primaryFinishRaceMaxShots, 3),
     primaryFinishRaceTargetHpMax: numberDefault(config.primaryFinishRaceTargetHpMax, 55),
-    incomingPressureEvidenceLeaseMs: numberDefault(config.incomingPressureEvidenceLeaseMs, 2500),
+    incomingPressureEvidenceLeaseMs,
     combatRealtimeTargetFreshMs: numberDefault(config.combatRealtimeTargetFreshMs, 500),
     combatDodgeOwnershipHoldMs: numberDefault(config.combatDodgeOwnershipHoldMs, 500),
     combatCoverEnabled: config.combatCoverEnabled !== false,

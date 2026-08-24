@@ -1625,20 +1625,21 @@ function assertHpSegmentedSecondaryEngagementRules() {
   const retainedAtBoundary = decide(
     retentionAdapter,
     state(fullStaminaSelf({ hp: 100 }), [primary, player({ drop: 1, firing: false })]),
-    7000,
+    4500,
     null,
     common
   );
   const releasedAfterBoundary = decide(
     retentionAdapter,
     state(fullStaminaSelf({ hp: 100 }), [primary, player({ drop: 1, firing: false })]),
-    7001,
+    4501,
     null,
     common
   );
   assert.strictEqual(entered.combat?.target?.combatRole, 'secondary');
   assert.strictEqual(retainedAtBoundary.combat?.target?.combatRole, 'secondary');
-  assert.strictEqual(retainedAtBoundary.combat?.secondaryRetention?.ageMs, 5000);
+  assert.strictEqual(retainedAtBoundary.combat?.secondaryRetention?.ageMs, 2500);
+  assert.strictEqual(retainedAtBoundary.combat?.secondaryRetention?.windowMs, 2500);
   assert.strictEqual(releasedAfterBoundary.combat?.target?.userId, 42);
   assert.strictEqual(releasedAfterBoundary.combat?.secondaryTargetRelease?.reason, 'secondary-defensive-evidence-cleared');
   assert.strictEqual(releasedAfterBoundary.stateful?.profitMission?.targetId, '42');
@@ -1677,7 +1678,7 @@ function assertHpSegmentedSecondaryEngagementRules() {
       current_join_mode: 'Passive',
       firing: false
     })]),
-    8000,
+    5500,
     null,
     common
   );
@@ -1690,7 +1691,7 @@ function assertHpSegmentedSecondaryEngagementRules() {
       current_join_mode: 'Passive',
       firing: false
     })]),
-    8001,
+    5501,
     null,
     common
   );
@@ -1829,33 +1830,34 @@ function assertInvulnerableProfitEscortArbitration() {
     'invulnerable-avoidance-yielded-to-secondary'
   );
 
-  const retainedAt5000 = decide(
+  const retainedAt2500 = decide(
     adapter,
     state(fullStaminaSelf(), [invulnerableSecondary()]),
-    6000,
+    3500,
     remoteBatch,
     options
   );
-  assert.strictEqual(retainedAt5000.combat?.secondaryRetention?.retained, true);
-  assert.strictEqual(retainedAt5000.action?.kind, 'combat-live');
-  assert.strictEqual(retainedAt5000.combat?.movement?.reason, 'secondary-follow-primary-target');
+  assert.strictEqual(retainedAt2500.combat?.secondaryRetention?.retained, true);
+  assert.strictEqual(retainedAt2500.combat?.secondaryRetention?.ageMs, 2500);
+  assert.strictEqual(retainedAt2500.action?.kind, 'combat-live');
+  assert.strictEqual(retainedAt2500.combat?.movement?.reason, 'secondary-follow-primary-target');
   assert.strictEqual(
-    retainedAt5000.combat?.invulnerableAvoidanceArbitration?.reason,
+    retainedAt2500.combat?.invulnerableAvoidanceArbitration?.reason,
     'invulnerable-avoidance-yielded-to-secondary'
   );
 
-  const releasedAt5001 = decide(
+  const releasedAt2501 = decide(
     adapter,
     state(fullStaminaSelf(), [invulnerableSecondary()]),
-    6001,
+    3501,
     remoteBatch,
     options
   );
-  assert.strictEqual(releasedAt5001.combat?.target, null);
-  assert.strictEqual(releasedAt5001.action?.kind, 'seek-remote-player');
-  assert.strictEqual(releasedAt5001.profit?.mission?.targetId, '99');
+  assert.strictEqual(releasedAt2501.combat?.target, null);
+  assert.strictEqual(releasedAt2501.action?.kind, 'seek-remote-player');
+  assert.strictEqual(releasedAt2501.profit?.mission?.targetId, '99');
   assert.strictEqual(
-    releasedAt5001.combat?.invulnerableAvoidanceArbitration?.reason,
+    releasedAt2501.combat?.invulnerableAvoidanceArbitration?.reason,
     'invulnerable-avoidance-yielded-to-primary-mission'
   );
 
@@ -2795,7 +2797,7 @@ function runRemoteProfitDecisionSelfTest() {
   const boundedDefenseReleased = decide(
     boundedDefenseAdapter,
     state(fullStaminaSelf(), [{ ...defensiveCrossingTarget, x: 8000, vx: 0, firing: false }]),
-    8101,
+    5501,
     remoteBatch,
     boundedDefenseOptions
   );
