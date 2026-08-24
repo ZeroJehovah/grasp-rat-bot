@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.23.6';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.24.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -189,11 +189,24 @@ function highDropSortValueCore(item, field = 'drop') {
     const current = highDropRankValueCore(item);
     return Number.isFinite(initial) && Number.isFinite(current) ? current - initial : -Infinity;
   }
-  if (field === 'estimated-quota') {
-    const quota = estimatedHighDropQuotaCore(item?.[1], item?.[2], item?.[3]);
-    return quota === null ? -Infinity : quota;
+  if (field === 'balance') {
+    const balance = highDropBalanceValueCore(item);
+    return balance === null ? -Infinity : balance;
   }
   return highDropRankValueCore(item);
+}
+
+function highDropBalanceValueCore(item) {
+  const raw = item?.[6];
+  if (raw === null || raw === undefined || raw === '') return null;
+  const externalBalance = Number(raw);
+  if (!Number.isFinite(externalBalance)) return null;
+  return externalBalance / 500000;
+}
+
+function formatHighDropBalanceCore(value) {
+  const balance = Number(value);
+  return Number.isFinite(balance) ? balance.toFixed(3) : '--';
 }
 
 function isStaminaExhaustionExitReasonCore(reason) {
@@ -434,18 +447,6 @@ function formatSpentStaminaCore(input) {
   return String(Math.ceil(spent / 1000));
 }
 
-function estimatedHighDropQuotaCore(initialDrop, maxDrop, latestDrop) {
-  if ([initialDrop, maxDrop, latestDrop].some(value => value === null || value === undefined || value === '')) {
-    return null;
-  }
-  const initial = Number(initialDrop);
-  const maximum = Number(maxDrop);
-  const latest = Number(latestDrop);
-  if (![initial, maximum, latest].every(Number.isFinite)) return null;
-  if (latest !== maximum) return null;
-  return Math.max(0, Math.round(initial * 20 + (latest - initial) * 2));
-}
-
 function nearbyCoinIconCore(options = {}) {
   const selected = Boolean(options.selected);
   const bait = Boolean(options.bait);
@@ -603,7 +604,7 @@ function renderBrowserlessWebPanel() {
     .coin-row{grid-template-columns:minmax(48px,1fr) minmax(34px,.5fr) minmax(46px,.65fr)}
     .player-row{grid-template-columns:minmax(150px,2.8fr) minmax(40px,.55fr) minmax(42px,.55fr) minmax(42px,.5fr) minmax(52px,.65fr)}
     .high-drop-list{display:grid;gap:0;min-width:0}
-    .high-drop-row{display:grid;grid-template-columns:minmax(100px,1.8fr) minmax(48px,.42fr) minmax(66px,.52fr) minmax(64px,.5fr);gap:8px;align-items:center;min-height:26px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)}
+    .high-drop-row{display:grid;grid-template-columns:minmax(100px,1.8fr) minmax(48px,.42fr) minmax(66px,.52fr) minmax(112px,.78fr);gap:8px;align-items:center;min-height:26px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)}
     .high-drop-row:last-child{border-bottom:0}
     .high-drop-head{position:sticky;top:0;z-index:1;color:var(--muted);font-size:11px;font-weight:700;background:var(--panel)}
     .high-drop-cell{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -674,7 +675,7 @@ function renderBrowserlessWebPanel() {
     @media (max-width:760px){.layout{grid-template-columns:1fr}.stats-grid{grid-template-columns:1fr}}
     @media (max-width:600px){.player-insights-grid{grid-template-columns:1fr}}
     @media (max-width:600px){.nearby-combined{grid-template-columns:1fr}.nearby-players-pane{border-left:0;border-top:1px solid var(--line);padding-left:0;padding-top:10px}}
-    @media (max-width:520px){.player-row{grid-template-columns:minmax(112px,2fr) minmax(34px,.5fr) minmax(38px,.55fr) minmax(36px,.5fr) minmax(44px,.6fr);gap:4px}.battle-fighters{grid-template-columns:minmax(0,1fr) 26px minmax(0,1fr);column-gap:5px}.battle-meta{gap:5px;font-size:11px}.battle-meta strong{font-size:11px}}
+    @media (max-width:520px){.player-row{grid-template-columns:minmax(112px,2fr) minmax(34px,.5fr) minmax(38px,.55fr) minmax(36px,.5fr) minmax(44px,.6fr);gap:4px}.high-drop-row{grid-template-columns:minmax(86px,1.45fr) minmax(44px,.4fr) minmax(60px,.48fr) minmax(96px,.85fr);gap:5px}.battle-fighters{grid-template-columns:minmax(0,1fr) 26px minmax(0,1fr);column-gap:5px}.battle-meta{gap:5px;font-size:11px}.battle-meta strong{font-size:11px}}
     @media (max-width:520px){main{padding:10px}header{align-items:flex-start;flex-direction:column}}
   </style>
 </head>
@@ -836,7 +837,7 @@ function renderBrowserlessWebPanel() {
     if (token) localStorage.graspRatBrowserlessToken = token;
     const WEB_PANEL_VERSION = ${JSON.stringify(BROWSERLESS_WEB_PANEL_VERSION)};
     const highDropRankValue = ${highDropRankValueCore.toString()};
-    const highDropSortValue = ${highDropSortValueCore.toString().replaceAll('highDropRankValueCore', 'highDropRankValue').replaceAll('estimatedHighDropQuotaCore', 'estimatedHighDropQuota')};
+    const highDropSortValue = ${highDropSortValueCore.toString().replaceAll('highDropRankValueCore', 'highDropRankValue').replaceAll('highDropBalanceValueCore', 'highDropBalanceValue')};
     const isStaminaExhaustionExitReason = ${isStaminaExhaustionExitReasonCore.toString()};
     const WEB_PANEL_RELOAD_KEY = 'graspRatBrowserlessPanelReloadedVersion';
     const PANEL_COLLAPSE_KEY = 'graspRatBrowserlessPanelCollapsedV1';
@@ -870,7 +871,8 @@ function renderBrowserlessWebPanel() {
     const groupBlockingFactors = ${groupBlockingFactorsCore.toString()};
     const nearbyCoinIcon = ${nearbyCoinIconCore.toString()};
     const spentStaminaUnit = ${formatSpentStaminaCore.toString()};
-    const estimatedHighDropQuota = ${estimatedHighDropQuotaCore.toString()};
+    const highDropBalanceValue = ${highDropBalanceValueCore.toString()};
+    const formatHighDropBalance = ${formatHighDropBalanceCore.toString()};
     const panelSessionFlags = ${panelSessionFlagsCore.toString()};
     const panelTargetRoles = ${panelTargetRolesCore.toString()};
     const lastExitPanelVisible = ${lastExitPanelVisibleCore.toString().replace('panelSessionFlagsCore', 'panelSessionFlags')};
@@ -3219,7 +3221,7 @@ function renderBrowserlessWebPanel() {
         delta: initial === null ? null : Math.round(current - initial)
       };
     }
-    function createHighDropRow(name, drop, dropChange, estimatedQuota, head = false, online = undefined, self = false, onSort = null) {
+    function createHighDropRow(name, drop, dropChange, balance, head = false, online = undefined, self = false, onSort = null) {
       const row = document.createElement('div');
       row.className = 'high-drop-row' + (head ? ' high-drop-head' : '');
       const nameCell = document.createElement('div');
@@ -3267,13 +3269,13 @@ function renderBrowserlessWebPanel() {
           changeCell.textContent = value(dropChange);
         }
       }
-      const quotaCell = document.createElement('div');
+      const balanceCell = document.createElement('div');
       if (head) {
-        row.append(nameCell, dropCell, changeCell, sortableCell(estimatedQuota, 'estimated-quota'));
+        row.append(nameCell, dropCell, changeCell, sortableCell(balance, 'balance'));
       } else {
-        quotaCell.className = valueCellClass;
-        quotaCell.textContent = value(estimatedQuota);
-        row.append(nameCell, dropCell, changeCell, quotaCell);
+        balanceCell.className = valueCellClass;
+        balanceCell.textContent = value(balance);
+        row.append(nameCell, dropCell, changeCell, balanceCell);
       }
       return row;
     }
@@ -3289,12 +3291,14 @@ function renderBrowserlessWebPanel() {
       const selfInitialDrop = dropBaselinePending ? null : number(today.initialDrop) ?? number(self?.drop);
       const selfMaxDrop = dropBaselinePending ? null : number(today.maxDrop) ?? number(self?.drop);
       const selfLatestDrop = dropBaselinePending ? null : number(today.latestDrop) ?? number(self?.drop);
+      const selfExternalBalanceSnapshot = number(status.highDropPlayers?.selfExternalBalanceSnapshot)
+        ?? number(self?.externalBalanceSnapshot ?? self?.external_balance_snapshot);
       setRichText('highDropTitleMeta', [
         { text: '更新于', className: 'meta-label' },
         { text: stamp(status.highDropPlayers?.lastSnapshotAt) }
       ]);
       const fragment = document.createDocumentFragment();
-      fragment.appendChild(createHighDropRow('玩家名称', 'Drop', 'Drop变化', '推测额度', true, undefined, false, field => {
+      fragment.appendChild(createHighDropRow('玩家名称', 'Drop', 'Drop变化', '额度', true, undefined, false, field => {
         highDropSortField = field;
         renderHighDropPlayers(status);
       }));
@@ -3306,7 +3310,7 @@ function renderBrowserlessWebPanel() {
         const maximum = selfMaxDrop ?? selfInitialDrop;
         const latest = selfLatestDrop;
         rankedItems.push({
-          item: [selfName, initial, maximum, latest, selfUserId, status.game?.inGame === true],
+          item: [selfName, initial, maximum, latest, selfUserId, status.game?.inGame === true, selfExternalBalanceSnapshot],
           self: true,
           online: status.game?.inGame === true
         });
@@ -3325,7 +3329,7 @@ function renderBrowserlessWebPanel() {
             item?.[0],
             drops?.current ?? null,
             drops?.delta ?? null,
-            integer(estimatedHighDropQuota(item?.[1], item?.[2], item?.[3])),
+            formatHighDropBalance(highDropBalanceValue(item)),
             false,
             entry.online,
             entry.self
@@ -4395,9 +4399,10 @@ module.exports = {
   BROWSERLESS_WEB_PANEL_VERSION,
   advanceMapTrailSamplesCore,
   appendMapTrailSampleCore,
-  estimatedHighDropQuotaCore,
+  formatHighDropBalanceCore,
   formatSpentStaminaCore,
   groupBlockingFactorsCore,
+  highDropBalanceValueCore,
   groupChatMessagesForDisplay,
   highDropRankValueCore,
   highDropSortValueCore,

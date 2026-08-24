@@ -217,9 +217,10 @@ const {
 const {
   advanceMapTrailSamplesCore,
   BROWSERLESS_WEB_PANEL_VERSION,
-  estimatedHighDropQuotaCore,
+  formatHighDropBalanceCore,
   formatSpentStaminaCore,
   groupChatMessagesForDisplay,
+  highDropBalanceValueCore,
   interpolateMapPointCore,
   interpolateMapMarkerCore,
   interpolateMapPolylineCore,
@@ -34404,10 +34405,10 @@ async function runSelfTest() {
         tracker.observeSnapshot({
           tick: 10,
           entities: [
-            { user_id: 7, name: 'self', drop: 900 },
+            { user_id: 7, name: 'self', drop: 900, external_balance_snapshot: 900000 },
             { user_id: 8, name: 'alice', drop: 49 },
-            { user_id: 9, name: 'bob', death_drop_coins: 500 },
-            { user_id: 10, name: 'carol-low', drop: 50 },
+            { user_id: 9, name: 'bob', death_drop_coins: 500, external_balance_snapshot: 1000000 },
+            { user_id: 10, name: 'carol-low', drop: 50, external_balance_snapshot: 1500000 },
             { user_id: 11, name: 'below-record-threshold', drop: 49 },
             { entity_id: 10, name: 'name-only', drop: 999 }
           ]
@@ -34416,30 +34417,38 @@ async function runSelfTest() {
         tracker.observeSnapshot({
           tick: 20,
           entities: [
-            { user_id: 8, name: 'alice', drop: 520 },
-            { user_id: 9, name: 'bob', drop: 450 },
-            { user_id: 10, name: 'carol-low', drop: 40 }
+            { user_id: 8, name: 'alice', drop: 520, external_balance_snapshot: 2000000 },
+            { user_id: 9, name: 'bob', drop: 450, external_balance_snapshot: 1100000 },
+            { user_id: 10, name: 'carol-low', drop: 40, external_balance_snapshot: 1400000 }
           ]
         }, { source: 'ws', selfUserId: 7, observedAtMs: t });
         t += 60000;
-        tracker.observeSnapshot({ tick: 30, entities: [{ user_id: 8, name: 'alice', drop: 700 }] }, {
+        tracker.observeSnapshot({ tick: 30, entities: [{ user_id: 8, name: 'alice', drop: 700, external_balance_snapshot: 3000000 }] }, {
           source: 'ws', selfUserId: 7, observedAtMs: t
         });
         t += 60000;
-        tracker.observeSnapshot({ tick: 40, entities: [{ user_id: 8, name: 'alice-renamed', drop: 600 }] }, {
+        tracker.observeSnapshot({ tick: 40, entities: [{ user_id: 8, name: 'alice-renamed', drop: 600, external_balance_snapshot: 2500000 }] }, {
           source: 'ws', selfUserId: 7, observedAtMs: t
         });
         t += 60000;
-        tracker.observeSnapshot({ tick: 35, entities: [{ user_id: 8, name: 'alice-after-tick-reset', drop: 800 }] }, {
+        tracker.observeSnapshot({ tick: 35, entities: [{ user_id: 8, name: 'alice-after-tick-reset', drop: 800, external_balance_snapshot: 4000000 }] }, {
           source: 'gap-http', selfUserId: 7, observedAtMs: t
         });
         t += 60000;
-        tracker.observeSnapshot({ tick: 100, entities: [{ user_id: 8, name: 'stale-old-name', drop: 900 }] }, {
+        tracker.observeSnapshot({ tick: 100, entities: [{ user_id: 8, name: 'stale-old-name', drop: 900, external_balance_snapshot: 9000000 }] }, {
           source: 'ws', selfUserId: 7, observedAtMs: t - 120000
         });
         t += 60000;
-        tracker.observeSnapshot({ tick: 50, entities: [{ user_id: 9, name: 'bob', drop: 450 }] }, {
+        tracker.observeSnapshot({ tick: 50, entities: [{ user_id: 9, name: 'bob', drop: 450, external_balance_snapshot: 1200000 }] }, {
           source: 'ws', global: false, selfUserId: 7, observedAtMs: t
+        });
+        t += 60000;
+        tracker.observeSnapshot({ tick: 60, entities: [{ user_id: 9, external_balance_snapshot: 1300000 }] }, {
+          source: 'ws', global: false, selfUserId: 7, observedAtMs: t
+        });
+        t += 60000;
+        tracker.observeSnapshot({ tick: 61, entities: [{ user_id: 9, external_balance_snapshot: 9900000 }] }, {
+          source: 'ws', global: false, selfUserId: 7, observedAtMs: t - 120000
         });
         const current = createHighDropPlayerTracker({ file, now: () => t }).status();
         t = Date.UTC(2026, 6, 14, 16, 0, 0);
@@ -34452,10 +34461,12 @@ async function runSelfTest() {
           current.players[0].initialDrop,
           current.players[0].maxDrop,
           current.players[0].latestDrop,
+          current.players[0].externalBalanceSnapshot,
           current.players[1].name,
           current.players[1].initialDrop,
           current.players[1].maxDrop,
           current.players[1].latestDrop,
+          current.players[1].externalBalanceSnapshot,
           current.players[2].name,
           current.players[2].initialDrop,
           current.players[2].maxDrop,
@@ -34463,6 +34474,7 @@ async function runSelfTest() {
           current.players[0].online,
           current.players[1].online,
           current.players[2].online,
+          current.selfExternalBalanceSnapshot,
           current.players.some(player => player.userId === 11),
           current.players.some(player => player.userId === 7),
           current.threshold,
@@ -34472,7 +34484,7 @@ async function runSelfTest() {
           nextDay.players.length
         ].join('|');
       }),
-      want: '2026-07-14|3|alice-after-tick-reset|8|520|800|800|bob|500|500|450|carol-low|50|50|40|true|true|false|false|false|50|ws|gap-http|2026-07-15|0'
+      want: '2026-07-14|3|alice-after-tick-reset|8|520|800|800|4000000|bob|500|500|450|1300000|carol-low|50|50|40|true|true|false|900000|false|false|50|ws|gap-http|2026-07-15|0'
     },
     {
       name: 'browserless snapshot gap poller waits three minutes after any observed snapshot',
@@ -37409,8 +37421,24 @@ async function runSelfTest() {
             lastGlobalSnapshotSource: 'gap-http',
             file: '/tmp/should-not-leak.json',
             players: [
-              { userId: 8, name: 'alice-renamed', initialDrop: 520, maxDrop: 700, latestDrop: 600, online: true },
-              { userId: 9, name: 'bob', initialDrop: 500, maxDrop: 500, latestDrop: 450, online: false },
+              {
+                userId: 8,
+                name: 'alice-renamed',
+                initialDrop: 520,
+                maxDrop: 700,
+                latestDrop: 600,
+                externalBalanceSnapshot: 1000000,
+                online: true
+              },
+              {
+                userId: 9,
+                name: 'bob',
+                initialDrop: 500,
+                maxDrop: 500,
+                latestDrop: 450,
+                externalBalanceSnapshot: 500000,
+                online: false
+              },
               { userId: 10, name: 'carol-low', initialDrop: 50, maxDrop: 499, latestDrop: 499 }
             ]
           }
@@ -37439,15 +37467,15 @@ async function runSelfTest() {
           panelScript.includes("{ text: '更新于', className: 'meta-label' }"),
           panelScript.includes("{ text: stamp(status.highDropPlayers?.lastSnapshotAt) }")
             && !panelScript.includes("{ text: stamp(status.highDropPlayers?.lastSnapshotAt), className: 'coin' }"),
-          panelScript.includes("createHighDropRow('玩家名称', 'Drop', 'Drop变化', '推测额度', true"),
-          panelScript.includes('const estimatedHighDropQuota = function estimatedHighDropQuotaCore'),
-          estimatedHighDropQuotaCore(1000, 1100, 1100) === 20200,
-          estimatedHighDropQuotaCore(1000, 1100, 1000) === null,
-          estimatedHighDropQuotaCore(500, 500, 500) === 10000,
-          estimatedHighDropQuotaCore(null, 500, 500) === null,
+          panelScript.includes("createHighDropRow('玩家名称', 'Drop', 'Drop变化', '额度', true"),
+          panelScript.includes('const highDropBalanceValue = function highDropBalanceValueCore'),
+          highDropBalanceValueCore(['player', 1000, 1100, 1100, 1, true, 1000000]) === 2,
+          formatHighDropBalanceCore(highDropBalanceValueCore(['player', 1000, 1100, 1100, 1, true, 1000000])) === '2.000',
+          highDropBalanceValueCore(['player', 1000, 1100, 1100, 1, true]) === null,
+          !panelScript.includes('initial * 20 + (latest - initial) * 2'),
           panelScript.includes('rankedItems.push({')
             && panelScript.includes('rankedItems.sort((left, right) => highDropSortValue(right.item, highDropSortField) - highDropSortValue(left.item, highDropSortField)'),
-          /\.high-drop-row\{display:grid;grid-template-columns:minmax\(100px,1\.8fr\) minmax\(48px,\.42fr\) minmax\(66px,\.52fr\) minmax\(64px,\.5fr\)/.test(panelText)
+          /\.high-drop-row\{display:grid;grid-template-columns:minmax\(100px,1\.8fr\) minmax\(48px,\.42fr\) minmax\(66px,\.52fr\) minmax\(112px,\.78fr\)/.test(panelText)
             && panelScript.includes("delta.textContent = '(' + (drops.delta > 0 ? '+' : '') + String(drops.delta) + ')'")
             && panelText.includes('.high-drop-values .high-drop-delta.positive{color:var(--red)}')
             && panelText.includes('.high-drop-values .high-drop-delta.negative{color:var(--green)}'),
@@ -37455,7 +37483,7 @@ async function runSelfTest() {
           panelText.indexOf('id="highDropPlayers"') < panelText.indexOf('id="nearbyGrid"')
         ].join('|');
       })(),
-      want: '2026-07-14|ws|gap-http|alice-renamed,520,700,600,8,true|bob,500,500,450,9,false|2|false|false|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|false|true|true'
+      want: '2026-07-14|ws|gap-http|alice-renamed,520,700,600,8,true,1000000|bob,500,500,450,9,false,500000|2|false|false|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|false|true|true'
     },
     {
       name: 'browserless compact status exposes completed source IP probe schedule',

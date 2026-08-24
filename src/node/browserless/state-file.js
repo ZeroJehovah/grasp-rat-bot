@@ -2409,6 +2409,7 @@ function compactSelf(self) {
     vy: compactNumber(self.vy),
     hp: compactNumber(self.hp),
     drop: compactNumber(self.drop ?? self.Drop ?? self.death_drop_coins ?? self.death_reward_preview),
+    externalBalanceSnapshot: compactNumber(self.externalBalanceSnapshot ?? self.external_balance_snapshot),
     active: compactBoolean(self.active),
     moving: compactBoolean(self.moving),
     firing: compactBoolean(self.firing),
@@ -2980,7 +2981,8 @@ function compactHighDropPlayers(value) {
       lastGlobalSnapshotAt: value.lastGlobalSnapshotAt || '',
       source: compactString(value.source, 32),
       globalSource: compactString(value.globalSource, 32),
-      p: value.p.slice(0, 160).map(row => Array.isArray(row) ? row.slice(0, 6) : row)
+      selfExternalBalanceSnapshot: compactNumber(value.selfExternalBalanceSnapshot),
+      p: value.p.slice(0, 160).map(row => Array.isArray(row) ? row.slice(0, 7) : row)
     };
   }
   const players = Array.isArray(value.players) ? value.players : [];
@@ -2990,7 +2992,8 @@ function compactHighDropPlayers(value) {
     compactNumber(player?.maxDrop),
     compactNumber(player?.latestDrop),
     compactNumber(player?.userId),
-    player?.online === true ? true : (player?.online === false ? false : null)
+    player?.online === true ? true : (player?.online === false ? false : null),
+    compactNumber(player?.externalBalanceSnapshot ?? player?.external_balance_snapshot)
   ]).filter(row => row[0] && row.slice(1, 5).every(item => item !== null))
     .filter(row => row.slice(1, 4).some(item => item >= HIGH_DROP_PANEL_THRESHOLD))
     .slice(0, 160);
@@ -3001,6 +3004,7 @@ function compactHighDropPlayers(value) {
     lastGlobalSnapshotAt: value.lastGlobalSnapshotAt || '',
     source: compactString(value.lastSnapshotSource, 32),
     globalSource: compactString(value.lastGlobalSnapshotSource, 32),
+    selfExternalBalanceSnapshot: compactNumber(value.selfExternalBalanceSnapshot),
     p: rows
   };
 }

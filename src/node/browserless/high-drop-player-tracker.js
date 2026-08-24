@@ -39,6 +39,10 @@ function entityDrop(entity) {
   );
 }
 
+function entityExternalBalanceSnapshot(entity) {
+  return numberOrNull(entity?.external_balance_snapshot ?? entity?.externalBalanceSnapshot);
+}
+
 function entityName(entity, fallback = '') {
   return String(
     entity?.name
@@ -72,6 +76,9 @@ function emptyStore(day = '') {
     lastSnapshotSource: '',
     lastGlobalSnapshotAt: '',
     lastGlobalSnapshotSource: '',
+    selfExternalBalanceSnapshot: null,
+    selfExternalBalanceSnapshotAt: '',
+    selfExternalBalanceSnapshotTick: null,
     players: {}
   };
 }
@@ -84,6 +91,9 @@ function normalizeStore(value, expectedDay) {
   output.lastSnapshotSource = String(value.lastSnapshotSource || '');
   output.lastGlobalSnapshotAt = String(value.lastGlobalSnapshotAt || '');
   output.lastGlobalSnapshotSource = String(value.lastGlobalSnapshotSource || '');
+  output.selfExternalBalanceSnapshot = numberOrNull(value.selfExternalBalanceSnapshot);
+  output.selfExternalBalanceSnapshotAt = String(value.selfExternalBalanceSnapshotAt || '');
+  output.selfExternalBalanceSnapshotTick = numberOrNull(value.selfExternalBalanceSnapshotTick);
   for (const [key, player] of Object.entries(value.players || {})) {
     if (!player || typeof player !== 'object') continue;
     const userId = numberOrNull(player.userId ?? String(key || '').replace(/^user:/, ''));
@@ -101,6 +111,11 @@ function normalizeStore(value, expectedDay) {
       initialDrop,
       maxDrop,
       latestDrop,
+      externalBalanceSnapshot: numberOrNull(
+        player.externalBalanceSnapshot ?? player.external_balance_snapshot
+      ),
+      externalBalanceSnapshotAt: String(player.externalBalanceSnapshotAt || ''),
+      externalBalanceSnapshotTick: numberOrNull(player.externalBalanceSnapshotTick),
       firstObservedAt: String(player.firstObservedAt || ''),
       lastObservedAt: String(player.lastObservedAt || ''),
       lastObservedTick: numberOrNull(player.lastObservedTick),
@@ -142,6 +157,15 @@ function normalizeStore(value, expectedDay) {
       initialDrop: first.initialDrop,
       maxDrop: Math.max(existing.maxDrop, candidate.maxDrop),
       latestDrop: latest.latestDrop,
+      externalBalanceSnapshot: latest.externalBalanceSnapshot
+        ?? existing.externalBalanceSnapshot
+        ?? candidate.externalBalanceSnapshot,
+      externalBalanceSnapshotAt: latest.externalBalanceSnapshotAt
+        || existing.externalBalanceSnapshotAt
+        || candidate.externalBalanceSnapshotAt,
+      externalBalanceSnapshotTick: latest.externalBalanceSnapshotTick
+        ?? existing.externalBalanceSnapshotTick
+        ?? candidate.externalBalanceSnapshotTick,
       firstObservedAt: first.firstObservedAt,
       lastObservedAt: latest.lastObservedAt,
       lastObservedTick: latest.lastObservedTick,
@@ -215,15 +239,58 @@ function createHighDropPlayerTracker(options = {}) {
     for (const entity of payload.entities) {
       if (!entity || typeof entity !== 'object') continue;
       const identity = entityIdentity(entity);
+      const externalBalanceSnapshot = entityExternalBalanceSnapshot(entity);
+      if (identity && selfUserId !== null && identity.userId === selfUserId && externalBalanceSnapshot !== null) {
+        const selfObservedAtMs = timestampOrNull(store.selfExternalBalanceSnapshotAt);
+        const freshness = nameObservationFreshness({
+          observedAtMs: atMs,
+          observedTick: snapshotTick,
+          previousObservedAtMs: selfObservedAtMs,
+          previousObservedTick: store.selfExternalBalanceSnapshotTick
+        });
+        if (freshness.accepted) {
+          const changed = store.selfExternalBalanceSnapshot !== externalBalanceSnapshot;
+          store.selfExternalBalanceSnapshot = externalBalanceSnapshot;
+          store.selfExternalBalanceSnapshotAt = at;
+          store.selfExternalBalanceSnapshotTick = snapshotTick;
+          if (changed || freshness.advanced) updated += 1;
+        }
+      }
+      const existing = identity ? store.players[identity.key] || null : null;
+      if (
+        identity
+        && (selfUserId === null || identity.userId !== selfUserId)
+        && existing
+        && externalBalanceSnapshot !== null
+      ) {
+        const balanceFreshness = nameObservationFreshness({
+          observedAtMs: atMs,
+          observedTick: snapshotTick,
+          previousObservedAtMs: timestampOrNull(
+            existing.externalBalanceSnapshotAt || existing.lastObservedAt
+          ),
+          previousObservedTick: existing.externalBalanceSnapshotTick ?? existing.lastObservedTick
+        });
+        if (balanceFreshness.accepted) {
+          const changed = existing.externalBalanceSnapshot !== externalBalanceSnapshot;
+          store.players[identity.key] = {
+            ...existing,
+            externalBalanceSnapshot,
+            externalBalanceSnapshotAt: at,
+            externalBalanceSnapshotTick: snapshotTick
+          };
+          if (changed || balanceFreshness.advanced) updated += 1;
+        }
+      }
       const drop = entityDrop(entity);
       if (!identity || drop === null) continue;
       if (selfUserId !== null && identity.userId === selfUserId) continue;
-      const existing = store.players[identity.key] || null;
-      if (!existing && drop < threshold) continue;
+      const trackedPlayer = store.players[identity.key] || null;
+      if (!trackedPlayer && drop < threshold) continue;
       observed += 1;
       const fallbackName = identity.userId !== null ? `#${identity.userId}` : identity.entityId ? `#${identity.entityId}` : '';
-      const name = entityName(entity, existing?.name || fallbackName);
-      if (!existing) {
+      const name = entityName(entity, trackedPlayer?.name || fallbackName);
+      if (!trackedPlayer) {
         store.players[identity.key] = {
           key: identity.key,
           userId: identity.userId,
@@ -232,6 +299,9 @@ function createHighDropPlayerTracker(options = {}) {
           initialDrop: drop,
           maxDrop: drop,
           latestDrop: drop,
+          externalBalanceSnapshot,
+          externalBalanceSnapshotAt: externalBalanceSnapshot === null ? '' : at,
+          externalBalanceSnapshotTick: externalBalanceSnapshot === null ? null : snapshotTick,
           firstObservedAt: at,
           lastObservedAt: at,
           lastObservedTick: snapshotTick,
@@ -242,35 +312,41 @@ function createHighDropPlayerTracker(options = {}) {
         updated += 1;
         continue;
       }
-      const existingObservedAtMs = timestampOrNull(existing.lastObservedAt);
+      const existingObservedAtMs = timestampOrNull(trackedPlayer.lastObservedAt);
       const freshness = nameObservationFreshness({
         observedAtMs: atMs,
         observedTick: snapshotTick,
         previousObservedAtMs: existingObservedAtMs,
-        previousObservedTick: existing.lastObservedTick
+        previousObservedTick: trackedPlayer.lastObservedTick
       });
       const staleObservation = !freshness.accepted;
       if (freshness.advanced) observationAdvanced += 1;
-      // maxDrop 与 latestDrop 使用同一套新旧门控:stale/乱序观测不得抬高 max、也不得
-      // 回退 latest,避免出现 latestDrop < maxDrop(玩家未死但推测额度被省略)。
+      // maxDrop 与 latestDrop 使用同一套新旧门控: stale/乱序观测不得抬高 max、也不得
+      // 回退 latest，避免出现 latestDrop < maxDrop。
       if (!staleObservation) {
-        const nextMax = Math.max(Number(existing.maxDrop), drop);
-        const displayChanged = existing.maxDrop !== nextMax
-          || existing.name !== name
-          || existing.entityId !== identity.entityId
-          || existing.latestDrop !== drop
-          || existing.online !== true;
+        const nextMax = Math.max(Number(trackedPlayer.maxDrop), drop);
+        const displayChanged = trackedPlayer.maxDrop !== nextMax
+          || trackedPlayer.name !== name
+          || trackedPlayer.entityId !== identity.entityId
+          || trackedPlayer.latestDrop !== drop
+          || (externalBalanceSnapshot !== null
+            && trackedPlayer.externalBalanceSnapshot !== externalBalanceSnapshot)
+          || trackedPlayer.online !== true;
         if (displayChanged || freshness.advanced) {
           store.players[identity.key] = {
-            ...existing,
+            ...trackedPlayer,
             maxDrop: nextMax,
             entityId: identity.entityId,
             name,
             latestDrop: drop,
+            ...(externalBalanceSnapshot !== null ? { externalBalanceSnapshot } : {}),
             lastObservedAt: at,
             lastObservedTick: snapshotTick,
             online: true,
             onlineObservedAt: at,
+            ...(externalBalanceSnapshot !== null
+              ? { externalBalanceSnapshotAt: at, externalBalanceSnapshotTick: snapshotTick }
+              : {}),
             ...(globalSnapshot ? { onlineCheckedAt: at } : {})
           };
           if (displayChanged) updated += 1;
@@ -320,6 +396,7 @@ function createHighDropPlayerTracker(options = {}) {
       lastSnapshotSource: store.lastSnapshotSource,
       lastGlobalSnapshotAt: store.lastGlobalSnapshotAt,
       lastGlobalSnapshotSource: store.lastGlobalSnapshotSource,
+      selfExternalBalanceSnapshot: store.selfExternalBalanceSnapshot,
       threshold,
       file,
       players
