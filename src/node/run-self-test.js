@@ -217,6 +217,7 @@ const {
 const {
   advanceMapTrailSamplesCore,
   BROWSERLESS_WEB_PANEL_VERSION,
+  highDropBalanceDeltaValueCore,
   formatHighDropBalanceCore,
   formatSpentStaminaCore,
   groupChatMessagesForDisplay,
@@ -34402,6 +34403,49 @@ async function runSelfTest() {
         let t = Date.UTC(2026, 6, 14, 1, 0, 0);
         const file = path.join(dir, 'high-drop-players.json');
         const tracker = createHighDropPlayerTracker({ file, now: () => t });
+        const balanceBaselineFile = path.join(dir, 'high-drop-balance-baseline.json');
+        let balanceBaselineAt = Date.UTC(2026, 6, 14, 1, 0, 0);
+        const balanceBaselineTracker = createHighDropPlayerTracker({
+          file: balanceBaselineFile,
+          now: () => balanceBaselineAt
+        });
+        balanceBaselineTracker.observeSnapshot({
+          tick: 1,
+          entities: [{
+            user_id: 12,
+            name: 'below-threshold-balance',
+            drop: 49,
+            external_balance_snapshot: 500000
+          }]
+        }, { source: 'prelogin-http', selfUserId: 7, observedAtMs: balanceBaselineAt });
+        balanceBaselineAt += 60000;
+        balanceBaselineTracker.observeSnapshot({
+          tick: 2,
+          entities: [{
+            user_id: 12,
+            name: 'below-threshold-balance',
+            drop: 520,
+            external_balance_snapshot: 1000000
+          }]
+        }, { source: 'ws', selfUserId: 7, observedAtMs: balanceBaselineAt });
+        const balanceBaselinePlayer = balanceBaselineTracker.status().players[0] || null;
+        const balanceBaselineLatest = balanceBaselinePlayer?.externalBalanceSnapshot ?? null;
+        const balanceBaselineInitial = balanceBaselinePlayer?.initialExternalBalanceSnapshot ?? null;
+        const balanceBaselineDelta = balanceBaselinePlayer
+          ? highDropBalanceDeltaValueCore([
+              balanceBaselinePlayer.name,
+              balanceBaselinePlayer.initialDrop,
+              balanceBaselinePlayer.maxDrop,
+              balanceBaselinePlayer.latestDrop,
+              balanceBaselinePlayer.userId,
+              balanceBaselinePlayer.online,
+              balanceBaselineLatest,
+              balanceBaselineInitial
+            ])
+          : null;
+        const balanceBaselineLabel = typeof balanceBaselineDelta === 'number'
+          ? (balanceBaselineDelta > 0 ? '+' : '') + balanceBaselineDelta.toFixed(3)
+          : '--';
         tracker.observeSnapshot({
           tick: 10,
           entities: [
@@ -34461,30 +34505,38 @@ async function runSelfTest() {
           current.players[0].initialDrop,
           current.players[0].maxDrop,
           current.players[0].latestDrop,
+          current.players[0].initialExternalBalanceSnapshot,
           current.players[0].externalBalanceSnapshot,
           current.players[1].name,
           current.players[1].initialDrop,
           current.players[1].maxDrop,
           current.players[1].latestDrop,
+          current.players[1].initialExternalBalanceSnapshot,
           current.players[1].externalBalanceSnapshot,
           current.players[2].name,
           current.players[2].initialDrop,
           current.players[2].maxDrop,
           current.players[2].latestDrop,
+          current.players[2].initialExternalBalanceSnapshot,
+          current.players[2].externalBalanceSnapshot,
           current.players[0].online,
           current.players[1].online,
           current.players[2].online,
           current.selfExternalBalanceSnapshot,
+          current.selfInitialExternalBalanceSnapshot,
           current.players.some(player => player.userId === 11),
           current.players.some(player => player.userId === 7),
           current.threshold,
           current.lastSnapshotSource,
           current.lastGlobalSnapshotSource,
           nextDay.day,
-          nextDay.players.length
+          nextDay.players.length,
+          balanceBaselineInitial,
+          balanceBaselineLatest,
+          balanceBaselineLabel
         ].join('|');
       }),
-      want: '2026-07-14|3|alice-after-tick-reset|8|520|800|800|4000000|bob|500|500|450|1300000|carol-low|50|50|40|true|true|false|900000|false|false|50|ws|gap-http|2026-07-15|0'
+      want: '2026-07-14|3|alice-after-tick-reset|8|520|800|800|2000000|4000000|bob|500|500|450|1000000|1300000|carol-low|50|50|40|1500000|1400000|true|true|false|900000|900000|false|false|50|ws|gap-http|2026-07-15|0|500000|1000000|+1.000'
     },
     {
       name: 'browserless snapshot gap poller waits three minutes after any observed snapshot',
@@ -37419,6 +37471,8 @@ async function runSelfTest() {
             lastGlobalSnapshotAt: '2026-07-14T01:00:03.000Z',
             lastSnapshotSource: 'ws',
             lastGlobalSnapshotSource: 'gap-http',
+            selfInitialExternalBalanceSnapshot: 500000,
+            selfExternalBalanceSnapshot: 1000000,
             file: '/tmp/should-not-leak.json',
             players: [
               {
@@ -37428,6 +37482,7 @@ async function runSelfTest() {
                 maxDrop: 700,
                 latestDrop: 600,
                 externalBalanceSnapshot: 1000000,
+                initialExternalBalanceSnapshot: 500000,
                 online: true
               },
               {
@@ -37437,6 +37492,7 @@ async function runSelfTest() {
                 maxDrop: 500,
                 latestDrop: 450,
                 externalBalanceSnapshot: 500000,
+                initialExternalBalanceSnapshot: 500000,
                 online: false
               },
               { userId: 10, name: 'carol-low', initialDrop: 50, maxDrop: 499, latestDrop: 499 }
@@ -37467,23 +37523,28 @@ async function runSelfTest() {
           panelScript.includes("{ text: '更新于', className: 'meta-label' }"),
           panelScript.includes("{ text: stamp(status.highDropPlayers?.lastSnapshotAt) }")
             && !panelScript.includes("{ text: stamp(status.highDropPlayers?.lastSnapshotAt), className: 'coin' }"),
-          panelScript.includes("createHighDropRow('玩家名称', 'Drop', 'Drop变化', '额度', true"),
+          panelScript.includes("createHighDropRow('玩家名称', 'Drop', '今日收益', '额度', true"),
           panelScript.includes('const highDropBalanceValue = function highDropBalanceValueCore'),
+          panelScript.includes('const highDropBalanceDeltaValue = function highDropBalanceDeltaValueCore'),
           highDropBalanceValueCore(['player', 1000, 1100, 1100, 1, true, 1000000]) === 2,
+          highDropBalanceDeltaValueCore(['player', 1000, 1100, 1100, 1, true, 2000000, 1000000]) === 2,
+          highDropBalanceDeltaValueCore(['player', 1000, 1100, 1100, 1, true, 500000, 1000000]) === -1,
           formatHighDropBalanceCore(highDropBalanceValueCore(['player', 1000, 1100, 1100, 1, true, 1000000])) === '2.000',
           highDropBalanceValueCore(['player', 1000, 1100, 1100, 1, true]) === null,
           !panelScript.includes('initial * 20 + (latest - initial) * 2'),
           panelScript.includes('rankedItems.push({')
             && panelScript.includes('rankedItems.sort((left, right) => highDropSortValue(right.item, highDropSortField) - highDropSortValue(left.item, highDropSortField)'),
-          /\.high-drop-row\{display:grid;grid-template-columns:minmax\(100px,1\.8fr\) minmax\(48px,\.42fr\) minmax\(66px,\.52fr\) minmax\(112px,\.78fr\)/.test(panelText)
-            && panelScript.includes("delta.textContent = '(' + (drops.delta > 0 ? '+' : '') + String(drops.delta) + ')'")
+          /\.high-drop-row\{display:grid;grid-template-columns:minmax\(100px,1\.8fr\) minmax\(64px,\.58fr\) minmax\(70px,\.52fr\) minmax\(112px,\.78fr\)/.test(panelText)
+            && panelText.includes('.high-drop-row>.high-drop-cell:nth-child(n+2){box-sizing:border-box;padding-right:8px;text-align:right}')
+            && panelText.includes('.high-drop-balance-decimal{color:var(--muted)}')
+            && panelScript.includes('todayGain.toFixed(3)')
             && panelText.includes('.high-drop-values .high-drop-delta.positive{color:var(--red)}')
             && panelText.includes('.high-drop-values .high-drop-delta.negative{color:var(--green)}'),
           !panelScript.includes("'我 · ' + self.name"),
           panelText.indexOf('id="highDropPlayers"') < panelText.indexOf('id="nearbyGrid"')
         ].join('|');
       })(),
-      want: '2026-07-14|ws|gap-http|alice-renamed,520,700,600,8,true,1000000|bob,500,500,450,9,false,500000|2|false|false|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|false|true|true'
+      want: '2026-07-14|ws|gap-http|alice-renamed,520,700,600,8,true,1000000,500000|bob,500,500,450,9,false,500000,500000|2|false|false|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless compact status exposes completed source IP probe schedule',

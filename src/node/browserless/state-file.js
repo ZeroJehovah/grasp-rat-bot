@@ -2981,8 +2981,9 @@ function compactHighDropPlayers(value) {
       lastGlobalSnapshotAt: value.lastGlobalSnapshotAt || '',
       source: compactString(value.source, 32),
       globalSource: compactString(value.globalSource, 32),
+      selfInitialExternalBalanceSnapshot: compactNumber(value.selfInitialExternalBalanceSnapshot),
       selfExternalBalanceSnapshot: compactNumber(value.selfExternalBalanceSnapshot),
-      p: value.p.slice(0, 160).map(row => Array.isArray(row) ? row.slice(0, 7) : row)
+      p: value.p.slice(0, 160).map(row => Array.isArray(row) ? row.slice(0, 8) : row)
     };
   }
   const players = Array.isArray(value.players) ? value.players : [];
@@ -2993,7 +2994,10 @@ function compactHighDropPlayers(value) {
     compactNumber(player?.latestDrop),
     compactNumber(player?.userId),
     player?.online === true ? true : (player?.online === false ? false : null),
-    compactNumber(player?.externalBalanceSnapshot ?? player?.external_balance_snapshot)
+    compactNumber(player?.externalBalanceSnapshot ?? player?.external_balance_snapshot),
+    compactNumber(
+      player?.initialExternalBalanceSnapshot ?? player?.initial_external_balance_snapshot
+    )
   ]).filter(row => row[0] && row.slice(1, 5).every(item => item !== null))
     .filter(row => row.slice(1, 4).some(item => item >= HIGH_DROP_PANEL_THRESHOLD))
     .slice(0, 160);
@@ -3004,6 +3008,7 @@ function compactHighDropPlayers(value) {
     lastGlobalSnapshotAt: value.lastGlobalSnapshotAt || '',
     source: compactString(value.lastSnapshotSource, 32),
     globalSource: compactString(value.lastGlobalSnapshotSource, 32),
+    selfInitialExternalBalanceSnapshot: compactNumber(value.selfInitialExternalBalanceSnapshot),
     selfExternalBalanceSnapshot: compactNumber(value.selfExternalBalanceSnapshot),
     p: rows
   };

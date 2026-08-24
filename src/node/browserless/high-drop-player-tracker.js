@@ -7,7 +7,7 @@ const {
   timestampOrNull
 } = require('./player-name-observation');
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DEFAULT_RECORD_THRESHOLD = 50;
 const DEFAULT_SNAPSHOT_GAP_MS = 30 * 1000;
@@ -76,9 +76,13 @@ function emptyStore(day = '') {
     lastSnapshotSource: '',
     lastGlobalSnapshotAt: '',
     lastGlobalSnapshotSource: '',
+    selfInitialExternalBalanceSnapshot: null,
+    selfInitialExternalBalanceSnapshotAt: '',
+    selfInitialExternalBalanceSnapshotTick: null,
     selfExternalBalanceSnapshot: null,
     selfExternalBalanceSnapshotAt: '',
     selfExternalBalanceSnapshotTick: null,
+    balanceSnapshots: {},
     players: {}
   };
 }
@@ -91,9 +95,32 @@ function normalizeStore(value, expectedDay) {
   output.lastSnapshotSource = String(value.lastSnapshotSource || '');
   output.lastGlobalSnapshotAt = String(value.lastGlobalSnapshotAt || '');
   output.lastGlobalSnapshotSource = String(value.lastGlobalSnapshotSource || '');
+  output.selfInitialExternalBalanceSnapshot = numberOrNull(value.selfInitialExternalBalanceSnapshot)
+    ?? numberOrNull(value.selfExternalBalanceSnapshot);
+  output.selfInitialExternalBalanceSnapshotAt = String(
+    value.selfInitialExternalBalanceSnapshotAt || value.selfExternalBalanceSnapshotAt || ''
+  );
+  output.selfInitialExternalBalanceSnapshotTick = numberOrNull(
+    value.selfInitialExternalBalanceSnapshotTick ?? value.selfExternalBalanceSnapshotTick
+  );
   output.selfExternalBalanceSnapshot = numberOrNull(value.selfExternalBalanceSnapshot);
   output.selfExternalBalanceSnapshotAt = String(value.selfExternalBalanceSnapshotAt || '');
   output.selfExternalBalanceSnapshotTick = numberOrNull(value.selfExternalBalanceSnapshotTick);
+  for (const [key, snapshot] of Object.entries(value.balanceSnapshots || {})) {
+    if (!snapshot || typeof snapshot !== 'object') continue;
+    const initial = numberOrNull(snapshot.initial ?? snapshot.initialValue ?? snapshot.value);
+    const latest = numberOrNull(snapshot.latest ?? snapshot.latestValue ?? snapshot.value);
+    if (initial === null && latest === null) continue;
+    const normalizedKey = String(key || '').startsWith('user:') ? String(key) : `user:${key}`;
+    output.balanceSnapshots[normalizedKey] = {
+      initial: initial ?? latest,
+      initialAt: String(snapshot.initialAt || snapshot.at || ''),
+      initialTick: numberOrNull(snapshot.initialTick ?? snapshot.tick),
+      latest: latest ?? initial,
+      at: String(snapshot.at || snapshot.latestAt || snapshot.initialAt || ''),
+      tick: numberOrNull(snapshot.tick ?? snapshot.latestTick ?? snapshot.initialTick)
+    };
+  }
   for (const [key, player] of Object.entries(value.players || {})) {
     if (!player || typeof player !== 'object') continue;
     const userId = numberOrNull(player.userId ?? String(key || '').replace(/^user:/, ''));
@@ -103,6 +130,12 @@ function normalizeStore(value, expectedDay) {
     const latestDrop = numberOrNull(player.latestDrop);
     if (initialDrop === null || maxDrop === null || latestDrop === null) continue;
     const normalizedKey = `user:${userId}`;
+    const externalBalanceSnapshot = numberOrNull(
+      player.externalBalanceSnapshot ?? player.external_balance_snapshot
+    );
+    const initialExternalBalanceSnapshot = numberOrNull(
+      player.initialExternalBalanceSnapshot ?? player.initial_external_balance_snapshot
+    ) ?? output.balanceSnapshots[normalizedKey]?.initial ?? externalBalanceSnapshot;
     const candidate = {
       key: normalizedKey,
       userId,
@@ -111,9 +144,19 @@ function normalizeStore(value, expectedDay) {
       initialDrop,
       maxDrop,
       latestDrop,
-      externalBalanceSnapshot: numberOrNull(
-        player.externalBalanceSnapshot ?? player.external_balance_snapshot
+      initialExternalBalanceSnapshot,
+      initialExternalBalanceSnapshotAt: String(
+        player.initialExternalBalanceSnapshotAt
+          || player.initial_external_balance_snapshot_at
+          || player.externalBalanceSnapshotAt
+          || ''
       ),
+      initialExternalBalanceSnapshotTick: numberOrNull(
+        player.initialExternalBalanceSnapshotTick
+          ?? player.initial_external_balance_snapshot_tick
+          ?? player.externalBalanceSnapshotTick
+      ),
+      externalBalanceSnapshot,
       externalBalanceSnapshotAt: String(player.externalBalanceSnapshotAt || ''),
       externalBalanceSnapshotTick: numberOrNull(player.externalBalanceSnapshotTick),
       firstObservedAt: String(player.firstObservedAt || ''),
@@ -123,6 +166,18 @@ function normalizeStore(value, expectedDay) {
       onlineObservedAt: String(player.onlineObservedAt || ''),
       onlineCheckedAt: String(player.onlineCheckedAt || '')
     };
+    if (!output.balanceSnapshots[normalizedKey]
+      && (candidate.initialExternalBalanceSnapshot !== null || candidate.externalBalanceSnapshot !== null)) {
+      const initial = candidate.initialExternalBalanceSnapshot ?? candidate.externalBalanceSnapshot;
+      output.balanceSnapshots[normalizedKey] = {
+        initial,
+        initialAt: candidate.initialExternalBalanceSnapshotAt || candidate.externalBalanceSnapshotAt,
+        initialTick: candidate.initialExternalBalanceSnapshotTick ?? candidate.externalBalanceSnapshotTick,
+        latest: candidate.externalBalanceSnapshot ?? initial,
+        at: candidate.externalBalanceSnapshotAt || candidate.initialExternalBalanceSnapshotAt,
+        tick: candidate.externalBalanceSnapshotTick ?? candidate.initialExternalBalanceSnapshotTick
+      };
+    }
     const existing = output.players[normalizedKey] || null;
     if (!existing) {
       output.players[normalizedKey] = candidate;
@@ -157,6 +212,15 @@ function normalizeStore(value, expectedDay) {
       initialDrop: first.initialDrop,
       maxDrop: Math.max(existing.maxDrop, candidate.maxDrop),
       latestDrop: latest.latestDrop,
+      initialExternalBalanceSnapshot: first.initialExternalBalanceSnapshot
+        ?? existing.initialExternalBalanceSnapshot
+        ?? candidate.initialExternalBalanceSnapshot,
+      initialExternalBalanceSnapshotAt: first.initialExternalBalanceSnapshotAt
+        || existing.initialExternalBalanceSnapshotAt
+        || candidate.initialExternalBalanceSnapshotAt,
+      initialExternalBalanceSnapshotTick: first.initialExternalBalanceSnapshotTick
+        ?? existing.initialExternalBalanceSnapshotTick
+        ?? candidate.initialExternalBalanceSnapshotTick,
       externalBalanceSnapshot: latest.externalBalanceSnapshot
         ?? existing.externalBalanceSnapshot
         ?? candidate.externalBalanceSnapshot,
@@ -240,6 +304,7 @@ function createHighDropPlayerTracker(options = {}) {
       if (!entity || typeof entity !== 'object') continue;
       const identity = entityIdentity(entity);
       const externalBalanceSnapshot = entityExternalBalanceSnapshot(entity);
+      const existing = identity ? store.players[identity.key] || null : null;
       if (identity && selfUserId !== null && identity.userId === selfUserId && externalBalanceSnapshot !== null) {
         const selfObservedAtMs = timestampOrNull(store.selfExternalBalanceSnapshotAt);
         const freshness = nameObservationFreshness({
@@ -250,36 +315,64 @@ function createHighDropPlayerTracker(options = {}) {
         });
         if (freshness.accepted) {
           const changed = store.selfExternalBalanceSnapshot !== externalBalanceSnapshot;
+          const initialMissing = store.selfInitialExternalBalanceSnapshot === null;
+          store.selfInitialExternalBalanceSnapshot = store.selfInitialExternalBalanceSnapshot
+            ?? externalBalanceSnapshot;
+          store.selfInitialExternalBalanceSnapshotAt = store.selfInitialExternalBalanceSnapshotAt || at;
+          store.selfInitialExternalBalanceSnapshotTick = store.selfInitialExternalBalanceSnapshotTick
+            ?? snapshotTick;
           store.selfExternalBalanceSnapshot = externalBalanceSnapshot;
           store.selfExternalBalanceSnapshotAt = at;
           store.selfExternalBalanceSnapshotTick = snapshotTick;
-          if (changed || freshness.advanced) updated += 1;
+          if (changed || initialMissing || freshness.advanced) updated += 1;
         }
       }
-      const existing = identity ? store.players[identity.key] || null : null;
-      if (
-        identity
-        && (selfUserId === null || identity.userId !== selfUserId)
-        && existing
-        && externalBalanceSnapshot !== null
-      ) {
+      if (identity && (selfUserId === null || identity.userId !== selfUserId)
+        && externalBalanceSnapshot !== null) {
+        const previousBalance = store.balanceSnapshots[identity.key]
+          || (existing && existing.externalBalanceSnapshot !== null
+            ? {
+                initial: existing.initialExternalBalanceSnapshot ?? existing.externalBalanceSnapshot,
+                initialAt: existing.initialExternalBalanceSnapshotAt || existing.externalBalanceSnapshotAt,
+                initialTick: existing.initialExternalBalanceSnapshotTick ?? existing.externalBalanceSnapshotTick,
+                latest: existing.externalBalanceSnapshot,
+                at: existing.externalBalanceSnapshotAt || existing.lastObservedAt,
+                tick: existing.externalBalanceSnapshotTick ?? existing.lastObservedTick
+              }
+            : null);
         const balanceFreshness = nameObservationFreshness({
           observedAtMs: atMs,
           observedTick: snapshotTick,
-          previousObservedAtMs: timestampOrNull(
-            existing.externalBalanceSnapshotAt || existing.lastObservedAt
-          ),
-          previousObservedTick: existing.externalBalanceSnapshotTick ?? existing.lastObservedTick
+          previousObservedAtMs: timestampOrNull(previousBalance?.at),
+          previousObservedTick: previousBalance?.tick
         });
         if (balanceFreshness.accepted) {
-          const changed = existing.externalBalanceSnapshot !== externalBalanceSnapshot;
-          store.players[identity.key] = {
-            ...existing,
-            externalBalanceSnapshot,
-            externalBalanceSnapshotAt: at,
-            externalBalanceSnapshotTick: snapshotTick
+          const balanceRecord = previousBalance || {
+            initial: externalBalanceSnapshot,
+            initialAt: at,
+            initialTick: snapshotTick
           };
-          if (changed || balanceFreshness.advanced) updated += 1;
+          const changed = balanceRecord.latest !== externalBalanceSnapshot;
+          store.balanceSnapshots[identity.key] = {
+            initial: balanceRecord.initial ?? externalBalanceSnapshot,
+            initialAt: balanceRecord.initialAt || at,
+            initialTick: balanceRecord.initialTick ?? snapshotTick,
+            latest: externalBalanceSnapshot,
+            at,
+            tick: snapshotTick
+          };
+          if (existing) {
+            store.players[identity.key] = {
+              ...existing,
+              initialExternalBalanceSnapshot: balanceRecord.initial ?? externalBalanceSnapshot,
+              initialExternalBalanceSnapshotAt: balanceRecord.initialAt || at,
+              initialExternalBalanceSnapshotTick: balanceRecord.initialTick ?? snapshotTick,
+              externalBalanceSnapshot,
+              externalBalanceSnapshotAt: at,
+              externalBalanceSnapshotTick: snapshotTick
+            };
+          }
+          if (changed || !previousBalance || balanceFreshness.advanced) updated += 1;
         }
       }
       const drop = entityDrop(entity);
@@ -291,6 +384,7 @@ function createHighDropPlayerTracker(options = {}) {
       const fallbackName = identity.userId !== null ? `#${identity.userId}` : identity.entityId ? `#${identity.entityId}` : '';
       const name = entityName(entity, trackedPlayer?.name || fallbackName);
       if (!trackedPlayer) {
+        const balanceRecord = store.balanceSnapshots[identity.key] || null;
         store.players[identity.key] = {
           key: identity.key,
           userId: identity.userId,
@@ -299,9 +393,12 @@ function createHighDropPlayerTracker(options = {}) {
           initialDrop: drop,
           maxDrop: drop,
           latestDrop: drop,
-          externalBalanceSnapshot,
-          externalBalanceSnapshotAt: externalBalanceSnapshot === null ? '' : at,
-          externalBalanceSnapshotTick: externalBalanceSnapshot === null ? null : snapshotTick,
+          initialExternalBalanceSnapshot: balanceRecord?.initial ?? externalBalanceSnapshot,
+          initialExternalBalanceSnapshotAt: balanceRecord?.initialAt || (externalBalanceSnapshot === null ? '' : at),
+          initialExternalBalanceSnapshotTick: balanceRecord?.initialTick ?? (externalBalanceSnapshot === null ? null : snapshotTick),
+          externalBalanceSnapshot: balanceRecord?.latest ?? externalBalanceSnapshot,
+          externalBalanceSnapshotAt: balanceRecord?.at || (externalBalanceSnapshot === null ? '' : at),
+          externalBalanceSnapshotTick: balanceRecord?.tick ?? (externalBalanceSnapshot === null ? null : snapshotTick),
           firstObservedAt: at,
           lastObservedAt: at,
           lastObservedTick: snapshotTick,
@@ -397,6 +494,7 @@ function createHighDropPlayerTracker(options = {}) {
       lastGlobalSnapshotAt: store.lastGlobalSnapshotAt,
       lastGlobalSnapshotSource: store.lastGlobalSnapshotSource,
       selfExternalBalanceSnapshot: store.selfExternalBalanceSnapshot,
+      selfInitialExternalBalanceSnapshot: store.selfInitialExternalBalanceSnapshot,
       threshold,
       file,
       players

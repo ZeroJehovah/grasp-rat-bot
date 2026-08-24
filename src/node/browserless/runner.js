@@ -30,6 +30,7 @@ const {
 const { startStatusServer } = require('./status-server');
 const {
   BROWSERLESS_WEB_PANEL_VERSION,
+  highDropBalanceDeltaValueCore,
   groupBlockingFactorsCore,
   highDropRankValueCore,
   highDropSortValueCore,
@@ -8237,9 +8238,11 @@ async function runBrowserlessRunnerSelfTest() {
       .join(',') === 'other,self';
     const highDropSortTest = {
       drop: highDropSortValueCore(['player', 100, 140, 130], 'drop') === 130,
-      change: highDropSortValueCore(['player', 100, 140, 130], 'drop-change') === 30,
+      todayIncome: highDropSortValueCore(['player', 100, 140, 130, 1, true, 2000000, 1000000], 'balance-change') === 2,
+      todayIncomeValue: highDropBalanceDeltaValueCore(['player', 100, 140, 130, 1, true, 2000000, 1000000]) === 2,
       balance: highDropSortValueCore(['player', 100, 140, 140, 1, true, 1000000], 'balance') === 2,
-      missingBalance: highDropSortValueCore(['player', 100, 140, 130, 1, true], 'balance') === -Infinity
+      missingBalance: highDropSortValueCore(['player', 100, 140, 130, 1, true], 'balance') === -Infinity,
+      missingTodayIncome: highDropSortValueCore(['player', 100, 140, 130, 1, true, 2000000], 'balance-change') === -Infinity
     };
     highDropSortTest.ok = Object.values(highDropSortTest).every(Boolean);
     const highDropRecencyTest = (() => {
@@ -9112,7 +9115,7 @@ async function runBrowserlessRunnerSelfTest() {
           && remoteTargetActivityTextCore({ active: true }) === '活动玩家'
           && remoteTargetActivityTextCore({ active: false, moving: false, firing: false }) === '挂机玩家'
           && pageHtml.includes('>Drop排行</h2>')
-          && pageHtml.includes('grid-template-columns:minmax(100px,1.8fr) minmax(48px,.42fr) minmax(66px,.52fr) minmax(112px,.78fr)')
+          && pageHtml.includes('grid-template-columns:minmax(100px,1.8fr) minmax(64px,.58fr) minmax(70px,.52fr) minmax(112px,.78fr)')
           && pageHtml.includes('id="transportHealthMode"')
           && pageHtml.includes('id="transportLatency"')
           && pageHtml.includes('id="transportFrameLoss"')
@@ -9127,7 +9130,7 @@ async function runBrowserlessRunnerSelfTest() {
           && pageHtml.includes("if (health.mode === 'active') return '活跃采样'")
           && pageHtml.includes("{ text: '更新于', className: 'meta-label' }")
           && pageHtml.includes("{ text: stamp(status.highDropPlayers?.lastSnapshotAt) }")
-          && pageHtml.includes("createHighDropRow('玩家名称', 'Drop', 'Drop变化', '额度', true")
+          && pageHtml.includes("createHighDropRow('玩家名称', 'Drop', '今日收益', '额度', true")
           && pageHtml.includes("let highDropSortField = 'drop'")
           && pageHtml.includes("button.className = 'high-drop-sort' + (highDropSortField === field ? ' active' : '')")
           && pageHtml.includes("button.setAttribute('aria-sort', highDropSortField === field ? 'descending' : 'none')")

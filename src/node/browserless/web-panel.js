@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.24.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.24.2';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -183,11 +183,9 @@ function highDropRankValueCore(item) {
 }
 
 function highDropSortValueCore(item, field = 'drop') {
-  if (field === 'drop-change') {
-    if (item?.[1] === null || item?.[1] === undefined || item?.[1] === '') return -Infinity;
-    const initial = Number(item?.[1]);
-    const current = highDropRankValueCore(item);
-    return Number.isFinite(initial) && Number.isFinite(current) ? current - initial : -Infinity;
+  if (field === 'balance-change') {
+    const change = highDropBalanceDeltaValueCore(item);
+    return change === null ? -Infinity : change;
   }
   if (field === 'balance') {
     const balance = highDropBalanceValueCore(item);
@@ -202,6 +200,17 @@ function highDropBalanceValueCore(item) {
   const externalBalance = Number(raw);
   if (!Number.isFinite(externalBalance)) return null;
   return externalBalance / 500000;
+}
+
+function highDropBalanceDeltaValueCore(item) {
+  const latestRaw = item?.[6];
+  const initialRaw = item?.[7];
+  if (latestRaw === null || latestRaw === undefined || latestRaw === ''
+    || initialRaw === null || initialRaw === undefined || initialRaw === '') return null;
+  const latest = Number(latestRaw);
+  const initial = Number(initialRaw);
+  if (!Number.isFinite(latest) || !Number.isFinite(initial)) return null;
+  return (latest - initial) / 500000;
 }
 
 function formatHighDropBalanceCore(value) {
@@ -604,11 +613,12 @@ function renderBrowserlessWebPanel() {
     .coin-row{grid-template-columns:minmax(48px,1fr) minmax(34px,.5fr) minmax(46px,.65fr)}
     .player-row{grid-template-columns:minmax(150px,2.8fr) minmax(40px,.55fr) minmax(42px,.55fr) minmax(42px,.5fr) minmax(52px,.65fr)}
     .high-drop-list{display:grid;gap:0;min-width:0}
-    .high-drop-row{display:grid;grid-template-columns:minmax(100px,1.8fr) minmax(48px,.42fr) minmax(66px,.52fr) minmax(112px,.78fr);gap:8px;align-items:center;min-height:26px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)}
+    .high-drop-row{display:grid;grid-template-columns:minmax(100px,1.8fr) minmax(64px,.58fr) minmax(70px,.52fr) minmax(112px,.78fr);gap:8px;align-items:center;min-height:26px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)}
     .high-drop-row:last-child{border-bottom:0}
     .high-drop-head{position:sticky;top:0;z-index:1;color:var(--muted);font-size:11px;font-weight:700;background:var(--panel)}
     .high-drop-cell{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .high-drop-sort{display:inline-flex;align-items:center;gap:4px;width:max-content;max-width:100%;min-height:0;padding:0;border:0;border-radius:0;background:transparent;color:inherit;font-size:inherit;font-weight:inherit;line-height:inherit}
+    .high-drop-row>.high-drop-cell:nth-child(n+2){box-sizing:border-box;padding-right:8px;text-align:right}
+    .high-drop-sort{display:inline-flex;align-items:center;justify-content:flex-end;gap:4px;width:100%;max-width:100%;min-height:0;padding:0;border:0;border-radius:0;background:transparent;color:inherit;font-size:inherit;font-weight:inherit;line-height:inherit}
     .high-drop-sort:hover{border-color:transparent;color:var(--text)}
     .high-drop-sort:focus-visible{outline:1px solid var(--blue);outline-offset:2px}
     .high-drop-sort.active::after{content:'';flex:0 0 auto;width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-top:5px solid var(--blue)}
@@ -622,6 +632,7 @@ function renderBrowserlessWebPanel() {
     .high-drop-values .high-drop-delta{color:var(--text)}
     .high-drop-values .high-drop-delta.positive{color:var(--red)}
     .high-drop-values .high-drop-delta.negative{color:var(--green)}
+    .high-drop-balance-decimal{color:var(--muted)}
     .high-drop-values.high-drop-current{color:var(--coin)}
     .high-drop-values.high-drop-delta{color:var(--text)}
     .high-drop-values.high-drop-delta.positive{color:var(--red)}
@@ -675,7 +686,7 @@ function renderBrowserlessWebPanel() {
     @media (max-width:760px){.layout{grid-template-columns:1fr}.stats-grid{grid-template-columns:1fr}}
     @media (max-width:600px){.player-insights-grid{grid-template-columns:1fr}}
     @media (max-width:600px){.nearby-combined{grid-template-columns:1fr}.nearby-players-pane{border-left:0;border-top:1px solid var(--line);padding-left:0;padding-top:10px}}
-    @media (max-width:520px){.player-row{grid-template-columns:minmax(112px,2fr) minmax(34px,.5fr) minmax(38px,.55fr) minmax(36px,.5fr) minmax(44px,.6fr);gap:4px}.high-drop-row{grid-template-columns:minmax(86px,1.45fr) minmax(44px,.4fr) minmax(60px,.48fr) minmax(96px,.85fr);gap:5px}.battle-fighters{grid-template-columns:minmax(0,1fr) 26px minmax(0,1fr);column-gap:5px}.battle-meta{gap:5px;font-size:11px}.battle-meta strong{font-size:11px}}
+    @media (max-width:520px){.player-row{grid-template-columns:minmax(112px,2fr) minmax(34px,.5fr) minmax(38px,.55fr) minmax(36px,.5fr) minmax(44px,.6fr);gap:4px}.high-drop-row{grid-template-columns:minmax(78px,1.35fr) minmax(58px,.55fr) minmax(56px,.55fr) minmax(92px,.85fr);gap:4px}.high-drop-row>.high-drop-cell:nth-child(n+2){padding-right:6px}.battle-fighters{grid-template-columns:minmax(0,1fr) 26px minmax(0,1fr);column-gap:5px}.battle-meta{gap:5px;font-size:11px}.battle-meta strong{font-size:11px}}
     @media (max-width:520px){main{padding:10px}header{align-items:flex-start;flex-direction:column}}
   </style>
 </head>
@@ -837,7 +848,7 @@ function renderBrowserlessWebPanel() {
     if (token) localStorage.graspRatBrowserlessToken = token;
     const WEB_PANEL_VERSION = ${JSON.stringify(BROWSERLESS_WEB_PANEL_VERSION)};
     const highDropRankValue = ${highDropRankValueCore.toString()};
-    const highDropSortValue = ${highDropSortValueCore.toString().replaceAll('highDropRankValueCore', 'highDropRankValue').replaceAll('highDropBalanceValueCore', 'highDropBalanceValue')};
+    const highDropSortValue = ${highDropSortValueCore.toString().replaceAll('highDropRankValueCore', 'highDropRankValue').replaceAll('highDropBalanceValueCore', 'highDropBalanceValue').replaceAll('highDropBalanceDeltaValueCore', 'highDropBalanceDeltaValue')};
     const isStaminaExhaustionExitReason = ${isStaminaExhaustionExitReasonCore.toString()};
     const WEB_PANEL_RELOAD_KEY = 'graspRatBrowserlessPanelReloadedVersion';
     const PANEL_COLLAPSE_KEY = 'graspRatBrowserlessPanelCollapsedV1';
@@ -872,6 +883,7 @@ function renderBrowserlessWebPanel() {
     const nearbyCoinIcon = ${nearbyCoinIconCore.toString()};
     const spentStaminaUnit = ${formatSpentStaminaCore.toString()};
     const highDropBalanceValue = ${highDropBalanceValueCore.toString()};
+    const highDropBalanceDeltaValue = ${highDropBalanceDeltaValueCore.toString()};
     const formatHighDropBalance = ${formatHighDropBalanceCore.toString()};
     const panelSessionFlags = ${panelSessionFlagsCore.toString()};
     const panelTargetRoles = ${panelTargetRolesCore.toString()};
@@ -3221,7 +3233,7 @@ function renderBrowserlessWebPanel() {
         delta: initial === null ? null : Math.round(current - initial)
       };
     }
-    function createHighDropRow(name, drop, dropChange, balance, head = false, online = undefined, self = false, onSort = null) {
+    function createHighDropRow(name, drop, todayGain, balance, head = false, online = undefined, self = false, onSort = null) {
       const row = document.createElement('div');
       row.className = 'high-drop-row' + (head ? ' high-drop-head' : '');
       const nameCell = document.createElement('div');
@@ -3259,14 +3271,14 @@ function renderBrowserlessWebPanel() {
         dropCell.classList.add('high-drop-current');
         dropCell.textContent = value(drop);
       }
-      const changeCell = head ? sortableCell(dropChange, 'drop-change') : document.createElement('div');
+      const changeCell = head ? sortableCell(todayGain, 'balance-change') : document.createElement('div');
       if (!head) {
         changeCell.className = valueCellClass;
-        if (typeof dropChange === 'number') {
-          changeCell.classList.add('high-drop-delta', dropChange > 0 ? 'positive' : (dropChange < 0 ? 'negative' : 'zero'));
-          changeCell.textContent = (dropChange > 0 ? '+' : '') + String(dropChange);
+        if (typeof todayGain === 'number') {
+          changeCell.classList.add('high-drop-delta', todayGain > 0 ? 'positive' : (todayGain < 0 ? 'negative' : 'zero'));
+          changeCell.textContent = (todayGain > 0 ? '+' : '') + todayGain.toFixed(3);
         } else {
-          changeCell.textContent = value(dropChange);
+          changeCell.textContent = value(todayGain);
         }
       }
       const balanceCell = document.createElement('div');
@@ -3274,7 +3286,18 @@ function renderBrowserlessWebPanel() {
         row.append(nameCell, dropCell, changeCell, sortableCell(balance, 'balance'));
       } else {
         balanceCell.className = valueCellClass;
-        balanceCell.textContent = value(balance);
+        const balanceText = value(balance);
+        const decimalIndex = balanceText.indexOf('.');
+        if (decimalIndex < 0) {
+          balanceCell.textContent = balanceText;
+        } else {
+          const integerPart = document.createElement('span');
+          integerPart.textContent = balanceText.slice(0, decimalIndex);
+          const decimalPart = document.createElement('span');
+          decimalPart.className = 'high-drop-balance-decimal';
+          decimalPart.textContent = balanceText.slice(decimalIndex);
+          balanceCell.append(integerPart, decimalPart);
+        }
         row.append(nameCell, dropCell, changeCell, balanceCell);
       }
       return row;
@@ -3293,12 +3316,14 @@ function renderBrowserlessWebPanel() {
       const selfLatestDrop = dropBaselinePending ? null : number(today.latestDrop) ?? number(self?.drop);
       const selfExternalBalanceSnapshot = number(status.highDropPlayers?.selfExternalBalanceSnapshot)
         ?? number(self?.externalBalanceSnapshot ?? self?.external_balance_snapshot);
+      const selfInitialExternalBalanceSnapshot = number(status.highDropPlayers?.selfInitialExternalBalanceSnapshot)
+        ?? selfExternalBalanceSnapshot;
       setRichText('highDropTitleMeta', [
         { text: '更新于', className: 'meta-label' },
         { text: stamp(status.highDropPlayers?.lastSnapshotAt) }
       ]);
       const fragment = document.createDocumentFragment();
-      fragment.appendChild(createHighDropRow('玩家名称', 'Drop', 'Drop变化', '额度', true, undefined, false, field => {
+      fragment.appendChild(createHighDropRow('玩家名称', 'Drop', '今日收益', '额度', true, undefined, false, field => {
         highDropSortField = field;
         renderHighDropPlayers(status);
       }));
@@ -3310,7 +3335,7 @@ function renderBrowserlessWebPanel() {
         const maximum = selfMaxDrop ?? selfInitialDrop;
         const latest = selfLatestDrop;
         rankedItems.push({
-          item: [selfName, initial, maximum, latest, selfUserId, status.game?.inGame === true, selfExternalBalanceSnapshot],
+          item: [selfName, initial, maximum, latest, selfUserId, status.game?.inGame === true, selfExternalBalanceSnapshot, selfInitialExternalBalanceSnapshot],
           self: true,
           online: status.game?.inGame === true
         });
@@ -3328,7 +3353,7 @@ function renderBrowserlessWebPanel() {
           fragment.appendChild(createHighDropRow(
             item?.[0],
             drops?.current ?? null,
-            drops?.delta ?? null,
+            highDropBalanceDeltaValue(item),
             formatHighDropBalance(highDropBalanceValue(item)),
             false,
             entry.online,
@@ -4402,6 +4427,7 @@ module.exports = {
   formatHighDropBalanceCore,
   formatSpentStaminaCore,
   groupBlockingFactorsCore,
+  highDropBalanceDeltaValueCore,
   highDropBalanceValueCore,
   groupChatMessagesForDisplay,
   highDropRankValueCore,
