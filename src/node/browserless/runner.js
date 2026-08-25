@@ -164,6 +164,7 @@ const { runRemoteProfitWorkerSelfTest } = require('./remote-profit-worker-self-t
 const { runRemoteProfitActionSelfTest } = require('./remote-profit-action-self-test');
 const { runRemoteProfitDecisionSelfTest } = require('./remote-profit-decision-self-test');
 const { runMissingEnemyHoldSelfTest } = require('./missing-enemy-hold-self-test');
+const { runActiveJoinModeProfitSelfTest } = require('./active-join-mode-profit-self-test');
 const { runInvulnerableProfitCommitmentSelfTest } = require('./invulnerable-profit-commitment-self-test');
 const { runAfkDynamicFireSelfTest } = require('./afk-dynamic-fire-self-test');
 const { runProfitMissionArrivalSelfTest } = require('./profit-mission-arrival-self-test');
@@ -6967,6 +6968,7 @@ async function runBrowserlessRunnerSelfTest() {
     const profitMissionArrival = runProfitMissionArrivalSelfTest();
     const invulnerableAfk = runInvulnerableAfkSelfTest();
     const missingEnemyHold = runMissingEnemyHoldSelfTest();
+    const activeJoinModeProfit = runActiveJoinModeProfitSelfTest();
     const requestRatePolicy = await runRequestRatePolicySelfTest();
     const requestRateController = await runRequestRateControllerSelfTest();
     const snapshotRequestScheduler = await runSnapshotRequestSchedulerSelfTest();
@@ -9678,6 +9680,7 @@ async function runBrowserlessRunnerSelfTest() {
         && profitMissionArrival.ok
         && invulnerableAfk.ok
         && missingEnemyHold.ok
+        && activeJoinModeProfit.ok
         && requestRateController.ok
         && snapshotRequestScheduler.ok
         && loginPointHighHpExemption.ok
@@ -9788,6 +9791,7 @@ async function runBrowserlessRunnerSelfTest() {
       profitMissionArrival,
       invulnerableAfk,
       missingEnemyHold,
+      activeJoinModeProfit,
       requestRateController,
       snapshotRequestScheduler,
       loginPointHighHpExemption,

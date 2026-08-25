@@ -506,6 +506,52 @@ function isActiveEntity(entity) {
   return mode === 'active';
 }
 
+function entityJoinModeLabel(entity) {
+  return String(
+    entity?.current_join_mode || entity?.currentJoinMode || entity?.mode || entity?.joined || ''
+  ) || null;
+}
+
+// The game itself separates Active from the Passive/AFK join mode, so an
+// Active-mode player is never an AFK profit target no matter how idle the
+// current frame looks. Full 5s stamina only proves the player spent nothing in
+// the last five seconds; it must not promote an Active player into the
+// deterministic AFK reward model. The realtime/native mode wins, and the
+// snapshot-sourced profit metadata mode is consulted only when realtime
+// carries no mode at all. This is profit/navigation evidence that can only
+// remove an opportunity, so it never becomes combat, aim, or fire authority.
+function activeJoinModeProfitEvidence(entity) {
+  const realtimeMode = entityJoinModeLabel(entity);
+  if (realtimeMode) return realtimeMode.toLowerCase() === 'active';
+  return String(entity?.profitMetadataMode || '').toLowerCase() === 'active';
+}
+
+// The reward model's notion of "active" is broader than the derived `active`
+// flag: a player the game reports as Active can move, shoot back, and deny the
+// drop at any moment, even on a frame where they happen to have spent nothing.
+// Profit pricing therefore treats the join mode as activity evidence, while the
+// derived `active` flag keeps its own meaning for defensive admission.
+function profitActiveTargetEvidence(target) {
+  return Boolean(target?.active) || activeJoinModeProfitEvidence(target);
+}
+
+// `isActiveCombatMode` short-circuits on the derived `active === false` before it
+// ever reads the join mode, and that derived flag is false for an Active-mode
+// player who simply spent nothing in the last five seconds. Once the AFK reward
+// model correctly refuses such a player, ordinary active profit admission is the
+// only pool left, so it has to consult the join mode directly or an in-range
+// Active player with a real drop would belong to no pool at all. The eligibility
+// policy itself is unchanged; only the activity input is corrected, through a
+// prototype view so the shared entity object and the derived `active` flag that
+// defensive admission depends on both stay untouched.
+function ordinaryActiveProfitEligible(target, options) {
+  if (proactiveActiveProfitEligible(target, options)) return true;
+  if (target?.active !== false || !activeJoinModeProfitEvidence(target)) return false;
+  const joinModeActiveView = Object.create(target);
+  joinModeActiveView.active = true;
+  return proactiveActiveProfitEligible(joinModeActiveView, options);
+}
+
 function isFiringEntity(entity) {
   return Boolean(entity?.firing || entity?.is_firing || entity?.shooting);
 }
@@ -2264,6 +2310,8 @@ function refreshRealtimeSnapshotObservation(state, self, stateful = {}, options 
     const afkStaminaCooldownRemainingMs = Number(
       realtimeEntity?.afkStaminaCooldownRemainingMs ?? metadataSource?.afkStaminaCooldownRemainingMs ?? 0
     );
+    const joinMode = entityJoinModeLabel(realtimeEntity) || entityJoinModeLabel(metadataSource);
+    const activeJoinMode = String(joinMode || '').toLowerCase() === 'active';
     nearbyPlayers.push({
       key: String(userId),
       name: entityDisplayName(realtimeEntity) || entityDisplayName(metadataSource) || '未知玩家',
@@ -2277,12 +2325,11 @@ function refreshRealtimeSnapshotObservation(state, self, stateful = {}, options 
       y,
       vx: numberOrNull(realtimeEntity?.vx) ?? numberOrNull(snapshotEntity?.vx),
       vy: numberOrNull(realtimeEntity?.vy) ?? numberOrNull(snapshotEntity?.vy),
-      mode: String(
-        realtimeEntity?.current_join_mode || realtimeEntity?.mode || realtimeEntity?.joined
-        || metadataSource?.current_join_mode || metadataSource?.mode || metadataSource?.joined || ''
-      ) || null,
+      mode: joinMode,
       fullStamina5s,
-      afk: Boolean(fullStamina5s && !active && !moving && !firing && alive),
+      // The displayed AFK flag has to agree with profit admission: a row
+      // labelled Active must never also be labelled AFK.
+      afk: Boolean(fullStamina5s && !active && !moving && !firing && alive && !activeJoinMode),
       afkGreen: !(afkStaminaCooldownRemainingMs > 0) && (activityAgeMs === null || activityAgeMs >= inactiveMs)
     });
   }
@@ -2916,7 +2963,9 @@ function summarizeOpportunity(item) {
     profitThresholdReason: item.profitThresholdReason || '',
     target: item.sourceTarget ? summarizeTarget(item.sourceTarget) : null,
     coin: item.sourceCoin ? summarizeCoin(item.sourceCoin) : null,
-    held: Boolean(item.held)
+    held: Boolean(item.held),
+    missionHoldRewardRevalidated: Boolean(item.missionHoldRewardRevalidated),
+    missionHoldFrozenExpectedReward: numberOrNull(item.missionHoldFrozenExpectedReward)
   };
 }
 
@@ -3821,6 +3870,8 @@ function summarizeNearbyForPanel(input, action, combat, options = {}, singleCoin
       const fullStamina5s = hasFull5sStamina(target, options);
       const targetKey = panelPlayerTargetKey(target);
       const selected = targetPlayerSelected(action, combat, target);
+      // The displayed AFK flag has to agree with profit admission: a row whose
+      // mode column reads Active must never also be labelled AFK.
       const afk = Boolean(
         fullStamina5s
           && target.alive !== false
@@ -3828,6 +3879,7 @@ function summarizeNearbyForPanel(input, action, combat, options = {}, singleCoin
           && !target.moving
           && !target.firing
           && !threatTargetIds.has(targetKey)
+          && !activeJoinModeProfitEvidence(target)
       );
       const foldAsLowValueAfk = Boolean(
         !displayName
@@ -4126,10 +4178,17 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   });
   const afkObservationTargets = afkObservationTargetsRaw;
   const afkAttackCommitment = recentAfkAttackCommitment(stateful, nowMs, options);
-  const afkPanelTargets = afkObservationTargets.filter(entity => hasFull5sStamina(entity, options));
+  const afkPanelTargets = afkObservationTargets.filter(entity => (
+    hasFull5sStamina(entity, options) && !activeJoinModeProfitEvidence(entity)
+  ));
+  // A fresh AFK admission requires that the join mode is not Active; the
+  // in-range attack continuation stays first so an already engaged AFK target
+  // cannot be dropped mid-engagement by a mode flip.
   const afkTargets = afkObservationTargets.filter(entity => (
     markAfkAttackContinuation(entity, afkAttackCommitment, options)
-    || (hasFull5sStamina(entity, options) && !afkTargetBlockedByRecentActivity(entity, options))
+    || (hasFull5sStamina(entity, options)
+      && !afkTargetBlockedByRecentActivity(entity, options)
+      && !activeJoinModeProfitEvidence(entity))
   ));
   const selfKillTargetTicks = filterSelfKillTargetTicksForObservedTick(
     selfKillTargetTicksFromMessages(Array.isArray(fallback.messages) ? fallback.messages : [], selfUserId),
@@ -4181,6 +4240,9 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   if (visibleTargets.some(target => target.whitelisted)) dataGaps.push('whitelisted-target-visible');
   if (visibleTargets.some(target => target.recentlyActive)) dataGaps.push('recently-active-target-visible');
   if (afkTargets.some(target => afkOpportunityBlockedByStaminaCooldown(target, options))) dataGaps.push('afk-stamina-cooldown-target-visible');
+  if (afkObservationTargets.some(target => activeJoinModeProfitEvidence(target) && !afkTargets.includes(target))) {
+    dataGaps.push('active-join-mode-afk-candidate-excluded');
+  }
   if (snapshotFallbackBlockedReasons.length) dataGaps.push(...snapshotFallbackBlockedReasons.map(reason => `snapshot-fallback-blocked:${reason}`));
   if (numberOrNull(realtime.frameAgeMs) === null && Number(realtime.receivedAtMs) > 0) {
     dataGaps.push('unknown-realtime-frame-age');
@@ -4558,7 +4620,7 @@ function scoreCoinOpportunity(coin, options = {}) {
 }
 
 function activeTargetCompletionEstimate(target, options = {}) {
-  if (!target?.active) {
+  if (!profitActiveTargetEvidence(target)) {
     return {
       probability: 1,
       baseProbability: 1,
@@ -4663,7 +4725,10 @@ function activeTargetExpectedReward(target, options = {}) {
 
 function effectiveProfitReward(target, options = {}) {
   const rawDrop = Math.max(0, entityDropValue(target));
-  const active = Boolean(target?.active);
+  // The deterministic AFK reward model assumes the kill always completes and the
+  // drop is always collected, which only holds for a player the game itself does
+  // not report as Active.
+  const active = profitActiveTargetEvidence(target);
   const completion = active
     ? activeTargetCompletionEstimate(target, options)
     : { probability: 1, source: 'deterministic-afk-target' };
@@ -7985,6 +8050,54 @@ function reconcileProfitMissionState(input = {}, stateful = {}, options = {}, re
   return mission;
 }
 
+// A held mission replays its selection-time reward model for the whole lock
+// window. When the same subject is still visible in realtime and its observable
+// activity no longer matches that model — most importantly an AFK-priced
+// mission whose subject is now an Active player — the frozen expected reward
+// overstates the opportunity until the lock expires. Re-derive the reward from
+// the live realtime entity and keep only a downgrade so the lock can lose
+// arbitration to a better candidate on the next frame. Raising a held mission
+// above its selection-time value stays forbidden, and a mission with no live
+// realtime observation keeps its frozen values so an ordinary candidate refresh
+// still cannot drop a high-value mission. Only the reward model is revisited;
+// the held distance/stamina basis stays frozen.
+function profitMissionHeldLiveRewardDowngrade(input = {}, mission = {}, held = {}, options = {}) {
+  if (String(held.type || '') !== 'enemy') return null;
+  const missionId = profitMissionTargetId(mission);
+  if (!missionId) return null;
+  const live = (input.visibleTargets || []).find(target => (
+    String(targetIdentity(target) || '') === missionId
+  ));
+  if (!live || live.alive === false) return null;
+  const authority = String(live.authority || '');
+  if (authority && authority !== 'realtime' && authority !== 'native') return null;
+  // A frame without usable drop metadata is not evidence of a smaller reward.
+  if (!entityDropKnown(live) || !(entityDropValue(live) > 0)) return null;
+  const frozenExpectedReward = numberOrNull(held.expectedReward);
+  if (frozenExpectedReward === null || !(frozenExpectedReward > 0)) return null;
+  const scoringOptions = easyKillOpportunityScoringOptions(
+    live,
+    options.decisionState || options.stateful || {},
+    options
+  );
+  const heldStaminaCost = numberOrNull(held.staminaCost);
+  const effective = effectiveProfitReward(live, {
+    ...scoringOptions,
+    staminaCostOverride: heldStaminaCost === null ? undefined : heldStaminaCost
+  });
+  const liveExpectedReward = numberOrNull(effective.expectedReward);
+  if (liveExpectedReward === null || !(liveExpectedReward < frozenExpectedReward)) return null;
+  return {
+    effective,
+    expectedReward: liveExpectedReward,
+    frozenExpectedReward,
+    ratio: liveExpectedReward / frozenExpectedReward,
+    modelSource: String(effective.modelSource || ''),
+    targetActive: Boolean(live.active),
+    joinModeActive: live.joinModeActive === true
+  };
+}
+
 function buildProfitMissionHeldOpportunity(input = {}, mission = {}, thresholdContext = {}, options = {}) {
   const escortContinuity = activeProfitEscortContinuityForMission(
     options.decisionState || options.stateful || {},
@@ -8016,6 +8129,31 @@ function buildProfitMissionHeldOpportunity(input = {}, mission = {}, thresholdCo
   held.staminaCost = escortContinuity && type === 'enemy'
     ? numberOrNull(opportunityEnemyStaminaCost(target, options))
     : numberOrNull(mission.staminaCost);
+  // Escort continuity covers an already engaged combat target, where an
+  // established target keeps its cadence instead of being repriced mid-fight,
+  // so only the ordinary navigation lock revalidates its reward model.
+  const liveRewardDowngrade = escortContinuity
+    ? null
+    : profitMissionHeldLiveRewardDowngrade(input, mission, held, options);
+  // mission.score/mission.expectedReward stay frozen so mission identity and
+  // continuity are untouched; the correction lands on the emitted arbitration
+  // candidate, which stays visible in the profit candidate summary even when the
+  // mission then loses arbitration.
+  if (liveRewardDowngrade) {
+    if (Number.isFinite(Number(held.score))) {
+      // opportunityValueScoreCore is linear in the expected reward and the raw
+      // drop multiplier is unchanged, so scaling by the reward ratio is the
+      // exact score for the corrected reward model at the frozen stamina basis.
+      held.score = Number(held.score) * liveRewardDowngrade.ratio;
+    }
+    held.reward = liveRewardDowngrade.expectedReward;
+    held.expectedReward = liveRewardDowngrade.expectedReward;
+    held.effectiveProfitReward = liveRewardDowngrade.effective;
+    held.missionHoldRewardRevalidated = true;
+    held.missionHoldFrozenExpectedReward = liveRewardDowngrade.frozenExpectedReward;
+    held.missionHoldRewardModelSource = liveRewardDowngrade.modelSource;
+    held.targetActive = liveRewardDowngrade.targetActive;
+  }
   if (escortContinuity
     && held.expectedReward !== null
     && held.staminaCost !== null) {
@@ -8394,7 +8532,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     .filter(target => !isWhitelistedTargetForOptions(target, options))
     .filter(target => Number.isFinite(Number(target.distance)) && Number(target.distance) <= activeProfitRange)
     .filter(target => !targetDangerousCooldownRecord(stateful, target, input.nowMs))
-    .filter(target => proactiveActiveProfitEligible(target, options));
+    .filter(target => ordinaryActiveProfitEligible(target, options));
   const enemyOpportunityTargets = Array.from(new Map(
     [...afkOpportunityTargets, ...easyKillOpportunityTargets, ...ordinaryActiveProfitTargets]
       .map(target => [String(target.user_id ?? target.userId ?? target.entity_id ?? target.entityId ?? ''), target])

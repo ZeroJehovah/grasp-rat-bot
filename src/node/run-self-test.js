@@ -9513,10 +9513,18 @@ async function runSelfTest() {
           nonFullActive.kind,
           nonFullActive.band,
           nonFullActive.action.target?.userId || '',
-          nonFullActive.profit.best === null
+          nonFullActive.profit.best === null,
+          // A transient full-5s-stamina reading must not change the reward model
+          // for a player the game reports as Active: both frames price the same
+          // opponent identically instead of one of them getting the
+          // deterministic AFK reward.
+          fullActive.action.effectiveProfitReward?.modelSource,
+          nonFullActive.action.effectiveProfitReward?.modelSource,
+          fullActive.action.effectiveProfitReward?.expectedReward
+            === nonFullActive.action.effectiveProfitReward?.expectedReward
         ].join('|');
       })(),
-      want: 'profit-candidate|8|false||profit-candidate|profit|8|false'
+      want: 'profit-candidate|8|false||profit-candidate|profit|8|false|conservative-prior|conservative-prior|true'
     },
     {
       name: 'browserless profit live skips whitelisted AFK targets',
@@ -11590,7 +11598,11 @@ async function runSelfTest() {
                 vy: 0,
                 hp: 56,
                 max_hp: 100,
-                current_join_mode: 'Active',
+                // This case is about center-edge geometry and return cost, so the
+                // subject has to be an actual AFK target: the game reports the
+                // Passive join mode for one, and an Active-mode player is never
+                // an AFK reward no matter how idle the frame looks.
+                current_join_mode: 'Passive',
                 drop: 200
               })
             ],
