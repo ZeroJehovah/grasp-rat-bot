@@ -14296,6 +14296,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const recoveryPriorityMetadata = {
     equivalentDrop: recoveryPriority.equivalentDrop,
     profitDrop: recoveryPriority.profitDrop,
+    approachStaminaCost: recoveryPriority.approachStaminaCost,
+    approachStaminaBudget: recoveryPriority.approachStaminaBudget,
     hardGate: recoveryPriority.hardGate,
     reason: recoveryPriority.reason
   };

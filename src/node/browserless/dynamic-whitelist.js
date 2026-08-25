@@ -194,6 +194,19 @@ function createDynamicWhitelist(options = {}) {
     persist(atMs);
     return { ok: true, added: !existed, player: clone(store.players[key]) };
   }
+  function remove(target, atMs = now()) {
+    const id = userId(target);
+    if (id === null) return { ok: false, reason: 'missing-user-id' };
+    const key = playerKey(id);
+    const existing = store.players[key] || null;
+    if (!existing) return { ok: true, removed: false, userId: id, player: null };
+    const player = clone(existing);
+    delete store.players[key];
+    temporarilyDisabled.delete(key);
+    recentDamage.delete(key);
+    persist(atMs);
+    return { ok: true, removed: true, userId: id, player };
+  }
   function observePlayerNames(targets = [], detail = {}) {
     const atMs = Number.isFinite(Number(detail.atMs)) ? Number(detail.atMs) : now();
     const at = new Date(atMs).toISOString();
@@ -409,6 +422,7 @@ function createDynamicWhitelist(options = {}) {
   return {
     file,
     add,
+    remove,
     observePlayerNames,
     observeDamage,
     observeBattles,

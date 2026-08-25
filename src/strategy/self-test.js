@@ -59,6 +59,7 @@ const {
   updateProfitEscortContinuityCore
 } = require('./profit-escort');
 const {
+  recoveryApproachStaminaBudgetForHp,
   recoveryEquivalentDropForHp,
   recoveryPriorityDecision
 } = require('./recovery-profit-priority');
@@ -310,6 +311,56 @@ function runStrategyModuleSelfTests() {
         { choice: { sourceTarget: { drop: 40 } } },
         { kind: 'recover' }
       ).recoveryWins === true
+  });
+  results.push({
+    name: 'recovery-profit-priority-low-hp-approach-budget-curve',
+    passed: recoveryApproachStaminaBudgetForHp(30) === 75000
+      && recoveryApproachStaminaBudgetForHp(50) === 75000
+      && recoveryApproachStaminaBudgetForHp(65) === 112500
+      && recoveryApproachStaminaBudgetForHp(80) === null
+      && recoveryApproachStaminaBudgetForHp(100) === null
+      && recoveryApproachStaminaBudgetForHp(undefined) === null
+      && recoveryApproachStaminaBudgetForHp(50, {
+        recoveryPriorityLowHpApproachStaminaMilli: 12000,
+        recoveryPriorityHighHpApproachStaminaMilli: 40000
+      }) === 12000
+  });
+  // 低血量下长途接近被打断会全额沉没体力: 超预算时必须先恢复。
+  const richFarTarget = { choice: { sourceTarget: { drop: 526 }, staminaCost: 113534 } };
+  const expensiveApproachAtLowHp = recoveryPriorityDecision({ hp: 46 }, richFarTarget, { kind: 'recover' });
+  results.push({
+    name: 'recovery-profit-priority-low-hp-approach-cost-gate',
+    passed: expensiveApproachAtLowHp.recoveryWins === true
+      && expensiveApproachAtLowHp.approachTooExpensive === true
+      && expensiveApproachAtLowHp.hardGate === true
+      && expensiveApproachAtLowHp.approachStaminaCost === 113534
+      && expensiveApproachAtLowHp.approachStaminaBudget === 75000
+      && expensiveApproachAtLowHp.reason === 'recovery-priority-low-hp-approach-cost'
+      && expensiveApproachAtLowHp.action.recoveryPriority.reason === 'recovery-priority-low-hp-approach-cost'
+      // 预算内的常规接近仍然按收益优先, 不改变原有行为。
+      // 敌人接近成本 = 约 31700ms 交战固定量 + 距离(cm), 常见 47000~62000 必须放行。
+      && recoveryPriorityDecision(
+        { hp: 46 },
+        { choice: { sourceTarget: { drop: 526 }, staminaCost: 61700 } },
+        { kind: 'recover' }
+      ).recoveryWins === false
+      && recoveryPriorityDecision(
+        { hp: 46 },
+        { choice: { sourceTarget: { drop: 526 }, staminaCost: 75000 } },
+        { kind: 'recover' }
+      ).recoveryWins === false
+      // 接近成本未知时不拦截, 避免把缺数据当成高成本。
+      && recoveryPriorityDecision({ hp: 46 }, { choice: { sourceTarget: { drop: 526 } } }, { kind: 'recover' })
+        .recoveryWins === false
+      // 血量回到高位后不再限制接近距离。
+      && recoveryPriorityDecision({ hp: 85 }, richFarTarget, { kind: 'recover' }).recoveryWins === false
+      && recoveryPriorityDecision({ hp: 85 }, richFarTarget, { kind: 'recover' }).approachStaminaBudget === null
+      // 恢复本来就占优时保留原有理由, 不被新门槛改写。
+      && recoveryPriorityDecision(
+        { hp: 46 },
+        { choice: { sourceTarget: { drop: 10 }, staminaCost: 113534 } },
+        { kind: 'recover' }
+      ).reason === 'recovery-priority-at-or-above-profit'
   });
 
   const primaryRole = classifyCombatTargetRole({ user_id: 7 }, { targetId: 7 });
@@ -1488,16 +1539,19 @@ function runStrategyModuleSelfTests() {
   const utc8EightAm = Date.parse('2026-07-12T00:00:00.000Z');
   const activeThreshold = buildDynamicProfitThresholdCore({ nowMs: utc8EightAm, remaining1dMilli: 20000000 }, {});
   const relaxedThreshold = buildDynamicProfitThresholdCore({ nowMs: Date.parse('2026-07-12T09:00:00.000Z'), remaining1dMilli: 20000000 }, {});
-  const equalBoundary = buildDynamicProfitThresholdCore({ nowMs: Date.parse('2026-07-12T11:00:00.000Z'), remaining1dMilli: 3000000 }, {});
+  const equalBoundary = buildDynamicProfitThresholdCore({ nowMs: Date.parse('2026-07-12T14:00:00.000Z'), remaining1dMilli: 3000000 }, {});
+  const elevenPmBoundary = buildDynamicProfitThresholdCore({ nowMs: Date.parse('2026-07-12T15:00:00.000Z'), remaining1dMilli: 1 }, {});
   results.push({
     name: 'profit-threshold-utc8-reset-reserve-and-burn-window',
     passed: nextDailyProfitResetAtCore(utc8EightAm) === Date.parse('2026-07-12T16:00:00.000Z')
       && activeThreshold.active === true
-      && activeThreshold.reserveMs === 14400000
-      && Math.round(activeThreshold.burnCapacityMilli) === 36000000
+      && activeThreshold.reserveMs === 3600000
+      && Math.round(activeThreshold.burnCapacityMilli) === 45000000
       && relaxedThreshold.active === false
       && relaxedThreshold.reason === 'insufficient-burn-window'
       && equalBoundary.active === true
+      && elevenPmBoundary.active === false
+      && Math.round(elevenPmBoundary.burnCapacityMilli) === 0
   });
   results.push({
     name: 'profit-threshold-unknown-daily-stamina-restores-old-selection',

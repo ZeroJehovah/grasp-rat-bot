@@ -155,6 +155,27 @@ function runRecoveryContactSelfTest() {
   }
 
   {
+    // 低血量长途接近一旦被第三方打断, 已投入的体力全额沉没且没有任何收益,
+    // 所以超出血量对应的接近预算时先恢复; 血量回到高位后不再限制。
+    const farProfit = {
+      nowMs: 1000,
+      targetX: 100000,
+      targetVx: 0,
+      targetMode: 'Passive',
+      targetDrop: 101
+    };
+    const gated = buildBrowserlessDecision(state({ ...farProfit, hp: 50 }), {}, decisionOptions(1000));
+    const ungated = buildBrowserlessDecision(state({ ...farProfit, hp: 85 }), {}, decisionOptions(1000));
+    assert.strictEqual(gated.action.kind, 'recover');
+    assert.strictEqual(gated.action.recoveryPriority.reason, 'recovery-priority-low-hp-approach-cost');
+    assert.strictEqual(gated.action.recoveryPriority.approachStaminaBudget, 75000);
+    assert.strictEqual(gated.action.recoveryPriority.approachStaminaCost > 75000, true);
+    assert.strictEqual(ungated.action.kind, 'seek-enemy');
+    assert.strictEqual(ungated.action.target.userId, 8);
+    cases.push('recovery-priority-blocks-low-hp-long-approach');
+  }
+
+  {
     const stateful = { lastDecisionAction: recoveryAction() };
     const decision = confirmLowHpContact(buildBrowserlessDecision, stateful);
     assert.strictEqual(decision.reason, 'recovery-low-hp-contact-leave');

@@ -146,12 +146,32 @@ async function runDynamicWhitelistSelfTest() {
       assert.strictEqual(whitelist.hasPendingBattleObservation(), true);
       const status = whitelist.status();
       const persisted = JSON.parse(fs.readFileSync(file, 'utf8'));
-      assert.strictEqual(typeof whitelist.remove, 'undefined');
       assert.strictEqual(status.playerCount, 1);
       assert.strictEqual(status.enabledPlayerCount, 0);
       assert.strictEqual(status.temporarilyDisabledCount, 1);
       assert.strictEqual(Object.keys(persisted.players).length, 1);
-      cases.push('persistent-entry-no-remove-api');
+      cases.push('persistent-entry');
+    }
+
+    {
+      // 面板手动移除: 条目、临时禁用态与伤害窗口一并清除, 并立即落盘。
+      const { file, whitelist } = createFixture(directory, 'manual-remove');
+      disableDirectly(whitelist);
+      assert.strictEqual(whitelist.remove({ userId: 99 }, 3000).removed, false);
+      const removed = whitelist.remove({ userId: 8 }, 3000);
+      assert.strictEqual(removed.ok, true);
+      assert.strictEqual(removed.removed, true);
+      assert.strictEqual(removed.player?.name, 'friendly');
+      const afterStatus = whitelist.status();
+      assert.strictEqual(afterStatus.playerCount, 0);
+      assert.strictEqual(afterStatus.temporarilyDisabledCount, 0);
+      assert.strictEqual(whitelist.isMember({ userId: 8 }), false);
+      assert.strictEqual(whitelist.isWhitelistedTarget({ userId: 8 }), false);
+      assert.strictEqual(whitelist.hasPendingBattleObservation(), false);
+      assert.strictEqual(whitelist.remove({}, 3000).ok, false);
+      const persistedAfter = JSON.parse(fs.readFileSync(file, 'utf8'));
+      assert.strictEqual(Object.keys(persistedAfter.players).length, 0);
+      cases.push('manual-remove-clears-entry-and-disabled-state');
     }
 
     {

@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.24.2';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.25.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -96,65 +96,6 @@ function interpolateMapPolylineCore(nextPoints, previousPoints, progress) {
     px: point.px + deltaX * clampedProgress,
     py: point.py + deltaY * clampedProgress
   }));
-}
-
-function appendMapTrailSampleCore(samples, sample, nowMs, maxAgeMs = 30000, maxSamples = 16) {
-  const now = Number(nowMs);
-  const maxAge = Math.max(0, Number(maxAgeMs) || 0);
-  const limit = Math.max(2, Math.round(Number(maxSamples) || 16));
-  if (!Number.isFinite(now)) return [];
-  const cutoff = now - maxAge;
-  const retained = (Array.isArray(samples) ? samples : [])
-    .filter(item => item?.x !== null && item?.x !== undefined && item?.x !== ''
-      && item?.y !== null && item?.y !== undefined && item?.y !== ''
-      && item?.at !== null && item?.at !== undefined && item?.at !== ''
-      && Number.isFinite(Number(item.x))
-      && Number.isFinite(Number(item.y))
-      && Number.isFinite(Number(item.at))
-      && Number(item.at) >= cutoff
-      && Number(item.at) <= now)
-    .slice(-limit);
-  if (!sample || sample.x === null || sample.x === undefined || sample.x === ''
-    || sample.y === null || sample.y === undefined || sample.y === ''
-    || sample.at === null || sample.at === undefined || sample.at === '') return retained;
-  const x = Number(sample?.x);
-  const y = Number(sample?.y);
-  const at = Number(sample?.at);
-  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(at) || at < cutoff || at > now) {
-    return retained;
-  }
-  const previous = retained.at(-1);
-  if (previous && at <= Number(previous.at)) return retained;
-  if (previous && !sample?.breakBefore && x === Number(previous.x) && y === Number(previous.y)) return retained;
-  return [...retained, { x, y, at, breakBefore: Boolean(sample?.breakBefore) }].slice(-limit);
-}
-
-function advanceMapTrailSamplesCore(samples, sample, nowMs, maxAgeMs = 30000, maxSamples = 16) {
-  const now = Number(nowMs);
-  const maxAge = Math.max(0, Number(maxAgeMs) || 0);
-  const limit = Math.max(2, Math.round(Number(maxSamples) || 16));
-  const retained = appendMapTrailSampleCore(samples, null, now, maxAge, limit);
-  if (!Number.isFinite(now)) return retained;
-  const x = Number(sample?.x);
-  const y = Number(sample?.y);
-  const at = Number(sample?.at);
-  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(at)
-    || at < now - maxAge || at > now) return retained;
-  const latest = { x, y, at, breakBefore: Boolean(sample?.breakBefore) };
-  const previous = retained.at(-1);
-  if (!previous) return [latest];
-  if (at <= Number(previous.at)) return retained;
-  if (latest.breakBefore) return [latest];
-  const deltaX = x - Number(previous.x);
-  const deltaY = y - Number(previous.y);
-  if (deltaX === 0 && deltaY === 0) return retained;
-  const translated = retained.map(item => ({
-    ...item,
-    x: Number(item.x) + deltaX,
-    y: Number(item.y) + deltaY
-  }));
-  const retainedCount = Math.max(1, limit - 1);
-  return [...translated.slice(-retainedCount), latest].slice(-limit);
 }
 
 function pruneMapTrailHistoryCore(history, observedKeys) {
@@ -613,11 +554,12 @@ function renderBrowserlessWebPanel() {
     .coin-row{grid-template-columns:minmax(48px,1fr) minmax(34px,.5fr) minmax(46px,.65fr)}
     .player-row{grid-template-columns:minmax(150px,2.8fr) minmax(40px,.55fr) minmax(42px,.55fr) minmax(42px,.5fr) minmax(52px,.65fr)}
     .high-drop-list{display:grid;gap:0;min-width:0}
-    .high-drop-row{display:grid;grid-template-columns:minmax(100px,1.8fr) minmax(64px,.58fr) minmax(70px,.52fr) minmax(112px,.78fr);gap:8px;align-items:center;min-height:26px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)}
+    .high-drop-row{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,.44fr) minmax(0,.55fr) minmax(0,.8fr);gap:6px;align-items:center;min-height:26px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)}
     .high-drop-row:last-child{border-bottom:0}
     .high-drop-head{position:sticky;top:0;z-index:1;color:var(--muted);font-size:11px;font-weight:700;background:var(--panel)}
     .high-drop-cell{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .high-drop-row>.high-drop-cell:nth-child(n+2){box-sizing:border-box;padding-right:8px;text-align:right}
+    .high-drop-row>.high-drop-cell:nth-child(n+2){box-sizing:border-box;padding-right:4px;text-align:right}
+    .high-drop-row>.high-drop-cell:last-child{padding-right:2px}
     .high-drop-sort{display:inline-flex;align-items:center;justify-content:flex-end;gap:4px;width:100%;max-width:100%;min-height:0;padding:0;border:0;border-radius:0;background:transparent;color:inherit;font-size:inherit;font-weight:inherit;line-height:inherit}
     .high-drop-sort:hover{border-color:transparent;color:var(--text)}
     .high-drop-sort:focus-visible{outline:1px solid var(--blue);outline-offset:2px}
@@ -644,7 +586,8 @@ function renderBrowserlessWebPanel() {
     .easy-kill-score-1{border-color:#B8862C;background:#FFF3C4;color:#8A641C}
     .easy-kill-score-2{border-color:#C58A16;background:#FFE8A3;color:#8B5E08}
     .easy-kill-score-3{border-color:#A86B00;background:#FFD86B;color:#6B4300}
-    .dynamic-whitelist-name{border-color:#BFC7D5;background:#FFFFFF;color:#687386}
+    .dynamic-whitelist-name{border-color:#BFC7D5;background:#FFFFFF;color:#687386;cursor:pointer}
+    .dynamic-whitelist-name:hover{border-color:#8C97A8}
     .damage-player-name{border-color:#8B1E24;background:#FFD6D8;color:#8A1C24}
     .whitelist-meta-count{color:#687386}.easy-kill-meta-count{color:#8A641C}.damage-meta-count{color:#8A1C24}
     .dynamic-whitelist-add{display:inline-flex;align-items:center;justify-content:center;flex:0 0 16px;width:16px;min-width:16px;max-width:16px;height:16px;min-height:16px;max-height:16px;box-sizing:border-box;padding:0;border:0;line-height:0;color:#fff;background:transparent;cursor:pointer}
@@ -652,6 +595,10 @@ function renderBrowserlessWebPanel() {
     .dynamic-whitelist-popover{position:fixed;z-index:20;display:flex;gap:5px;padding:7px;border:1px solid rgba(255,255,255,.8);border-radius:6px;background:#101827;box-shadow:0 8px 24px rgba(0,0,0,.35)}
     .dynamic-whitelist-popover input{width:130px;min-height:26px;border:1px solid var(--line);border-radius:4px;background:var(--panel2);color:var(--text);padding:3px 6px}
     .dynamic-whitelist-popover button{min-height:26px;padding:3px 7px}
+    .dynamic-whitelist-remove-popover{align-items:center;max-width:260px}
+    .dynamic-whitelist-remove-label{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);font-size:12px}
+    .dynamic-whitelist-remove-label.dynamic-whitelist-remove-error{color:var(--red)}
+    .dynamic-whitelist-remove-confirm{border-color:var(--red);color:var(--red)}
     .chat-title-meta{display:inline-flex;align-items:center;gap:7px;min-width:0}.chat-refresh-at{font-weight:500;letter-spacing:0;text-transform:none;white-space:nowrap}
     .chat-kill-toggle{min-height:24px;padding:2px 8px;font-size:11px;line-height:1.2}
     .chat-log{height:300px;overflow:auto;scrollbar-gutter:stable}
@@ -686,7 +633,7 @@ function renderBrowserlessWebPanel() {
     @media (max-width:760px){.layout{grid-template-columns:1fr}.stats-grid{grid-template-columns:1fr}}
     @media (max-width:600px){.player-insights-grid{grid-template-columns:1fr}}
     @media (max-width:600px){.nearby-combined{grid-template-columns:1fr}.nearby-players-pane{border-left:0;border-top:1px solid var(--line);padding-left:0;padding-top:10px}}
-    @media (max-width:520px){.player-row{grid-template-columns:minmax(112px,2fr) minmax(34px,.5fr) minmax(38px,.55fr) minmax(36px,.5fr) minmax(44px,.6fr);gap:4px}.high-drop-row{grid-template-columns:minmax(78px,1.35fr) minmax(58px,.55fr) minmax(56px,.55fr) minmax(92px,.85fr);gap:4px}.high-drop-row>.high-drop-cell:nth-child(n+2){padding-right:6px}.battle-fighters{grid-template-columns:minmax(0,1fr) 26px minmax(0,1fr);column-gap:5px}.battle-meta{gap:5px;font-size:11px}.battle-meta strong{font-size:11px}}
+    @media (max-width:520px){.player-row{grid-template-columns:minmax(112px,2fr) minmax(34px,.5fr) minmax(38px,.55fr) minmax(36px,.5fr) minmax(44px,.6fr);gap:4px}.high-drop-row{grid-template-columns:minmax(0,1.05fr) minmax(0,.44fr) minmax(0,.55fr) minmax(0,.8fr);gap:4px}.high-drop-row>.high-drop-cell:nth-child(n+2){padding-right:3px}.high-drop-row>.high-drop-cell:last-child{padding-right:1px}.battle-fighters{grid-template-columns:minmax(0,1fr) 26px minmax(0,1fr);column-gap:5px}.battle-meta{gap:5px;font-size:11px}.battle-meta strong{font-size:11px}}
     @media (max-width:520px){main{padding:10px}header{align-items:flex-start;flex-direction:column}}
   </style>
 </head>
@@ -856,7 +803,7 @@ function renderBrowserlessWebPanel() {
     const MAP_STALE_MS = 15000;
     const MAP_MOVE_ANIMATION_MS = 260;
     const MAP_TRAIL_MAX_AGE_MS = 30000;
-    const MAP_TRAIL_MAX_SAMPLES = 16;
+    const MAP_TRAIL_MAX_SAMPLES = 180;
     const MAP_TRAIL_LINE_WIDTH = 2;
     let autoRefreshTimer = 0;
     let countdownTimer = 0;
@@ -897,9 +844,6 @@ function renderBrowserlessWebPanel() {
     const interpolateMapPoint = ${interpolateMapPointCore.toString()};
     const interpolateMapPolyline = ${interpolateMapPolylineCore.toString()
       .replaceAll('interpolateMapPointCore', 'interpolateMapPoint')};
-    const appendMapTrailSample = ${appendMapTrailSampleCore.toString()};
-    const advanceMapTrailSamples = ${advanceMapTrailSamplesCore.toString()
-      .replaceAll('appendMapTrailSampleCore', 'appendMapTrailSample')};
     const interpolateMapMarker = ${interpolateMapMarkerCore.toString()};
     const mapTrailOpacity = ${mapTrailOpacityCore.toString()};
     const transportMetricValueClass = ${transportMetricValueClassCore.toString()};
@@ -2490,12 +2434,7 @@ function renderBrowserlessWebPanel() {
           .map(mapTrailSampleFromBackend)
           .filter(Boolean)
           .filter(sample => nowMs - sample.at <= maxAgeMs && sample.at <= nowMs);
-        const latestSample = backendSamples.at(-1);
-        if (!latestSample) continue;
-        const previous = mapTrailRenderHistory.get(key);
-        const samples = previous?.samples?.length
-          ? advanceMapTrailSamples(previous.samples, latestSample, nowMs, maxAgeMs, MAP_TRAIL_MAX_SAMPLES)
-          : backendSamples.slice(-MAP_TRAIL_MAX_SAMPLES);
+        const samples = backendSamples.slice(-MAP_TRAIL_MAX_SAMPLES);
         if (!samples.length) continue;
         next.set(key, {
           color: markerColors.get(key) || (key.startsWith('self:') ? '#eef2f5' : '#fb7185'),
@@ -3275,8 +3214,10 @@ function renderBrowserlessWebPanel() {
       if (!head) {
         changeCell.className = valueCellClass;
         if (typeof todayGain === 'number') {
-          changeCell.classList.add('high-drop-delta', todayGain > 0 ? 'positive' : (todayGain < 0 ? 'negative' : 'zero'));
-          changeCell.textContent = (todayGain > 0 ? '+' : '') + todayGain.toFixed(3);
+          // 今日收益按整数展示: 小数位对判读无价值, 省下的宽度留给额度列。
+          const roundedGain = Math.round(todayGain);
+          changeCell.classList.add('high-drop-delta', roundedGain > 0 ? 'positive' : (roundedGain < 0 ? 'negative' : 'zero'));
+          changeCell.textContent = (roundedGain > 0 ? '+' : '') + String(roundedGain);
         } else {
           changeCell.textContent = value(todayGain);
         }
@@ -3376,7 +3317,16 @@ function renderBrowserlessWebPanel() {
       const whitelistItems = Array.isArray(status.dynamicWhitelist?.p) ? status.dynamicWhitelist.p : [];
       const easyItems = Array.isArray(status.easyKillPlayers?.p) ? status.easyKillPlayers.p : [];
       const damageItems = Array.isArray(status.dailyDamagePlayers?.p) ? status.dailyDamagePlayers.p : [];
-      for (const item of whitelistItems) fragment.appendChild(createPlayerMemoryName(item, 'dynamic-whitelist-name'));
+      for (const item of whitelistItems) {
+        const node = createPlayerMemoryName(item, 'dynamic-whitelist-name');
+        const memberName = value(item);
+        node.title = '点击移除白名单并加入行走的金币';
+        node.addEventListener('click', event => {
+          event.stopPropagation();
+          showDynamicWhitelistRemovePopover(node, memberName);
+        });
+        fragment.appendChild(node);
+      }
       const add = document.createElement('button');
       add.type = 'button'; add.className = 'dynamic-whitelist-add'; add.title = '添加白名单玩家';
       add.innerHTML = '<svg viewBox="0 0 1024 1024" aria-hidden="true"><path d="M514.048 62.464q93.184 0 175.616 35.328t143.872 96.768 96.768 143.872 35.328 175.616q0 94.208-35.328 176.128t-96.768 143.36-143.872 96.768-175.616 35.328q-94.208 0-176.64-35.328t-143.872-96.768-96.768-143.36-35.328-176.128q0-93.184 35.328-175.616t96.768-143.872 143.872-96.768 176.64-35.328zM772.096 576.512q26.624 0 45.056-18.944t18.432-45.568-18.432-45.056-45.056-18.432l-192.512 0 0-192.512q0-26.624-18.944-45.568t-45.568-18.944-45.056 18.944-18.432 45.568l0 192.512-192.512 0q-26.624 0-45.056 18.432t-18.432 45.056 18.432 45.568 45.056 18.944l192.512 0 0 191.488q0 26.624 18.432 45.568t45.056 18.944 45.568-18.944 18.944-45.568l0-191.488 192.512 0z"/></svg>';
@@ -3412,6 +3362,40 @@ function renderBrowserlessWebPanel() {
       button.addEventListener('click', async () => {
         try { await api('/api/dynamic-whitelist', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({ name: input.value }) }); panel.remove(); requestStatusRefresh(true); }
         catch (error) { input.setCustomValidity(error.message || '添加失败'); input.reportValidity(); }
+      });
+    }
+    function showDynamicWhitelistRemovePopover(anchor, name) {
+      document.querySelector('.dynamic-whitelist-popover')?.remove();
+      const panel = document.createElement('div');
+      panel.className = 'dynamic-whitelist-popover dynamic-whitelist-remove-popover';
+      const label = document.createElement('span');
+      label.className = 'dynamic-whitelist-remove-label';
+      label.textContent = '移除 ' + name + '?';
+      const confirm = document.createElement('button');
+      confirm.type = 'button'; confirm.className = 'dynamic-whitelist-remove-confirm'; confirm.textContent = '确认';
+      const cancel = document.createElement('button');
+      cancel.type = 'button'; cancel.textContent = '取消';
+      panel.append(label, confirm, cancel);
+      document.body.appendChild(panel);
+      const rect = anchor.getBoundingClientRect();
+      panel.style.left = Math.max(6, Math.min(window.innerWidth - panel.offsetWidth - 6, rect.left)) + 'px';
+      panel.style.top = Math.max(6, Math.min(window.innerHeight - panel.offsetHeight - 6, rect.bottom + 5)) + 'px';
+      const dismiss = () => { panel.remove(); document.removeEventListener('click', close, true); };
+      const close = event => { if (!panel.contains(event.target) && event.target !== anchor) dismiss(); };
+      document.addEventListener('click', close, true);
+      cancel.addEventListener('click', event => { event.stopPropagation(); dismiss(); });
+      confirm.addEventListener('click', async event => {
+        event.stopPropagation();
+        confirm.disabled = true;
+        try {
+          await api('/api/dynamic-whitelist/remove', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({ name }) });
+          dismiss();
+          requestStatusRefresh(true);
+        } catch (error) {
+          confirm.disabled = false;
+          label.textContent = error.message || '移除失败';
+          label.classList.add('dynamic-whitelist-remove-error');
+        }
       });
     }
     function updateNearbyPanels(status) {
@@ -4422,8 +4406,6 @@ function renderBrowserlessWebPanel() {
 
 module.exports = {
   BROWSERLESS_WEB_PANEL_VERSION,
-  advanceMapTrailSamplesCore,
-  appendMapTrailSampleCore,
   formatHighDropBalanceCore,
   formatSpentStaminaCore,
   groupBlockingFactorsCore,

@@ -71,7 +71,10 @@ const {
   createSnapshotRequestScheduler,
   runSnapshotRequestSchedulerSelfTest
 } = require('./snapshot-request-scheduler');
-const { createEasyKillPlayerTracker } = require('./easy-kill-player-tracker');
+const {
+  MAX_SCORE: EASY_KILL_MAX_SCORE,
+  createEasyKillPlayerTracker
+} = require('./easy-kill-player-tracker');
 const { createCombatCompletionTracker } = require('./combat-completion-tracker');
 const { createCombatBattleLog, runCombatBattleLogSelfTest } = require('./combat-battle-log');
 const { createDailyDamagePlayerTracker } = require('./daily-damage-player-tracker');
@@ -332,6 +335,8 @@ function publicConfig(config) {
     profitThresholdCoinsPer10Stamina: Number(config.profitThresholdCoinsPer10Stamina || 0),
     profitThresholdHourlyStaminaLimit: Number(config.profitThresholdHourlyStaminaLimit || 0),
     profitThresholdResetReserveMs: Number(config.profitThresholdResetReserveMs || 0),
+    recoveryPriorityLowHpApproachStaminaMilli: Number(config.recoveryPriorityLowHpApproachStaminaMilli || 0),
+    recoveryPriorityHighHpApproachStaminaMilli: Number(config.recoveryPriorityHighHpApproachStaminaMilli || 0),
     userId: Number(config.userId || 0),
     sessionTokenPresent: Boolean(config.sessionToken)
   };
@@ -4017,6 +4022,39 @@ async function runBrowserlessRunner(config, deps = {}) {
           });
           compactStatusCacheText = '';
           return { ok: true, added: Boolean(result.added), player: result.player };
+        },
+        onDynamicWhitelistRemove: name => {
+          const requestedName = String(name || '').trim();
+          if (!requestedName) return { ok: false, statusCode: 400, reason: 'empty-name', error: '请选择玩家名称' };
+          // 面板只下发名称, userId 必须由服务端从动态白名单自身解析, 避免误删同名玩家。
+          const members = dynamicWhitelist.status().players || [];
+          const matches = members.filter(player => String(player?.name || '') === requestedName);
+          if (!matches.length) return { ok: false, statusCode: 404, reason: 'player-not-found', error: '该玩家不在动态白名单中' };
+          if (matches.length > 1) return { ok: false, statusCode: 409, reason: 'ambiguous-name', error: '存在同名玩家，无法安全移除' };
+          const atMs = now();
+          const target = matches[0];
+          const result = dynamicWhitelist.remove(target, atMs);
+          if (result.ok === false) {
+            return { ok: false, statusCode: 400, reason: result.reason || 'remove-failed', error: '移除失败' };
+          }
+          const easyKill = easyKillPlayerTracker.upsertManualPlayer(
+            { userId: target.userId, name: target.name },
+            { atMs, score: EASY_KILL_MAX_SCORE, source: 'dynamic-whitelist-remove' }
+          );
+          logStore.append('runner', 'dynamic-whitelist-removed', {
+            userId: target.userId,
+            name: target.name,
+            removed: Boolean(result.removed),
+            easyKillScore: easyKill.ok ? easyKill.score : null,
+            easyKillReason: easyKill.ok ? '' : (easyKill.reason || '')
+          });
+          compactStatusCacheText = '';
+          return {
+            ok: true,
+            removed: Boolean(result.removed),
+            player: result.player,
+            easyKill: easyKill.ok ? { userId: easyKill.userId, name: easyKill.name, score: easyKill.score } : null
+          };
         },
         onStop: async () => {
           const event = safetyController.requestStop('explicit-stop', { source: 'status-api' });
@@ -9115,7 +9153,8 @@ async function runBrowserlessRunnerSelfTest() {
           && remoteTargetActivityTextCore({ active: true }) === '活动玩家'
           && remoteTargetActivityTextCore({ active: false, moving: false, firing: false }) === '挂机玩家'
           && pageHtml.includes('>Drop排行</h2>')
-          && pageHtml.includes('grid-template-columns:minmax(100px,1.8fr) minmax(64px,.58fr) minmax(70px,.52fr) minmax(112px,.78fr)')
+          && pageHtml.includes('grid-template-columns:minmax(0,1.3fr) minmax(0,.44fr) minmax(0,.55fr) minmax(0,.8fr)')
+          && pageHtml.includes('.high-drop-row>.high-drop-cell:last-child{padding-right:2px}')
           && pageHtml.includes('id="transportHealthMode"')
           && pageHtml.includes('id="transportLatency"')
           && pageHtml.includes('id="transportFrameLoss"')

@@ -11,6 +11,7 @@ const SCHEMA_VERSION = 4;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DEFAULT_RECORD_THRESHOLD = 50;
 const DEFAULT_SNAPSHOT_GAP_MS = 30 * 1000;
+const MAX_BALANCE_SNAPSHOTS = 400;
 
 function cloneJson(value) {
   if (value === null || value === undefined) return value;
@@ -87,8 +88,55 @@ function emptyStore(day = '') {
   };
 }
 
+function pruneBalanceSnapshots(snapshots, limit = MAX_BALANCE_SNAPSHOTS) {
+  const entries = Object.entries(snapshots || {});
+  if (entries.length <= limit) return snapshots || {};
+  entries.sort((left, right) => (timestampOrNull(right[1]?.at) ?? 0) - (timestampOrNull(left[1]?.at) ?? 0));
+  const output = {};
+  for (const [key, snapshot] of entries.slice(0, limit)) output[key] = snapshot;
+  return output;
+}
+
+// UTC+8 day rollover keeps balances: 今日收益 is (latest - initial), so a new day's
+// initial baseline must be the previous day's last observed balance. Resetting it to
+// null made the first post-midnight snapshot the baseline and silently understated the gain.
+function carryForwardStore(previous, day) {
+  const output = emptyStore(day);
+  if (!previous || typeof previous !== 'object') return output;
+  const selfLatest = numberOrNull(previous.selfExternalBalanceSnapshot);
+  if (selfLatest !== null) {
+    const at = String(previous.selfExternalBalanceSnapshotAt || '');
+    const tick = numberOrNull(previous.selfExternalBalanceSnapshotTick);
+    output.selfInitialExternalBalanceSnapshot = selfLatest;
+    output.selfInitialExternalBalanceSnapshotAt = at;
+    output.selfInitialExternalBalanceSnapshotTick = tick;
+    output.selfExternalBalanceSnapshot = selfLatest;
+    output.selfExternalBalanceSnapshotAt = at;
+    output.selfExternalBalanceSnapshotTick = tick;
+  }
+  for (const [key, snapshot] of Object.entries(previous.balanceSnapshots || {})) {
+    if (!snapshot || typeof snapshot !== 'object') continue;
+    const latest = numberOrNull(snapshot.latest ?? snapshot.latestValue ?? snapshot.value ?? snapshot.initial);
+    if (latest === null) continue;
+    const normalizedKey = String(key || '').startsWith('user:') ? String(key) : `user:${key}`;
+    const at = String(snapshot.at || snapshot.latestAt || snapshot.initialAt || '');
+    const tick = numberOrNull(snapshot.tick ?? snapshot.latestTick ?? snapshot.initialTick);
+    output.balanceSnapshots[normalizedKey] = {
+      initial: latest,
+      initialAt: at,
+      initialTick: tick,
+      latest,
+      at,
+      tick
+    };
+  }
+  output.balanceSnapshots = pruneBalanceSnapshots(output.balanceSnapshots);
+  return output;
+}
+
 function normalizeStore(value, expectedDay) {
-  if (!value || typeof value !== 'object' || value.day !== expectedDay) return emptyStore(expectedDay);
+  if (!value || typeof value !== 'object') return emptyStore(expectedDay);
+  if (value.day !== expectedDay) return carryForwardStore(value, expectedDay);
   const output = emptyStore(expectedDay);
   output.updatedAt = String(value.updatedAt || '');
   output.lastSnapshotAt = String(value.lastSnapshotAt || '');
@@ -121,6 +169,7 @@ function normalizeStore(value, expectedDay) {
       tick: numberOrNull(snapshot.tick ?? snapshot.latestTick ?? snapshot.initialTick)
     };
   }
+  output.balanceSnapshots = pruneBalanceSnapshots(output.balanceSnapshots);
   for (const [key, player] of Object.entries(value.players || {})) {
     if (!player || typeof player !== 'object') continue;
     const userId = numberOrNull(player.userId ?? String(key || '').replace(/^user:/, ''));
@@ -272,7 +321,7 @@ function createHighDropPlayerTracker(options = {}) {
   function ensureToday(atMs = now()) {
     const today = dayKey(atMs);
     if (store.day === today) return false;
-    store = emptyStore(today);
+    store = carryForwardStore(store, today);
     writeStore(file, store, backgroundIo);
     lastWriteAtMs = Number(atMs);
     return true;
@@ -450,6 +499,7 @@ function createHighDropPlayerTracker(options = {}) {
         }
       }
     }
+    store.balanceSnapshots = pruneBalanceSnapshots(store.balanceSnapshots);
     if (globalSnapshot) {
       for (const [key, player] of Object.entries(store.players)) {
         const online = presentUserIds.has(player.userId);

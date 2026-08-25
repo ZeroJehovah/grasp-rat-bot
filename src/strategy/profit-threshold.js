@@ -34,7 +34,7 @@ function buildDynamicProfitThresholdCore(input = {}, options = {}) {
   const enabled = options.enabled !== false;
   const nowMs = finiteNumber(input.nowMs);
   const remaining1dMilli = finiteNumber(input.remaining1dMilli);
-  const reserveMs = Math.max(0, finiteNumber(options.reserveMs) ?? 4 * HOUR_MS);
+  const reserveMs = Math.max(0, finiteNumber(options.reserveMs) ?? HOUR_MS);
   const hourlyStaminaLimit = finiteNumber(options.hourlyStaminaLimit);
   const hourlyBurnMilli = (hourlyStaminaLimit !== null && hourlyStaminaLimit > 0 ? hourlyStaminaLimit : 3000)
     * STAMINA_MILLI_PER_UNIT;

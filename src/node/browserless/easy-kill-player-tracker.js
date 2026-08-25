@@ -269,6 +269,45 @@ function createEasyKillPlayerTracker(options = {}) {
     lastWriteAtMs = timestamp;
   }
 
+  // 面板手动录入: 分数按 MAX_SCORE 夹紧, 已有记录只抬高分数、不回退击杀统计。
+  function upsertManualPlayer(target, detail = {}) {
+    const atMs = Number.isFinite(Number(detail.atMs)) ? Number(detail.atMs) : now();
+    const userId = targetUserId(target);
+    if (userId === null) return { ok: false, reason: 'missing-user-id' };
+    const score = normalizedScore(detail.score ?? MAX_SCORE, MAX_SCORE);
+    if (score <= 0) return { ok: false, reason: 'invalid-score' };
+    const key = playerKey(userId);
+    const at = new Date(atMs).toISOString();
+    const existing = store.players[key] || null;
+    const name = targetName(target, existing?.name || `#${userId}`);
+    const nextScore = Math.max(score, existing ? Number(existing.score) : 0);
+    store.players[key] = {
+      key,
+      userId,
+      name,
+      nameUpdatedAt: existing && existing.name === name ? String(existing.nameUpdatedAt || at) : at,
+      nameObservedAt: at,
+      nameObservedTick: numberOrNull(target?.nameObservedTick ?? target?.lastObservedTick) ?? existing?.nameObservedTick ?? null,
+      score: nextScore,
+      killCount: Math.max(1, Math.round(Number(existing?.killCount || 1))),
+      firstKilledAt: String(existing?.firstKilledAt || at),
+      lastKilledAt: String(existing?.lastKilledAt || at),
+      lastKillTick: existing?.lastKillTick ?? null,
+      lastDrop: targetDrop(target) ?? existing?.lastDrop ?? null
+    };
+    persist(atMs);
+    emit({
+      kind: 'easy-kill-manual-add',
+      userId,
+      name,
+      score: nextScore,
+      previousScore: existing ? Number(existing.score) : null,
+      source: String(detail.source || 'manual'),
+      at
+    });
+    return { ok: true, added: !existing, userId, name, score: nextScore };
+  }
+
   function refreshDailyScores(atMsValue = now()) {
     const atMs = Number.isFinite(Number(atMsValue)) ? Number(atMsValue) : now();
     const today = dayKey(atMs);
@@ -756,6 +795,7 @@ function createEasyKillPlayerTracker(options = {}) {
     observeVisibleTargets,
     refreshDailyScores,
     recordImmediateFailure,
+    upsertManualPlayer,
     status
   };
 }

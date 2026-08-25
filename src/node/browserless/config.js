@@ -167,7 +167,9 @@ const DEFAULTS = {
   browserlessRemoteProfitTargetsEnabled: true,
   profitThresholdCoinsPer10Stamina: 1,
   profitThresholdHourlyStaminaLimit: 3000,
-  profitThresholdResetReserveMs: 14400000
+  profitThresholdResetReserveMs: 3600000,
+  recoveryPriorityLowHpApproachStaminaMilli: 75000,
+  recoveryPriorityHighHpApproachStaminaMilli: 150000
 };
 
 const CANARY_PROFILES = {
@@ -502,6 +504,14 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     profitThresholdCoinsPer10Stamina: numberEnv(env.GRASP_RAT_BROWSERLESS_PROFIT_THRESHOLD_COINS_PER_10_STAMINA, DEFAULTS.profitThresholdCoinsPer10Stamina),
     profitThresholdHourlyStaminaLimit: numberEnv(env.GRASP_RAT_BROWSERLESS_PROFIT_THRESHOLD_HOURLY_STAMINA_LIMIT, DEFAULTS.profitThresholdHourlyStaminaLimit),
     profitThresholdResetReserveMs: numberEnv(env.GRASP_RAT_BROWSERLESS_PROFIT_THRESHOLD_RESET_RESERVE_MS, DEFAULTS.profitThresholdResetReserveMs),
+    recoveryPriorityLowHpApproachStaminaMilli: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_RECOVERY_PRIORITY_LOW_HP_APPROACH_STAMINA_MILLI,
+      DEFAULTS.recoveryPriorityLowHpApproachStaminaMilli
+    ),
+    recoveryPriorityHighHpApproachStaminaMilli: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_RECOVERY_PRIORITY_HIGH_HP_APPROACH_STAMINA_MILLI,
+      DEFAULTS.recoveryPriorityHighHpApproachStaminaMilli
+    ),
     selfTest: false,
     help: false
   };
@@ -795,6 +805,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.profitThresholdHourlyStaminaLimit = numberEnv(argv[++i], config.profitThresholdHourlyStaminaLimit);
     } else if (arg === '--profit-threshold-reset-reserve-ms') {
       config.profitThresholdResetReserveMs = numberEnv(argv[++i], config.profitThresholdResetReserveMs);
+    } else if (arg === '--recovery-priority-low-hp-approach-stamina-milli') {
+      config.recoveryPriorityLowHpApproachStaminaMilli = numberEnv(argv[++i], config.recoveryPriorityLowHpApproachStaminaMilli);
+    } else if (arg === '--recovery-priority-high-hp-approach-stamina-milli') {
+      config.recoveryPriorityHighHpApproachStaminaMilli = numberEnv(argv[++i], config.recoveryPriorityHighHpApproachStaminaMilli);
     } else if (arg === '--self-test') {
       config.selfTest = true;
     } else if (arg === '--help' || arg === '-h') {
@@ -940,7 +954,9 @@ function usage() {
     '  --no-dynamic-profit-threshold  Disable the dynamic ordinary-profit threshold',
     '  --profit-threshold-coins-per-10-stamina <n>  Reward coins per 10 stamina. Default: 1',
     '  --profit-threshold-hourly-stamina-limit <n>  Theoretical stamina burn per hour. Default: 3000',
-    '  --profit-threshold-reset-reserve-ms <ms>  UTC+8 reset reserve. Default: 14400000',
+    '  --profit-threshold-reset-reserve-ms <ms>  UTC+8 reset reserve. Default: 3600000',
+    '  --recovery-priority-low-hp-approach-stamina-milli <ms>  Approach budget at low HP. Default: 75000',
+    '  --recovery-priority-high-hp-approach-stamina-milli <ms>  Approach budget near high HP. Default: 150000',
     '  --self-test              Run runner skeleton self-test'
   ].join('\n');
 }

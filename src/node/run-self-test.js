@@ -215,7 +215,6 @@ const {
   startStatusServer
 } = require('./browserless/status-server');
 const {
-  advanceMapTrailSamplesCore,
   BROWSERLESS_WEB_PANEL_VERSION,
   highDropBalanceDeltaValueCore,
   formatHighDropBalanceCore,
@@ -31638,7 +31637,7 @@ async function runSelfTest() {
           exposed.profitThresholdResetReserveMs
         ].join('|');
       })(),
-      want: '14400000|false|2|2500|1800000|true|1.5|2800|900000'
+      want: '3600000|false|2|2500|1800000|true|1.5|2800|900000'
     },
     {
       name: 'browserless frame gap safety defaults to strictly over two seconds',
@@ -34443,8 +34442,9 @@ async function runSelfTest() {
               balanceBaselineInitial
             ])
           : null;
+        // 与面板一致: 今日收益按整数展示。
         const balanceBaselineLabel = typeof balanceBaselineDelta === 'number'
-          ? (balanceBaselineDelta > 0 ? '+' : '') + balanceBaselineDelta.toFixed(3)
+          ? (Math.round(balanceBaselineDelta) > 0 ? '+' : '') + String(Math.round(balanceBaselineDelta))
           : '--';
         tracker.observeSnapshot({
           tick: 10,
@@ -34495,8 +34495,21 @@ async function runSelfTest() {
           source: 'ws', global: false, selfUserId: 7, observedAtMs: t - 120000
         });
         const current = createHighDropPlayerTracker({ file, now: () => t }).status();
+        const previousDayFile = path.join(dir, 'high-drop-carry-forward.json');
+        fs.copyFileSync(file, previousDayFile);
         t = Date.UTC(2026, 6, 14, 16, 0, 0);
         const nextDay = tracker.status();
+        // 跨 UTC+8 零点后仍要观测到 alice 才能验证新一天的 initial 基线来自昨日最后额度。
+        tracker.observeSnapshot({
+          tick: 200,
+          entities: [{ user_id: 8, name: 'alice-next-day', drop: 900, external_balance_snapshot: 4500000 }]
+        }, { source: 'ws', selfUserId: 7, observedAtMs: t + 60000 });
+        const nextDayAlice = tracker.status().players.find(player => player.userId === 8) || null;
+        // 重启场景: 文件仍写着昨天, 新进程首次读盘也必须继承昨日额度而不是清零。
+        const restarted = createHighDropPlayerTracker({
+          file: previousDayFile,
+          now: () => Date.UTC(2026, 6, 14, 16, 30, 0)
+        }).status();
         return [
           current.day,
           current.players.length,
@@ -34531,12 +34544,20 @@ async function runSelfTest() {
           current.lastGlobalSnapshotSource,
           nextDay.day,
           nextDay.players.length,
+          nextDay.selfInitialExternalBalanceSnapshot,
+          nextDay.selfExternalBalanceSnapshot,
+          nextDayAlice?.initialExternalBalanceSnapshot,
+          nextDayAlice?.externalBalanceSnapshot,
+          nextDayAlice?.initialDrop,
+          restarted.day,
+          restarted.selfInitialExternalBalanceSnapshot,
+          restarted.selfExternalBalanceSnapshot,
           balanceBaselineInitial,
           balanceBaselineLatest,
           balanceBaselineLabel
         ].join('|');
       }),
-      want: '2026-07-14|3|alice-after-tick-reset|8|520|800|800|2000000|4000000|bob|500|500|450|1000000|1300000|carol-low|50|50|40|1500000|1400000|true|true|false|900000|900000|false|false|50|ws|gap-http|2026-07-15|0|500000|1000000|+1.000'
+      want: '2026-07-14|3|alice-after-tick-reset|8|520|800|800|2000000|4000000|bob|500|500|450|1000000|1300000|carol-low|50|50|40|1500000|1400000|true|true|false|900000|900000|false|false|50|ws|gap-http|2026-07-15|0|900000|900000|4000000|4500000|900|2026-07-15|900000|900000|500000|1000000|+1'
     },
     {
       name: 'browserless snapshot gap poller waits three minutes after any observed snapshot',
@@ -37171,17 +37192,6 @@ async function runSelfTest() {
           ],
           0.5
         );
-        const advancedTrailSamples = advanceMapTrailSamplesCore(
-          [
-            { x: 10, y: 20, at: 1000 },
-            { x: 20, y: 20, at: 2000 },
-            { x: 30, y: 20, at: 3000 }
-          ],
-          { x: 40, y: 25, at: 4000 },
-          4000,
-          30000,
-          3
-        );
         const withoutPrevious = interpolateMapMarkerCore({ px: 110, py: 220 }, null, 0);
         return [
           BROWSERLESS_WEB_PANEL_VERSION,
@@ -37198,22 +37208,16 @@ async function runSelfTest() {
           halfwayPolyline.length,
           halfwayPolyline[1].px.toFixed(1),
           halfwayPolyline[1].py.toFixed(1),
-          advancedTrailSamples.length,
-          advancedTrailSamples[0].x,
-          advancedTrailSamples[0].y,
-          advancedTrailSamples.at(-1).x,
-          advancedTrailSamples.at(-1).y,
           withoutPrevious.px,
           withoutPrevious.py,
           panelScript.includes('const MAP_MOVE_ANIMATION_MS = 260;'),
-          panelScript.includes('const MAP_TRAIL_MAX_SAMPLES = 16;'),
+          panelScript.includes('const MAP_TRAIL_MAX_SAMPLES = 180;'),
           panelScript.includes('const mapAnimationProgress = function mapAnimationProgressCore'),
           panelScript.includes('const interpolateMapPoint = function interpolateMapPointCore'),
           panelScript.includes('const interpolateMapPolyline = function interpolateMapPolylineCore'),
-          panelScript.includes('const appendMapTrailSample = function appendMapTrailSampleCore')
-            && panelScript.includes('const advanceMapTrailSamples = function advanceMapTrailSamplesCore')
-            && panelScript.includes('const retained = appendMapTrailSample(samples, null'),
-          panelScript.includes('advanceMapTrailSamples(previous.samples, latestSample'),
+          !panelScript.includes('appendMapTrailSample'),
+          !panelScript.includes('advanceMapTrailSamples'),
+          panelScript.includes('const samples = backendSamples.slice(-MAP_TRAIL_MAX_SAMPLES);'),
           panelScript.includes('const deltaX = nextEndpoint.px - previousEndpoint.px'),
           !panelScript.includes('resampleMapPolyline'),
           panelScript.includes('function buildMapTrailGeometry(scene, markers, frame'),
@@ -37252,8 +37256,8 @@ async function runSelfTest() {
       want: [
         BROWSERLESS_WEB_PANEL_VERSION,
         'coin:0', 'player:alice', '', 0, '0.875', 1, '97.5', '195.0', '97.5', '195.0',
-        3, '60.0', '170.0', 3, 30, 25, 40, 25, 110, 220,
-        ...Array(40).fill(true)
+        3, '60.0', '170.0', 110, 220,
+        ...Array(41).fill(true)
       ].join('|')
     },
     {
@@ -37282,6 +37286,48 @@ async function runSelfTest() {
         }
       })(),
       want: '200|8|friendly'
+    },
+    {
+      name: 'browserless status server removes dynamic whitelist players by name',
+      got: () => (async () => {
+        const names = [];
+        const handle = await startStatusServer({
+          host: '127.0.0.1',
+          port: 0,
+          webToken: 'test-token',
+          onDynamicWhitelistRemove: name => {
+            names.push(name);
+            if (name === 'missing') {
+              return { ok: false, statusCode: 404, reason: 'player-not-found', error: '该玩家不在动态白名单中' };
+            }
+            return { ok: true, removed: true, player: { userId: 8, name }, easyKill: { userId: 8, name, score: 3 } };
+          }
+        });
+        try {
+          const base = `http://127.0.0.1:${handle.port}/api/dynamic-whitelist/remove?token=test-token`;
+          const post = body => fetch(base, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body)
+          });
+          const ok = await post({ name: 'friendly' });
+          const okBody = await ok.json();
+          const missing = await post({ name: 'missing' });
+          const missingBody = await missing.json();
+          return [
+            ok.status,
+            okBody.removed,
+            okBody.player.userId,
+            okBody.easyKill.score,
+            missing.status,
+            missingBody.reason,
+            names.join(',')
+          ].join('|');
+        } finally {
+          await handle.close();
+        }
+      })(),
+      want: '200|true|8|3|404|player-not-found|friendly,missing'
     },
     {
       name: 'browserless status server accepts async pre-rendered full and compact JSON text',
@@ -37534,10 +37580,16 @@ async function runSelfTest() {
           !panelScript.includes('initial * 20 + (latest - initial) * 2'),
           panelScript.includes('rankedItems.push({')
             && panelScript.includes('rankedItems.sort((left, right) => highDropSortValue(right.item, highDropSortField) - highDropSortValue(left.item, highDropSortField)'),
-          /\.high-drop-row\{display:grid;grid-template-columns:minmax\(100px,1\.8fr\) minmax\(64px,\.58fr\) minmax\(70px,\.52fr\) minmax\(112px,\.78fr\)/.test(panelText)
-            && panelText.includes('.high-drop-row>.high-drop-cell:nth-child(n+2){box-sizing:border-box;padding-right:8px;text-align:right}')
+          // 四列全部使用 minmax(0,…fr): 固定最小宽度会让网格总宽超出面板, 把额度列挤出可视区。
+          /\.high-drop-row\{display:grid;grid-template-columns:minmax\(0,1\.3fr\) minmax\(0,\.44fr\) minmax\(0,\.55fr\) minmax\(0,\.8fr\)/.test(panelText)
+            && !/\.high-drop-row\{[^}]*grid-template-columns:minmax\([1-9]/.test(panelText)
+            && panelText.includes('.high-drop-row>.high-drop-cell:nth-child(n+2){box-sizing:border-box;padding-right:4px;text-align:right}')
+            && panelText.includes('.high-drop-row>.high-drop-cell:last-child{padding-right:2px}')
             && panelText.includes('.high-drop-balance-decimal{color:var(--muted)}')
-            && panelScript.includes('todayGain.toFixed(3)')
+            // 今日收益整数展示, 额度保留三位小数 (UC-013)。
+            && !panelScript.includes('todayGain.toFixed(3)')
+            && panelScript.includes("changeCell.textContent = (roundedGain > 0 ? '+' : '') + String(roundedGain)")
+            && panelScript.includes('toFixed(3)')
             && panelText.includes('.high-drop-values .high-drop-delta.positive{color:var(--red)}')
             && panelText.includes('.high-drop-values .high-drop-delta.negative{color:var(--green)}'),
           !panelScript.includes("'我 · ' + self.name"),
@@ -37732,7 +37784,9 @@ async function runSelfTest() {
           /\.easy-kill-score-1\{border-color:#B8862C;background:#FFF3C4;color:#8A641C\}/.test(panelText),
           /\.easy-kill-score-2\{border-color:#C58A16;background:#FFE8A3;color:#8B5E08\}/.test(panelText),
           /\.easy-kill-score-3\{border-color:#A86B00;background:#FFD86B;color:#6B4300\}/.test(panelText),
-          /\.dynamic-whitelist-name\{border-color:#BFC7D5;background:#FFFFFF;color:#687386\}/.test(panelText),
+          /\.dynamic-whitelist-name\{border-color:#BFC7D5;background:#FFFFFF;color:#687386;cursor:pointer\}/.test(panelText),
+          /\.dynamic-whitelist-remove-popover\{align-items:center;max-width:260px\}/.test(panelText),
+          /\.dynamic-whitelist-remove-label\.dynamic-whitelist-remove-error\{color:var\(--red\)\}/.test(panelText),
           /\.damage-player-name\{border-color:#8B1E24;background:#FFD6D8;color:#8A1C24\}/.test(panelText),
           /\.whitelist-meta-count\{color:#687386\}\.easy-kill-meta-count\{color:#8A641C\}\.damage-meta-count\{color:#8A1C24\}/.test(panelText),
           !/\.player-memory-grid\{/.test(panelText),
@@ -37750,6 +37804,14 @@ async function runSelfTest() {
           /easy-kill-meta-count/.test(panelScript),
           /damage-meta-count/.test(panelScript),
           /api\('\/api\/dynamic-whitelist'/.test(panelScript),
+          // 点击白名单玩家名弹出就近确认框, 确认后调用移除接口。
+          /function showDynamicWhitelistRemovePopover/.test(panelScript),
+          /api\('\/api\/dynamic-whitelist\/remove'/.test(panelScript),
+          panelScript.includes("showDynamicWhitelistRemovePopover(node, memberName)"),
+          panelScript.includes("confirm.textContent = '确认'"),
+          panelScript.includes("cancel.textContent = '取消'"),
+          panelScript.includes("label.textContent = '移除 ' + name + '?'"),
+          panelScript.includes("node.title = '点击移除白名单并加入行走的金币'"),
           panelScript.includes("createPlayerMemoryName(item?.[0], 'easy-kill-score-' + score)"),
           panelText.indexOf('id="highDropPlayers"') < panelText.indexOf('id="playerMemoryPlayers"'),
           panelText.indexOf('id="playerMemoryPlayers"') < panelText.indexOf('id="nearbyGrid"')
@@ -45489,6 +45551,40 @@ async function runSelfTest() {
 	      want: '8|1|target-reappeared-alive|0|0|1|engagement-pending-cleared'
 	    },
 	    {
+	      name: 'browserless easy-kill tracker accepts manual entries capped at the max score',
+	      got: (() => {
+	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-manual-'));
+	        try {
+	          const file = path.join(dir, 'easy-kill-players.json');
+	          const events = [];
+	          const tracker = createEasyKillPlayerTracker({ file, now: () => 1000, onEvent: event => events.push(event) });
+	          const added = tracker.upsertManualPlayer({ userId: 8, name: 'ex-whitelist' }, { atMs: 1000, score: 3, source: 'dynamic-whitelist-remove' });
+	          const clamped = tracker.upsertManualPlayer({ userId: 9, name: 'over-cap' }, { atMs: 1000, score: 99 });
+	          const missingId = tracker.upsertManualPlayer({ name: 'no-id' }, { atMs: 1000, score: 3 });
+	          const invalidScore = tracker.upsertManualPlayer({ userId: 10, name: 'zero' }, { atMs: 1000, score: 0 });
+	          // 已有更高分记录不得被手动录入压低。
+	          const keepsHigher = tracker.upsertManualPlayer({ userId: 8, name: 'ex-whitelist' }, { atMs: 2000, score: 1 });
+	          const reloaded = createEasyKillPlayerTracker({ file, now: () => 3000 }).status();
+	          const persisted = reloaded.players.find(player => player.userId === 8) || null;
+	          return [
+	            added.ok, added.added, added.score,
+	            clamped.score,
+	            missingId.ok, missingId.reason,
+	            invalidScore.ok, invalidScore.reason,
+	            keepsHigher.added, keepsHigher.score,
+	            reloaded.playerCount,
+	            persisted?.name,
+	            persisted?.score,
+	            events.filter(event => event.kind === 'easy-kill-manual-add').length,
+	            events[0]?.source
+	          ].join('|');
+	        } finally {
+	          fs.rmSync(dir, { recursive: true, force: true });
+	        }
+	      })(),
+	      want: 'true|true|3|3|false|missing-user-id|false|invalid-score|false|3|2|ex-whitelist|3|3|dynamic-whitelist-remove'
+	    },
+	    {
 	      name: 'browserless easy-kill tracker keeps user id while refreshing the latest observed name',
 	      got: (() => {
 	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-name-'));
@@ -45843,7 +45939,7 @@ async function runSelfTest() {
 	      want: 'true|0|0|0|0|0'
 	    },
 	    {
-		      name: 'browserless dynamic whitelist persists stable ids and has no runtime removal path',
+		      name: 'browserless dynamic whitelist persists stable ids and removes members on manual request',
 		      got: (() => {
 	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-dynamic-whitelist-'));
 	        const file = path.join(dir, 'dynamic-whitelist.json');
@@ -45868,6 +45964,9 @@ async function runSelfTest() {
 		            added.added,
 		            matched,
 		            typeof reloaded.remove,
+		            reloaded.remove({ userId: 8 }, 4000).removed,
+		            reloaded.isMember({ userId: 8 }),
+		            reloaded.hasPendingBattleObservation(),
 		            disabled.newlyDisabled,
 		            reloaded.isWhitelistedTarget({ userId: 8 }),
 		            status.playerCount,
@@ -45880,7 +45979,7 @@ async function runSelfTest() {
 	          fs.rmSync(dir, { recursive: true, force: true });
 	        }
 	      })(),
-		      want: 'true|true|undefined|true|false|1|0|1|1|2'
+		      want: 'true|true|function|true|false|false|true|false|1|0|1|1|2'
 	    },
 	    {
 	      name: 'browserless dynamic whitelist defers likely crossfire but temporarily disables after over 10 HP in 60 seconds',

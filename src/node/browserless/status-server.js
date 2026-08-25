@@ -141,6 +141,9 @@ function createStatusServer(options = {}) {
   const onDynamicWhitelistAdd = typeof options.onDynamicWhitelistAdd === 'function'
     ? options.onDynamicWhitelistAdd
     : null;
+  const onDynamicWhitelistRemove = typeof options.onDynamicWhitelistRemove === 'function'
+    ? options.onDynamicWhitelistRemove
+    : null;
   const recordTask = (task, started, detail = {}) => {
     if (!onMainThreadTask) return;
     try {
@@ -285,6 +288,17 @@ function createStatusServer(options = {}) {
         const body = await readRequestJson(req);
         const result = onDynamicWhitelistAdd
           ? await onDynamicWhitelistAdd(body.name ?? '')
+          : { ok: false, statusCode: 409, reason: 'dynamic-whitelist-not-implemented', error: '白名单管理不可用' };
+        const statusCode = result?.ok === false
+          ? Math.max(400, Math.min(599, Number(result.statusCode || 409)))
+          : 200;
+        sendJson(res, statusCode, result || { ok: true });
+        return;
+      }
+      if (req.method === 'POST' && parsed.pathname === '/api/dynamic-whitelist/remove') {
+        const body = await readRequestJson(req);
+        const result = onDynamicWhitelistRemove
+          ? await onDynamicWhitelistRemove(body.name ?? '')
           : { ok: false, statusCode: 409, reason: 'dynamic-whitelist-not-implemented', error: '白名单管理不可用' };
         const statusCode = result?.ok === false
           ? Math.max(400, Math.min(599, Number(result.statusCode || 409)))
