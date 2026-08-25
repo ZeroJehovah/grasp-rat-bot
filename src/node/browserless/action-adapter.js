@@ -15,6 +15,11 @@ const {
   profitKillRacePolicy
 } = require('../../strategy/profit-kill-race');
 const { remoteProfitApproachDistanceCm } = require('../../strategy/remote-profit-targets');
+const { invulnerableApproachWindowCore } = require('../../strategy/invulnerable-approach-window');
+const {
+  canonicalInvulnerabilityMsFrom,
+  rawInvulnerabilityMsFrom
+} = require('../../strategy/invulnerability-time');
 
 const BROWSER_RUNTIME_DEFAULTS = buildRuntimeDefaults({}, false);
 const DEFAULT_TARGET_DEAD_ZONE_CM = 900;
@@ -26,11 +31,11 @@ const DEFAULT_PLAYER_DROP_PICKUP_RADIUS_CM = Math.max(
 const DEFAULT_INVULNERABLE_PROFIT_ARRIVAL_HYSTERESIS_CM = 100;
 const DEFAULT_INVULNERABLE_ACTIVE_PROFIT_APPROACH_DISTANCE_CM = Math.max(
   0,
-  Number(BROWSER_RUNTIME_DEFAULTS.invulnerableActiveProfitApproachDistanceCm || 15000)
+  Number(BROWSER_RUNTIME_DEFAULTS.invulnerableActiveProfitApproachDistanceCm || 11000)
 );
 const DEFAULT_INVULNERABLE_ACTIVE_PROFIT_ARRIVAL_HYSTERESIS_CM = Math.max(
   0,
-  Number(BROWSER_RUNTIME_DEFAULTS.invulnerableActiveProfitArrivalHysteresisCm || 500)
+  Number(BROWSER_RUNTIME_DEFAULTS.invulnerableActiveProfitArrivalHysteresisCm || 1000)
 );
 const DEFAULT_COMMAND_INTERVAL_MS = 500;
 const DEFAULT_SETTLEMENT_FRAMES = 2;
@@ -131,6 +136,31 @@ function coordinateOrNull(value) {
 function optionalNumber(value) {
   if (value === null || value === undefined || value === '') return null;
   return numberOrNull(value);
+}
+
+// An execution-layer target is a planner target merged with a raw realtime
+// entity, so the countdown can arrive either already normalized to wall
+// milliseconds or still in the protocol's raw units. Canonical wins; raw is
+// converted; the protection lease is the last resort.
+function invulnerableRemainingWallMs(target) {
+  const canonicalMs = canonicalInvulnerabilityMsFrom(target);
+  if (canonicalMs !== null) return Math.round(canonicalMs);
+  const rawMs = rawInvulnerabilityMsFrom(target);
+  if (rawMs !== null) return Math.round(rawMs);
+  return numberOrNull(target?.invulnerableProtectionRemainingMs);
+}
+
+// Prefer the live coordinates over any carried `distance`, which is a
+// planner-cadence value and can be several seconds old at execution time.
+function separationCm(from, to) {
+  const fx = coordinateOrNull(from?.x);
+  const fy = coordinateOrNull(from?.y);
+  const tx = coordinateOrNull(to?.x);
+  const ty = coordinateOrNull(to?.y);
+  if (fx !== null && fy !== null && tx !== null && ty !== null) {
+    return Math.hypot(tx - fx, ty - fy);
+  }
+  return numberOrNull(to?.distance);
 }
 
 function normalizeShootExecutionClass(value) {
@@ -637,6 +667,8 @@ function createInitialActionState() {
     nearCoinContinuationCancelCount: 0,
     nearCoinContinuationLastCancelReason: '',
     invulnerableProfitApproachLock: null,
+    // Single retained approach-window state, keyed by the target it belongs to.
+    invulnerableApproachWindow: null,
     invulnerableProfitApproachArrival: null,
     invulnerableProfitApproachFeedbackGate: null,
     invulnerableProfitApproachFeedbackWaitCount: 0,
@@ -1681,15 +1713,25 @@ function createBrowserlessActionAdapter(options = {}) {
       };
     }
     const distance = Math.hypot(tx - sx, ty - sy);
-    const approachDistanceCm = Math.max(0, Number(
-      target?.invulnerableApproachDistanceCm
-        ?? options.invulnerableActiveProfitApproachDistanceCm
-        ?? DEFAULT_INVULNERABLE_ACTIVE_PROFIT_APPROACH_DISTANCE_CM
-    ));
-    const releaseDistanceCm = approachDistanceCm + Math.max(0, Number(
-      options.invulnerableActiveProfitArrivalHysteresisCm
-        ?? DEFAULT_INVULNERABLE_ACTIVE_PROFIT_ARRIVAL_HYSTERESIS_CM
-    ));
+    const window = detail.invulnerableWindow && detail.invulnerableWindow.active === true
+      ? detail.invulnerableWindow
+      : null;
+    // The wait station is shared with the combat movement layer: a single band
+    // keeps the two owners from fighting over the same metre of ground when the
+    // station sits inside our attack range.
+    const approachDistanceCm = window
+      ? Math.max(0, Number(window.holdFloorCm))
+      : Math.max(0, Number(
+        target?.invulnerableApproachDistanceCm
+          ?? options.invulnerableActiveProfitApproachDistanceCm
+          ?? DEFAULT_INVULNERABLE_ACTIVE_PROFIT_APPROACH_DISTANCE_CM
+      ));
+    const releaseDistanceCm = window
+      ? Math.max(approachDistanceCm, Number(window.releaseDistanceCm))
+      : approachDistanceCm + Math.max(0, Number(
+        options.invulnerableActiveProfitArrivalHysteresisCm
+          ?? DEFAULT_INVULNERABLE_ACTIVE_PROFIT_ARRIVAL_HYSTERESIS_CM
+      ));
     if (distance >= approachDistanceCm && distance <= releaseDistanceCm) {
       const stopped = stop('profit-active-invulnerable-distance-hold');
       return {
@@ -1703,6 +1745,7 @@ function createBrowserlessActionAdapter(options = {}) {
         distanceCm: Math.round(distance),
         approachDistanceCm,
         releaseDistanceCm,
+        invulnerableWindow: window,
         remoteNavigationOnly: Boolean(detail.remoteNavigationOnly),
         shoot: { ok: true, skipped: true, reason: 'target-invulnerable-wire-gate' },
         ...transportFailure(stopped)
@@ -4130,8 +4173,41 @@ function createBrowserlessActionAdapter(options = {}) {
     if (target?.invulnerable !== true) clearInvulnerableProfitApproach('vulnerable-profit-target');
     if (target?.active && target?.easyKillProfitTarget) {
       clearInvulnerableProfitApproach('active-profit-target');
-      const invulnerableApproach = target?.invulnerable === true;
-      if (invulnerableApproach) return applyActiveInvulnerableProfitApproach(self, target);
+      // Release the distance hold once the measured close ETA says the
+      // remaining travel to combat spacing fits the remaining protection, so
+      // the first shot can land as protection clears instead of being paid for
+      // with a long head-on approach against an already-vulnerable shooter.
+      const invulnerableWindowKey = targetRepeatKey(target);
+      const retainedWindowState = state.invulnerableApproachWindow
+        && state.invulnerableApproachWindow.targetKey === invulnerableWindowKey
+        ? state.invulnerableApproachWindow.state
+        : null;
+      const invulnerableWindow = invulnerableApproachWindowCore({
+        self,
+        target,
+        invulnerable: target?.invulnerable === true,
+        targetActive: true,
+        // The decision's `distance` is a planner-cadence value; the merged
+        // realtime coordinates are what the band is actually held against.
+        distanceCm: separationCm(self, target),
+        remainingMs: invulnerableRemainingWallMs(target),
+        waitDistanceCm: target?.invulnerableApproachDistanceCm,
+        selfHp: Number(self?.hp),
+        stamina5sRemainingMilli: self?.stamina_5s_remaining_milli ?? self?.stamina5sRemainingMilli,
+        // Same retained window as the combat movement layer, so navigation and
+        // combat spacing cannot disagree about the phase for the same target.
+        stateTracked: true,
+        atMs: now(),
+        previous: retainedWindowState
+      }, options);
+      state.invulnerableApproachWindow = invulnerableWindow.state
+        ? { targetKey: invulnerableWindowKey, state: invulnerableWindow.state }
+        : null;
+      const invulnerableApproach = target?.invulnerable === true
+        && invulnerableWindow.phase !== 'closing';
+      if (invulnerableApproach) {
+        return applyActiveInvulnerableProfitApproach(self, target, { invulnerableWindow });
+      }
       const vector = movementVectorToTarget(self, target, invulnerableApproach
         ? {
             ...options,

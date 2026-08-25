@@ -237,6 +237,22 @@ function isPlayerOpportunityCore(item) {
   return type === 'enemy' || type === 'remote-player-navigation';
 }
 
+// The high-value-visible-coin shortcut is arbitrated ahead of the ordinary
+// profit choice, so it bypasses `enemyMainHoldAgainstLowCoinCore` entirely and
+// can break an established player mission for a coin the choice layer would
+// have rejected. Apply the same rule at that shortcut: a player mission that
+// already outscores the coin keeps ownership. A coin that genuinely outscores
+// the mission, and the drop of our own primary target, still win.
+function playerMissionHoldsAgainstHighValueCoinCore(mission, coin, options = {}) {
+  if (!isPlayerOpportunityCore(mission)) return false;
+  if (!coin || coin.primaryTargetDropPriority === true) return false;
+  const missionScore = Number(mission?.score ?? NaN);
+  const coinScore = Number(coin?.score ?? NaN);
+  if (!Number.isFinite(missionScore) || !Number.isFinite(coinScore)) return false;
+  const relativeMargin = Math.max(0, Number(options.coinPreemptionRelativeMargin ?? 0));
+  return coinScore <= missionScore * (1 + relativeMargin);
+}
+
 function enemyMainHoldAgainstLowerValueEnemyCore(held, best) {
   return Boolean(
     isPlayerOpportunityCore(held)
@@ -770,6 +786,9 @@ module.exports = {
   opportunityMatchesChoiceCore,
   isHighValueCoinOpportunityCore,
   highValueCoinHoldBlocksEnemySwitchCore,
+  enemyMainHoldAgainstLowCoinCore,
+  playerMissionHoldsAgainstHighValueCoinCore,
+  isPlayerOpportunityCore,
   enemyMainHoldAgainstLowerValueEnemyCore,
   suppressLowerValuePassiveEnemyPrimaryCore,
   afkFinishCommitmentCore,

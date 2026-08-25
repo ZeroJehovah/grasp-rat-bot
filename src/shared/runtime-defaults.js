@@ -51,10 +51,32 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     afkAttackHpSafetyBuffer: numberDefault(config.afkAttackHpSafetyBuffer, 3),
     invulnerableProfitApproachDistanceCm: playerDropPickupRadiusCm,
     invulnerableProfitArrivalHysteresisCm: numberDefault(config.invulnerableProfitArrivalHysteresisCm, 100),
-    invulnerableActiveProfitApproachDistanceCm: numberDefault(config.invulnerableActiveProfitApproachDistanceCm, 15000),
-    invulnerableActiveProfitArrivalHysteresisCm: numberDefault(config.invulnerableActiveProfitArrivalHysteresisCm, 500),
+    // Active invulnerable profit targets wait inside our own attack range but
+    // well outside the bullet-flight-below-reaction-budget band, then close on a
+    // measured ETA. The hysteresis must exceed one decision step of travel
+    // (~990cm at the 1000ms profit cadence) or the band cannot be held.
+    invulnerableActiveProfitApproachDistanceCm: numberDefault(config.invulnerableActiveProfitApproachDistanceCm, 11000),
+    invulnerableActiveProfitArrivalHysteresisCm: numberDefault(config.invulnerableActiveProfitArrivalHysteresisCm, 1000),
+    invulnerableApproachWaitDistanceCm: numberDefault(config.invulnerableApproachWaitDistanceCm, 11000),
+    invulnerableApproachWaitHysteresisCm: numberDefault(config.invulnerableApproachWaitHysteresisCm, 1000),
+    invulnerableApproachMinWaitDistanceCm: numberDefault(config.invulnerableApproachMinWaitDistanceCm, 10000),
+    invulnerableApproachMaxWaitDistanceCm: numberDefault(config.invulnerableApproachMaxWaitDistanceCm, 12000),
+    invulnerableApproachEngagementDistanceCm: numberDefault(config.invulnerableApproachEngagementDistanceCm, 6500),
+    invulnerableApproachSelfSpeedCmPerSec: numberDefault(config.invulnerableApproachSelfSpeedCmPerSec, 990),
+    invulnerableApproachClosingSafetyFactor: numberDefault(config.invulnerableApproachClosingSafetyFactor, 0.8),
+    invulnerableApproachClosingSpeedFloorCmPerSec: numberDefault(config.invulnerableApproachClosingSpeedFloorCmPerSec, 200),
+    invulnerableApproachCloseMarginMs: numberDefault(config.invulnerableApproachCloseMarginMs, 1500),
+    invulnerableApproachRiskMinStamina5sMilli: numberDefault(config.invulnerableApproachRiskMinStamina5sMilli, 3000),
+    invulnerableApproachRiskMinSelfHp: numberDefault(config.invulnerableApproachRiskMinSelfHp, 60),
+    invulnerableApproachRiskMaxUnavoidableShotFrames: numberDefault(config.invulnerableApproachRiskMaxUnavoidableShotFrames, 2),
     invulnerableProfitWaitStaminaWeight: numberDefault(config.invulnerableProfitWaitStaminaWeight, 0.5),
     invulnerableProfitApproachSlackMs: numberDefault(config.invulnerableProfitApproachSlackMs, 10000),
+    profitTargetRealtimePositionMaxAgeMs: numberDefault(config.profitTargetRealtimePositionMaxAgeMs, 3000),
+    profitTargetDistanceCorrectionMinStaminaCost: numberDefault(config.profitTargetDistanceCorrectionMinStaminaCost, 1),
+    // An established player mission is only worth breaking for a coin that
+    // clearly beats it. Equal-ish scores flip-flopping across the profit
+    // cadence is the target oscillation this margin removes.
+    coinPreemptionRelativeMargin: numberDefault(config.coinPreemptionRelativeMargin, 0.25),
     invulnerableProfitAxisSpeedCmPerSec: numberDefault(config.invulnerableProfitAxisSpeedCmPerSec, 950),
     invulnerableProfitDiagonalSpeedCmPerSec: numberDefault(config.invulnerableProfitDiagonalSpeedCmPerSec, 940),
     invulnerableProfitRouteSegmentOverheadMs: numberDefault(config.invulnerableProfitRouteSegmentOverheadMs, 120),

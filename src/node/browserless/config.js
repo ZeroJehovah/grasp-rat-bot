@@ -150,8 +150,11 @@ const DEFAULTS = {
   playerDropPickupRadiusCm: 150,
   invulnerableProfitApproachDistanceCm: 150,
   invulnerableProfitArrivalHysteresisCm: 100,
-  invulnerableActiveProfitApproachDistanceCm: 15000,
-  invulnerableActiveProfitArrivalHysteresisCm: 500,
+  // Active invulnerable targets wait outside the effective danger band instead
+  // of sitting on the 15000cm bullet-range boundary; the hysteresis is one
+  // 1000ms decision step of travel so the station cannot oscillate.
+  invulnerableActiveProfitApproachDistanceCm: 11000,
+  invulnerableActiveProfitArrivalHysteresisCm: 1000,
   invulnerableProfitWaitStaminaWeight: 0.5,
   invulnerableProfitApproachSlackMs: 10000,
   invulnerableProfitAxisSpeedCmPerSec: 950,

@@ -126,6 +126,7 @@ const {
   resolveDodgeOwnershipCore,
   selectCombatMovementOwnerCore
 } = require('../../strategy/combat-movement-ownership');
+const { invulnerableApproachWindowCore } = require('../../strategy/invulnerable-approach-window');
 const {
   observeProfitCompetitorEvidence,
   profitKillRacePolicy
@@ -3277,7 +3278,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     directionDwells: opponentBehavior?.metrics?.directionDwells
   }, options);
   const ballisticCloseActive = ballisticClose.active === true;
-  const spacing = ballisticCloseActive
+  let spacing = ballisticCloseActive
     ? Number(ballisticClose.targetRangeCm)
     : (closePressureActive
         ? Number(closePressureRange.rangeCm)
@@ -3300,6 +3301,32 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     currentTick: options.currentTick,
     reactionSafetyMarginMs: options.combatReactionSafetyMarginMs ?? 100
   });
+  // A protected active target cannot be damaged, so compressing to combat
+  // spacing only buys incoming pressure. Hold the wait station until the
+  // measured close ETA says the remaining travel fits the remaining
+  // protection, and let dodge/exit ownership keep its own priority.
+  const invulnerableWindow = invulnerableApproachWindowCore({
+    self,
+    target,
+    invulnerable: isInvulnerableEntity(target),
+    targetActive: target.active !== false,
+    distanceCm: target.distance,
+    remainingMs: target.invulnerableRemainingMs ?? target.invulnerableProtectionRemainingMs,
+    selfHp: hpValue(self),
+    stamina5sRemainingMilli: self?.stamina_5s_remaining_milli ?? self?.stamina5sRemainingMilli,
+    unavoidableCurrentShot: dodge?.unavoidableCurrentShot === true || recentSelfDamage,
+    // The 50ms combat cadence sees every jink, so this layer keeps the smoothed
+    // estimate, close confirmation, and approach latch across frames instead of
+    // switching phase on one frame of radial velocity.
+    stateTracked: true,
+    atMs: Number(options.nowMs) || null,
+    previous: combatTargetState?.invulnerableApproachState || null
+  }, options);
+  if (combatTargetState) {
+    combatTargetState.invulnerableApproachState = invulnerableWindow.state;
+  }
+  const invulnerableWaitActive = invulnerableWindow.phase === 'wait';
+  if (invulnerableWaitActive) spacing = invulnerableWindow.waitDistanceCm;
   const safeRetreatInterceptEnabled = options.combatSafeRetreatInterceptEnabled === true;
   const safeRetreatModeConfirmed = String(opponentBehavior?.mode || '') === 'retreat-kite'
     && Number(opponentBehavior?.confidence || 0) >= 0.65;
@@ -3450,9 +3477,11 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       && Number(target.distance || Infinity)
         > Number(ballisticClose.targetRangeCm) + Number(ballisticClose.hysteresisCm || 0)
   );
-  const backAway = ballisticCloseActive
-    ? ballisticCloseTooClose
-    : (closePressureActive ? closePressureTooClose : shouldBackAwayFromTarget(self, target));
+  const backAway = invulnerableWaitActive
+    ? invulnerableWindow.separate
+    : (ballisticCloseActive
+      ? ballisticCloseTooClose
+      : (closePressureActive ? closePressureTooClose : shouldBackAwayFromTarget(self, target)));
   const pressureClose = Boolean(
     closePressureActive
       ? closeAllowed && Number(target.distance || Infinity) > closeRange + closePressureHysteresisCm
@@ -3524,7 +3553,9 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   }, {
     dodgeOwnershipHoldMs: options.combatDodgeOwnershipHoldMs
   });
-  const closeIn = closeAllowed
+  const closeIn = invulnerableWaitActive
+    ? Boolean(closeAllowed && invulnerableWindow.approach)
+    : closeAllowed
     && (pressureClose
       || ballisticCloseIn
       || retreatingClose
@@ -3899,6 +3930,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   if (profitKillRace.active) distanceAwareBaseBand = 'profit-target-competition';
   else if (profitEscort?.active && !ballisticCloseActive) distanceAwareBaseBand = 'escort';
   else if (closePressureTooClose || ballisticCloseTooClose) distanceAwareBaseBand = 'separate';
+  else if (backAway && invulnerableWaitActive) distanceAwareBaseBand = 'separate';
   else if (lootRaceDirection) distanceAwareBaseBand = 'loot-race';
   else if (strafe?.active) distanceAwareBaseBand = 'strafe';
   else if (closeIn) distanceAwareBaseBand = 'approach';
@@ -3906,6 +3938,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   if (profitKillRace.active) distanceAwareRadialIntent = profitKillRace.direction;
   else if (profitEscort?.active && !ballisticCloseActive) distanceAwareRadialIntent = profitEscort.direction;
   else if (closePressureTooClose || ballisticCloseTooClose) distanceAwareRadialIntent = awayFromTarget;
+  else if (backAway && invulnerableWaitActive) distanceAwareRadialIntent = awayFromTarget;
   else if (lootRaceDirection) distanceAwareRadialIntent = lootRaceDirection;
   else if (closeIn) distanceAwareRadialIntent = towardTarget;
   const distanceAwareDodge = distanceAwareDodgeEnabled
@@ -4125,7 +4158,9 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     };
     effectiveDodge = null;
   }
-  const closeReason = ballisticCloseActive
+  const closeReason = invulnerableWaitActive
+    ? 'combat-invulnerable-wait-approach'
+    : ballisticCloseActive
     ? 'combat-ballistic-flight-close'
     : (pressureClose
     ? (closePressureActive ? 'combat-close-pressure-approach' : 'combat-pressure-close')
@@ -4158,16 +4193,20 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     : movement.modifiers.includes('profit-target-competition')
     ? 'profit-target-competition-approach'
     : (movement.modifiers.includes('back-away') || movement.modifiers.includes('back-away-mixed')
-        ? (closePressureTooClose
-            ? 'combat-close-pressure-separate'
-            : (ballisticCloseTooClose ? 'combat-ballistic-flight-separate' : 'back-away'))
+        ? (invulnerableWaitActive
+            ? 'combat-invulnerable-wait-separate'
+            : (closePressureTooClose
+              ? 'combat-close-pressure-separate'
+              : (ballisticCloseTooClose ? 'combat-ballistic-flight-separate' : 'back-away')))
         : (movement.modifiers.includes('close-in')
-            ? (edgePressure?.active ? 'combat-advantage-reengage' : closeReason)
-            : (escapeDecision?.confirmed
+            ? (edgePressure?.active && !invulnerableWaitActive ? 'combat-advantage-reengage' : closeReason)
+            : (invulnerableWaitActive
+                ? 'combat-invulnerable-wait-hold'
+                : (escapeDecision?.confirmed
                 ? 'combat-escape-confirmed-hold'
                 : (outOfRange
                     ? 'combat-out-of-range-hold'
-                    : (ballisticCloseActive ? 'combat-ballistic-flight-hold' : 'hold-spacing')))));
+                    : (ballisticCloseActive ? 'combat-ballistic-flight-hold' : 'hold-spacing'))))));
   const safeRetreatInterceptApplied = Boolean(
     safeRetreatInterceptEnabled
       && safeRetreatIntercept.eligible
@@ -4196,6 +4235,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     dy: Number(movement.dy || 0),
     reason,
     spacing: Math.round(spacing),
+    invulnerableWindow: invulnerableWindow.active ? invulnerableWindow : null,
     dodge: dodge ? {
       dx: effectiveDodge?.dx ?? dodge.dx,
       dy: effectiveDodge?.dy ?? dodge.dy,

@@ -546,6 +546,79 @@ function assertActivePlayerPickupRadiusCoinCompetition() {
   assert.strictEqual(retained.input?.loot?.reason, 'high-value-visible-coin');
 }
 
+// The high-value-visible-coin shortcut is arbitrated in the profit band on raw
+// reward-over-stamina, so a coin whose netROI edges out an established player
+// mission used to take the action even though the profit choice - which carries
+// the player-drop multiplier and the completion model - ranked the mission far
+// higher. That is the observed coin/player oscillation.
+function assertEstablishedPlayerMissionHoldsAgainstHighValueCoin() {
+  const common = {
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    dynamicProfitThresholdEnabled: false,
+    singleCoinBaitEnabled: false,
+    finalActionArbitrationHoldMs: 0,
+    opportunitySwitchConfirmFrames: 1,
+    opportunitySwitchMargin: 0,
+    opportunitySwitchRelativeMargin: 0
+  };
+  const missionTarget = ordinaryProfitTarget(1234, 30000, 197);
+  // An Active shooter in range is what opens the coin shortcut at all.
+  const shooter = ordinaryProfitTarget(555, 13000, 5, {
+    current_join_mode: 'Active',
+    active: true,
+    firing: true
+  });
+  const coinState = (amount, coinX) => state(
+    fullStaminaSelf({ x: 500 }),
+    [missionTarget, shooter],
+    [{ drop_id: 319, amount, x: coinX, y: 0 }],
+    true
+  );
+  const shortcutOffered = decision => (decision.finalSelection?.candidates || [])
+    .some(candidate => candidate.switchReason === 'high-value-visible-coin');
+
+  const adapter = createBrowserlessDecisionAdapter(common);
+  const established = decide(
+    adapter,
+    state(fullStaminaSelf(), [missionTarget, shooter], [], true),
+    1000,
+    null,
+    common
+  );
+  assert.strictEqual(established.profit?.mission?.targetId, '1234');
+
+  const held = decide(adapter, coinState(47, 14000), 2000, null, common);
+  assert.strictEqual(held.action?.kind, 'seek-enemy');
+  assert.strictEqual(held.action?.reason, 'best-opportunity');
+  assert.strictEqual(held.action?.target?.userId, 1234);
+  assert.strictEqual(held.profit?.coinPriorityHold?.held, true);
+  assert.strictEqual(held.profit?.coinPriorityHold?.established, true);
+  assert.strictEqual(held.profit?.coinPriorityHold?.missionType, 'enemy');
+  assert.strictEqual(held.profit?.coinPriorityHold?.primaryTargetDrop, false);
+  assert(held.profit.coinPriorityHold.missionScore > held.profit.coinPriorityHold.coinScore);
+  assert.strictEqual(shortcutOffered(held), false, 'the held coin shortcut is withdrawn from arbitration');
+
+  // A coin that genuinely outscores the mission still preempts it, so this is a
+  // tie-break rule and not a coin-priority shutdown.
+  const preemptAdapter = createBrowserlessDecisionAdapter(common);
+  const preemptEstablished = decide(
+    preemptAdapter,
+    state(fullStaminaSelf(), [missionTarget, shooter], [], true),
+    1000,
+    null,
+    common
+  );
+  assert.strictEqual(preemptEstablished.profit?.mission?.targetId, '1234');
+  const preempted = decide(preemptAdapter, coinState(16, 1400), 2000, null, common);
+  assert.strictEqual(preempted.action?.kind, 'coin');
+  assert.strictEqual(preempted.action?.reason, 'high-value-visible-coin-priority');
+  assert.strictEqual(preempted.profit?.coinPriorityHold?.held, false);
+  assert(preempted.profit.coinPriorityHold.coinScore > preempted.profit.coinPriorityHold.missionScore
+    || preempted.profit.coinPriorityHold.missionType === 'coin');
+}
+
 function assertSelfKillReleasesSupersededMission() {
   const adapter = createBrowserlessDecisionAdapter({
     userId: 7,
@@ -2843,7 +2916,7 @@ function runRemoteProfitDecisionSelfTest() {
   );
   assert.strictEqual(invulnerableRemoteFirst.action?.kind, 'seek-remote-player');
   assert.strictEqual(invulnerableRemoteFirst.action?.target?.invulnerableRemainingMs, 74000);
-  assert.strictEqual(invulnerableRemoteFirst.action?.target?.arrivalToleranceCm, 15000);
+  assert.strictEqual(invulnerableRemoteFirst.action?.target?.arrivalToleranceCm, 11000);
   const remoteApproachAdapter = createBrowserlessActionAdapter({
     userId: 7,
     commandIntervalMs: 0,
@@ -2924,7 +2997,7 @@ function runRemoteProfitDecisionSelfTest() {
   );
   assert.strictEqual(realtimeInvulnerableReady.action?.kind, 'seek-enemy');
   assert.strictEqual(realtimeInvulnerableReady.action?.target?.easyKillInvulnerableApproachEligible, true);
-  assert.strictEqual(realtimeInvulnerableReady.action?.target?.invulnerableApproachDistanceCm, 15000);
+  assert.strictEqual(realtimeInvulnerableReady.action?.target?.invulnerableApproachDistanceCm, 11000);
   const activeApproachAdapter = createBrowserlessActionAdapter({
     userId: 7,
     commandIntervalMs: 0,
@@ -2939,11 +3012,43 @@ function runRemoteProfitDecisionSelfTest() {
     realtimeInvulnerableReady
   );
   assert.strictEqual(activeApproachAction.reason, 'profit-active-invulnerable-approach');
+  const activeBandHoldAction = activeApproachAdapter.applyDecision(
+    state(fullStaminaSelf({ x: 0 }), [activeInvulnerable(11000, 72000)]),
+    realtimeInvulnerableReady
+  );
+  assert.strictEqual(activeBandHoldAction.reason, 'profit-active-invulnerable-distance-hold');
+  assert.strictEqual(activeBandHoldAction.approachDistanceCm, 10000);
+  assert.strictEqual(activeBandHoldAction.releaseDistanceCm, 12000);
   const activeCloseAction = activeApproachAdapter.applyDecision(
-    state(fullStaminaSelf({ x: 0 }), [activeInvulnerable(10000, 72000)]),
+    state(fullStaminaSelf({ x: 0 }), [activeInvulnerable(9000, 72000)]),
     realtimeInvulnerableReady
   );
   assert.strictEqual(activeCloseAction.reason, 'profit-active-invulnerable-separate');
+  // Protection is nearly over, so the wait station releases and the runner is
+  // allowed to close to combat spacing instead of holding the band. The release
+  // has to hold for two consecutive frames, so the first triggered frame still
+  // waits - one noisy ETA sample cannot move the navigation target.
+  const activeEtaConfirmAction = activeApproachAdapter.applyDecision(
+    state(fullStaminaSelf({ x: 0 }), [activeInvulnerable(11000, 12000)]),
+    realtimeInvulnerableReady
+  );
+  assert.strictEqual(activeEtaConfirmAction.reason, 'profit-active-invulnerable-distance-hold');
+  const activeEtaCloseAction = activeApproachAdapter.applyDecision(
+    state(fullStaminaSelf({ x: 0 }), [activeInvulnerable(11000, 12000)]),
+    realtimeInvulnerableReady
+  );
+  assert.notStrictEqual(activeEtaCloseAction.reason, 'profit-active-invulnerable-distance-hold');
+  // A countdown that rises is a fresh protection period, so the retained
+  // approach state is dropped instead of carrying the previous period's
+  // release into it.
+  const activeProtectionResetAction = activeApproachAdapter.applyDecision(
+    state(fullStaminaSelf({ x: 0 }), [activeInvulnerable(11000, 72000)]),
+    realtimeInvulnerableReady
+  );
+  assert.strictEqual(
+    activeProtectionResetAction.reason,
+    'profit-active-invulnerable-distance-hold'
+  );
   const realtimeInvulnerableTooClose = decide(
     realtimeInvulnerableAdapter,
     state(fullStaminaSelf(), [activeInvulnerable(20000, 72000)]),
@@ -3076,6 +3181,7 @@ function runRemoteProfitDecisionSelfTest() {
   assertPassiveRealtimeDamageDoesNotDiscardRemoteMission();
   assertLowerValuePassiveEnemyDoesNotTakeRemotePrimaryMission();
   assertActivePlayerPickupRadiusCoinCompetition();
+  assertEstablishedPlayerMissionHoldsAgainstHighValueCoin();
   assertSelfKillReleasesSupersededMission();
   assertRemoteMissionDoesNotOverrideRealtimeProfit();
   assertProfitMissionContinuityRegressions();
@@ -3457,7 +3563,7 @@ function runRemoteProfitDecisionSelfTest() {
   assert.strictEqual(lowDropDecision.profit?.postKillCoinSuppression?.removedCount, 1);
   assert.strictEqual(lowDropDecision.stateful.profitMission?.targetId, '99');
 
-  return { ok: true, cases: 88 };
+  return { ok: true, cases: 92 };
 }
 
 if (require.main === module) {

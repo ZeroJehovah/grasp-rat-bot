@@ -112,6 +112,7 @@ const {
 const { runCombatShotExecutionSelfTest } = require('./combat-shot-execution-self-test');
 const { runCombatTargetFrameGapSelfTest } = require('./combat-target-frame-gap-self-test');
 const { runIncomingPressureSelfTest } = require('./incoming-pressure-self-test');
+const { runInvulnerableWaitStationSelfTest } = require('./invulnerable-wait-station-self-test');
 const { runLootRacePositioningSelfTest } = require('./loot-race-positioning-self-test');
 const { createSourceIpController } = require('./source-ip-controller');
 const {
@@ -9784,6 +9785,7 @@ async function runBrowserlessRunnerSelfTest() {
     const combatShotExecution = runCombatShotExecutionSelfTest();
     const combatTargetFrameGap = runCombatTargetFrameGapSelfTest();
     const incomingPressure = runIncomingPressureSelfTest();
+    const invulnerableWaitStation = runInvulnerableWaitStationSelfTest();
     const lootRacePositioning = runLootRacePositioningSelfTest();
     const dynamicWhitelist = await require('./dynamic-whitelist-self-test').runDynamicWhitelistSelfTest();
     const recoveryContact = require('./recovery-contact-self-test').runRecoveryContactSelfTest();
@@ -9891,6 +9893,7 @@ async function runBrowserlessRunnerSelfTest() {
         && combatShotExecution.ok
         && combatTargetFrameGap.ok
         && incomingPressure.ok
+        && invulnerableWaitStation.ok
         && lootRacePositioning.ok
         && dynamicWhitelist.ok
         && recoveryContact.ok
@@ -9988,6 +9991,7 @@ async function runBrowserlessRunnerSelfTest() {
       combatShotExecution,
       combatTargetFrameGap,
       incomingPressure,
+      invulnerableWaitStation,
       lootRacePositioning,
       dynamicWhitelist,
       recoveryContact,

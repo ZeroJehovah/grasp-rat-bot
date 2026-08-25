@@ -15,6 +15,12 @@ const {
   rawInvulnerabilityMsToWallMs,
   rawInvulnerabilityMsFrom
 } = require('./invulnerability-time');
+const { invulnerableApproachWindowCore } = require('./invulnerable-approach-window');
+const {
+  profitTargetDistanceCorrectionCore,
+  freshestProfitTargetPositionCore
+} = require('./profit-target-distance-correction');
+const { playerMissionHoldsAgainstHighValueCoinCore } = require('./opportunity-choice');
 
 function scoring(target) {
   const distance = Number(target.distance || 0);
@@ -68,6 +74,262 @@ function evaluateAt(self, entities, overrides = {}) {
   }, { scoreTarget: (_entity, details) => scoring({ ...details, drop: _entity.drop, distance: details.distance }) });
 }
 
+// The wait station, its hysteresis band, the measured close-in ETA and the risk
+// budget replace the old fixed boundary hold, so each branch is pinned here.
+function assertInvulnerableApproachWindow() {
+  const self = { x: 0, y: 0 };
+  const stationary = { x: 11500, y: 0 };
+  const held = invulnerableApproachWindowCore({
+    self,
+    target: stationary,
+    invulnerable: true,
+    targetActive: true,
+    distanceCm: 11500,
+    remainingMs: 60000
+  });
+  assert.strictEqual(held.active, true);
+  assert.strictEqual(held.phase, 'wait');
+  assert.strictEqual(held.waitDistanceCm, 11000);
+  assert.strictEqual(held.holdFloorCm, 10000);
+  assert.strictEqual(held.releaseDistanceCm, 12000);
+  assert.strictEqual(held.engagementDistanceCm, 6500);
+  assert.strictEqual(held.closingSpeedCmPerSec, 792);
+  assert.strictEqual(held.closeEtaMs, 5682);
+  assert.strictEqual(held.triggerRemainingMs, 7182);
+  assert.strictEqual(held.hold, true);
+  assert.strictEqual(held.separate, false);
+  assert.strictEqual(held.approach, false);
+  assert.strictEqual(held.reason, 'invulnerable-wait-station-hold');
+
+  const inside = invulnerableApproachWindowCore({
+    self, target: stationary, invulnerable: true, targetActive: true, distanceCm: 8000, remainingMs: 60000
+  });
+  assert.strictEqual(inside.separate, true);
+  assert.strictEqual(inside.hold, false);
+
+  const outside = invulnerableApproachWindowCore({
+    self, target: stationary, invulnerable: true, targetActive: true, distanceCm: 20000, remainingMs: 60000
+  });
+  assert.strictEqual(outside.approach, true);
+  assert.strictEqual(outside.hold, false);
+
+  const closing = invulnerableApproachWindowCore({
+    self, target: stationary, invulnerable: true, targetActive: true, distanceCm: 11000, remainingMs: 7000
+  });
+  assert.strictEqual(closing.phase, 'closing');
+  assert.strictEqual(closing.separate, false);
+  assert.strictEqual(closing.reason, 'invulnerable-close-eta-reached');
+
+  const staminaHold = invulnerableApproachWindowCore({
+    self,
+    target: stationary,
+    invulnerable: true,
+    targetActive: true,
+    distanceCm: 11000,
+    remainingMs: 7000,
+    stamina5sRemainingMilli: 2000
+  });
+  assert.strictEqual(staminaHold.phase, 'wait');
+  assert.strictEqual(staminaHold.riskBudget.ok, false);
+  assert(staminaHold.riskBudget.reasons.includes('stamina-5s-below-approach-reserve'));
+  assert.strictEqual(staminaHold.reason, 'invulnerable-close-risk-budget-hold');
+
+  const hpHold = invulnerableApproachWindowCore({
+    self, target: stationary, invulnerable: true, targetActive: true, distanceCm: 11000, remainingMs: 7000, selfHp: 50
+  });
+  assert(hpHold.riskBudget.reasons.includes('self-hp-below-approach-floor'));
+
+  const shotHold = invulnerableApproachWindowCore({
+    self,
+    target: stationary,
+    invulnerable: true,
+    targetActive: true,
+    distanceCm: 11000,
+    remainingMs: 7000,
+    unavoidableCurrentShot: true
+  });
+  assert(shotHold.riskBudget.reasons.includes('unavoidable-current-shot'));
+  assert.strictEqual(shotHold.phase, 'wait');
+
+  const framesHold = invulnerableApproachWindowCore({
+    self,
+    target: stationary,
+    invulnerable: true,
+    targetActive: true,
+    distanceCm: 11000,
+    remainingMs: 7000,
+    unavoidableShotFrames: 3
+  });
+  assert(framesHold.riskBudget.reasons.includes('recent-unavoidable-shots'));
+
+  // A protocol "invulnerable, duration unknown" countdown must never release.
+  const unknown = invulnerableApproachWindowCore({
+    self, target: stationary, invulnerable: true, targetActive: true, distanceCm: 11000, remainingMs: -1
+  });
+  assert.strictEqual(unknown.remainingMs, null);
+  assert.strictEqual(unknown.phase, 'wait');
+  assert.strictEqual(unknown.reason, 'invulnerable-unknown-remaining-hold');
+
+  assert.strictEqual(invulnerableApproachWindowCore({
+    self, target: stationary, invulnerable: false, targetActive: true, distanceCm: 11000, remainingMs: 60000
+  }).reason, 'not-invulnerable');
+  assert.strictEqual(invulnerableApproachWindowCore({
+    self, target: stationary, invulnerable: true, targetActive: false, distanceCm: 11000, remainingMs: 60000
+  }).reason, 'target-not-active');
+  assert.strictEqual(invulnerableApproachWindowCore({
+    self, target: stationary, invulnerable: true, targetActive: true, remainingMs: 60000
+  }).reason, 'unknown-distance');
+
+  // A stale planner request outside the configured band is clamped, not obeyed.
+  assert.strictEqual(invulnerableApproachWindowCore({
+    self,
+    target: stationary,
+    invulnerable: true,
+    targetActive: true,
+    distanceCm: 11000,
+    remainingMs: 60000,
+    waitDistanceCm: 15000
+  }).waitDistanceCm, 12000);
+  assert.strictEqual(invulnerableApproachWindowCore({
+    self,
+    target: stationary,
+    invulnerable: true,
+    targetActive: true,
+    distanceCm: 11000,
+    remainingMs: 60000,
+    waitDistanceCm: 3000
+  }).waitDistanceCm, 10000);
+
+  // `vx` is cm per 50ms server tick, so a fleeing target lowers the closing
+  // speed and lengthens the close-in trigger.
+  const fleeing = invulnerableApproachWindowCore({
+    self,
+    target: { x: 11000, y: 0, vx: 10, vy: 0 },
+    invulnerable: true,
+    targetActive: true,
+    distanceCm: 11000,
+    remainingMs: 60000
+  });
+  assert.strictEqual(fleeing.closingSpeedCmPerSec, 632);
+  assert.strictEqual(fleeing.closeEtaMs, 7120);
+  assert.strictEqual(fleeing.triggerRemainingMs, 8620);
+}
+
+// The snapshot worker prices the move leg from its own separation, which can be
+// minutes stale by the time the planner arbitrates the candidate.
+function assertProfitTargetDistanceCorrection() {
+  const corrected = profitTargetDistanceCorrectionCore({
+    snapshotDistanceCm: 44179,
+    snapshotStaminaCost: 131230,
+    snapshotBaseScore: 10,
+    freshDistanceCm: 29436
+  });
+  assert.strictEqual(corrected.applied, true);
+  assert.strictEqual(corrected.reason, 'fresh-distance-move-stamina-recomputed');
+  assert.strictEqual(corrected.fixedStaminaCost, 87051);
+  assert.strictEqual(corrected.staminaCost, 116487);
+  assert.strictEqual(corrected.distanceCm, 29436);
+  assert.strictEqual(corrected.staminaDeltaMilli, -14743);
+  assert(Math.abs(corrected.baseScore - 10 * (131230 / 116487)) < 1e-9);
+  assert(corrected.baseScore > 10, 'a closer target than the snapshot claimed scores higher');
+
+  const unchanged = profitTargetDistanceCorrectionCore({
+    snapshotDistanceCm: 30000,
+    snapshotStaminaCost: 50000,
+    snapshotBaseScore: 4,
+    freshDistanceCm: 30000
+  });
+  assert.strictEqual(unchanged.applied, false);
+  assert.strictEqual(unchanged.staminaCost, 50000);
+  assert.strictEqual(unchanged.baseScore, 4);
+
+  // A snapshot cost at or below its own move component was priced with another
+  // model, so re-adding a move leg at this rate would invent a cost.
+  const foreignModel = profitTargetDistanceCorrectionCore({
+    snapshotDistanceCm: 90000,
+    snapshotStaminaCost: 1000,
+    snapshotBaseScore: 10,
+    freshDistanceCm: 220500
+  });
+  assert.strictEqual(foreignModel.applied, false);
+  assert.strictEqual(foreignModel.reason, 'snapshot-cost-excludes-move-component');
+  assert.strictEqual(foreignModel.staminaCost, 1000);
+  assert.strictEqual(foreignModel.baseScore, 10);
+
+  assert.strictEqual(profitTargetDistanceCorrectionCore({
+    snapshotDistanceCm: 44179, snapshotStaminaCost: 131230, snapshotBaseScore: 10
+  }).reason, 'missing-fresh-distance');
+  assert.strictEqual(profitTargetDistanceCorrectionCore({
+    snapshotBaseScore: 10, freshDistanceCm: 29436
+  }).reason, 'missing-snapshot-economics');
+  assert.strictEqual(profitTargetDistanceCorrectionCore({
+    snapshotDistanceCm: 44179, snapshotStaminaCost: 131230, snapshotBaseScore: 10, freshDistanceCm: 29436
+  }, { opportunityMoveStaminaPerCm: 0 }).reason, 'no-move-stamina-component');
+
+  const arrived = profitTargetDistanceCorrectionCore({
+    snapshotDistanceCm: 40000,
+    snapshotStaminaCost: 40001,
+    snapshotBaseScore: 2,
+    freshDistanceCm: 0
+  });
+  assert.strictEqual(arrived.staminaCost, 1);
+}
+
+function assertFreshestProfitTargetPosition() {
+  const snapshotOnly = freshestProfitTargetPositionCore({
+    snapshotX: 44000, snapshotY: 0, snapshotAgeMs: 120000
+  });
+  assert.strictEqual(snapshotOnly.source, 'snapshot');
+  assert.strictEqual(snapshotOnly.position.x, 44000);
+
+  const realtime = freshestProfitTargetPositionCore({
+    snapshotX: 44000, snapshotY: 0, snapshotAgeMs: 120000,
+    realtimeX: 29000, realtimeY: 1000, realtimeAgeMs: 500
+  });
+  assert.strictEqual(realtime.source, 'realtime');
+  assert.strictEqual(realtime.position.x, 29000);
+  assert.strictEqual(realtime.position.authority, 'realtime');
+
+  assert.strictEqual(freshestProfitTargetPositionCore({
+    snapshotX: 44000, snapshotY: 0, snapshotAgeMs: 120000,
+    realtimeX: 29000, realtimeY: 0, realtimeAgeMs: 5000
+  }).source, 'snapshot-realtime-stale');
+  assert.strictEqual(freshestProfitTargetPositionCore({
+    snapshotX: 44000, snapshotY: 0, snapshotAgeMs: 100,
+    realtimeX: 29000, realtimeY: 0, realtimeAgeMs: 500
+  }).source, 'snapshot-newer');
+  assert.strictEqual(freshestProfitTargetPositionCore({
+    snapshotX: 44000, snapshotY: 0, snapshotAgeMs: 120000,
+    realtimeX: 29000, realtimeY: 0, realtimeAgeMs: 5000
+  }, { profitTargetRealtimePositionMaxAgeMs: 8000 }).source, 'realtime');
+  assert.strictEqual(freshestProfitTargetPositionCore({}).source, 'none');
+  assert.strictEqual(freshestProfitTargetPositionCore({ realtimeX: 1, realtimeY: 2, realtimeAgeMs: 100 }).source, 'realtime');
+}
+
+// The high-value-visible-coin shortcut is arbitrated ahead of the ordinary
+// profit choice, so the same hold rule has to apply there.
+function assertPlayerMissionHoldsAgainstHighValueCoin() {
+  const mission = { type: 'enemy', score: 100 };
+  assert.strictEqual(playerMissionHoldsAgainstHighValueCoinCore(mission, { score: 90 }), true);
+  assert.strictEqual(playerMissionHoldsAgainstHighValueCoinCore(mission, { score: 120 }), false);
+  assert.strictEqual(playerMissionHoldsAgainstHighValueCoinCore(mission, { score: 120 }, {
+    coinPreemptionRelativeMargin: 0.25
+  }), true);
+  assert.strictEqual(playerMissionHoldsAgainstHighValueCoinCore(mission, { score: 130 }, {
+    coinPreemptionRelativeMargin: 0.25
+  }), false);
+  // Our own primary target's drop is never held against.
+  assert.strictEqual(playerMissionHoldsAgainstHighValueCoinCore(mission, {
+    score: 10, primaryTargetDropPriority: true
+  }), false);
+  assert.strictEqual(playerMissionHoldsAgainstHighValueCoinCore({ type: 'coin', score: 100 }, { score: 10 }), false);
+  assert.strictEqual(playerMissionHoldsAgainstHighValueCoinCore({
+    type: 'remote-player-navigation', score: 10
+  }, { score: 5 }), true);
+  assert.strictEqual(playerMissionHoldsAgainstHighValueCoinCore({ type: 'enemy' }, { score: 5 }), false);
+  assert.strictEqual(playerMissionHoldsAgainstHighValueCoinCore(mission, null), false);
+}
+
 function runRemoteProfitTargetsSelfTest() {
   assert.strictEqual(remoteProfitDistanceFactor(50000), 1);
   assert.strictEqual(remoteProfitDistanceFactor(100000), 0.75);
@@ -79,8 +341,8 @@ function runRemoteProfitTargetsSelfTest() {
     playerDropPickupRadiusCm: 220,
     invulnerableAfkApproachDistanceCm: 0
   }), 220);
-  assert.strictEqual(remoteProfitApproachDistanceCm('easy-kill-active'), 15000);
-  assert.strictEqual(remoteProfitApproachEtaMs(100000, {}, 'easy-kill-active'), 89474);
+  assert.strictEqual(remoteProfitApproachDistanceCm('easy-kill-active'), 11000);
+  assert.strictEqual(remoteProfitApproachEtaMs(100000, {}, 'easy-kill-active'), 93684);
   assert.strictEqual(rawInvulnerabilityMsToWallMs(36600), 15250);
   assert.strictEqual(rawInvulnerabilityMsToWallMs(34200), 14250);
   assert.strictEqual(rawInvulnerabilityMsFrom({ invulnerable_remaining_ms: 36600 }), 15250);
@@ -240,7 +502,7 @@ function runRemoteProfitTargetsSelfTest() {
     online: true
   }, { scoreTarget: (_entity, details) => scoring({ ...details, drop: _entity.drop, distance: details.distance }) });
   assert.strictEqual(invulnerableActiveReady.candidates.length, 1);
-  assert.strictEqual(invulnerableActiveReady.candidates[0].approachDistanceCm, 15000);
+  assert.strictEqual(invulnerableActiveReady.candidates[0].approachDistanceCm, 11000);
   const invulnerableActiveLate = evaluateRemoteProfitTargets({
     self: { user_id: 1, x: 0, y: 0 },
     entities: [target({ user_id: 24, x: 100000, current_join_mode: 'Active', invulnerable: true, invulnerableRemainingMs: 89475 })],
@@ -347,7 +609,11 @@ function runRemoteProfitTargetsSelfTest() {
   assert.strictEqual(movedSelfOpportunities[0].baseScore, opportunities[0].baseScore);
   assert.strictEqual(movedSelfOpportunities[0].distanceFactor, opportunities[0].distanceFactor);
   assert.strictEqual(movedSelfOpportunities[0].adjustedScore, opportunities[0].adjustedScore);
-  return { ok: true, cases: 55 };
+  assertInvulnerableApproachWindow();
+  assertProfitTargetDistanceCorrection();
+  assertFreshestProfitTargetPosition();
+  assertPlayerMissionHoldsAgainstHighValueCoin();
+  return { ok: true, cases: 93 };
 }
 
 if (require.main === module) {

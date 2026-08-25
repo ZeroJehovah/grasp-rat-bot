@@ -28,8 +28,13 @@ const { estimateEightWayRouteCore } = require('../../strategy/eight-way-route-et
 const { invulnerableProfitSelectionCostCore } = require('../../strategy/invulnerable-profit-selection');
 const {
   chooseStableOpportunityCore,
-  rememberOpportunityChoiceCore
+  rememberOpportunityChoiceCore,
+  playerMissionHoldsAgainstHighValueCoinCore
 } = require('../../strategy/opportunity-choice');
+const {
+  profitTargetDistanceCorrectionCore,
+  freshestProfitTargetPositionCore
+} = require('../../strategy/profit-target-distance-correction');
 const {
   DEFAULT_REMOTE_PROFIT_TARGET_CONFIG,
   remoteProfitApproachDistanceCm,
@@ -210,7 +215,7 @@ const EASY_KILL_SEEK_RANGE_CM_BY_SCORE = Object.freeze({
   3: null
 });
 const DEFAULT_INVULNERABLE_PROFIT_APPROACH_DISTANCE_CM = BROWSER_RUNTIME_DEFAULTS.playerDropPickupRadiusCm ?? 150;
-const DEFAULT_INVULNERABLE_ACTIVE_PROFIT_APPROACH_DISTANCE_CM = 15000;
+const DEFAULT_INVULNERABLE_ACTIVE_PROFIT_APPROACH_DISTANCE_CM = BROWSER_RUNTIME_DEFAULTS.invulnerableActiveProfitApproachDistanceCm ?? 11000;
 const DEFAULT_INVULNERABLE_PROFIT_MOVE_SPEED_CM_PER_SEC = 1000;
 const DEFAULT_DANGEROUS_TARGET_COOLDOWN_MS = BROWSER_RUNTIME_DEFAULTS.browserlessDangerousTargetCooldownMs ?? 900000;
 const DEFAULT_EASY_KILL_APPROACH_WINDOW_MS = BROWSER_RUNTIME_DEFAULTS.browserlessEasyKillApproachWindowMs ?? 8000;
@@ -4977,6 +4982,9 @@ function buildHighValueVisibleCoinPriorityDecision(input, combatDecision, option
     ignoreReturnBlock: true,
     reward: effectiveCoinProfitReward(coin),
     staminaCost: opportunityCoinStaminaCost(coin, options),
+    // Same scale as the ordinary opportunity score, so the arbitration layer can
+    // compare this shortcut against an established player mission.
+    coinOpportunityScore: scoreCoinOpportunity(coin, options),
     target: summarizeCoin(coin),
     highValueCoinPriority: {
       amount: Math.max(0, Math.round(Number(coin.amount || 0))),
@@ -7209,6 +7217,49 @@ function realtimeProfitAuthorityIds(input = {}, options = {}) {
   return ids;
 }
 
+const PROFIT_TARGET_REALTIME_POSITION_LIMIT = 64;
+
+// Remember where realtime/native observation last saw each player so a remote
+// snapshot candidate for the same player can be scored from that fresher
+// position. A snapshot batch can be minutes old; a player who just left the
+// nearby projection still has a far better known position than the batch.
+// Entries expire on age, so this never becomes a second snapshot source.
+function observeRealtimeProfitTargetPositions(input = {}, stateful = {}, options = {}) {
+  if (!(stateful.profitTargetRealtimePositions instanceof Map)) {
+    stateful.profitTargetRealtimePositions = new Map();
+  }
+  const store = stateful.profitTargetRealtimePositions;
+  const nowMs = Number(input?.nowMs);
+  if (!Number.isFinite(nowMs)) return store;
+  const maxAgeMs = Math.max(0, Number(
+    options.profitTargetRealtimePositionMaxAgeMs
+      ?? BROWSER_RUNTIME_DEFAULTS.profitTargetRealtimePositionMaxAgeMs
+      ?? 3000
+  ));
+  for (const target of input.visibleTargets || []) {
+    if (target?.authority !== 'realtime' && target?.authority !== 'native') continue;
+    const userId = easyKillTargetUserId(target);
+    if (userId === null) continue;
+    const x = Number(target.x);
+    const y = Number(target.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    const id = String(userId);
+    // Re-insert so Map iteration order stays recency ordered for eviction.
+    store.delete(id);
+    store.set(id, { x, y, observedAtMs: nowMs });
+  }
+  for (const [id, entry] of store) {
+    const observedAtMs = Number(entry?.observedAtMs);
+    if (!Number.isFinite(observedAtMs) || nowMs - observedAtMs > maxAgeMs) store.delete(id);
+  }
+  while (store.size > PROFIT_TARGET_REALTIME_POSITION_LIMIT) {
+    const oldest = store.keys().next();
+    if (oldest.done) break;
+    store.delete(oldest.value);
+  }
+  return store;
+}
+
 function remoteProfitCandidateInput(input, options = {}, stateful = {}) {
   const batch = input?.remoteProfitBatch && typeof input.remoteProfitBatch === 'object'
     ? input.remoteProfitBatch
@@ -7225,6 +7276,8 @@ function remoteProfitCandidateInput(input, options = {}, stateful = {}) {
     invalidatedIds: [],
     inputCount: Number(batch?.candidates?.length || 0),
     filtered: {},
+    positionSources: {},
+    distanceCorrectedCount: 0,
     valid: false,
     ageMs: null,
     expiresAt: batch?.expiresAtMs ? new Date(Number(batch.expiresAtMs)).toISOString() : ''
@@ -7268,6 +7321,7 @@ function remoteProfitCandidateInput(input, options = {}, stateful = {}) {
     .filter(id => !visibleIds.has(id) || realtimeAuthorityIds.has(id)));
   const missSuppressed = new Set((batch.missSuppressedIds || []).map(String));
   const completedProfitTargets = observeCompletedProfitTargets(input, stateful, options);
+  const realtimeProfitPositions = observeRealtimeProfitTargetPositions(input, stateful, options);
   const batchTick = positiveTick(batch?.tick);
   const tickEpoch = currentProfitTickEpoch(stateful);
   for (const id of visibleIds) {
@@ -7315,22 +7369,66 @@ function remoteProfitCandidateInput(input, options = {}, stateful = {}) {
       ? null
       : Math.max(0, snapshotRemainingMs - result.ageMs);
     const approachDistanceCm = remoteProfitApproachDistanceCm(classification, options);
-    const distanceNow = distanceBetween(input.self, candidate);
+    const realtimePosition = realtimeProfitPositions.get(id) || null;
+    const freshestPosition = freshestProfitTargetPositionCore({
+      snapshotX: candidate.x,
+      snapshotY: candidate.y,
+      snapshotAgeMs: result.ageMs,
+      realtimeX: realtimePosition?.x,
+      realtimeY: realtimePosition?.y,
+      realtimeAgeMs: realtimePosition
+        ? Math.max(0, input.nowMs - Number(realtimePosition.observedAtMs))
+        : null
+    }, options);
+    result.positionSources[freshestPosition.source] = Number(
+      result.positionSources[freshestPosition.source] || 0
+    ) + 1;
+    const distanceNow = freshestPosition.position
+      ? distanceBetween(input.self, freshestPosition.position)
+      : NaN;
     if (!Number.isFinite(distanceNow)) {
       reject('invalid-current-distance');
       continue;
     }
+    // Arrival is a staleness proof about the snapshot's own claim: standing on
+    // the claimed position with nothing visible there disproves the snapshot.
+    // It therefore stays measured from the snapshot position even when a fresher
+    // realtime memory is driving navigation and the economics correction.
+    const snapshotDistanceNow = distanceBetween(input.self, { x: candidate.x, y: candidate.y });
+    const arrivalDistanceCm = Number.isFinite(snapshotDistanceNow) ? snapshotDistanceNow : distanceNow;
     // Keep an invulnerable target selected through its configured approach
     // band so the action layer can stop there and retain the mission until
     // native state clears protection.  A normal remote target uses the
     // ordinary arrival tolerance and can then hand off to realtime combat.
-    if (!snapshotInvulnerable && distanceNow <= arrivalToleranceCm) {
+    if (!snapshotInvulnerable && arrivalDistanceCm <= arrivalToleranceCm) {
       missSuppressed.add(id);
       reject('arrival-target-missing');
       continue;
     }
     const approachEtaMs = remoteProfitApproachEtaMs(distanceNow, options, classification);
-    if (!opportunityStaminaAffordable(input.self, candidate.staminaCost, options)) {
+    // The worker priced the move leg from the snapshot's own separation. That
+    // term dominates a distant player's cost, so an aged batch can inflate the
+    // cost and deflate the score by tens of percent against the coin and
+    // realtime candidates this one is arbitrated with. Reprice the move leg
+    // from the distance we actually have to travel now and rescale the score
+    // by the same ratio; the completion terms do not depend on separation.
+    const distanceCorrection = profitTargetDistanceCorrectionCore({
+      snapshotDistanceCm: candidate.distance,
+      snapshotStaminaCost: candidate.staminaCost,
+      snapshotBaseScore: candidate.baseScore,
+      freshDistanceCm: distanceNow
+    }, options);
+    if (distanceCorrection.applied) result.distanceCorrectedCount += 1;
+    const staminaCostNow = Number.isFinite(Number(distanceCorrection.staminaCost))
+      ? Number(distanceCorrection.staminaCost)
+      : Number(candidate.staminaCost);
+    const baseScoreNow = Number.isFinite(Number(distanceCorrection.baseScore))
+      ? Number(distanceCorrection.baseScore)
+      : Number(candidate.baseScore);
+    const scoreScale = Number(candidate.baseScore) > 0 && baseScoreNow > 0
+      ? baseScoreNow / Number(candidate.baseScore)
+      : 1;
+    if (!opportunityStaminaAffordable(input.self, staminaCostNow, options)) {
       reject('stamina-unaffordable');
       continue;
     }
@@ -7342,39 +7440,58 @@ function remoteProfitCandidateInput(input, options = {}, stateful = {}) {
     );
     const selection = selectionRecalculationRequired
       ? invulnerableProfitSelectionCostCore({
-          staminaCost: candidate.staminaCost,
+          staminaCost: staminaCostNow,
           expectedReward: candidate.expectedReward,
           invulnerable: snapshotInvulnerable && (remainingNowMs === null || remainingNowMs > 0),
           invulnerableRemainingMs: remainingNowMs,
           approachEtaMs
         }, options)
       : {
-          selectionStaminaCost: candidate.selectionStaminaCost ?? candidate.staminaCost,
+          selectionStaminaCost: staminaCostNow,
           selectionNetROI: candidate.selectionNetROI ?? null,
           selectionScoreMultiplier: 1,
           applied: false,
           reason: 'snapshot-score-authoritative'
         };
-    const distanceFactor = selectionRecalculationRequired
-      ? remoteProfitDistanceFactor(distanceNow, options)
-      : Number(candidate.distanceFactor);
+    // `distance` on the pushed candidate is the corrected separation, so the
+    // distance factor has to come from the same number in both branches or the
+    // stored score no longer matches the stored distance. The snapshot's own
+    // factor came from its own separation, so a score we carry through instead
+    // of recomputing is rescaled by the ratio between the two factors.
+    const distanceFactor = remoteProfitDistanceFactor(distanceNow, options);
+    const snapshotDistanceFactorRaw = Number(candidate.distanceFactor);
+    const snapshotDistanceFactor = Number.isFinite(snapshotDistanceFactorRaw) && snapshotDistanceFactorRaw > 0
+      ? snapshotDistanceFactorRaw
+      : Number(remoteProfitDistanceFactor(candidate.distance, options));
+    const distanceFactorScale = Number.isFinite(snapshotDistanceFactor) && snapshotDistanceFactor > 0
+      && Number.isFinite(Number(distanceFactor)) && Number(distanceFactor) > 0
+      ? Number(distanceFactor) / snapshotDistanceFactor
+      : 1;
     const selectionScore = selectionRecalculationRequired
-      ? Number(candidate.baseScore) * Number(selection.selectionScoreMultiplier || 0)
-      : Number(candidate.selectionScore ?? candidate.baseScore ?? candidate.adjustedScore);
+      ? baseScoreNow * Number(selection.selectionScoreMultiplier || 0)
+      : Number(candidate.selectionScore ?? candidate.baseScore ?? candidate.adjustedScore) * scoreScale;
     const adjustedScore = selectionRecalculationRequired
       ? selectionScore * Number(distanceFactor)
-      : Number(candidate.adjustedScore);
+      : Number(candidate.adjustedScore) * scoreScale * distanceFactorScale;
     if (!(adjustedScore > 0)) {
       reject('non-positive-current-score');
       continue;
     }
     result.candidates.push({
       ...candidate,
+      ...(freshestPosition.source === 'realtime'
+        ? { x: freshestPosition.position.x, y: freshestPosition.position.y }
+        : {}),
       distance: distanceNow,
+      snapshotDistance: candidate.distance,
+      positionSource: freshestPosition.source,
       invulnerable: snapshotInvulnerable && (remainingNowMs === null || remainingNowMs > 0),
       invulnerableRemainingMs: remainingNowMs,
       approachDistanceCm,
       approachEtaMs,
+      staminaCost: staminaCostNow,
+      baseScore: baseScoreNow,
+      distanceCorrection,
       selectionStaminaCost: selection.selectionStaminaCost,
       selectionNetROI: selection.selectionNetROI,
       invulnerableSelection: selection,
@@ -14341,6 +14458,36 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     committedHighValueCoinPriorityAction
       && hpValue(input.self) > highValueCoinPriorityHealthyHp(options)
   );
+  // The coin shortcut is arbitrated ahead of the ordinary profit choice, so it
+  // can break a player mission the choice layer would have held. Recovery keeps
+  // the shortcut unconditionally; otherwise a player mission that already
+  // outscores the coin - by a margin once the mission is established - keeps
+  // ownership, which is what stops the coin/player flip-flop.
+  const establishedPlayerProfitMission = Boolean(
+    retainedProfitMissionTargetId
+      && opportunity.choice
+      && String(retainedProfitMissionTargetId) === String(opportunityChoiceTargetId(opportunity.choice))
+  );
+  const playerMissionHoldsAgainstCoinPriority = Boolean(
+    committedHighValueCoinPriorityAction
+      && !isRecoveringSelf(input.self)
+      && playerMissionHoldsAgainstHighValueCoinCore(
+        opportunity.choice,
+        {
+          score: committedHighValueCoinPriorityAction.coinOpportunityScore,
+          primaryTargetDropPriority: primaryTargetDropPriorityAction
+        },
+        {
+          coinPreemptionRelativeMargin: establishedPlayerProfitMission
+            ? Math.max(0, Number(
+              options.coinPreemptionRelativeMargin
+                ?? BROWSER_RUNTIME_DEFAULTS.coinPreemptionRelativeMargin
+                ?? 0
+            ))
+            : 0
+        }
+      )
+  );
   const preTargetIncomingSafetyAction = input.self && !realtimeStale
     ? buildBrowserlessPreTargetIncomingSafetyDecision(input, incomingThreatAssessment, safetyContextOptions)
     : null;
@@ -14734,6 +14881,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       candidate(
         committedHighValueCoinPriorityAction
           && (primaryTargetDropPriorityAction || !singleCoinBaitReleaseAction)
+          && !playerMissionHoldsAgainstCoinPriority
           ? committedHighValueCoinPriorityAction
           : null,
         70,
@@ -14975,6 +15123,14 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       threshold: opportunity.threshold,
       switch: opportunity.switchDiagnostics || null,
       missingEnemyHold: cloneJson(opportunity.missingEnemyHold || null),
+      coinPriorityHold: committedHighValueCoinPriorityAction ? {
+        held: playerMissionHoldsAgainstCoinPriority,
+        established: establishedPlayerProfitMission,
+        missionType: String(opportunity.choice?.type || ''),
+        missionScore: numberOrNull(opportunity.choice?.score),
+        coinScore: numberOrNull(committedHighValueCoinPriorityAction.coinOpportunityScore),
+        primaryTargetDrop: primaryTargetDropPriorityAction
+      } : null,
       coinRouteBaitExclusion: cloneJson(opportunity.coinRouteBaitExclusion || null),
       postKillCoinSuppression,
       remoteProfit: cloneJson(opportunity.remoteProfit || null),

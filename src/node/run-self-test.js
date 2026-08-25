@@ -47462,8 +47462,12 @@ async function runSelfTest() {
 	          y: 0,
 	          active: true,
 	          invulnerable: true,
-	          invulnerableRemainingMs: 5550,
+	          // Well beyond the close-in ETA, so the wait station still owns the
+	          // decision and the merge assertions below stay the point of the case.
+	          invulnerableRemainingMs: 30000,
 	          invulnerableMetadataAuthority: 'snapshot',
+	          // Above the wait-station clamp on purpose: the band is capped to the
+	          // configured maximum instead of following a stale planner request.
           invulnerableApproachDistanceCm: 15000,
 	          easyKillKnown: true,
 	          easyKillProfitTarget: true,
@@ -47516,7 +47520,7 @@ async function runSelfTest() {
 	          commands.includes('shoot')
 	        ].join('|');
 	      })(),
-      want: 'velocity|profit-active-invulnerable-separate|true|5550|snapshot|stop|profit-easy-kill-combat-handoff|false|0|realtime|false'
+      want: 'velocity|profit-active-invulnerable-separate|true|30000|snapshot|stop|profit-easy-kill-combat-handoff|false|0|realtime|false'
 	    },
 	    {
 	      name: 'browserless easy-kill approach stops after eight-second low-closing window',
