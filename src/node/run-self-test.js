@@ -38031,7 +38031,9 @@ async function runSelfTest() {
           /\.target-flee\{--target-color:rgba\(96,165,250,\.82\)/.test(panelText),
           /\.target-bait\{--target-color:rgba\(251,191,36,\.95\)/.test(panelText),
           /\.target-name\{display:inline-flex;align-items:center;[^}]*vertical-align:middle/.test(panelText),
-          /\.target-current \.target-name,\.target-route-next \.target-name\{padding-left:4px\}/.test(panelText),
+          // 竖条 3px 之后还要留 5px, 与 .target-icon 的 margin-right 一致,
+          // 否则"竖条-图标"没有间距而"图标-名称"有。
+          /\.target-current \.target-name,\.target-route-next \.target-name\{padding-left:8px\}/.test(panelText),
           /\.target-current::before,\.target-route-next::before\{content:"";position:absolute;left:0;top:-1px;bottom:-1px;width:3px;background:var\(--target-color\)/.test(panelText),
           /\.target-icon\{display:inline-block;[^}]*align-self:center;[^}]*vertical-align:middle;[^}]*transform:translateY\(1px\);[^}]*color:var\(--target-color\);fill:currentColor/.test(panelText),
           /\.target-icon-coin\{transform:translateY\(0\)\}/.test(panelText),
@@ -38578,13 +38580,16 @@ async function runSelfTest() {
         return [
           panelScript.includes("addRow(rowsOut, '退出威胁', targetLabel(exitThreat), true)"),
           panelScript.includes("function hpTriggeredExit(status, reason)"),
-          panelScript.includes("hpTriggeredExit(status, reason) ? '退出触发血量' : '退出时血量'"),
+          panelScript.includes('const hpTriggered = hpTriggeredExit(status, reason);'),
+          panelScript.includes("hpTriggered ? '退出触发血量' : '退出时血量'"),
+          // 战斗面板已经给出我方起止血量时, 非血量触发的退出不再重复一行。
+          panelScript.includes('&& (hpTriggered || !battleHasSelfOverview);'),
           panelScript.includes('if (engagedTargets.length > 1)'),
           panelScript.includes("parts.push(name + ' ' + number(target.hp))"),
           panelScript.includes('if (engagedTargets.length <= 1 && hpGap !== null)')
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless miss-close exit preserves quantitative reason detail',
@@ -39134,11 +39139,14 @@ async function runSelfTest() {
           !/return '检查中'/.test(panelScript),
           panelScript.includes("text: '检测到角色仍在线，正在恢复实时连接（不会新登录）'"),
           panelScript.includes("reentry ? '连接状态' : '登录点'"),
-          panelScript.includes("reentry ? '当前坐标' : '登录点坐标'"),
+          // 登录点坐标是固定配置, 离线面板不需要再占一行。
+          !panelScript.includes("reentry ? '当前坐标' : '登录点坐标'"),
           panelScript.includes("if (loginDisplay.state === 'unsafe') {"),
           panelScript.includes("addRow(rowsOut, '等待原因', loginPointPendingReasonText(status));"),
-          panelScript.includes("if (!loginDisplay.afterOffline && !loginDisplay.cooldown)"),
-          panelScript.includes("loginDisplay.reviewing ? '上次检查时间' : '检查时间'"),
+          // 快照块已经给出"最近检查"时, 安全块不再重复同一个时间。
+          panelScript.includes("if (!snapshotStateShown && !loginDisplay.afterOffline && !loginDisplay.cooldown)"),
+          panelScript.includes("addRow(rowsOut, '最近检查', fullStamp(snapshotCheckAt));"),
+          !panelScript.includes("loginDisplay.reviewing ? '上次检查时间' : '检查时间'"),
           /function dangerousPlayerExitReasonText/.test(panelScript),
           panelScript.includes("evidence.push('快照为 Active')"),
           panelScript.includes("evidence.push('近期有活动')"),
@@ -39179,7 +39187,7 @@ async function runSelfTest() {
           hiddenActionLabels.every(label => !panelScript.includes("addRow(rowsOut, '" + label + "'"))
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless web panel explains shutdown exits and confirmed leave snapshot waits',

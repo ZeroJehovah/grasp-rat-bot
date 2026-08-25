@@ -8929,6 +8929,54 @@ async function runBrowserlessRunnerSelfTest() {
       {}
     );
     const panelRecoveryRoles = panelTargetRolesCore(panelRecoveryCompact);
+    // 保留的 exit-recovery 事件只是"最后一次需要退出确认的退出",
+    // 它的失败原因不能跨过后来一次干净的确认离场继续显示在面板上。
+    const staleRecoveryExitEvent = {
+      at: '2026-08-25T06:13:48.734Z',
+      classification: 'exit-recovery',
+      reason: 'frame-gap',
+      error: 'frame-gap',
+      shouldLeave: true
+    };
+    const panelStaleRecoveryErrorCompact = buildCompactBrowserlessStatus(
+      browserlessCompactStatusSource({
+        session: { userId: 7, sessionToken: 'panel-stale-recovery-self-test-token' },
+        runner: {
+          running: true,
+          exitRecoveryOutcomes: [{
+            exitAttemptId: 'panel-stale-recovery-attempt',
+            originalReason: 'restart-drain-ready',
+            outcome: 'confirmed-absent',
+            startedAt: '2026-08-25T07:42:11.803Z',
+            completedAt: '2026-08-25T07:42:11.949Z',
+            durationMs: 146,
+            httpStatuses: [200],
+            lastHp: 100,
+            reloginAllowed: true
+          }]
+        },
+        recentExits: [
+          staleRecoveryExitEvent,
+          {
+            at: '2026-08-25T07:42:11.949Z',
+            reason: 'restart-drain-ready',
+            shouldLeave: true,
+            leaveConfirmation: { at: '2026-08-25T07:42:11.949Z', selfHp: 100 }
+          }
+        ],
+        current: { self: { userId: 7, name: 'self', x: 0, y: 0, hp: 100, maxHp: 100 } }
+      }),
+      {}
+    );
+    const panelUnconfirmedRecoveryErrorCompact = buildCompactBrowserlessStatus(
+      browserlessCompactStatusSource({
+        session: { userId: 7, sessionToken: 'panel-unconfirmed-recovery-self-test-token' },
+        runner: { running: true },
+        recentExits: [staleRecoveryExitEvent],
+        current: { self: { userId: 7, name: 'self', x: 0, y: 0, hp: 62, maxHp: 100 } }
+      }),
+      {}
+    );
     const panelProfitHoldCompact = buildCompactBrowserlessStatus(
       browserlessCompactStatusSource({
         session: { userId: 7, sessionToken: 'panel-profit-hold-self-test-token' },
@@ -9312,21 +9360,81 @@ async function runBrowserlessRunnerSelfTest() {
           && pageHtml.includes("if (phase === 'snapshot-wait') return '正在等待新的登录点快照';")
           && pageHtml.includes("if (loginPointSafetyCheckInFlight(status)) return '正在检查登录点安全';")
           && pageHtml.includes("checking: true, text: '上次检查不安全，正在检查新快照'")
-          && pageHtml.includes('if (!loginDisplay.afterOffline && !loginDisplay.cooldown)')
+          && pageHtml.includes('if (!snapshotStateShown && !loginDisplay.afterOffline && !loginDisplay.cooldown)')
           && pageHtml.includes("return '等待登录点快照安全检查'")
           && pageHtml.includes("if (reason === 'login-point-safe-connecting') return '登录点已安全，正在连接游戏'")
           && pageHtml.includes("text: '上次检查安全，等待新快照'")
           && pageHtml.includes("text: '上次检查不安全，等待新快照'")
           && pageHtml.includes("if (display.reviewing) return classAttrs('warn');")
-          && pageHtml.includes("loginDisplay.reviewing ? '上次检查时间' : '检查时间'")
+          // 离线面板只保留一个"最近检查"时间, 快照拉取/完成/安全检查不再各占一行。
+          && pageHtml.includes("addRow(rowsOut, '最近检查', fullStamp(snapshotCheckAt))")
+          && !pageHtml.includes("loginDisplay.reviewing ? '上次检查时间' : '检查时间'")
+          && !pageHtml.includes("addRow(rowsOut, '最近拉取时间'")
+          && !pageHtml.includes("addRow(rowsOut, '最近完成时间'")
+          && !pageHtml.includes("addRow(rowsOut, '最近快照完成时间'")
           && pageHtml.includes("if (online && !liveCombat) addRow(rowsOut, '原因', actionReasonDisplay(status), true)")
           && pageHtml.includes("const liveCombat = Boolean(realtimeOnline && (kind === 'combat-live' || action.kind === 'combat-live'))")
           && pageHtml.includes("'活动 ' + bool(target.active)")
           && !pageHtml.includes("'危险 ' + bool(target.active)")
           && pageHtml.includes('const exit = status.game?.inGame')
-          && pageHtml.includes("addRow(rowsOut, '下次快照检查', fullStamp(scheduledSnapshotCheckAt))")
-          && pageHtml.includes("addRow(rowsOut, '检查倒计时', countdownUntil(scheduledSnapshotCheckAt)")
-          && pageHtml.includes("addRow(rowsOut, '冷却剩余', countdownUntil(cooldownAt)")
+          // 计划时刻和它的倒计时是同一件事, 合并成一行并由 countdownPrefix 续算。
+          && pageHtml.includes("addRow(rowsOut, '下次快照检查', scheduledAtText(scheduledSnapshotCheckAt), false, scheduledAtAttrs(scheduledSnapshotCheckAt))")
+          && pageHtml.includes("addRow(rowsOut, '冷却结束', scheduledAtText(cooldownAt), false, scheduledAtAttrs(cooldownAt))")
+          && pageHtml.includes("const scheduledAtText = iso => {")
+          && pageHtml.includes("return clock === '--' ? stampText : stampText + '（' + clock + '后）';")
+          && pageHtml.includes("const scheduledAtAttrs = iso => ({ countdownAt: iso, countdownPrefix: fullStamp(iso) });")
+          && pageHtml.includes("const prefix = node.dataset.countdownPrefix || '';")
+          && !pageHtml.includes("addRow(rowsOut, '检查倒计时'")
+          && !pageHtml.includes("addRow(rowsOut, '冷却剩余'")
+          && !pageHtml.includes("addRow(rowsOut, '重试剩余'")
+          // Cloudflare 挑战只保留状态/时间/一条合并的检测详情。
+          && pageHtml.includes("addRow(rowsOut, '检测详情', joinNonBlank([")
+          && !pageHtml.includes("addRow(rowsOut, '检测依据'")
+          && !pageHtml.includes("addRow(rowsOut, 'HTTP 状态'")
+          && !pageHtml.includes("addRow(rowsOut, 'CF Ray'")
+          && !pageHtml.includes("addRow(rowsOut, '游戏状态'")
+          && !pageHtml.includes("addRow(rowsOut, '退出请求',")
+          // 退出历史归"上次退出", "当前动作"只在退出确认仍是当前动作时展示,
+          // 失败原因必须翻译, 不能把原始英文 token 直接标红。
+          && pageHtml.includes("if (!online && (recovery.active || action.kind === 'exit-recovery')) {")
+          && pageHtml.includes("addRow(rowsOut, '退出确认失败', reasonText(recovery.lastError), true, classAttrs('bad'));")
+          && !pageHtml.includes("addRow(rowsOut, '退出触发', reasonText(recovery.triggerReason)")
+          && !pageHtml.includes("addRow(rowsOut, '最近退出请求'")
+          && !pageHtml.includes("addRow(rowsOut, '最近响应'")
+          && pageHtml.includes("addRow(rowsOut, '预检结果', sourceIpPreflightLastResultText(status.network));")
+          && !pageHtml.includes("addRow(rowsOut, reentry ? '当前坐标' : '登录点坐标'")
+          // 上次退出: 确认与确认时间合并, 干净的 200 与"重登许可 是"不占行。
+          && pageHtml.includes("? confirmationText + '（' + fullStamp(recovery.confirmationAt) + '）'")
+          && !pageHtml.includes("addRow(rowsOut, '退出确认时间'")
+          && pageHtml.includes('if (httpStatuses.some(item => number(item) !== 200)) {')
+          && pageHtml.includes('if (recovery.reloginAllowed !== true) {')
+          && pageHtml.includes("addRow(rowsOut, '下次退出确认', scheduledAtText(recovery.nextRetryAt), false, scheduledAtAttrs(recovery.nextRetryAt));")
+          // 主目标连线必须跟随它指向的对象上色: 金币黄、挂机绿、快照灰,
+          // 只有真实战斗才是红色。视野外与金币目标没有玩家 marker,
+          // 需要回落到目标描述而不是整条线默认成战斗红。
+          && pageHtml.includes('function mapTargetPathColor(status, target, marker) {')
+          && pageHtml.includes("if (marker?.kind === 'coin') return '#fbbf24';")
+          && pageHtml.includes("if (marker?.kind === 'player' && marker.color) return marker.color;")
+          && pageHtml.includes('function mapTargetDescriptorRole(target) {')
+          && pageHtml.includes('function mapTargetNearbyRole(status, target) {')
+          && pageHtml.includes('function mapTargetMatchesCoin(target, item) {')
+          && pageHtml.includes('color: mapTargetPathColor(status, target, marker || (fallbackPoint?.kind ? fallbackPoint : null)),')
+          && pageHtml.includes('role: coinRole,')
+          // 视野外目标行沿用同类视野内图标, 行样式仍提供快照灰。
+          && pageHtml.includes("const targetIcon = targetType === 'remote-snapshot'")
+          && pageHtml.includes("? (afkTarget ? 'afk' : 'combat')")
+          && pageHtml.includes("{ text: name, icon: selected ? targetIcon : '' },")
+          // 竖条 3px + 竖条-图标 5px, 与图标-名称的 5px 一致, 且只右移名称列。
+          && pageHtml.includes('.target-current .target-name,.target-route-next .target-name{padding-left:8px}')
+          // 已确认离场没有失败可报, 但保留事件仍要留给诊断用。
+          && panelStaleRecoveryErrorCompact.exitRecovery.state === 'confirmed-absent'
+          && panelStaleRecoveryErrorCompact.exitRecovery.lastError === ''
+          && panelStaleRecoveryErrorCompact.exitRecovery.lastAttemptAt === '2026-08-25T07:42:11.803Z'
+          && panelStaleRecoveryErrorCompact.exitRecovery.confirmationAt === '2026-08-25T07:42:11.949Z'
+          && panelStaleRecoveryErrorCompact.exitRecovery.lastRecoveryEvent?.lastError === 'frame-gap'
+          && panelUnconfirmedRecoveryErrorCompact.exitRecovery.state !== 'confirmed-absent'
+          && panelUnconfirmedRecoveryErrorCompact.exitRecovery.lastError === 'frame-gap'
+          && panelUnconfirmedRecoveryErrorCompact.exitRecovery.lastAttemptAt === '2026-08-25T06:13:48.734Z'
           && pageHtml.includes('Date.parse(reconnectAt) <= Date.now()')
           && !pageHtml.includes("addRow(rowsOut, '预检进度'")
           && !pageHtml.includes("addRow(rowsOut, '当前测试 IP'")
@@ -9602,6 +9710,19 @@ async function runBrowserlessRunnerSelfTest() {
         targetMarkerAvoidsAdjacentOverlap,
         targetMarkerBoundaryOwnership,
         loginPointBlockerPanelPresent,
+        staleRecoveryError: {
+          confirmed: {
+            state: panelStaleRecoveryErrorCompact.exitRecovery.state,
+            lastError: panelStaleRecoveryErrorCompact.exitRecovery.lastError,
+            lastAttemptAt: panelStaleRecoveryErrorCompact.exitRecovery.lastAttemptAt,
+            retainedEventError: panelStaleRecoveryErrorCompact.exitRecovery.lastRecoveryEvent?.lastError || ''
+          },
+          unconfirmed: {
+            state: panelUnconfirmedRecoveryErrorCompact.exitRecovery.state,
+            lastError: panelUnconfirmedRecoveryErrorCompact.exitRecovery.lastError,
+            lastAttemptAt: panelUnconfirmedRecoveryErrorCompact.exitRecovery.lastAttemptAt
+          }
+        },
         panelDetailTest
       };
     } finally {

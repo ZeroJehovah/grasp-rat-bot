@@ -2230,12 +2230,15 @@ function compactExitRecoveryStatus(normalized, recentExit, action, nowMs = Date.
         || recoveryExit?.reason,
       160
     ),
-    lastAttemptAt: pending?.lastAttemptAt || recoveryExit?.at || '',
+    lastAttemptAt: pending?.lastAttemptAt || lastOutcome?.startedAt || recoveryExit?.at || '',
     confirmationAt: lastOutcome?.completedAt || leaveConfirmation?.at || '',
     confirmedHp: confirmed ? effectiveLastHp : null,
     lastKnownHp: effectiveLastHp,
     minHp: compactNumber(lastOutcome?.minHp ?? pending?.minHp ?? recoveryExit?.injury?.currentHp),
-    lastError: compactString(pending?.lastError || recoveryExit?.lastError, 240),
+    // A confirmed exit has no failure to report. The retained recovery event is
+    // only the last exit that ever needed recovery, so carrying its error across
+    // a later clean leave showed a stale failure hours after the exit succeeded.
+    lastError: compactString(pending?.lastError || (confirmed ? '' : recoveryExit?.lastError), 240),
     httpStatuses,
     nextRetryAt: pending?.nextRetryAt || '',
     remainingMs: pending?.remainingMs ?? null,

@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.25.4';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.25.5';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -681,7 +681,7 @@ function renderBrowserlessWebPanel() {
     .target-route-next.target-coin{--target-color:rgba(251,191,36,.45);--target-bg:rgba(251,191,36,.07)}
     .target-bait{--target-color:rgba(251,191,36,.95);--target-bg:rgba(251,191,36,.16)}
     .target-name{display:inline-flex;align-items:center;min-width:0;vertical-align:middle}
-    .target-current .target-name,.target-route-next .target-name{padding-left:4px}
+    .target-current .target-name,.target-route-next .target-name{padding-left:8px}
     .target-name-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .target-icon{display:inline-block;width:16px;height:16px;flex:0 0 16px;align-self:center;margin-right:5px;overflow:visible;vertical-align:middle;transform:translateY(1px);color:var(--target-color);fill:currentColor}
     .target-icon-coin{transform:translateY(0)}
@@ -1000,6 +1000,15 @@ function renderBrowserlessWebPanel() {
       const n = number(remainingMs);
       return n === null ? '--' : String(Math.max(0, Math.floor(n / 1000))) + '/' + maxSeconds;
     };
+    // A scheduled time and its countdown are one fact, so render them in one
+    // row. updateCountdownNodes() rebuilds the same shape from the prefix.
+    const scheduledAtText = iso => {
+      const stampText = fullStamp(iso);
+      if (stampText === '--') return '--';
+      const clock = countdownUntil(iso);
+      return clock === '--' ? stampText : stampText + '（' + clock + '后）';
+    };
+    const scheduledAtAttrs = iso => ({ countdownAt: iso, countdownPrefix: fullStamp(iso) });
     const sourceIpProbeLastResultText = network => {
       const round = network?.sourceIpProbe?.lastRound;
       if (!round) return '--';
@@ -2430,6 +2439,12 @@ function renderBrowserlessWebPanel() {
       if (targetId && rowId) return targetId === rowId;
       return !targetId && Boolean(target.name) && String(target.name) === String(item?.[0] || '');
     }
+    function mapTargetMatchesCoin(target, item) {
+      if (!target || String(target.type || '') !== 'coin') return false;
+      const targetId = target.id === null || target.id === undefined ? '' : String(target.id);
+      const rowId = item?.[0] === null || item?.[0] === undefined ? '' : String(item[0]);
+      return Boolean(targetId) && targetId === rowId;
+    }
     function snapshotNavigationTarget(status) {
       const target = status?.action?.target;
       return target?.authority === 'snapshot-navigation' && target?.remoteNavigationOnly === true
@@ -2618,11 +2633,38 @@ function renderBrowserlessWebPanel() {
       context.setLineDash([]);
       context.restore();
     }
-    function mapTargetPathColor(marker) {
+    function mapTargetDescriptorRole(target) {
+      if (!target || typeof target !== 'object') return '';
+      const type = String(target.type || '');
+      if (type === 'coin') return 'coin';
+      if (type === 'remote-player-navigation'
+        || target.remoteNavigationOnly === true
+        || String(target.authority || '') === 'snapshot-navigation') return 'remote-snapshot';
+      return target.active === true || target.moving === true || target.firing === true ? 'combat' : 'afk';
+    }
+    function mapTargetNearbyRole(status, target) {
+      if (!target) return '';
+      const rows = Array.isArray(status?.nearby?.p) ? status.nearby.p : [];
+      const item = rows.find(row => mapTargetMatchesPlayer(target, row));
+      if (!item) return '';
+      return isAfkNearbyPlayer(item) ? 'afk' : 'combat';
+    }
+    // The target line must always match the colour of the thing it points at:
+    // yellow for coins, green for AFK profit, grey for snapshot-only
+    // navigation, red only for real combat. Out-of-view and coin targets have
+    // no player marker, so fall back to the target descriptor instead of
+    // defaulting the whole line to combat red.
+    function mapTargetPathColor(status, target, marker) {
+      if (marker?.kind === 'coin') return '#fbbf24';
+      if (marker?.kind === 'player' && marker.color) return marker.color;
       if (marker?.targetRole === 'combat') return '#fb7185';
       if (marker?.targetRole === 'remote-snapshot') return '#9ca3af';
       if (marker?.targetRole === 'afk') return '#4ade80';
-      return '#fb7185';
+      const descriptorRole = mapTargetDescriptorRole(target);
+      if (descriptorRole === 'coin') return '#fbbf24';
+      if (descriptorRole === 'remote-snapshot') return '#9ca3af';
+      const nearbyRole = mapTargetNearbyRole(status, target) || descriptorRole;
+      return nearbyRole === 'afk' ? '#4ade80' : '#fb7185';
     }
     function mapTargetPathPoint(target, scene, frame) {
       if (!target) return null;
@@ -2646,14 +2688,14 @@ function renderBrowserlessWebPanel() {
         || markers.find(marker => marker.targetRole === 'afk')
         || markers.find(marker => marker.targetRole === 'remote-snapshot');
       const secondaryTarget = markers.find(marker => marker.role === 'secondary');
-      const add = (role, target, marker, fallbackPoint, color, dashed) => {
+      const add = (role, target, marker, fallbackPoint, dashed) => {
         const point = marker || fallbackPoint;
         if (!point) return;
         entries.push({
           key: mapTargetLineKey(role, target, point),
           point: { px: point.px, py: point.py },
           fromMarker: Boolean(marker),
-          color: mapTargetPathColor(point),
+          color: mapTargetPathColor(status, target, marker || (fallbackPoint?.kind ? fallbackPoint : null)),
           dashed
         });
       };
@@ -2664,7 +2706,6 @@ function renderBrowserlessWebPanel() {
         targetRoles?.primary,
         primaryMarker,
         primaryProjected || (playerTarget?.role !== 'primary' ? playerTarget : null),
-        mapTargetPathColor(primaryMarker || primaryProjected),
         false
       );
       const secondaryMarker = secondaryTarget?.role === 'secondary' ? secondaryTarget : null;
@@ -2674,7 +2715,6 @@ function renderBrowserlessWebPanel() {
         targetRoles?.secondary,
         secondaryMarker,
         secondaryProjected,
-        mapTargetPathColor(secondaryMarker || secondaryProjected),
         true
       );
       return entries;
@@ -2945,6 +2985,11 @@ function renderBrowserlessWebPanel() {
         const dy = y - selfY;
         if (Math.hypot(dx, dy) > visibleRange * 1.01) continue;
         const amount = Math.max(0, number(item?.[1]) || 0);
+        // Coin markers carry the primary/secondary role so the target line can
+        // end on the animated coin marker and keep the coin colour.
+        const coinRole = mapTargetMatchesCoin(targetRoles?.primary, item)
+          ? 'primary'
+          : (mapTargetMatchesCoin(targetRoles?.secondary, item) ? 'secondary' : '');
         markers.push({
           mapKey: mapMarkerKey('coin', item?.[0]),
           px: frame.center + dx * scale,
@@ -2952,6 +2997,7 @@ function renderBrowserlessWebPanel() {
           radius: Math.min(5.5, 2.5 + Math.log2(amount + 1) * .55),
           color: '#fbbf24',
           kind: 'coin',
+          role: coinRole,
           selected: panelFlag(item?.[3]),
           routeOrder: Math.max(0, number(item?.[4]) || 0),
           invulnerable: false,
@@ -3233,8 +3279,14 @@ function renderBrowserlessWebPanel() {
             ? 'flee'
             : (isSnapshotTarget ? 'remote-snapshot' : (afkTarget ? 'afk' : 'combat'));
           const rowClass = selected ? 'target-current target-' + targetType : '';
+          // Snapshot (out-of-view) targets have no icon of their own; reuse the
+          // in-view icon for the same kind so the row keeps its leading marker.
+          // The row class still supplies the snapshot colour.
+          const targetIcon = targetType === 'remote-snapshot'
+            ? (afkTarget ? 'afk' : 'combat')
+            : targetType;
           fragment.appendChild(createNearbyRow('player', [
-            { text: name, icon: selected && targetType !== 'remote-snapshot' ? targetType : '' },
+            { text: name, icon: selected ? targetIcon : '' },
             hpCell,
             staminaCell,
             { text: integer(drop), className: 'coin' },
@@ -3720,10 +3772,10 @@ function renderBrowserlessWebPanel() {
         addRow(rowsOut, '出口预检', sourceIpPreflightPhaseText(status.network), true,
           preflightPhase === 'insufficient' ? classAttrs('bad') : classAttrs('info'));
         if (['retry-wait', 'insufficient', 'login-failed'].includes(preflightPhase)) {
-          addRow(rowsOut, '最近响应', sourceIpPreflightLastResultText(status.network));
+          addRow(rowsOut, '预检结果', sourceIpPreflightLastResultText(status.network));
         }
         if (preflightPhase === 'retry-wait') {
-          addRow(rowsOut, '下次重试', countdownUntil(preflight.nextRetryAt), false, { countdownAt: preflight.nextRetryAt });
+          addRow(rowsOut, '下次重试', scheduledAtText(preflight.nextRetryAt), false, scheduledAtAttrs(preflight.nextRetryAt));
         }
         if (preflightPhase === 'deferred') {
           addRow(rowsOut, '延期说明', sourceIpDeferredDetailText(status), true, classAttrs('warn'));
@@ -3736,19 +3788,29 @@ function renderBrowserlessWebPanel() {
         ? status.runner.connectionFailure
         : null;
       if (!online && cloudflareChallenge) {
+        // One line for the state, one for when it happened, one that carries
+        // every identifier needed to look the challenge up.
         addRow(rowsOut, '连接状态', 'Cloudflare 挑战已确认，已停止自动登录', true, classAttrs('bad'));
-        addRow(rowsOut, '检测依据', Array.isArray(cloudflareChallenge.evidence) && cloudflareChallenge.evidence.length
-          ? cloudflareChallenge.evidence.join('、')
-          : '响应明确标记为 Challenge');
         addRow(rowsOut, '检测时间', fullStamp(cloudflareChallenge.detectedAt));
-        addRow(rowsOut, 'HTTP 状态', cloudflareChallenge.status || '--');
-        addRow(rowsOut, 'CF Ray', cloudflareChallenge.cfRay || '--');
-        addRow(rowsOut, '游戏状态', cloudflareChallenge.inGameEvidence ? '存在游戏内证据' : '未确认进入游戏');
-        addRow(rowsOut, '退出请求', cloudflareChallenge.leaveAttempted
-          ? (cloudflareChallenge.leaveConfirmed ? '已调用并确认' : '已调用但未确认')
-          : '未调用 leave');
+        addRow(rowsOut, '检测详情', joinNonBlank([
+          cloudflareChallenge.status ? 'HTTP ' + cloudflareChallenge.status : '',
+          cloudflareChallenge.cfRay ? 'CF Ray ' + cloudflareChallenge.cfRay : '',
+          Array.isArray(cloudflareChallenge.evidence) && cloudflareChallenge.evidence.length
+            ? cloudflareChallenge.evidence.join('、')
+            : '响应明确标记为 Challenge'
+        ]));
       }
       const snapshot = snapshotPanelStatus(status);
+      // Attempt and completion of the same offline poll are milliseconds apart,
+      // so one "最近检查" line carries the whole fact.
+      const snapshotCheckAt = snapshot.scheduler?.lastCompletedAt
+        || snapshot.status?.lastCompletedAt
+        || snapshot.scheduler?.lastAttemptAt
+        || snapshot.status?.lastAttemptAt
+        || status.loginPointSafety?.checkedAt
+        || status.loginPointSafety?.detail?.checkedAt
+        || status.loginPointSafety?.detail?.previousCheck?.checkedAt
+        || '';
       const hasSnapshotActivity = Boolean(
         snapshot.status?.lastCompletedAt
           || snapshot.status?.lastAttemptAt
@@ -3756,31 +3818,24 @@ function renderBrowserlessWebPanel() {
           || snapshot.scheduler?.lastAttemptAt
           || snapshot.poller?.nextAttemptAt
       );
-      if (!online && hasSnapshotActivity) {
+      const snapshotStateShown = !online && hasSnapshotActivity;
+      if (snapshotStateShown) {
         addRow(rowsOut, '快照状态', snapshotResultDisplay(status), true,
           latestSnapshotFetchFailure(status) ? classAttrs('bad') : classAttrs('info'));
-        addRow(rowsOut, '最近拉取时间', fullStamp(
-          snapshot.scheduler?.lastAttemptAt || snapshot.status?.lastAttemptAt
-        ));
-        addRow(rowsOut, '最近完成时间', fullStamp(
-          snapshot.scheduler?.lastCompletedAt || snapshot.status?.lastCompletedAt
-        ));
+        addRow(rowsOut, '最近检查', fullStamp(snapshotCheckAt));
       }
       const recovery = status.exitRecovery || {};
-      if (!online && (recovery.active || recovery.state !== 'none' || action.kind === 'exit-recovery')) {
+      // Exit history belongs to the 上次退出 panel. 当前动作 only reports the
+      // confirmation while it is still the action being performed.
+      if (!online && (recovery.active || action.kind === 'exit-recovery')) {
         addRow(rowsOut, '退出确认', exitRecoveryDisplay(status), true,
           recovery.active ? classAttrs('warn') : classAttrs(recovery.state === 'confirmed-absent' ? 'ok' : 'bad'));
-        addRow(rowsOut, '退出触发', reasonText(recovery.triggerReason), true);
-        addRow(rowsOut, '最近退出请求', fullStamp(recovery.lastAttemptAt));
-        if (number(recovery.lastKnownHp) !== null) addRow(rowsOut, '最后已知血量', number(recovery.lastKnownHp));
-        if (recovery.httpStatuses?.length) addRow(rowsOut, '最近响应', exitRecoveryHttpText(status));
-        if (recovery.lastError) addRow(rowsOut, '退出确认失败', recovery.lastError, true, classAttrs('bad'));
-        if (recovery.active && recovery.nextRetryAt) {
-          addRow(rowsOut, '下次退出确认', fullStamp(recovery.nextRetryAt));
-          addRow(rowsOut, '重试剩余', countdownUntil(recovery.nextRetryAt), false, { countdownAt: recovery.nextRetryAt });
+        if (recovery.lastError) {
+          addRow(rowsOut, '退出确认失败', reasonText(recovery.lastError), true, classAttrs('bad'));
         }
-        addRow(rowsOut, '重登许可', recovery.reloginAllowed === true ? '是' : '否', true,
-          recovery.reloginAllowed === true ? classAttrs('ok') : classAttrs('warn'));
+        if (recovery.active && recovery.nextRetryAt) {
+          addRow(rowsOut, '下次退出确认', scheduledAtText(recovery.nextRetryAt), false, scheduledAtAttrs(recovery.nextRetryAt));
+        }
       }
       if (online && !liveCombat) addRow(rowsOut, '原因', actionReasonDisplay(status), true);
       const decisionText = targetDecisionBasisText(status, targetRoles);
@@ -3806,43 +3861,28 @@ function renderBrowserlessWebPanel() {
       if (!realtimeOnline && isSafetyStatus(status, kind, reason)) {
         const reentry = loginDisplay.state === 'reentry';
         addRow(rowsOut, reentry ? '连接状态' : '登录点', loginPointText(status), false, loginPointAttrs(status));
-        addRow(rowsOut, reentry ? '当前坐标' : '登录点坐标', pointCoordText(status.loginPointSafety?.point));
         if (loginDisplay.state === 'unsafe') {
           addRow(rowsOut, '不安全原因', unsafeReasonText(status));
           addRow(rowsOut, '阻碍因素', blockingFactorsText(status));
           const singleBlocker = singleBlockerHoldText(status);
           if (singleBlocker !== '--') addRow(rowsOut, '单人阻挡', singleBlocker);
-        } else if (loginDisplay.state === 'error') {
+        } else if (loginDisplay.state === 'error' && !snapshotStateShown) {
           addRow(rowsOut, '快照状态', snapshotFailureText(status), true, classAttrs('bad'));
         } else if (loginDisplay.state === 'pending') {
           addRow(rowsOut, '等待原因', loginPointPendingReasonText(status));
         }
         addRow(rowsOut, '保持离线', offlineBlockerText(status), false, status.stats?.offline?.blocker ? classAttrs('warn') : null);
-        if (!loginDisplay.afterOffline && !loginDisplay.cooldown) {
-          const snapshot = snapshotPanelStatus(status);
-          const latestCheckAt = snapshot.scheduler?.lastCompletedAt
-            || snapshot.status?.lastCompletedAt
-            || status.loginPointSafety?.checkedAt
-            || status.loginPointSafety?.detail?.checkedAt
-            || status.loginPointSafety?.detail?.previousCheck?.checkedAt;
-          addRow(
-            rowsOut,
-            latestSnapshotFetchFailure(status)
-              ? '最近快照完成时间'
-              : (reentry ? '状态确认时间' : (loginDisplay.reviewing ? '上次检查时间' : '检查时间')),
-            fullStamp(latestCheckAt)
-          );
+        if (!snapshotStateShown && !loginDisplay.afterOffline && !loginDisplay.cooldown) {
+          addRow(rowsOut, '最近检查', fullStamp(snapshotCheckAt));
         }
       }
 
       const scheduledSnapshotCheckAt = nextSnapshotCheckAt(status);
       const cooldownAt = offlineCooldownAt(status);
       if (!online && scheduledSnapshotCheckAt) {
-        addRow(rowsOut, '下次快照检查', fullStamp(scheduledSnapshotCheckAt));
-        addRow(rowsOut, '检查倒计时', countdownUntil(scheduledSnapshotCheckAt), false, { countdownAt: scheduledSnapshotCheckAt });
+        addRow(rowsOut, '下次快照检查', scheduledAtText(scheduledSnapshotCheckAt), false, scheduledAtAttrs(scheduledSnapshotCheckAt));
       } else if (!online && cooldownAt) {
-        addRow(rowsOut, '冷却结束', fullStamp(cooldownAt));
-        addRow(rowsOut, '冷却剩余', countdownUntil(cooldownAt), false, { countdownAt: cooldownAt });
+        addRow(rowsOut, '冷却结束', scheduledAtText(cooldownAt), false, scheduledAtAttrs(cooldownAt));
       }
 
       return rowsOut;
@@ -3857,18 +3897,25 @@ function renderBrowserlessWebPanel() {
       addRow(rowsOut, '退出时间', fullStamp(offlineStats.lastExitAt), true);
       const recovery = status.exitRecovery || {};
       if (recovery.active || recovery.state !== 'none' || recovery.lastOutcome) {
-        addRow(rowsOut, '退出确认', exitRecoveryDisplay(status), true,
+        // The confirmation and the moment it happened are one fact.
+        const confirmationText = exitRecoveryDisplay(status);
+        addRow(rowsOut, '退出确认',
+          confirmationText !== '--' && recovery.confirmationAt
+            ? confirmationText + '（' + fullStamp(recovery.confirmationAt) + '）'
+            : confirmationText,
+          true,
           recovery.active ? classAttrs('warn') : classAttrs(recovery.state === 'confirmed-absent' ? 'ok' : 'bad'));
-        if (recovery.confirmationAt) addRow(rowsOut, '退出确认时间', fullStamp(recovery.confirmationAt));
-        if (number(recovery.confirmedHp) !== null) addRow(rowsOut, '离场确认血量', '我方 ' + number(recovery.confirmedHp));
-        else if (number(recovery.lastKnownHp) !== null) addRow(rowsOut, '最后已知血量', '我方 ' + number(recovery.lastKnownHp));
-        if (recovery.httpStatuses?.length) addRow(rowsOut, '退出请求响应', exitRecoveryHttpText(status));
-        if (recovery.active && recovery.nextRetryAt) {
-          addRow(rowsOut, '下次退出确认', fullStamp(recovery.nextRetryAt));
-          addRow(rowsOut, '重试剩余', countdownUntil(recovery.nextRetryAt), false, { countdownAt: recovery.nextRetryAt });
+        // A clean 200 adds nothing to 已确认离场; only retries and errors do.
+        const httpStatuses = Array.isArray(recovery.httpStatuses) ? recovery.httpStatuses : [];
+        if (httpStatuses.some(item => number(item) !== 200)) {
+          addRow(rowsOut, '退出请求响应', exitRecoveryHttpText(status));
         }
-        addRow(rowsOut, '重登许可', recovery.reloginAllowed === true ? '是' : '否', true,
-          recovery.reloginAllowed === true ? classAttrs('ok') : classAttrs('warn'));
+        if (recovery.active && recovery.nextRetryAt) {
+          addRow(rowsOut, '下次退出确认', scheduledAtText(recovery.nextRetryAt), false, scheduledAtAttrs(recovery.nextRetryAt));
+        }
+        if (recovery.reloginAllowed !== true) {
+          addRow(rowsOut, '重登许可', '否', true, classAttrs('warn'));
+        }
       }
       const exitThreat = recentExitThreat(status);
       if (battle && !staminaExhausted) {
@@ -3889,6 +3936,9 @@ function renderBrowserlessWebPanel() {
       } else if (exitThreat && !staminaExhausted) {
         addRow(rowsOut, '退出威胁', targetLabel(exitThreat), true);
       }
+      // Every HP row below restates our own HP around the same exit. Keep at
+      // most the trigger and the confirmed leave, and only fall back to the
+      // last known value when neither is available.
       const injuryHpText = recentInjuryHpText(status);
       const battleHasSelfOverview = number(battle?.selfHpStart) !== null
         && number(battle?.selfHpEnd) !== null
@@ -3896,14 +3946,21 @@ function renderBrowserlessWebPanel() {
       if (!staminaExhausted && injuryHpText && !battleHasSelfOverview) {
         addRow(rowsOut, '退出判定受击', injuryHpText);
       }
+      const hpTriggered = hpTriggeredExit(status, reason);
       const exitHpText = combatExitHpText(status);
-      if (!staminaExhausted && exitHpText && exitHpText !== '--') {
-        addRow(rowsOut, hpTriggeredExit(status, reason) ? '退出触发血量' : '退出时血量', exitHpText);
+      const exitHpShown = !staminaExhausted && exitHpText && exitHpText !== '--'
+        && (hpTriggered || !battleHasSelfOverview);
+      if (exitHpShown) {
+        addRow(rowsOut, hpTriggered ? '退出触发血量' : '退出时血量', exitHpText);
       }
-      const confirmedHpText = recovery.confirmedHp === null || recovery.confirmedHp === undefined
+      const confirmedHpText = number(recovery.confirmedHp) === null
         ? confirmedLeaveHpText(status)
-        : '';
+        : '我方 ' + number(recovery.confirmedHp);
       if (confirmedHpText) addRow(rowsOut, '离场确认血量', confirmedHpText);
+      else if (!staminaExhausted && !exitHpShown && !battleHasSelfOverview
+        && number(recovery.lastKnownHp) !== null) {
+        addRow(rowsOut, '最后已知血量', '我方 ' + number(recovery.lastKnownHp));
+      }
       return rowsOut;
     }
     function updateLastExitPanel(status) {
@@ -4316,7 +4373,13 @@ function renderBrowserlessWebPanel() {
     }
     function updateCountdownNodes() {
       document.querySelectorAll('[data-countdown-at]').forEach(node => {
-        setValueText(node, countdownUntil(node.dataset.countdownAt || ''));
+        const clock = countdownUntil(node.dataset.countdownAt || '');
+        const prefix = node.dataset.countdownPrefix || '';
+        if (!prefix) {
+          setValueText(node, clock);
+          return;
+        }
+        setValueText(node, clock === '--' ? prefix : prefix + '（' + clock + '后）');
       });
       updateBattleDuration();
       if (lastStatusReceivedAtMs) {
