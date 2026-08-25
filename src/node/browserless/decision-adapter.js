@@ -9459,6 +9459,19 @@ function observeDropRaceLifecycles(input, stateful, previousSettlements, nextSet
         targetId: String(settlement.targetId || ''),
         coinKey: settlement.matchedCoinAuthority === 'realtime' ? settlement.matchedCoinKey || null : null,
         coinAmount: settlement.matchedCoinAuthority === 'realtime' ? numberOrNull(settlement.matchedCoinAmount) : null,
+        // Diagnostic-only record of the coin the settlement actually matched, with its
+        // authority stated explicitly.  The realtime-gated fields above keep their
+        // meaning; this only lets a reader tell "no realtime coin transport exists"
+        // apart from "a realtime coin existed but did not match".
+        matchedCoin: {
+          authority: settlement.matchedCoinAuthority || '',
+          key: settlement.matchedCoinKey || null,
+          amount: numberOrNull(settlement.matchedCoinAmount),
+          observedAtMs: numberOrNull(settlement.matchedCoinObservedAtMs),
+          ageMs: Number(settlement.matchedCoinObservedAtMs || 0) > 0
+            ? Math.max(0, nowMs - Number(settlement.matchedCoinObservedAtMs))
+            : null
+        },
         targetDrop: numberOrNull(settlement.targetDrop),
         targetDropAuthority: target?.dropAuthority || '',
         realtimeAuthority: 'realtime',

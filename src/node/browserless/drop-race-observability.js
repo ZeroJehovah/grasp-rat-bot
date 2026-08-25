@@ -100,17 +100,50 @@ function movementSummary(input = {}, action = {}, stateful = {}) {
   };
 }
 
+// Bounded, closed enum.  Diagnostic only: never read by target, aim, fire, Dodge,
+// movement, login, profit or exit logic.
+function matchedCoinSummary(value) {
+  if (!value || typeof value !== 'object') return null;
+  const raw = String(value.authority || '').toLowerCase();
+  const authority = raw === 'realtime' || raw === 'native'
+    ? 'realtime'
+    : (raw === 'snapshot' ? 'snapshot' : '');
+  const key = identifier(value.key);
+  const amount = finite(value.amount);
+  const observedAtMs = finite(value.observedAtMs);
+  const ageMs = finite(value.ageMs);
+  if (!authority && key === null && amount === null && observedAtMs === null) return null;
+  return {
+    authority,
+    key,
+    amount,
+    observedAtMs: observedAtMs === null ? null : Math.round(observedAtMs),
+    ageMs: ageMs === null ? null : Math.max(0, Math.round(ageMs))
+  };
+}
+
 function classify(detail = {}) {
   const picker = detail?.disappearance?.picker;
   const event = String(detail?.event || '');
-  if (picker?.id && picker?.authority === 'server') return 'confirmed';
-  if (!['settled', 'expired'].includes(event)) return 'unresolved';
-  if (Number(detail?.disappearance?.selfDropDelta) > 0
-    || (Array.isArray(detail?.disappearance?.competitorDropDeltas)
-      && detail.disappearance.competitorDropDeltas.some(item => Number(item?.delta) > 0))) {
-    return 'strong-inference';
+  if (picker?.id && picker?.authority === 'server') {
+    return { classification: 'confirmed', reason: 'server-picker' };
   }
-  return 'unresolved';
+  if (!['settled', 'expired'].includes(event)) {
+    return { classification: 'unresolved', reason: 'non-terminal-event' };
+  }
+  if (Number(detail?.disappearance?.selfDropDelta) > 0) {
+    return { classification: 'strong-inference', reason: 'self-drop-increase' };
+  }
+  if (Array.isArray(detail?.disappearance?.competitorDropDeltas)
+    && detail.disappearance.competitorDropDeltas.some(item => Number(item?.delta) > 0)) {
+    return { classification: 'strong-inference', reason: 'competitor-drop-increase' };
+  }
+  const authority = detail?.matchedCoin?.authority || '';
+  if (!authority) return { classification: 'unresolved', reason: 'no-matched-coin' };
+  if (authority !== 'realtime') {
+    return { classification: 'unresolved', reason: 'no-realtime-coin-authority' };
+  }
+  return { classification: 'unresolved', reason: 'no-drop-delta-observed' };
 }
 
 function sanitizeDropRaceLifecycle(detail = {}) {
@@ -153,6 +186,7 @@ function sanitizeDropRaceLifecycle(detail = {}) {
     targetId,
     coinKey: identifier(source.coinKey),
     coinAmount: finite(source.coinAmount),
+    matchedCoin: matchedCoinSummary(source.matchedCoin),
     targetDrop: finite(source.targetDrop),
     targetDropAuthority: identifier(source.targetDropAuthority),
     realtimeAuthority: 'realtime',
@@ -178,7 +212,9 @@ function sanitizeDropRaceLifecycle(detail = {}) {
     requestId: identifier(source.requestId),
     exitAttemptId: identifier(source.exitAttemptId)
   };
-  output.classification = classify(output);
+  const verdict = classify(output);
+  output.classification = verdict.classification;
+  output.classificationReason = verdict.reason;
   return output;
 }
 
@@ -288,9 +324,57 @@ module.exports = {
       event: 'drop-visible',
       disappearance: { selfDropDelta: 3, competitorDropDeltas: [] }
     });
-    if (nonterminalIncrease?.classification !== 'unresolved') {
+    if (nonterminalIncrease?.classification !== 'unresolved'
+      || nonterminalIncrease?.classificationReason !== 'non-terminal-event') {
       throw new Error('drop-race nonterminal inference rejection self-test failed');
     }
-    return { ok: true, cases: 8, maxCompetitors: realtime.competitors.length };
+    if (realtime?.classificationReason !== 'non-terminal-event'
+      || selfIncrease?.classificationReason !== 'self-drop-increase'
+      || competitorIncrease?.classificationReason !== 'competitor-drop-increase'
+      || confirmed?.classificationReason !== 'server-picker'
+      || missing?.classificationReason !== 'no-matched-coin') {
+      throw new Error('drop-race classification reason self-test failed');
+    }
+    // A snapshot-authority match must stay out of the realtime-gated fields while
+    // still explaining itself, so an operator can tell a missing realtime coin
+    // transport apart from a realtime coin that failed to match.
+    const snapshotMatched = sanitizeDropRaceLifecycle({
+      ...base,
+      event: 'settled',
+      coinKey: null,
+      coinAmount: null,
+      tDropMs: null,
+      matchedCoin: { authority: 'snapshot', key: 'coin-9', amount: 71, observedAtMs: 1000, ageMs: 250 },
+      disappearance: { selfDropDelta: 0, competitorDropDeltas: [] }
+    });
+    if (snapshotMatched?.coinKey !== null
+      || snapshotMatched?.coinAmount !== null
+      || snapshotMatched?.tDropMs !== null
+      || snapshotMatched?.matchedCoin?.authority !== 'snapshot'
+      || snapshotMatched?.matchedCoin?.key !== 'coin-9'
+      || snapshotMatched?.matchedCoin?.amount !== 71
+      || snapshotMatched?.matchedCoin?.ageMs !== 250
+      || snapshotMatched?.classification !== 'unresolved'
+      || snapshotMatched?.classificationReason !== 'no-realtime-coin-authority') {
+      throw new Error('drop-race snapshot matched-coin disclosure self-test failed');
+    }
+    const realtimeMatched = sanitizeDropRaceLifecycle({
+      ...base,
+      event: 'settled',
+      coinKey: 'coin-3',
+      coinAmount: 12,
+      matchedCoin: { authority: 'native', key: 'coin-3', amount: 12, observedAtMs: 2000, ageMs: -5 },
+      disappearance: { selfDropDelta: 0, competitorDropDeltas: [] }
+    });
+    if (realtimeMatched?.matchedCoin?.authority !== 'realtime'
+      || realtimeMatched?.matchedCoin?.ageMs !== 0
+      || realtimeMatched?.classification !== 'unresolved'
+      || realtimeMatched?.classificationReason !== 'no-drop-delta-observed') {
+      throw new Error('drop-race realtime matched-coin disclosure self-test failed');
+    }
+    if (sanitizeDropRaceLifecycle({ ...base, event: 'settled', matchedCoin: {} })?.matchedCoin !== null) {
+      throw new Error('drop-race empty matched-coin normalization self-test failed');
+    }
+    return { ok: true, cases: 11, maxCompetitors: realtime.competitors.length };
   }
 };
