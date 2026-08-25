@@ -102,12 +102,15 @@ function movementSummary(input = {}, action = {}, stateful = {}) {
 
 // Bounded, closed enum.  Diagnostic only: never read by target, aim, fire, Dodge,
 // movement, login, profit or exit logic.
+function evidenceAuthority(value) {
+  const raw = String(value || '').toLowerCase();
+  if (raw === 'realtime' || raw === 'native') return 'realtime';
+  return raw === 'snapshot' ? 'snapshot' : '';
+}
+
 function matchedCoinSummary(value) {
   if (!value || typeof value !== 'object') return null;
-  const raw = String(value.authority || '').toLowerCase();
-  const authority = raw === 'realtime' || raw === 'native'
-    ? 'realtime'
-    : (raw === 'snapshot' ? 'snapshot' : '');
+  const authority = evidenceAuthority(value.authority);
   const key = identifier(value.key);
   const amount = finite(value.amount);
   const observedAtMs = finite(value.observedAtMs);
@@ -122,28 +125,50 @@ function matchedCoinSummary(value) {
   };
 }
 
+// A positive Drop delta at disappearance is settlement attribution, so under
+// UC-018 it counts whether the reading came from realtime or from snapshot
+// metadata -- the authority is named in the reason and in attributionAuthority.
+// `confirmed` still requires a server-authority picker: snapshot evidence is
+// capped at `strong-inference` (daily-iteration.md section 4.7).
 function classify(detail = {}) {
   const picker = detail?.disappearance?.picker;
   const event = String(detail?.event || '');
   if (picker?.id && picker?.authority === 'server') {
-    return { classification: 'confirmed', reason: 'server-picker' };
+    return { classification: 'confirmed', reason: 'server-picker', authority: 'server' };
   }
   if (!['settled', 'expired'].includes(event)) {
-    return { classification: 'unresolved', reason: 'non-terminal-event' };
+    return { classification: 'unresolved', reason: 'non-terminal-event', authority: '' };
   }
   if (Number(detail?.disappearance?.selfDropDelta) > 0) {
-    return { classification: 'strong-inference', reason: 'self-drop-increase' };
+    const authority = detail?.disappearance?.selfDropAuthority || '';
+    return {
+      classification: 'strong-inference',
+      reason: authority === 'snapshot' ? 'snapshot-self-drop-increase' : 'self-drop-increase',
+      authority
+    };
   }
-  if (Array.isArray(detail?.disappearance?.competitorDropDeltas)
-    && detail.disappearance.competitorDropDeltas.some(item => Number(item?.delta) > 0)) {
-    return { classification: 'strong-inference', reason: 'competitor-drop-increase' };
+  const competitor = Array.isArray(detail?.disappearance?.competitorDropDeltas)
+    ? detail.disappearance.competitorDropDeltas.find(item => Number(item?.delta) > 0)
+    : null;
+  if (competitor) {
+    const authority = competitor.authority || '';
+    return {
+      classification: 'strong-inference',
+      reason: authority === 'snapshot' ? 'snapshot-competitor-drop-increase' : 'competitor-drop-increase',
+      authority
+    };
   }
-  const authority = detail?.matchedCoin?.authority || '';
-  if (!authority) return { classification: 'unresolved', reason: 'no-matched-coin' };
-  if (authority !== 'realtime') {
-    return { classification: 'unresolved', reason: 'no-realtime-coin-authority' };
-  }
-  return { classification: 'unresolved', reason: 'no-drop-delta-observed' };
+  const coinAuthority = detail?.matchedCoin?.authority || '';
+  if (!coinAuthority) return { classification: 'unresolved', reason: 'no-matched-coin', authority: '' };
+  return { classification: 'unresolved', reason: 'no-drop-delta-observed', authority: '' };
+}
+
+function dropIncreaseCount(disappearance = {}) {
+  const competitors = Array.isArray(disappearance?.competitorDropDeltas)
+    ? disappearance.competitorDropDeltas
+    : [];
+  return (Number(disappearance?.selfDropDelta) > 0 ? 1 : 0)
+    + competitors.filter(item => Number(item?.delta) > 0).length;
 }
 
 function sanitizeDropRaceLifecycle(detail = {}) {
@@ -165,11 +190,13 @@ function sanitizeDropRaceLifecycle(detail = {}) {
   const disappearance = source.disappearance && typeof source.disappearance === 'object'
     ? {
         selfDropDelta: finite(source.disappearance.selfDropDelta),
+        selfDropAuthority: evidenceAuthority(source.disappearance.selfDropAuthority),
         competitorDropDeltas: (Array.isArray(source.disappearance.competitorDropDeltas)
           ? source.disappearance.competitorDropDeltas
           : []).slice(0, MAX_COMPETITORS).map(item => ({
             id: identifier(item?.id),
-            delta: finite(item?.delta)
+            delta: finite(item?.delta),
+            authority: evidenceAuthority(item?.authority)
           })).filter(item => item.id),
         picker: source.disappearance.picker && typeof source.disappearance.picker === 'object'
           ? {
@@ -179,7 +206,7 @@ function sanitizeDropRaceLifecycle(detail = {}) {
             }
           : null
       }
-    : { selfDropDelta: null, competitorDropDeltas: [], picker: null };
+    : { selfDropDelta: null, selfDropAuthority: '', competitorDropDeltas: [], picker: null };
   const output = {
     schemaVersion: 1,
     event,
@@ -215,6 +242,11 @@ function sanitizeDropRaceLifecycle(detail = {}) {
   const verdict = classify(output);
   output.classification = verdict.classification;
   output.classificationReason = verdict.reason;
+  output.attributionAuthority = verdict.authority;
+  // More than one actor gaining Drop across the same disappearance window makes
+  // the winning inference ambiguous.  The verdict keeps its self-before-
+  // competitor order; this states plainly how contested it was.
+  output.dropIncreaseCount = dropIncreaseCount(disappearance);
   return output;
 }
 
@@ -355,7 +387,9 @@ module.exports = {
       || snapshotMatched?.matchedCoin?.amount !== 71
       || snapshotMatched?.matchedCoin?.ageMs !== 250
       || snapshotMatched?.classification !== 'unresolved'
-      || snapshotMatched?.classificationReason !== 'no-realtime-coin-authority') {
+      || snapshotMatched?.classificationReason !== 'no-drop-delta-observed'
+      || snapshotMatched?.attributionAuthority !== ''
+      || snapshotMatched?.dropIncreaseCount !== 0) {
       throw new Error('drop-race snapshot matched-coin disclosure self-test failed');
     }
     const realtimeMatched = sanitizeDropRaceLifecycle({
@@ -375,6 +409,89 @@ module.exports = {
     if (sanitizeDropRaceLifecycle({ ...base, event: 'settled', matchedCoin: {} })?.matchedCoin !== null) {
       throw new Error('drop-race empty matched-coin normalization self-test failed');
     }
-    return { ok: true, cases: 11, maxCompetitors: realtime.competitors.length };
+    // UC-018: a snapshot-sourced Drop delta is valid attribution evidence and
+    // reaches strong-inference, but it must name its authority and can never be
+    // promoted to confirmed.
+    const snapshotSelfIncrease = sanitizeDropRaceLifecycle({
+      ...base,
+      event: 'settled',
+      disappearance: { selfDropDelta: 5, selfDropAuthority: 'snapshot', competitorDropDeltas: [] }
+    });
+    if (snapshotSelfIncrease?.classification !== 'strong-inference'
+      || snapshotSelfIncrease?.classificationReason !== 'snapshot-self-drop-increase'
+      || snapshotSelfIncrease?.attributionAuthority !== 'snapshot'
+      || snapshotSelfIncrease?.disappearance?.selfDropAuthority !== 'snapshot'
+      || snapshotSelfIncrease?.dropIncreaseCount !== 1) {
+      throw new Error('drop-race snapshot self Drop attribution self-test failed');
+    }
+    const snapshotCompetitorIncrease = sanitizeDropRaceLifecycle({
+      ...base,
+      event: 'expired',
+      disappearance: {
+        selfDropDelta: 0,
+        selfDropAuthority: 'snapshot',
+        competitorDropDeltas: [{ id: 'other', delta: 4, authority: 'snapshot' }]
+      }
+    });
+    if (snapshotCompetitorIncrease?.classification !== 'strong-inference'
+      || snapshotCompetitorIncrease?.classificationReason !== 'snapshot-competitor-drop-increase'
+      || snapshotCompetitorIncrease?.attributionAuthority !== 'snapshot'
+      || snapshotCompetitorIncrease?.disappearance?.competitorDropDeltas?.[0]?.authority !== 'snapshot'
+      || snapshotCompetitorIncrease?.dropIncreaseCount !== 1) {
+      throw new Error('drop-race snapshot competitor Drop attribution self-test failed');
+    }
+    // A server picker still outranks any snapshot evidence, and snapshot
+    // evidence alone never reaches confirmed.
+    const snapshotWithPicker = sanitizeDropRaceLifecycle({
+      ...base,
+      event: 'settled',
+      disappearance: {
+        selfDropDelta: 9,
+        selfDropAuthority: 'snapshot',
+        competitorDropDeltas: [],
+        picker: { id: 'other', source: 'server-picker', authority: 'server' }
+      }
+    });
+    if (snapshotWithPicker?.classification !== 'confirmed'
+      || snapshotWithPicker?.classificationReason !== 'server-picker'
+      || snapshotWithPicker?.attributionAuthority !== 'server') {
+      throw new Error('drop-race server picker precedence self-test failed');
+    }
+    // Contested disappearance: the verdict keeps its self-first order, but the
+    // ambiguity has to be visible.
+    const contested = sanitizeDropRaceLifecycle({
+      ...base,
+      event: 'settled',
+      disappearance: {
+        selfDropDelta: 2,
+        selfDropAuthority: 'realtime',
+        competitorDropDeltas: [{ id: 'other', delta: 3, authority: 'snapshot' }]
+      }
+    });
+    if (contested?.classification !== 'strong-inference'
+      || contested?.classificationReason !== 'self-drop-increase'
+      || contested?.attributionAuthority !== 'realtime'
+      || contested?.dropIncreaseCount !== 2) {
+      throw new Error('drop-race contested Drop increase self-test failed');
+    }
+    // An unlabelled delta must not silently claim realtime provenance.
+    const unlabelled = sanitizeDropRaceLifecycle({
+      ...base,
+      event: 'settled',
+      disappearance: { selfDropDelta: 1, selfDropAuthority: 'guess', competitorDropDeltas: [] }
+    });
+    if (unlabelled?.disappearance?.selfDropAuthority !== ''
+      || unlabelled?.classificationReason !== 'self-drop-increase'
+      || unlabelled?.attributionAuthority !== '') {
+      throw new Error('drop-race unlabelled Drop authority self-test failed');
+    }
+    if (selfIncrease?.attributionAuthority !== ''
+      || competitorIncrease?.attributionAuthority !== ''
+      || confirmed?.attributionAuthority !== 'server'
+      || missing?.attributionAuthority !== ''
+      || realtime?.attributionAuthority !== '') {
+      throw new Error('drop-race attribution authority self-test failed');
+    }
+    return { ok: true, cases: 16, maxCompetitors: realtime.competitors.length };
   }
 };

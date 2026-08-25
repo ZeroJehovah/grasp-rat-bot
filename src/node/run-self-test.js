@@ -69,6 +69,7 @@ const {
   createBrowserlessDecisionAdapter,
   currentProfitThresholdEligibility,
   decisionStatePatch,
+  dropRaceDropDeltas,
   effectiveProfitReward,
   evaluateProactiveCombatMarginalRoi,
   normalizeEntityForDecision,
@@ -6401,7 +6402,63 @@ async function runSelfTest() {
         const result = runDropRaceObservabilitySelfTest();
         return `${result.ok}:${result.cases}:${result.maxCompetitors}`;
       })(),
-      want: 'true:11:8'
+      want: 'true:16:8'
+    },
+    {
+      // UC-018: a snapshot-sourced Drop reading is valid attribution evidence,
+      // but the delta must carry the weaker of its two endpoints' authorities.
+      name: 'drop-race Drop deltas label snapshot-sourced attribution',
+      got: (() => {
+        const baseline = {
+          selfDrop: 10,
+          selfDropAuthority: 'snapshot',
+          competitorDrops: {
+            '20': { drop: 4, authority: 'realtime' },
+            '21': { drop: 7, authority: 'realtime' }
+          }
+        };
+        const result = dropRaceDropDeltas(
+          baseline,
+          { user_id: 7, drop: 13, dropAuthority: 'snapshot' },
+          [
+            { user_id: 20, drop: 6, dropAuthority: 'realtime' },
+            { user_id: 21, drop: 9, dropAuthority: 'snapshot' }
+          ]
+        );
+        return [
+          result.selfDropDelta,
+          result.selfDropAuthority,
+          ...result.competitorDropDeltas.map(item => `${item.id}:${item.delta}:${item.authority}`)
+        ].join('|');
+      })(),
+      want: '3|snapshot|20:2:realtime|21:2:snapshot'
+    },
+    {
+      // A baseline recorded before UC-018 stored a bare number; it must keep
+      // working rather than silently dropping the delta.
+      name: 'drop-race Drop deltas accept a pre-UC-018 numeric baseline',
+      got: (() => {
+        const result = dropRaceDropDeltas(
+          { selfDrop: 2, competitorDrops: { '20': 5 } },
+          { user_id: 7, drop: 6, dropAuthority: 'realtime' },
+          [{ user_id: 20, drop: 5, dropAuthority: 'realtime' }]
+        );
+        return `${result.selfDropDelta}:${result.selfDropAuthority}:${result.competitorDropDeltas[0].delta}:${result.competitorDropDeltas[0].authority}`;
+      })(),
+      want: '4:realtime:0:realtime'
+    },
+    {
+      // An unknown Drop or an unlabelled authority must not fabricate a delta.
+      name: 'drop-race Drop deltas suppress unknown readings',
+      got: (() => {
+        const result = dropRaceDropDeltas(
+          { selfDrop: null, competitorDrops: { '20': { drop: 3, authority: 'snapshot' } } },
+          { user_id: 7, drop: 9, dropAuthority: 'snapshot' },
+          [{ user_id: 20, drop: null, dropAuthority: 'snapshot' }]
+        );
+        return `${result.selfDropDelta}:${result.selfDropAuthority}:${result.competitorDropDeltas.length}`;
+      })(),
+      want: 'null::0'
     },
     {
       name: 'shared GRZ frame parser decodes gzip pos summaries',

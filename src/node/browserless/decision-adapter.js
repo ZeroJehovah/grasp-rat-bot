@@ -9334,9 +9334,43 @@ function dropRaceActorId(value) {
   return id === null || id === undefined || id === '' ? '' : String(id);
 }
 
-function dropRaceActorDrop(value) {
-  if (!value || String(value.dropAuthority || '').toLowerCase() !== 'realtime') return null;
-  return numberOrNull(value.drop);
+function dropRaceAuthorityLabel(value) {
+  const raw = String(value || '').toLowerCase();
+  if (raw === 'realtime' || raw === 'native') return 'realtime';
+  return raw === 'snapshot' ? 'snapshot' : '';
+}
+
+// Drop attribution is settlement evidence, not spatial or combat authority, so
+// under UC-018 it may come from snapshot metadata as long as the authority is
+// stated.  Geometry stays realtime-only: this record never feeds a position,
+// aim, fire, Dodge, movement or exit decision.
+//
+// `nullableNumberOrNull` rather than `numberOrNull`: an explicitly null Drop is
+// unknown, and Number(null) is 0, which would fabricate a delta against the
+// baseline.  This matches entityDropKnown's null/undefined/'' convention.
+function dropRaceActorDropRecord(value) {
+  if (!value || typeof value !== 'object') return { drop: null, authority: '' };
+  const drop = nullableNumberOrNull(value.drop);
+  return { drop, authority: drop === null ? '' : dropRaceAuthorityLabel(value.dropAuthority) };
+}
+
+// Baselines recorded before UC-018 stored a bare number per actor.  Accept both
+// shapes so an in-flight decision state carried across a release keeps working.
+function dropRaceBaselineDropRecord(value) {
+  if (value === null || value === undefined || value === '') return { drop: null, authority: '' };
+  if (typeof value === 'object') {
+    const drop = nullableNumberOrNull(value.drop);
+    return { drop, authority: drop === null ? '' : dropRaceAuthorityLabel(value.authority) };
+  }
+  const drop = nullableNumberOrNull(value);
+  return { drop, authority: drop === null ? '' : 'realtime' };
+}
+
+// The weaker of the two endpoints wins: a delta is only realtime-authoritative
+// when both the baseline and the current reading are.
+function dropRaceDeltaAuthority(baselineAuthority, currentAuthority) {
+  if (!baselineAuthority || !currentAuthority) return '';
+  return baselineAuthority === 'realtime' && currentAuthority === 'realtime' ? 'realtime' : 'snapshot';
 }
 
 function dropRaceTargetMemory(input, stateful, settlement) {
@@ -9377,19 +9411,30 @@ function dropRaceKillAt(stateful, settlement) {
 }
 
 function dropRaceDropDeltas(baseline = {}, self, competitors = []) {
-  const selfDrop = dropRaceActorDrop(self);
-  const selfDropDelta = selfDrop === null || baseline.selfDrop === null || baseline.selfDrop === undefined
-    ? null
-    : selfDrop - Number(baseline.selfDrop);
+  const selfCurrent = dropRaceActorDropRecord(self);
+  const selfBaseline = dropRaceBaselineDropRecord(
+    baseline.selfDrop === null || baseline.selfDrop === undefined
+      ? null
+      : { drop: baseline.selfDrop, authority: baseline.selfDropAuthority ?? 'realtime' }
+  );
+  const selfResolved = selfCurrent.drop === null || selfBaseline.drop === null;
+  const selfDropDelta = selfResolved ? null : selfCurrent.drop - selfBaseline.drop;
+  const selfDropAuthority = selfResolved
+    ? ''
+    : dropRaceDeltaAuthority(selfBaseline.authority, selfCurrent.authority);
   const competitorDropDeltas = [];
   for (const competitor of competitors) {
     const id = dropRaceActorId(competitor);
-    const current = dropRaceActorDrop(competitor);
-    const prior = baseline.competitorDrops?.[id];
-    if (!id || current === null || prior === null || prior === undefined) continue;
-    competitorDropDeltas.push({ id, delta: current - Number(prior) });
+    const current = dropRaceActorDropRecord(competitor);
+    const prior = dropRaceBaselineDropRecord(baseline.competitorDrops?.[id]);
+    if (!id || current.drop === null || prior.drop === null) continue;
+    competitorDropDeltas.push({
+      id,
+      delta: current.drop - prior.drop,
+      authority: dropRaceDeltaAuthority(prior.authority, current.authority)
+    });
   }
-  return { selfDropDelta, competitorDropDeltas: competitorDropDeltas.slice(0, 8) };
+  return { selfDropDelta, selfDropAuthority, competitorDropDeltas: competitorDropDeltas.slice(0, 8) };
 }
 
 function observeDropRaceLifecycles(input, stateful, previousSettlements, nextSettlements, options = {}) {
@@ -9419,8 +9464,12 @@ function observeDropRaceLifecycles(input, stateful, previousSettlements, nextSet
       tLastVisibleMs: null,
       tSettleMs: null,
       baseline: {
-        selfDrop: dropRaceActorDrop(input?.self),
-        competitorDrops: Object.fromEntries(competitors.map(item => [dropRaceActorId(item), dropRaceActorDrop(item)]))
+        selfDrop: dropRaceActorDropRecord(input?.self).drop,
+        selfDropAuthority: dropRaceActorDropRecord(input?.self).authority,
+        competitorDrops: Object.fromEntries(competitors.map(item => [
+          dropRaceActorId(item),
+          dropRaceActorDropRecord(item)
+        ]))
       }
     };
     observation.dropPoint = dropPoint;
@@ -9448,7 +9497,7 @@ function observeDropRaceLifecycles(input, stateful, previousSettlements, nextSet
     if (event) {
       const deltas = terminal
         ? dropRaceDropDeltas(observation.baseline, input?.self, competitors)
-        : { selfDropDelta: null, competitorDropDeltas: [] };
+        : { selfDropDelta: null, selfDropAuthority: '', competitorDropDeltas: [] };
       const pickerId = settlement.pickerUserId
         ?? settlement.pickedByUserId
         ?? settlement.picker_id
@@ -15352,6 +15401,7 @@ module.exports = {
   buildBrowserlessStrategyInput,
   currentProfitThresholdEligibility,
   decoratePrimaryTargetDropCoins,
+  dropRaceDropDeltas,
   clearIneligibleFinalProfitHold,
   buildLowHpRecoveryThreatExitDecision,
   buildRecoveryContactGuardDecision,
