@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.25.5';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.25.6';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -629,11 +629,14 @@ function renderBrowserlessWebPanel() {
     .high-drop-values .high-drop-delta{color:var(--text)}
     .high-drop-values .high-drop-delta.positive{color:var(--red)}
     .high-drop-values .high-drop-delta.negative{color:var(--green)}
-    .high-drop-balance-decimal{color:var(--muted)}
+    /* 小数点和小数位沿用整数部分的颜色, 只靠透明度压低对比度, 不再切换成灰色。 */
+    .high-drop-balance-decimal{opacity:.6}
     .high-drop-values.high-drop-current{color:var(--coin)}
     .high-drop-values.high-drop-delta{color:var(--text)}
     .high-drop-values.high-drop-delta.positive{color:var(--red)}
     .high-drop-values.high-drop-delta.negative{color:var(--green)}
+    /* 离线/未确认玩家整行灰显: Drop 和今日收益不保留金色与涨跌色, 必须排在涨跌色规则之后才能压过同特异度。 */
+    .high-drop-values.offline.high-drop-current,.high-drop-values.unknown.high-drop-current,.high-drop-values.offline.high-drop-delta,.high-drop-values.unknown.high-drop-delta{color:var(--muted)}
     .player-insights-body{height:186px;overflow-y:auto;scrollbar-gutter:stable}
     .player-memory-list{display:flex;flex-wrap:wrap;gap:6px 5px;min-height:24px;align-items:center;align-content:flex-start}
     .player-memory-name{display:inline-flex;align-items:center;max-width:100%;height:26px;box-sizing:border-box;padding:2px 5px;border:1px solid transparent;border-radius:4px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

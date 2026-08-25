@@ -37783,13 +37783,19 @@ async function runSelfTest() {
             && panelText.includes('.high-drop-row>.high-drop-cell:nth-child(n+2){text-align:right}')
             && panelText.includes('.high-drop-cell{padding-right:5px}')
             && !/\.high-drop-cell:last-child\{padding-right/.test(panelText)
-            && panelText.includes('.high-drop-balance-decimal{color:var(--muted)}')
+            // 小数点和小数位沿用整数部分颜色, 只压低对比度, 不再改成灰色。
+            && panelText.includes('.high-drop-balance-decimal{opacity:.6}')
+            && !/\.high-drop-balance-decimal\{[^}]*color:/.test(panelText)
             // 今日收益整数展示, 额度保留三位小数 (UC-013)。
             && !panelScript.includes('todayGain.toFixed(3)')
             && panelScript.includes("changeCell.textContent = (roundedGain > 0 ? '+' : '') + String(roundedGain)")
             && panelScript.includes('toFixed(3)')
             && panelText.includes('.high-drop-values .high-drop-delta.positive{color:var(--red)}')
-            && panelText.includes('.high-drop-values .high-drop-delta.negative{color:var(--green)}'),
+            && panelText.includes('.high-drop-values .high-drop-delta.negative{color:var(--green)}')
+            // 离线/未确认玩家的 Drop 与今日收益必须灰显, 且该规则要排在同特异度的涨跌色规则之后。
+            && panelText.includes('.high-drop-values.offline.high-drop-current,.high-drop-values.unknown.high-drop-current,.high-drop-values.offline.high-drop-delta,.high-drop-values.unknown.high-drop-delta{color:var(--muted)}')
+            && panelText.indexOf('.high-drop-values.offline.high-drop-current')
+              > panelText.indexOf('.high-drop-values.high-drop-delta.negative{color:var(--green)}'),
           !panelScript.includes("'我 · ' + self.name"),
           panelText.indexOf('id="highDropPlayers"') < panelText.indexOf('id="nearbyGrid"')
         ].join('|');
