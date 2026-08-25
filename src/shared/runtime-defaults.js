@@ -102,6 +102,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     combatEvasiveAimTriggerEnabled: config.combatEvasiveAimTriggerEnabled === true,
     combatEvasiveAimEarlyDetectionEnabled: config.combatEvasiveAimEarlyDetectionEnabled !== false,
     dynamicWhitelistProximitySafetyEnabled: config.dynamicWhitelistProximitySafetyEnabled !== false,
+    dynamicWhitelistStaminaExemptionEnabled: config.dynamicWhitelistStaminaExemptionEnabled !== false,
     preTargetIncomingDodgeEnabled: config.preTargetIncomingDodgeEnabled !== false,
     combatRobustDodgeEnabled: config.combatRobustDodgeEnabled !== false,
     combatDistanceAwareDodgeEnabled: config.combatDistanceAwareDodgeEnabled !== false,

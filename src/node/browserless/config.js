@@ -86,6 +86,7 @@ const DEFAULTS = {
   browserlessProfitPursuitPressureCycleMs: 60000,
   combatEnabled: false,
   dynamicWhitelistProximitySafetyEnabled: true,
+  dynamicWhitelistStaminaExemptionEnabled: true,
   preTargetIncomingDodgeEnabled: true,
   combatRobustDodgeEnabled: true,
   combatDistanceAwareDodgeEnabled: true,
@@ -311,6 +312,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     dynamicWhitelistProximitySafetyEnabled: boolEnv(
       env.GRASP_RAT_BROWSERLESS_DYNAMIC_WHITELIST_PROXIMITY_SAFETY_ENABLED,
       DEFAULTS.dynamicWhitelistProximitySafetyEnabled
+    ),
+    dynamicWhitelistStaminaExemptionEnabled: boolEnv(
+      env.GRASP_RAT_BROWSERLESS_DYNAMIC_WHITELIST_STAMINA_EXEMPTION_ENABLED,
+      DEFAULTS.dynamicWhitelistStaminaExemptionEnabled
     ),
     preTargetIncomingDodgeEnabled: boolEnv(
       env.GRASP_RAT_BROWSERLESS_PRE_TARGET_INCOMING_DODGE_ENABLED,
@@ -550,6 +555,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.dynamicWhitelistProximitySafetyEnabled = true;
     } else if (arg === '--no-dynamic-whitelist-proximity-safety') {
       config.dynamicWhitelistProximitySafetyEnabled = false;
+    } else if (arg === '--dynamic-whitelist-stamina-exemption') {
+      config.dynamicWhitelistStaminaExemptionEnabled = true;
+    } else if (arg === '--no-dynamic-whitelist-stamina-exemption') {
+      config.dynamicWhitelistStaminaExemptionEnabled = false;
     } else if (arg === '--pre-target-incoming-dodge') {
       config.preTargetIncomingDodgeEnabled = true;
     } else if (arg === '--no-pre-target-incoming-dodge') {

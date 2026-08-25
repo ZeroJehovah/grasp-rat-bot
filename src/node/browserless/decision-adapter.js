@@ -157,10 +157,19 @@ const {
 const {
   hasFull5sStamina,
   staminaLimitForWindow,
-  staminaRemainingValue
+  staminaRemainingValue,
+  summarizeStaminaWindow
 } = require('./stamina-metadata');
 
 const BROWSER_RUNTIME_DEFAULTS = buildRuntimeDefaults({}, false);
+const DYNAMIC_WHITELIST_STAMINA_EXEMPT_WINDOWS = ['1h', '1d'];
+const NO_DYNAMIC_WHITELIST_STAMINA_EXEMPTION = Object.freeze({
+  exempt: false,
+  window: '',
+  remaining: null,
+  limit: null,
+  authority: ''
+});
 const DEFAULT_STALE_SELF_MS = 2500;
 const DEFAULT_STALE_SELF_CONFIRM_MS = 2000;
 const DEFAULT_ATTACK_RANGE = BROWSER_RUNTIME_DEFAULTS.attackRange;
@@ -609,6 +618,34 @@ function buildWhitelistSafetyIdentityContext(options = {}, nowMs = Date.now()) {
   };
 }
 
+function declaredWhitelistProtected(entity, options = {}) {
+  return Boolean(
+    (typeof options.whitelistCheck === 'function' && options.whitelistCheck(entity))
+      || targetIsWhitelisted(entity, targetWhitelistFromOptions(options))
+  );
+}
+
+// 观察到动态白名单成员的 1h 或 1d 体力已满, 说明他没有在消耗长周期体力, 允许把他设为战斗目标。
+// 1h/1d 体力字段只出现在快照元数据中(实时 pos 帧不携带), 因此这里读到的是已合并到实时实体上的
+// 快照字段, 其新鲜度由 snapshotCoinFallbackMaxAgeMs 约束; 豁免结果只写在实时实体上, 远端快照
+// 选目标路径不经过这里, 所以只影响视野内的目标选择。
+function dynamicWhitelistStaminaExemption(entity, options = {}) {
+  if (options.dynamicWhitelistStaminaExemptionEnabled === false) return NO_DYNAMIC_WHITELIST_STAMINA_EXEMPTION;
+  const summaryOptions = { staminaFullRatio: options.staminaFullRatio };
+  for (const windowName of DYNAMIC_WHITELIST_STAMINA_EXEMPT_WINDOWS) {
+    const summary = summarizeStaminaWindow(entity, windowName, summaryOptions);
+    if (!summary.full) continue;
+    return {
+      exempt: true,
+      window: windowName,
+      remaining: summary.remaining,
+      limit: summary.limit,
+      authority: String(entity?.staminaMetadataAuthority || 'realtime')
+    };
+  }
+  return NO_DYNAMIC_WHITELIST_STAMINA_EXEMPTION;
+}
+
 function whitelistSafetyIdentityForEntity(entity, context = {}, options = {}) {
   const userId = targetStableUserId(entity);
   const key = userId === null ? '' : String(userId);
@@ -616,10 +653,14 @@ function whitelistSafetyIdentityForEntity(entity, context = {}, options = {}) {
     context.creatorCheck?.(entity)
       || (key && context.creatorIds?.has(key))
   );
-  const dynamicWhitelistMember = Boolean(
+  const dynamicWhitelistRawMember = Boolean(
     context.dynamicMemberCheck?.(entity)
       || (key && context.dynamicMemberIds?.has(key))
   );
+  const staminaExemption = dynamicWhitelistRawMember && !creatorProtected
+    ? dynamicWhitelistStaminaExemption(entity, options)
+    : NO_DYNAMIC_WHITELIST_STAMINA_EXEMPTION;
+  const dynamicWhitelistMember = dynamicWhitelistRawMember && !staminaExemption.exempt;
   const dynamicWhitelistEnabled = dynamicWhitelistMember && (context.dynamicEnabledAuthority
     ? Boolean(context.dynamicEnabledCheck?.(entity) || (key && context.dynamicEnabledIds?.has(key)))
     : true);
@@ -627,16 +668,19 @@ function whitelistSafetyIdentityForEntity(entity, context = {}, options = {}) {
     context.damagedCheck?.(entity)
       || (key && context.damagedIds?.has(key))
   );
+  // 体力豁免的成员只保留显式声明的静态白名单保护; 实体上的 whitelisted 派生标记来自上一轮标注,
+  // 沿用它会让刚被豁免的成员立刻被重新保护。
   const legacyWhitelistProtected = !creatorProtected
-    && !dynamicWhitelistMember
-    && Boolean(
-      entity?.whitelisted === true
-        || (typeof options.whitelistCheck === 'function' && options.whitelistCheck(entity))
-        || targetIsWhitelisted(entity, targetWhitelistFromOptions(options))
-    );
+    && (dynamicWhitelistRawMember
+      ? (staminaExemption.exempt && declaredWhitelistProtected(entity, options))
+      : Boolean(entity?.whitelisted === true || declaredWhitelistProtected(entity, options)));
   return {
     creatorProtected,
     dynamicWhitelistMember,
+    dynamicWhitelistRawMember,
+    dynamicWhitelistStaminaExempt: staminaExemption.exempt,
+    dynamicWhitelistStaminaExemptWindow: staminaExemption.window,
+    dynamicWhitelistStaminaExemptAuthority: staminaExemption.authority,
     dynamicWhitelistEnabled,
     damagedSelfToday,
     legacyWhitelistProtected
@@ -647,21 +691,37 @@ function annotateWhitelistSafetyPolicy(entity, self, identityContext, options = 
   if (!entity) return entity;
   const identity = whitelistSafetyIdentityForEntity(entity, identityContext, options);
   const recoveryRadius = lowHpRecoveryThreatRadiusForHp(hpValue(self), options)?.radius || 0;
-  const policy = evaluateDynamicWhitelistContactCore(self, entity, {
+  // 被豁免的成员还要清掉实体上遗留的白名单派生标记, 否则安全内核的兜底判断会再次把他保护起来。
+  const policyTarget = identity.dynamicWhitelistStaminaExempt
+    ? { ...entity, dynamicWhitelistMember: false, whitelisted: false, profitProtected: false }
+    : entity;
+  const policy = evaluateDynamicWhitelistContactCore(self, policyTarget, {
     ...identity,
     recovering: isRecoveringSelf(self),
     recoveryRadiusCm: recoveryRadius
   }, options);
+  const contactPolicy = identity.dynamicWhitelistStaminaExempt
+    ? {
+        ...policy,
+        dynamicWhitelistRawMember: true,
+        dynamicWhitelistStaminaExempt: true,
+        dynamicWhitelistStaminaExemptWindow: identity.dynamicWhitelistStaminaExemptWindow,
+        dynamicWhitelistStaminaExemptAuthority: identity.dynamicWhitelistStaminaExemptAuthority
+      }
+    : policy;
   return {
     ...entity,
     creatorProtected: policy.creatorProtected,
     dynamicWhitelistMember: policy.dynamicWhitelistMember,
+    dynamicWhitelistRawMember: identity.dynamicWhitelistRawMember,
+    dynamicWhitelistStaminaExempt: identity.dynamicWhitelistStaminaExempt,
+    dynamicWhitelistStaminaExemptWindow: identity.dynamicWhitelistStaminaExemptWindow,
     dynamicWhitelistEnabled: policy.dynamicWhitelistEnabled,
     damagedSelfToday: policy.damagedSelfToday,
     legacyWhitelistProtected: policy.legacyWhitelistProtected,
     profitProtected: policy.profitProtected,
     whitelisted: policy.profitProtected,
-    whitelistContactPolicy: policy
+    whitelistContactPolicy: contactPolicy
   };
 }
 
@@ -4278,7 +4338,8 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
   const rawRealtimeEntities = (Array.isArray(realtime.entities) ? realtime.entities : []).filter(entity => {
     const userId = entity?.user_id ?? entity?.userId;
     if (userId !== null && userId !== undefined && priorityUserIds.has(String(userId))) return true;
-    if (whitelistSafetyIdentityForEntity(entity, whitelistIdentityContext, options).dynamicWhitelistMember) return true;
+    // 用原始成员身份保留实体: 体力豁免后仍要保留在决策输入里, 否则被豁免的挂机成员会在这一步被裁掉。
+    if (whitelistSafetyIdentityForEntity(entity, whitelistIdentityContext, options).dynamicWhitelistRawMember) return true;
     if (entity?.firing || entity?.shooting || entity?.is_firing) return true;
     if (Math.abs(Number(entity?.vx || 0)) > 0 || Math.abs(Number(entity?.vy || 0)) > 0) return true;
     const mode = String(entity?.current_join_mode || entity?.mode || entity?.joined || '').toLowerCase();

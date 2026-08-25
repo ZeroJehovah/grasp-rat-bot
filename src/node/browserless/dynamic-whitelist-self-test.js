@@ -4,7 +4,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { createDynamicWhitelist } = require('./dynamic-whitelist');
+const { DEFAULT_OBSERVED_DEATH_MAX_AGE_MS, createDynamicWhitelist } = require('./dynamic-whitelist');
 const { createDailyDamagePlayerTracker } = require('./daily-damage-player-tracker');
 const {
   buildBrowserlessDecision,
@@ -74,6 +74,14 @@ function decisionState(options = {}) {
           ? { invulnerable_remaining_ms: options.targetInvulnerableMs }
           : {}),
         stamina_5s_remaining_milli: options.targetStamina5s ?? 10000,
+        ...(options.targetStamina1h === undefined ? {} : {
+          stamina_1h_remaining_milli: options.targetStamina1h,
+          stamina_1h_limit_milli: options.targetStamina1hLimit ?? 600000
+        }),
+        ...(options.targetStamina1d === undefined ? {} : {
+          stamina_1d_remaining_milli: options.targetStamina1d,
+          stamina_1d_limit_milli: options.targetStamina1dLimit ?? 3600000
+        }),
         drop: options.targetDrop ?? 100
       };
   const extraTargets = (options.extraTargets || []).map((item, index) => ({
@@ -172,6 +180,57 @@ async function runDynamicWhitelistSelfTest() {
       const persistedAfter = JSON.parse(fs.readFileSync(file, 'utf8'));
       assert.strictEqual(Object.keys(persistedAfter.players).length, 0);
       cases.push('manual-remove-clears-entry-and-disabled-state');
+    }
+
+    {
+      // 聊天击杀记录观察到成员死亡: 仅接受入表之后且在时效窗口内的证据, 避免补拉重放的历史击杀误删成员。
+      const { file, whitelist } = createFixture(directory, 'observed-death');
+      disableDirectly(whitelist);
+      const missingId = whitelist.removeObservedDeath({}, { atMs: 3000 });
+      const notMember = whitelist.removeObservedDeath({ userId: 99 }, { atMs: 3000, observedAtMs: 2900 });
+      const beforeMembership = whitelist.removeObservedDeath({ userId: 8 }, { atMs: 3000, observedAtMs: 500 });
+      const tooOld = whitelist.removeObservedDeath({ userId: 8 }, {
+        atMs: 3000 + DEFAULT_OBSERVED_DEATH_MAX_AGE_MS,
+        observedAtMs: 2999
+      });
+      assert.strictEqual(missingId.ok, false);
+      assert.strictEqual(missingId.reason, 'missing-user-id');
+      assert.strictEqual(notMember.removed, false);
+      assert.strictEqual(notMember.reason, 'not-a-member');
+      assert.strictEqual(beforeMembership.removed, false);
+      assert.strictEqual(beforeMembership.reason, 'death-before-membership');
+      assert.strictEqual(tooOld.removed, false);
+      assert.strictEqual(tooOld.reason, 'death-observation-too-old');
+      assert.strictEqual(whitelist.isMember({ userId: 8 }), true);
+
+      const removed = whitelist.removeObservedDeath({ userId: 8 }, {
+        atMs: 3000,
+        observedAtMs: 2900,
+        killerUserId: 7,
+        selfKill: true,
+        source: 'chat-kill-record',
+        tick: 640,
+        evidenceKey: 'kill:41'
+      });
+      assert.strictEqual(removed.ok, true);
+      assert.strictEqual(removed.removed, true);
+      assert.strictEqual(removed.reason, 'observed-death');
+      assert.strictEqual(removed.name, 'friendly');
+      assert.strictEqual(removed.killerUserId, 7);
+      assert.strictEqual(removed.selfKill, true);
+      assert.strictEqual(removed.source, 'chat-kill-record');
+      assert.strictEqual(removed.tick, 640);
+      assert.strictEqual(removed.evidenceKey, 'kill:41');
+      assert.strictEqual(removed.observedAt, '1970-01-01T00:00:02.900Z');
+      assert.strictEqual(removed.player?.name, 'friendly');
+      assert.strictEqual(whitelist.isMember({ userId: 8 }), false);
+      assert.strictEqual(whitelist.hasPendingBattleObservation(), false);
+      assert.strictEqual(whitelist.status().observedDeathMaxAgeMs, DEFAULT_OBSERVED_DEATH_MAX_AGE_MS);
+      assert.strictEqual(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')).players).length, 0);
+      const repeated = whitelist.removeObservedDeath({ userId: 8 }, { atMs: 3100, observedAtMs: 2900 });
+      assert.strictEqual(repeated.removed, false);
+      assert.strictEqual(repeated.reason, 'not-a-member');
+      cases.push('observed-death-removes-member-only-with-fresh-post-membership-evidence');
     }
 
     {
@@ -757,6 +816,63 @@ async function runDynamicWhitelistSelfTest() {
       assert.strictEqual(ordinary.reason, 'combat-live-realtime');
       assert.strictEqual(ordinary.combat.target.dynamicWhitelistMember, false);
       cases.push('profit-protection-remains-and-ordinary-combat-is-unchanged');
+    }
+
+    {
+      // 视野内观察到成员 1h 或 1d 体力已满时解除保护, 允许设为目标;
+      // 创建者、静态白名单与配置开关仍然优先, 部分体力不触发豁免。
+      const visible = (state, options) => buildBrowserlessStrategyInput(state, options, {}).visibleTargets[0];
+      const base = { hp: 100, withBullet: false, targetDistance: 20000 };
+      const guarded = visible(decisionState(base), decisionOptions());
+      const partial1h = visible(decisionState({ ...base, targetStamina1h: 300000 }), decisionOptions());
+      const full1h = visible(decisionState({ ...base, targetStamina1h: 600000 }), decisionOptions());
+      const full1d = visible(decisionState({ ...base, targetStamina1d: 3600000 }), decisionOptions());
+      const rolledBack = visible(
+        decisionState({ ...base, targetStamina1h: 600000 }),
+        decisionOptions({ dynamicWhitelistStaminaExemptionEnabled: false })
+      );
+      const creator = visible(
+        decisionState({ ...base, targetStamina1h: 600000 }),
+        decisionOptions({ creatorUserIds: [8] })
+      );
+      const staticWhitelisted = visible(
+        decisionState({ ...base, targetStamina1h: 600000 }),
+        decisionOptions({ targetWhitelistUserIds: [8] })
+      );
+      for (const [label, entity] of [['guarded', guarded], ['partial-1h', partial1h], ['rolled-back', rolledBack]]) {
+        assert.strictEqual(entity.dynamicWhitelistMember, true, label);
+        assert.strictEqual(entity.dynamicWhitelistStaminaExempt, false, label);
+        assert.strictEqual(entity.whitelisted, true, label);
+      }
+      for (const [label, entity, window] of [['full-1h', full1h, '1h'], ['full-1d', full1d, '1d']]) {
+        assert.strictEqual(entity.dynamicWhitelistRawMember, true, label);
+        assert.strictEqual(entity.dynamicWhitelistMember, false, label);
+        assert.strictEqual(entity.dynamicWhitelistStaminaExempt, true, label);
+        assert.strictEqual(entity.dynamicWhitelistStaminaExemptWindow, window, label);
+        assert.strictEqual(entity.legacyWhitelistProtected, false, label);
+        assert.strictEqual(entity.profitProtected, false, label);
+        assert.strictEqual(entity.whitelisted, false, label);
+      }
+      assert.strictEqual(creator.creatorProtected, true);
+      assert.strictEqual(creator.dynamicWhitelistStaminaExempt, false);
+      assert.strictEqual(creator.whitelisted, true);
+      assert.strictEqual(staticWhitelisted.dynamicWhitelistStaminaExempt, true);
+      assert.strictEqual(staticWhitelisted.legacyWhitelistProtected, true);
+      assert.strictEqual(staticWhitelisted.whitelisted, true);
+
+      const engagement = { hp: 100, withBullet: false, targetDistance: 5000, targetMode: 'Active', targetVx: 50 };
+      const guardedCombat = buildBrowserlessDecision(decisionState(engagement), {}, decisionOptions());
+      const exemptCombat = buildBrowserlessDecision(
+        decisionState({ ...engagement, targetStamina1h: 600000 }),
+        {},
+        decisionOptions()
+      );
+      assert.strictEqual(guardedCombat.combat.target, null);
+      assert.strictEqual(exemptCombat.reason, 'combat-live-realtime');
+      assert.strictEqual(exemptCombat.combat.target.combatRole, 'primary');
+      assert.strictEqual(Number(exemptCombat.combat.target.userId ?? exemptCombat.combat.target.user_id), 8);
+      assert.strictEqual(exemptCombat.combat.target.dynamicWhitelistMember, false);
+      cases.push('full-1h-or-1d-stamina-exempts-visible-dynamic-whitelist-members-from-targeting');
     }
 
     {

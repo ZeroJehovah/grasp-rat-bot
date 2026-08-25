@@ -406,6 +406,26 @@ function createChatService(options = {}) {
     };
   }
 
+  function killEventFromMessage(message, observedAtMs) {
+    const parsedOccurredAtMs = Date.parse(message.occurredAt || '');
+    const occurredAtMs = Number.isFinite(parsedOccurredAtMs) ? parsedOccurredAtMs : observedAtMs;
+    return {
+      key: message.key,
+      id: message.id,
+      tick: message.tick,
+      killerUserId: message.userId,
+      killerName: message.name,
+      victimUserId: message.targetUserId,
+      victimName: message.targetUserId === null ? '' : (names.get(message.targetUserId)?.name || ''),
+      text: message.text,
+      mine: Boolean(message.mine),
+      occurredAt: message.occurredAt,
+      occurredAtMs,
+      observedAtMs,
+      ageMs: Math.max(0, observedAtMs - occurredAtMs)
+    };
+  }
+
   function trimMessages() {
     const ordered = Array.from(messages.values()).sort((a, b) => {
       const order = messageOrder(a) - messageOrder(b);
@@ -460,6 +480,8 @@ function createChatService(options = {}) {
     const snapshotTick = numberOrNull(payload.tick);
     const normalized = [];
     const historyMessages = [];
+    // 只记录首次出现的击杀行, 内容变更或补拉重放不会重复触发下游的死亡观察逻辑。
+    const newKillKeys = [];
     let updated = 0;
     for (const item of sourceMessages) {
       const message = normalizeMessage(item, observedAtMs, snapshotTick);
@@ -469,6 +491,7 @@ function createChatService(options = {}) {
         updated += 1;
         historyMessages.push(message);
       }
+      if (!existing && message.kind === 'kill') newKillKeys.push(message.key);
       messages.set(message.key, message);
       normalized.push(message);
     }
@@ -477,6 +500,10 @@ function createChatService(options = {}) {
       message.name = names.get(message.userId).name;
       message.mine = message.userId === selfUserId();
     }
+    const killEvents = newKillKeys
+      .map(key => messages.get(key))
+      .filter(Boolean)
+      .map(message => killEventFromMessage(message, observedAtMs));
     const ordered = trimMessages();
     const historyResyncDue = Boolean(
       historyFile
@@ -499,7 +526,9 @@ function createChatService(options = {}) {
       updated,
       confirmed,
       messageCount: ordered.length,
-      namesUpdated: nameResult.updated
+      namesUpdated: nameResult.updated,
+      killsObserved: killEvents.length,
+      killEvents
     };
   }
 
@@ -740,6 +769,33 @@ function runChatServiceSelfTest() {
     firstId: retentionStatus.messages[0]?.id,
     lastId: retentionStatus.messages.at(-1)?.id
   };
+  const killService = createChatService({
+    now: () => nowMs,
+    selfUserId: 7
+  });
+  const killMessages = [
+    { id: 21, tick: 598, kind: 'kill', user_id: 8, target_user_id: 9, text: 'Alice killed Bob' },
+    { id: 22, tick: 599, kind: 'kill', user_id: 7, target_user_id: 8, text: 'Self killed Alice' }
+  ];
+  const killFirst = killService.observeSnapshot({
+    tick: 600,
+    entities: [{ user_id: 8, name: 'Alice' }, { user_id: 9, name: 'Bob' }],
+    messages: killMessages
+  }, { source: 'kill-test', observedAtMs: nowMs });
+  const killRepeat = killService.observeSnapshot({
+    tick: 601,
+    entities: [],
+    messages: killMessages
+  }, { source: 'kill-test', observedAtMs: nowMs + 1000 });
+  const killSummary = {
+    observed: killFirst.killsObserved,
+    repeated: killRepeat.killsObserved,
+    killerUserId: killFirst.killEvents?.[0]?.killerUserId ?? null,
+    victimUserId: killFirst.killEvents?.[0]?.victimUserId ?? null,
+    victimName: killFirst.killEvents?.[0]?.victimName || '',
+    ageMs: killFirst.killEvents?.[0]?.ageMs ?? null,
+    mine: Boolean(killFirst.killEvents?.[1]?.mine)
+  };
   const renameAtMs = nowMs + DEFAULT_CHAT_HISTORY_RESYNC_INTERVAL_MS + 1000;
   const renamed = service.rememberNames([{ user_id: 8, name: 'Alice Renamed' }], {
     source: 'new-session-snapshot',
@@ -818,6 +874,13 @@ function runChatServiceSelfTest() {
       && retentionSummary.count === 200
       && retentionSummary.firstId === 6
       && retentionSummary.lastId === 205
+      && killSummary.observed === 2
+      && killSummary.repeated === 0
+      && killSummary.killerUserId === 8
+      && killSummary.victimUserId === 9
+      && killSummary.victimName === 'Bob'
+      && killSummary.ageMs === 100
+      && killSummary.mine === true
       && renamed.updated === 1
       && sameName.updated === 0
       && staleName.updated === 0
@@ -836,6 +899,7 @@ function runChatServiceSelfTest() {
     historyBatches,
     onlineStatus,
     retentionSummary,
+    killSummary,
     renamed,
     sameName,
     staleName,

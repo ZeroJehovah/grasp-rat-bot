@@ -223,7 +223,7 @@ const {
   highDropBalanceValueCore,
   interpolateMapPointCore,
   interpolateMapMarkerCore,
-  interpolateMapPolylineCore,
+  interpolateMapTrailPathsCore,
   mapAnimationProgressCore,
   mapMarkerKeyCore,
   missCloseExitReasonTextCore,
@@ -34270,6 +34270,92 @@ async function runSelfTest() {
       want: 'explicit-stop|false|true'
     },
     {
+      name: 'browserless runner removes dynamic whitelist members observed dead in chat kill records',
+      got: () => withTempDirForTest(async dir => {
+        const nowMs = Date.UTC(2026, 6, 8, 1, 1, 0);
+        const addedAt = new Date(nowMs - 600000).toISOString();
+        const member = (userId, name) => [`user:${userId}`, {
+          key: `user:${userId}`,
+          userId,
+          name,
+          nameUpdatedAt: addedAt,
+          nameObservedAt: addedAt,
+          nameObservedTick: 1,
+          addedAt
+        }];
+        const config = parseBrowserlessRunnerArgs([
+          '--live',
+          '--data-dir',
+          dir,
+          '--user-id',
+          '7',
+          '--session-token',
+          'runner-secret-token',
+          '--login-point-x',
+          '1',
+          '--login-point-y',
+          '2',
+          '--login-point-hp',
+          '100'
+        ], {});
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'dynamic-whitelist.json'), `${JSON.stringify({
+          schemaVersion: 2,
+          updatedAt: addedAt,
+          players: Object.fromEntries([member(8, 'friendly'), member(9, 'ally'), member(10, 'bystander')])
+        }, null, 2)}\n`);
+        const snapshot = {
+          tick: 600,
+          entities: [{ user_id: 7, name: 'self' }, { user_id: 10, name: 'bystander' }],
+          messages: [
+            // 我自己击杀的成员(体力豁免后允许开火)与他人击杀的成员都要移出白名单。
+            { id: 41, tick: 598, kind: 'kill', user_id: 7, target_user_id: 8, text: 'self killed friendly' },
+            { id: 42, tick: 599, kind: 'kill', user_id: 12, target_user_id: 9, text: 'stranger killed ally' },
+            { id: 43, tick: 599, kind: 'kill', user_id: 12, target_user_id: 11, text: 'stranger killed outsider' },
+            { id: 44, tick: 599, kind: 'chat', user_id: 12, text: 'gg' }
+          ]
+        };
+        const observations = [];
+        await runRunnerForSelfTest(config, {
+          now: () => nowMs,
+          startStatusServer: false,
+          disableSourceIpPreflight: true,
+          runReadOnlyOnce: async (_runtimeConfig, options) => {
+            observations.push(options.onSnapshotPayload(snapshot, { source: 'ws', observedAtMs: nowMs }));
+            observations.push(options.onSnapshotPayload(snapshot, { source: 'ws', observedAtMs: nowMs + 1000 }));
+            return {
+              ok: false,
+              runId: 'observed-death-self-test',
+              error: 'explicit-stop',
+              safety: { event: { reason: 'explicit-stop', at: new Date(nowMs).toISOString() } }
+            };
+          }
+        });
+        const text = fs.readFileSync(path.join(dir, 'logs', '2026-07-08', 'runner.jsonl'), 'utf8');
+        const removals = text.split('\n')
+          .filter(Boolean)
+          .map(line => { try { return JSON.parse(line); } catch (_) { return null; } })
+          .filter(entry => entry?.type === 'dynamic-whitelist-removed')
+          .map(entry => [
+            entry.detail.userId,
+            entry.detail.selfKill,
+            entry.detail.observedDeath,
+            entry.detail.easyKillScore
+          ].join(':'));
+        const persisted = JSON.parse(fs.readFileSync(path.join(dir, 'dynamic-whitelist.json'), 'utf8'));
+        return [
+          observations[0].chatKillsObserved,
+          observations[0].dynamicWhitelistDeathsObserved,
+          observations[0].dynamicWhitelistDeathsRemoved,
+          observations[1].chatKillsObserved,
+          observations[1].dynamicWhitelistDeathsRemoved,
+          removals.join(','),
+          Object.keys(persisted.players).join(',')
+        ].join('|');
+      }),
+      want: '3|2|2|0|0|8:true:true:3,9:false:true:3|user:10'
+    },
+    {
       name: 'browserless runner startup clears stale login point safety progress',
       got: () => withTempDirForTest(async dir => {
         const config = parseBrowserlessRunnerArgs([
@@ -37180,15 +37266,21 @@ async function runSelfTest() {
           { px: 10, py: 20 },
           halfway
         );
-        const halfwayPolyline = interpolateMapPolylineCore(
+        // 采样点按 at 配对: 前两个点从各自的旧屏幕位置平移到新位置, 第三个是新追加的采样,
+        // 从上一帧末端(at=2000 的旧位置)长出来, 而不是整条线被端点位移平移。
+        const halfwayTrail = interpolateMapTrailPathsCore(
           [
-            { px: 110, py: 220 },
-            { px: 210, py: 220 }
+            [
+              { px: 110, py: 220, at: 1000 },
+              { px: 110, py: 320, at: 2000 },
+              { px: 210, py: 320, at: 3000 }
+            ]
           ],
           [
-            { px: 10, py: 20 },
-            { px: 10, py: 120 },
-            { px: 110, py: 120 }
+            [
+              { px: 10, py: 20, at: 1000 },
+              { px: 10, py: 120, at: 2000 }
+            ]
           ],
           0.5
         );
@@ -37205,20 +37297,26 @@ async function runSelfTest() {
           interpolated.py.toFixed(1),
           linePoint.px.toFixed(1),
           linePoint.py.toFixed(1),
-          halfwayPolyline.length,
-          halfwayPolyline[1].px.toFixed(1),
-          halfwayPolyline[1].py.toFixed(1),
+          halfwayTrail.length,
+          halfwayTrail[0].length,
+          halfwayTrail[0][0].px.toFixed(1),
+          halfwayTrail[0][0].py.toFixed(1),
+          halfwayTrail[0][2].px.toFixed(1),
+          halfwayTrail[0][2].py.toFixed(1),
           withoutPrevious.px,
           withoutPrevious.py,
           panelScript.includes('const MAP_MOVE_ANIMATION_MS = 260;'),
           panelScript.includes('const MAP_TRAIL_MAX_SAMPLES = 180;'),
           panelScript.includes('const mapAnimationProgress = function mapAnimationProgressCore'),
           panelScript.includes('const interpolateMapPoint = function interpolateMapPointCore'),
-          panelScript.includes('const interpolateMapPolyline = function interpolateMapPolylineCore'),
+          panelScript.includes('const interpolateMapTrailPaths = function interpolateMapTrailPathsCore'),
           !panelScript.includes('appendMapTrailSample'),
           !panelScript.includes('advanceMapTrailSamples'),
           panelScript.includes('const samples = backendSamples.slice(-MAP_TRAIL_MAX_SAMPLES);'),
-          panelScript.includes('const deltaX = nextEndpoint.px - previousEndpoint.px'),
+          !panelScript.includes('interpolateMapPolyline'),
+          panelScript.includes('const previousByAt = new Map();'),
+          panelScript.includes('at: Number(sample.at)'),
+          panelScript.includes('paths: interpolateMapTrailPaths(entry.paths, previousEntry?.paths, progress)'),
           !panelScript.includes('resampleMapPolyline'),
           panelScript.includes('function buildMapTrailGeometry(scene, markers, frame'),
           panelScript.includes('function interpolateMapTrailGeometry(previous, next, progress)'),
@@ -37256,8 +37354,8 @@ async function runSelfTest() {
       want: [
         BROWSERLESS_WEB_PANEL_VERSION,
         'coin:0', 'player:alice', '', 0, '0.875', 1, '97.5', '195.0', '97.5', '195.0',
-        3, '60.0', '170.0', 110, 220,
-        ...Array(41).fill(true)
+        1, 3, '60.0', '120.0', '110.0', '220.0', 110, 220,
+        ...Array(44).fill(true)
       ].join('|')
     },
     {
@@ -37583,8 +37681,11 @@ async function runSelfTest() {
           // 四列全部使用 minmax(0,…fr): 固定最小宽度会让网格总宽超出面板, 把额度列挤出可视区。
           /\.high-drop-row\{display:grid;grid-template-columns:minmax\(0,1\.3fr\) minmax\(0,\.44fr\) minmax\(0,\.55fr\) minmax\(0,\.8fr\)/.test(panelText)
             && !/\.high-drop-row\{[^}]*grid-template-columns:minmax\([1-9]/.test(panelText)
-            && panelText.includes('.high-drop-row>.high-drop-cell:nth-child(n+2){box-sizing:border-box;padding-right:4px;text-align:right}')
-            && panelText.includes('.high-drop-row>.high-drop-cell:last-child{padding-right:2px}')
+            // 每一列都要有右 padding (UC): 末列不得例外, 否则额度数字会贴到 scrollbar-gutter 上。
+            && panelText.includes('.high-drop-cell{box-sizing:border-box;min-width:0;padding-right:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}')
+            && panelText.includes('.high-drop-row>.high-drop-cell:nth-child(n+2){text-align:right}')
+            && panelText.includes('.high-drop-cell{padding-right:5px}')
+            && !/\.high-drop-cell:last-child\{padding-right/.test(panelText)
             && panelText.includes('.high-drop-balance-decimal{color:var(--muted)}')
             // 今日收益整数展示, 额度保留三位小数 (UC-013)。
             && !panelScript.includes('todayGain.toFixed(3)')

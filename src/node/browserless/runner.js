@@ -2218,6 +2218,94 @@ async function runBrowserlessRunner(config, deps = {}) {
     now,
     backgroundIo
   });
+  // 动态白名单移除的统一出口: 面板手动移除与聊天击杀记录观察到的死亡共用同一套 easy-kill 提权与日志,
+  // 保证两条路径的副作用完全一致。
+  const applyDynamicWhitelistRemoval = (target, detail = {}) => {
+    const atMs = Number.isFinite(Number(detail.atMs)) ? Number(detail.atMs) : now();
+    const source = String(detail.source || 'dynamic-whitelist-remove');
+    const observedDeath = detail.observedDeath === true;
+    const result = observedDeath
+      ? dynamicWhitelist.removeObservedDeath(target, { ...detail, atMs, source })
+      : dynamicWhitelist.remove(target, atMs);
+    if (result.ok === false) {
+      return { ok: false, removed: false, reason: result.reason || 'remove-failed', player: null, easyKill: null };
+    }
+    if (result.removed !== true) {
+      return { ok: true, removed: false, reason: result.reason || 'not-removed', player: result.player || null, easyKill: null };
+    }
+    const userId = Number(result.player?.userId ?? target?.userId ?? target?.user_id);
+    const name = String(result.player?.name || target?.name || '');
+    let easyKill = null;
+    try {
+      easyKill = easyKillPlayerTracker.upsertManualPlayer(
+        { userId, name },
+        { atMs, score: EASY_KILL_MAX_SCORE, source }
+      );
+    } catch (err) {
+      recordSupervisorError(err, { operation: 'dynamic-whitelist-remove-easy-kill-upsert', source });
+      easyKill = { ok: false, reason: errorMessage(err) };
+    }
+    logStore.append('runner', 'dynamic-whitelist-removed', {
+      userId,
+      name,
+      source,
+      removed: true,
+      observedDeath,
+      killerUserId: observedDeath ? (result.killerUserId ?? null) : null,
+      selfKill: observedDeath ? Boolean(result.selfKill) : false,
+      evidenceKey: observedDeath ? String(result.evidenceKey || '') : '',
+      easyKillScore: easyKill?.ok ? easyKill.score : null,
+      easyKillReason: easyKill?.ok ? '' : (easyKill?.reason || '')
+    });
+    compactStatusCacheText = '';
+    return { ok: true, removed: true, reason: result.reason || source, player: result.player, easyKill };
+  };
+  // 聊天击杀记录里出现动态白名单成员被击杀(包括体力豁免后由我自己击杀的)时, 立即移出白名单。
+  const observeDynamicWhitelistKillEvents = (killEvents, detail = {}) => {
+    const events = Array.isArray(killEvents) ? killEvents : [];
+    if (!events.length) return { observed: 0, removed: 0, removals: [] };
+    const atMs = Number.isFinite(Number(detail.observedAtMs)) ? Number(detail.observedAtMs) : now();
+    const source = `${detail.source || 'snapshot'}-kill-record`;
+    const removals = [];
+    let observed = 0;
+    for (const event of events) {
+      const victimUserId = Number(event?.victimUserId);
+      if (!Number.isFinite(victimUserId)) continue;
+      if (!dynamicWhitelist.isMember?.({ userId: victimUserId })) continue;
+      observed += 1;
+      const applied = applyDynamicWhitelistRemoval({ userId: victimUserId, name: event.victimName }, {
+        atMs,
+        observedAtMs: Number.isFinite(Number(event.occurredAtMs)) ? Number(event.occurredAtMs) : atMs,
+        observedDeath: true,
+        source,
+        killerUserId: event.killerUserId,
+        selfKill: event.mine === true,
+        tick: event.tick,
+        evidenceKey: event.key
+      });
+      if (!applied.removed) {
+        logStore.append('runner', 'dynamic-whitelist-observed-death-skipped', {
+          userId: victimUserId,
+          name: String(event.victimName || ''),
+          source,
+          reason: applied.reason,
+          killerUserId: event.killerUserId ?? null,
+          selfKill: event.mine === true,
+          evidenceKey: String(event.key || '')
+        });
+        continue;
+      }
+      removals.push({
+        userId: victimUserId,
+        name: applied.player?.name || String(event.victimName || ''),
+        killerUserId: event.killerUserId ?? null,
+        selfKill: event.mine === true,
+        evidenceKey: String(event.key || ''),
+        easyKillScore: applied.easyKill?.ok ? applied.easyKill.score : null
+      });
+    }
+    return { observed, removed: removals.length, removals };
+  };
   const easyKillPlayerStatus = () => {
     easyKillPlayerTracker.expirePendingOutcomes?.(now());
     return easyKillPlayerTracker.status();
@@ -2331,6 +2419,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       scheduleAtMs: detail.scheduleAtMs
     });
     let chatResult = null;
+    let dynamicWhitelistDeathResult = null;
     let dynamicWhitelistNameResult = null;
     let easyKillNameResult = null;
     let easyKillEvidenceResult = null;
@@ -2386,6 +2475,18 @@ async function runBrowserlessRunner(config, deps = {}) {
     } catch (err) {
       recordSupervisorError(err, { operation: 'chat-snapshot-observe', source: detail.source || 'snapshot' });
       logStore.append('runner', 'chat-snapshot-observation-error', {
+        source: detail.source || 'snapshot',
+        error: errorMessage(err)
+      });
+    }
+    try {
+      dynamicWhitelistDeathResult = observeDynamicWhitelistKillEvents(chatResult?.killEvents, {
+        source: detail.source || 'snapshot',
+        observedAtMs
+      });
+    } catch (err) {
+      recordSupervisorError(err, { operation: 'dynamic-whitelist-observed-death', source: detail.source || 'snapshot' });
+      logStore.append('runner', 'dynamic-whitelist-observed-death-error', {
         source: detail.source || 'snapshot',
         error: errorMessage(err)
       });
@@ -2494,6 +2595,9 @@ async function runBrowserlessRunner(config, deps = {}) {
         chatMessagesObserved: Number(chatResult?.observed || 0),
         chatMessagesUpdated: Number(chatResult?.updated || 0),
         chatSendConfirmed: Boolean(chatResult?.confirmed),
+        chatKillsObserved: Number(chatResult?.killsObserved || 0),
+        dynamicWhitelistDeathsObserved: Number(dynamicWhitelistDeathResult?.observed || 0),
+        dynamicWhitelistDeathsRemoved: Number(dynamicWhitelistDeathResult?.removed || 0),
         dynamicWhitelistNamesUpdated: Number(dynamicWhitelistNameResult?.updated || 0),
         easyKillNamesUpdated: Number(easyKillNameResult?.updated || 0),
         easyKillKillsConfirmed: Number(easyKillEvidenceResult?.confirmed?.length || 0),
@@ -2511,6 +2615,9 @@ async function runBrowserlessRunner(config, deps = {}) {
         chatMessagesObserved: Number(chatResult?.observed || 0),
         chatMessagesUpdated: Number(chatResult?.updated || 0),
         chatSendConfirmed: Boolean(chatResult?.confirmed),
+        chatKillsObserved: Number(chatResult?.killsObserved || 0),
+        dynamicWhitelistDeathsObserved: Number(dynamicWhitelistDeathResult?.observed || 0),
+        dynamicWhitelistDeathsRemoved: Number(dynamicWhitelistDeathResult?.removed || 0),
         dynamicWhitelistNamesUpdated: Number(dynamicWhitelistNameResult?.updated || 0)
       };
     }
@@ -4031,29 +4138,20 @@ async function runBrowserlessRunner(config, deps = {}) {
           const matches = members.filter(player => String(player?.name || '') === requestedName);
           if (!matches.length) return { ok: false, statusCode: 404, reason: 'player-not-found', error: '该玩家不在动态白名单中' };
           if (matches.length > 1) return { ok: false, statusCode: 409, reason: 'ambiguous-name', error: '存在同名玩家，无法安全移除' };
-          const atMs = now();
           const target = matches[0];
-          const result = dynamicWhitelist.remove(target, atMs);
-          if (result.ok === false) {
-            return { ok: false, statusCode: 400, reason: result.reason || 'remove-failed', error: '移除失败' };
-          }
-          const easyKill = easyKillPlayerTracker.upsertManualPlayer(
-            { userId: target.userId, name: target.name },
-            { atMs, score: EASY_KILL_MAX_SCORE, source: 'dynamic-whitelist-remove' }
-          );
-          logStore.append('runner', 'dynamic-whitelist-removed', {
-            userId: target.userId,
-            name: target.name,
-            removed: Boolean(result.removed),
-            easyKillScore: easyKill.ok ? easyKill.score : null,
-            easyKillReason: easyKill.ok ? '' : (easyKill.reason || '')
+          const applied = applyDynamicWhitelistRemoval(target, {
+            atMs: now(),
+            source: 'dynamic-whitelist-remove'
           });
-          compactStatusCacheText = '';
+          if (applied.ok === false) {
+            return { ok: false, statusCode: 400, reason: applied.reason || 'remove-failed', error: '移除失败' };
+          }
+          const easyKill = applied.easyKill;
           return {
             ok: true,
-            removed: Boolean(result.removed),
-            player: result.player,
-            easyKill: easyKill.ok ? { userId: easyKill.userId, name: easyKill.name, score: easyKill.score } : null
+            removed: Boolean(applied.removed),
+            player: applied.player,
+            easyKill: easyKill?.ok ? { userId: easyKill.userId, name: easyKill.name, score: easyKill.score } : null
           };
         },
         onStop: async () => {
@@ -9154,7 +9252,9 @@ async function runBrowserlessRunnerSelfTest() {
           && remoteTargetActivityTextCore({ active: false, moving: false, firing: false }) === '挂机玩家'
           && pageHtml.includes('>Drop排行</h2>')
           && pageHtml.includes('grid-template-columns:minmax(0,1.3fr) minmax(0,.44fr) minmax(0,.55fr) minmax(0,.8fr)')
-          && pageHtml.includes('.high-drop-row>.high-drop-cell:last-child{padding-right:2px}')
+          // 每一列都要有右 padding, 末列不得例外, 否则额度数字会贴到 scrollbar-gutter 上。
+          && pageHtml.includes('.high-drop-cell{box-sizing:border-box;min-width:0;padding-right:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}')
+          && !pageHtml.includes('.high-drop-row>.high-drop-cell:last-child{padding-right')
           && pageHtml.includes('id="transportHealthMode"')
           && pageHtml.includes('id="transportLatency"')
           && pageHtml.includes('id="transportFrameLoss"')

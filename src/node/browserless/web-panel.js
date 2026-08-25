@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.25.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.25.2';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -75,27 +75,44 @@ function interpolateMapPointCore(point, previous, progress) {
   };
 }
 
-function interpolateMapPolylineCore(nextPoints, previousPoints, progress) {
-  const next = Array.isArray(nextPoints) ? nextPoints : [];
-  const normalizedNext = next
+// 轨迹线的补间以后端采样时间 at 作为点的身份, 而不是数组下标: 新采样追加、老采样过期、断点分段
+// 都会让下标错位, 只有按 at 配对才能让同一个采样点在与标记点相同的动画窗口里从旧屏幕位置平移到新位置。
+function interpolateMapTrailPathsCore(nextPaths, previousPaths, progress) {
+  const paths = (Array.isArray(nextPaths) ? nextPaths : []).map(path => (Array.isArray(path) ? path : [])
     .filter(point => Number.isFinite(Number(point?.px)) && Number.isFinite(Number(point?.py)))
-    .map(point => ({ px: Number(point.px), py: Number(point.py) }));
-  if (!normalizedNext.length) return [];
-  const previous = (Array.isArray(previousPoints) ? previousPoints : [])
-    .filter(point => Number.isFinite(Number(point?.px)) && Number.isFinite(Number(point?.py)))
-    .map(point => ({ px: Number(point.px), py: Number(point.py) }));
-  if (!previous.length) return normalizedNext;
+    .map(point => ({ px: Number(point.px), py: Number(point.py), at: Number(point?.at) })));
   const parsedProgress = Number(progress);
   const clampedProgress = Math.max(0, Math.min(1, Number.isFinite(parsedProgress) ? parsedProgress : 1));
-  if (clampedProgress >= 1) return normalizedNext;
-  const nextEndpoint = normalizedNext.at(-1);
-  const previousEndpoint = previous.at(-1);
-  const deltaX = nextEndpoint.px - previousEndpoint.px;
-  const deltaY = nextEndpoint.py - previousEndpoint.py;
-  return previous.map(point => ({
-    px: point.px + deltaX * clampedProgress,
-    py: point.py + deltaY * clampedProgress
-  }));
+  if (clampedProgress >= 1) return paths;
+  const previousByAt = new Map();
+  let previousEndpoint = null;
+  for (const path of Array.isArray(previousPaths) ? previousPaths : []) {
+    for (const point of Array.isArray(path) ? path : []) {
+      const px = Number(point?.px);
+      const py = Number(point?.py);
+      const at = Number(point?.at);
+      if (!Number.isFinite(px) || !Number.isFinite(py)) continue;
+      previousEndpoint = { px, py };
+      if (Number.isFinite(at)) previousByAt.set(at, { px, py });
+    }
+  }
+  if (!previousEndpoint) return paths;
+  return paths.map(path => {
+    // 没配上 at 的点(新追加的采样、断点后的新段)先向前继承最近的已配对点, 首部缺失再向后继承,
+    // 整段都没配上时回落到上一帧轨迹末端, 让新线段从旧末端"长"出来而不是凭空闪现。
+    const anchors = path.map(point => (Number.isFinite(point.at) ? previousByAt.get(point.at) : null) || null);
+    let carry = null;
+    for (let index = 0; index < anchors.length; index += 1) {
+      if (anchors[index]) carry = anchors[index];
+      else if (carry) anchors[index] = carry;
+    }
+    carry = null;
+    for (let index = anchors.length - 1; index >= 0; index -= 1) {
+      if (anchors[index]) carry = anchors[index];
+      else if (carry) anchors[index] = carry;
+    }
+    return path.map((point, index) => interpolateMapPointCore(point, anchors[index] || previousEndpoint, clampedProgress));
+  });
 }
 
 function pruneMapTrailHistoryCore(history, observedKeys) {
@@ -554,12 +571,12 @@ function renderBrowserlessWebPanel() {
     .coin-row{grid-template-columns:minmax(48px,1fr) minmax(34px,.5fr) minmax(46px,.65fr)}
     .player-row{grid-template-columns:minmax(150px,2.8fr) minmax(40px,.55fr) minmax(42px,.55fr) minmax(42px,.5fr) minmax(52px,.65fr)}
     .high-drop-list{display:grid;gap:0;min-width:0}
-    .high-drop-row{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,.44fr) minmax(0,.55fr) minmax(0,.8fr);gap:6px;align-items:center;min-height:26px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)}
+    .high-drop-row{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,.44fr) minmax(0,.55fr) minmax(0,.8fr);gap:2px;align-items:center;min-height:26px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)}
     .high-drop-row:last-child{border-bottom:0}
     .high-drop-head{position:sticky;top:0;z-index:1;color:var(--muted);font-size:11px;font-weight:700;background:var(--panel)}
-    .high-drop-cell{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .high-drop-row>.high-drop-cell:nth-child(n+2){box-sizing:border-box;padding-right:4px;text-align:right}
-    .high-drop-row>.high-drop-cell:last-child{padding-right:2px}
+    /* 每一列都要有右 padding: 末列同样保留, 否则额度数字会贴到 scrollbar-gutter 上。 */
+    .high-drop-cell{box-sizing:border-box;min-width:0;padding-right:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .high-drop-row>.high-drop-cell:nth-child(n+2){text-align:right}
     .high-drop-sort{display:inline-flex;align-items:center;justify-content:flex-end;gap:4px;width:100%;max-width:100%;min-height:0;padding:0;border:0;border-radius:0;background:transparent;color:inherit;font-size:inherit;font-weight:inherit;line-height:inherit}
     .high-drop-sort:hover{border-color:transparent;color:var(--text)}
     .high-drop-sort:focus-visible{outline:1px solid var(--blue);outline-offset:2px}
@@ -633,7 +650,7 @@ function renderBrowserlessWebPanel() {
     @media (max-width:760px){.layout{grid-template-columns:1fr}.stats-grid{grid-template-columns:1fr}}
     @media (max-width:600px){.player-insights-grid{grid-template-columns:1fr}}
     @media (max-width:600px){.nearby-combined{grid-template-columns:1fr}.nearby-players-pane{border-left:0;border-top:1px solid var(--line);padding-left:0;padding-top:10px}}
-    @media (max-width:520px){.player-row{grid-template-columns:minmax(112px,2fr) minmax(34px,.5fr) minmax(38px,.55fr) minmax(36px,.5fr) minmax(44px,.6fr);gap:4px}.high-drop-row{grid-template-columns:minmax(0,1.05fr) minmax(0,.44fr) minmax(0,.55fr) minmax(0,.8fr);gap:4px}.high-drop-row>.high-drop-cell:nth-child(n+2){padding-right:3px}.high-drop-row>.high-drop-cell:last-child{padding-right:1px}.battle-fighters{grid-template-columns:minmax(0,1fr) 26px minmax(0,1fr);column-gap:5px}.battle-meta{gap:5px;font-size:11px}.battle-meta strong{font-size:11px}}
+    @media (max-width:520px){.player-row{grid-template-columns:minmax(112px,2fr) minmax(34px,.5fr) minmax(38px,.55fr) minmax(36px,.5fr) minmax(44px,.6fr);gap:4px}.high-drop-row{grid-template-columns:minmax(0,1.05fr) minmax(0,.44fr) minmax(0,.55fr) minmax(0,.8fr);gap:2px}.high-drop-cell{padding-right:5px}.battle-fighters{grid-template-columns:minmax(0,1fr) 26px minmax(0,1fr);column-gap:5px}.battle-meta{gap:5px;font-size:11px}.battle-meta strong{font-size:11px}}
     @media (max-width:520px){main{padding:10px}header{align-items:flex-start;flex-direction:column}}
   </style>
 </head>
@@ -842,7 +859,7 @@ function renderBrowserlessWebPanel() {
     const mapRemoteTargetPosition = ${mapRemoteTargetPositionCore.toString()};
     const mapAnimationProgress = ${mapAnimationProgressCore.toString()};
     const interpolateMapPoint = ${interpolateMapPointCore.toString()};
-    const interpolateMapPolyline = ${interpolateMapPolylineCore.toString()
+    const interpolateMapTrailPaths = ${interpolateMapTrailPathsCore.toString()
       .replaceAll('interpolateMapPointCore', 'interpolateMapPoint')};
     const interpolateMapMarker = ${interpolateMapMarkerCore.toString()};
     const mapTrailOpacity = ${mapTrailOpacityCore.toString()};
@@ -2468,14 +2485,15 @@ function renderBrowserlessWebPanel() {
         const currentMarker = currentMarkers.get(key);
         if (!currentMarker) continue;
         const paths = mapTrailPathSamples(samples);
-        const points = paths.map((pathSamples, pathIndex) => pathSamples.map((sample, index) => ({
-          px: pathIndex === paths.length - 1 && index === pathSamples.length - 1
-            ? currentMarker.px
-            : frame.center + (Number(sample.x) - scene.selfX) * scene.scale,
-          py: pathIndex === paths.length - 1 && index === pathSamples.length - 1
-            ? currentMarker.py
-            : frame.center + (Number(sample.y) - scene.selfY) * scene.scale
-        })));
+        // 每个点都带上后端采样时间 at, 补间时靠它把同一个采样点在两帧之间配对起来。
+        const points = paths.map((pathSamples, pathIndex) => pathSamples.map((sample, index) => {
+          const pinnedToMarker = pathIndex === paths.length - 1 && index === pathSamples.length - 1;
+          return {
+            px: pinnedToMarker ? currentMarker.px : frame.center + (Number(sample.x) - scene.selfX) * scene.scale,
+            py: pinnedToMarker ? currentMarker.py : frame.center + (Number(sample.y) - scene.selfY) * scene.scale,
+            at: Number(sample.at)
+          };
+        }));
         const drawablePaths = points.filter(path => path.length >= 2);
         if (!drawablePaths.length) continue;
         geometry.set(key, {
@@ -2492,11 +2510,7 @@ function renderBrowserlessWebPanel() {
         const previousEntry = previous instanceof Map ? previous.get(key) : null;
         geometry.set(key, {
           ...entry,
-          paths: entry.paths.map((path, index) => interpolateMapPolyline(
-            path,
-            previousEntry?.paths?.[index],
-            progress
-          ))
+          paths: interpolateMapTrailPaths(entry.paths, previousEntry?.paths, progress)
         });
       }
       return geometry;
@@ -4416,7 +4430,7 @@ module.exports = {
   highDropSortValueCore,
   interpolateMapPointCore,
   interpolateMapMarkerCore,
-  interpolateMapPolylineCore,
+  interpolateMapTrailPathsCore,
   isStaminaExhaustionExitReasonCore,
   lastExitPanelVisibleCore,
   mapAnimationProgressCore,

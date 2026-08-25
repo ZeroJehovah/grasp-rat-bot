@@ -14,6 +14,7 @@ const SCHEMA_VERSION = 2;
 const DEFAULT_DAMAGE_WINDOW_MS = 60 * 1000;
 const DEFAULT_DAMAGE_THRESHOLD_HP = 10;
 const DEFAULT_CROSSFIRE_CONE_HALF_ANGLE_DEG = 30;
+const DEFAULT_OBSERVED_DEATH_MAX_AGE_MS = 10 * 60 * 1000;
 
 function numberOrNull(value) {
   if (value === null || value === undefined || value === '') return null;
@@ -150,6 +151,9 @@ function createDynamicWhitelist(options = {}) {
   const backgroundIo = options.backgroundIo || null;
   const damageWindowMs = Math.max(1, Number(options.damageWindowMs ?? DEFAULT_DAMAGE_WINDOW_MS));
   const damageThresholdHp = Math.max(0, Number(options.damageThresholdHp ?? DEFAULT_DAMAGE_THRESHOLD_HP));
+  const observedDeathMaxAgeMs = Math.max(0, Number(
+    options.observedDeathMaxAgeMs ?? DEFAULT_OBSERVED_DEATH_MAX_AGE_MS
+  ));
   const crossfireOptions = {
     attackRangeCm: options.attackRangeCm,
     crossfireConeHalfAngleDeg: options.crossfireConeHalfAngleDeg
@@ -206,6 +210,39 @@ function createDynamicWhitelist(options = {}) {
     recentDamage.delete(key);
     persist(atMs);
     return { ok: true, removed: true, userId: id, player };
+  }
+  // 观察到成员死亡后调用的移除入口: 死亡证据来自聊天击杀记录, 因此必须校验证据时效与入表时间,
+  // 避免重启后重放的历史击杀记录误删当前成员。
+  function removeObservedDeath(target, detail = {}) {
+    const id = userId(target);
+    if (id === null) return { ok: false, removed: false, reason: 'missing-user-id' };
+    const atMs = Number.isFinite(Number(detail.atMs)) ? Number(detail.atMs) : now();
+    const observedAtMs = Number.isFinite(Number(detail.observedAtMs)) ? Number(detail.observedAtMs) : atMs;
+    const key = playerKey(id);
+    const existing = store.players[key] || null;
+    const base = {
+      ok: true,
+      userId: id,
+      name: existing ? existing.name : playerName(target),
+      observedAt: new Date(observedAtMs).toISOString(),
+      killerUserId: numberOrNull(detail.killerUserId),
+      selfKill: detail.selfKill === true,
+      source: String(detail.source || 'kill-record'),
+      tick: numberOrNull(detail.tick),
+      evidenceKey: String(detail.evidenceKey || '')
+    };
+    if (!existing) return { ...base, removed: false, player: null, reason: 'not-a-member' };
+    const maxAgeMs = Math.max(0, Number(detail.maxAgeMs ?? observedDeathMaxAgeMs));
+    if (maxAgeMs > 0 && atMs - observedAtMs > maxAgeMs) {
+      return { ...base, removed: false, player: clone(existing), reason: 'death-observation-too-old' };
+    }
+    const addedAtMs = Date.parse(existing.addedAt || '');
+    if (Number.isFinite(addedAtMs) && observedAtMs < addedAtMs) {
+      return { ...base, removed: false, player: clone(existing), reason: 'death-before-membership' };
+    }
+    const result = remove({ userId: id }, atMs);
+    if (result.ok === false) return { ...base, removed: false, player: clone(existing), reason: result.reason };
+    return { ...base, removed: Boolean(result.removed), player: result.player, reason: 'observed-death' };
   }
   function observePlayerNames(targets = [], detail = {}) {
     const atMs = Number.isFinite(Number(detail.atMs)) ? Number(detail.atMs) : now();
@@ -410,6 +447,7 @@ function createDynamicWhitelist(options = {}) {
     return {
       file,
       updatedAt: store.updatedAt,
+      observedDeathMaxAgeMs,
       playerCount: players.length,
       memberUserIds: players.map(item => item.userId),
       enabledPlayerCount: userIds.length,
@@ -423,6 +461,7 @@ function createDynamicWhitelist(options = {}) {
     file,
     add,
     remove,
+    removeObservedDeath,
     observePlayerNames,
     observeDamage,
     observeBattles,
@@ -439,6 +478,7 @@ module.exports = {
   DEFAULT_CROSSFIRE_CONE_HALF_ANGLE_DEG,
   DEFAULT_DAMAGE_THRESHOLD_HP,
   DEFAULT_DAMAGE_WINDOW_MS,
+  DEFAULT_OBSERVED_DEATH_MAX_AGE_MS,
   createDynamicWhitelist,
   crossfireBystanders,
   playerName,
