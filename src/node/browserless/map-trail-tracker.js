@@ -3,6 +3,9 @@
 const DEFAULT_MAP_TRAIL_MAX_AGE_MS = 30000;
 const DEFAULT_MAP_TRAIL_MAX_SAMPLES = 720;
 const DEFAULT_MAP_TRAIL_STATUS_SAMPLES = 180;
+const DEFAULT_MAP_TRAIL_STATUS_BUCKET_MS = 250;
+const DEFAULT_MAP_TRAIL_LIVE_TAIL_SAMPLES = 40;
+const DEFAULT_MAP_TRAIL_UNOBSERVED_GRACE_MS = 2000;
 const DEFAULT_MAP_TRAIL_MAX_PLAYERS = 160;
 const DEFAULT_MAP_TRAIL_VISIBLE_RANGE = 50000;
 
@@ -47,20 +50,43 @@ function compareTrailPriority(left, right) {
     || String(left?.key || '').localeCompare(String(right?.key || ''));
 }
 
-function compactTrailSamples(samples, limit) {
+// 导出给面板的采样集合必须在两次状态构建之间保持稳定。等距下标抽稀做不到: 缓冲区每收到一帧
+// 就整体位移一格, 抽稀命中的下标随之漂移, 同一批采样点会被反复换掉, 面板按 at 认出的老点忽隐忽现,
+// 于是轨迹在刷新时被重画而不是整体平移。这里改成"冻结前缀 + 原始尾巴":
+// 老采样按绝对时间桶只保留每桶第一个采样, 桶边界只由 at 决定, 一个点一旦被导出就会一直被导出
+// 直到自然过期(保留集合是嵌套的); 最新的若干个采样原样导出, 保证轨迹头部精度。
+function compactTrailSamples(samples, limit, bucketMs, liveTailSamples) {
   const source = Array.isArray(samples) ? samples : [];
   const maximum = Math.max(2, Math.round(Number(limit) || DEFAULT_MAP_TRAIL_STATUS_SAMPLES));
   if (source.length <= maximum) return source.map(sample => sample.slice());
+  const bucket = Math.max(1, Math.round(Number(bucketMs) || DEFAULT_MAP_TRAIL_STATUS_BUCKET_MS));
+  const tailCount = Math.max(1, Math.min(
+    Math.round(Number(liveTailSamples) || DEFAULT_MAP_TRAIL_LIVE_TAIL_SAMPLES),
+    Math.floor(maximum / 2)
+  ));
+  const tailStart = Math.max(0, source.length - tailCount);
   const output = [];
-  const lastIndex = source.length - 1;
-  for (let index = 0; index < maximum; index += 1) {
-    const sourceIndex = Math.round(index * lastIndex / (maximum - 1));
-    const sample = source[sourceIndex];
-    if (!sample) continue;
-    if (output.length && output.at(-1)[2] === sample[2]) continue;
+  const pushSample = sample => {
+    if (output.length && output.at(-1)[2] === sample[2]) return;
     output.push(sample.slice());
+  };
+  let lastBucket = null;
+  for (let index = 0; index < tailStart; index += 1) {
+    const sample = source[index];
+    const at = Number(sample?.[2]);
+    if (!Number.isFinite(at)) continue;
+    const sampleBucket = Math.floor(at / bucket);
+    if (sampleBucket === lastBucket) continue;
+    lastBucket = sampleBucket;
+    pushSample(sample);
   }
-  return output;
+  for (let index = tailStart; index < source.length; index += 1) {
+    const sample = source[index];
+    if (!Number.isFinite(Number(sample?.[2]))) continue;
+    pushSample(sample);
+  }
+  // 超出预算时只从最老的一端截断, 保留集合仍然是嵌套的。
+  return output.length > maximum ? output.slice(output.length - maximum) : output;
 }
 
 function createMapTrailTracker(options = {}) {
@@ -68,6 +94,17 @@ function createMapTrailTracker(options = {}) {
   const maxAgeMs = Math.max(1000, Math.round(Number(options.maxAgeMs) || DEFAULT_MAP_TRAIL_MAX_AGE_MS));
   const maxSamples = Math.max(2, Math.round(Number(options.maxSamples) || DEFAULT_MAP_TRAIL_MAX_SAMPLES));
   const statusSamples = Math.max(2, Math.round(Number(options.statusSamples) || DEFAULT_MAP_TRAIL_STATUS_SAMPLES));
+  const statusBucketMs = Math.max(
+    1,
+    Math.round(Number(options.statusBucketMs) || DEFAULT_MAP_TRAIL_STATUS_BUCKET_MS)
+  );
+  const liveTailSamples = Math.max(
+    1,
+    Math.round(Number(options.liveTailSamples) || DEFAULT_MAP_TRAIL_LIVE_TAIL_SAMPLES)
+  );
+  const unobservedGraceMs = Math.max(0, Math.round(
+    Number(options.unobservedGraceMs ?? DEFAULT_MAP_TRAIL_UNOBSERVED_GRACE_MS) || 0
+  ));
   const maxPlayers = Math.max(1, Math.round(Number(options.maxPlayers) || DEFAULT_MAP_TRAIL_MAX_PLAYERS));
   const visibleRange = Math.max(
     0,
@@ -167,8 +204,12 @@ function createMapTrailTracker(options = {}) {
       observedKeys.add(key);
       appendObservation(entity, key, atMs, tick);
     }
-    for (const key of histories.keys()) {
-      if (!observedKeys.has(key)) histories.delete(key);
+    // 单帧缺席不再立即清空历史: 视野边界上的玩家会在相邻 pos 帧之间反复进出,
+    // 立即删除会让轨迹整条消失再从一个点重新长出来, 看起来就是一次重画。
+    // 缺席超过宽限期才真正丢弃, 面板本来就只画有当前标记的身份, 不会出现孤立轨迹。
+    for (const [key, history] of histories.entries()) {
+      if (observedKeys.has(key)) continue;
+      if (atMs - Number(history?.lastSeenAtMs || 0) > unobservedGraceMs) histories.delete(key);
     }
     retainNewestPlayers();
     return {
@@ -189,7 +230,7 @@ function createMapTrailTracker(options = {}) {
       .map(history => ({
         k: history.key,
         n: history.name || '',
-        s: compactTrailSamples(history.samples, statusSamples),
+        s: compactTrailSamples(history.samples, statusSamples, statusBucketMs, liveTailSamples),
         at: history.lastSeenAtMs,
         tick: history.lastTick
       }))
@@ -248,6 +289,44 @@ function runMapTrailTrackerSelfTest() {
     { ...inside, x: 900, y: 40 }
   ], { ...self, x: 300, y: 0 }, startAtMs + 150, 103);
   const reappeared = tracker.status(startAtMs + 150);
+  tracker.observeRealtime(
+    [{ ...self, x: 400, y: 0 }],
+    { ...self, x: 400, y: 0 },
+    startAtMs + 2400,
+    104
+  );
+  const afterGrace = tracker.status(startAtMs + 2400);
+  const stableTracker = createMapTrailTracker({
+    visibleRange: 50000,
+    statusSamples: 180,
+    includeSelf: false,
+    now: () => startAtMs
+  });
+  const stableSelf = { user_id: 11, entity_id: 11, name: 'stable-self', x: 0, y: 0 };
+  let stableObserved = 0;
+  const observeStable = count => {
+    for (let index = 0; index < count; index += 1) {
+      stableObserved += 1;
+      stableTracker.observeRealtime(
+        [{ user_id: 12, entity_id: 12, name: 'stable', x: 1000 + stableObserved * 7, y: stableObserved * 3 }],
+        stableSelf,
+        startAtMs + stableObserved * 50,
+        200 + stableObserved
+      );
+    }
+    return startAtMs + stableObserved * 50;
+  };
+  const stableFirst = stableTracker.status(observeStable(400));
+  const stableSecond = stableTracker.status(observeStable(60));
+  const stableFirstSamples = stableFirst?.items?.find(item => item.k === 'player:12')?.s || [];
+  const stableSecondSamples = stableSecond?.items?.find(item => item.k === 'player:12')?.s || [];
+  const stableSecondAtSet = new Set(stableSecondSamples.map(sample => sample[2]));
+  // 已经冻结的前缀(上一次导出里除最新原始尾巴以外的部分)必须整段留在下一次导出中,
+  // 只有自然过期或预算截断能从最老一端移除采样。
+  const stableFrozen = stableFirstSamples
+    .slice(0, -DEFAULT_MAP_TRAIL_LIVE_TAIL_SAMPLES)
+    .filter(sample => sample[2] >= (stableSecondSamples[0]?.[2] ?? 0));
+  const stableDropped = stableFrozen.filter(sample => !stableSecondAtSet.has(sample[2]));
   const crowdedTracker = createMapTrailTracker({
     visibleRange: 5000,
     maxPlayers: 64,
@@ -279,6 +358,7 @@ function runMapTrailTrackerSelfTest() {
   );
   const crowded = crowdedTracker.status(startAtMs + 50);
   const initialPlayer = initial?.items?.find(item => item.k === 'player:8') || null;
+  const afterLeavePlayer = afterLeave?.items?.find(item => item.k === 'player:8') || null;
   const reappearedPlayer = reappeared?.items?.find(item => item.k === 'player:8') || null;
   const crowdedMovingPlayer = crowded?.items?.find(item => item.k === 'player:1079') || null;
   return {
@@ -286,14 +366,26 @@ function runMapTrailTrackerSelfTest() {
       && initial?.source === 'pos'
       && initialPlayer?.s?.length === 2
       && !initial.items.some(item => item.k === 'player:9')
-      && !afterLeave.items.some(item => item.k === 'player:8')
-      && reappearedPlayer?.s?.length === 1
-      && reappearedPlayer.s[0][0] === 900
+      && afterLeavePlayer?.s?.length === 2
+      && reappearedPlayer?.s?.length === 3
+      && reappearedPlayer.s.at(-1)[0] === 900
+      && !afterGrace.items.some(item => item.k === 'player:8')
+      && stableFrozen.length > 0
+      && stableDropped.length === 0
+      && stableSecondSamples.length > 0
+      && stableSecondSamples.length <= 180
       && crowdedMovingPlayer?.s?.length === 2
       && crowded.items.length === 65,
     initialItems: initial?.items?.map(item => [item.k, item.s.length]) || [],
-    afterLeaveItems: afterLeave?.items?.map(item => item.k) || [],
+    afterLeaveItems: afterLeave?.items?.map(item => [item.k, item.s.length]) || [],
     reappearedItems: reappeared?.items?.map(item => [item.k, item.s.length]) || [],
+    afterGraceItems: afterGrace?.items?.map(item => item.k) || [],
+    stableExport: {
+      firstCount: stableFirstSamples.length,
+      secondCount: stableSecondSamples.length,
+      frozenCount: stableFrozen.length,
+      droppedCount: stableDropped.length
+    },
     crowded: {
       itemCount: crowded?.items?.length || 0,
       movingPlayer: crowdedMovingPlayer ? [crowdedMovingPlayer.k, crowdedMovingPlayer.s.length] : null
@@ -302,10 +394,13 @@ function runMapTrailTrackerSelfTest() {
 }
 
 module.exports = {
+  DEFAULT_MAP_TRAIL_LIVE_TAIL_SAMPLES,
   DEFAULT_MAP_TRAIL_MAX_AGE_MS,
   DEFAULT_MAP_TRAIL_MAX_PLAYERS,
   DEFAULT_MAP_TRAIL_MAX_SAMPLES,
+  DEFAULT_MAP_TRAIL_STATUS_BUCKET_MS,
   DEFAULT_MAP_TRAIL_STATUS_SAMPLES,
+  DEFAULT_MAP_TRAIL_UNOBSERVED_GRACE_MS,
   DEFAULT_MAP_TRAIL_VISIBLE_RANGE,
   createMapTrailTracker,
   runMapTrailTrackerSelfTest

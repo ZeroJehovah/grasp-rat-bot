@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.25.3';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.25.4';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -75,44 +75,74 @@ function interpolateMapPointCore(point, previous, progress) {
   };
 }
 
-// 轨迹线的补间以后端采样时间 at 作为点的身份, 而不是数组下标: 新采样追加、老采样过期、断点分段
-// 都会让下标错位, 只有按 at 配对才能让同一个采样点在与标记点相同的动画窗口里从旧屏幕位置平移到新位置。
-function interpolateMapTrailPathsCore(nextPaths, previousPaths, progress) {
-  const paths = (Array.isArray(nextPaths) ? nextPaths : []).map(path => (Array.isArray(path) ? path : [])
-    .filter(point => Number.isFinite(Number(point?.px)) && Number.isFinite(Number(point?.py)))
-    .map(point => ({ px: Number(point.px), py: Number(point.py), at: Number(point?.at) })));
+// 轨迹点一律保存世界坐标, 屏幕位置每帧由相机(自身世界位置 + 缩放 + 画布中心)重新投影。
+// 补间的是相机而不是顶点: 世界里静止的老轨迹因此必然整体平移, 不会因为后端导出的采样集合
+// 发生变化(抽稀、过期、断点分段)而被逐点重新配对, 也就不会出现整条线重画或橡皮筋式变形。
+function mapTrailCameraCore(scene, frame) {
+  const x = Number(scene?.selfX);
+  const y = Number(scene?.selfY);
+  const scale = Number(scene?.scale);
+  const center = Number(frame?.center);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(scale) || !Number.isFinite(center)) return null;
+  return { x, y, scale, center };
+}
+
+function interpolateMapCameraCore(next, previous, progress) {
+  if (!next) return null;
+  const previousX = Number(previous?.x);
+  const previousY = Number(previous?.y);
+  const previousScale = Number(previous?.scale);
+  const previousCenter = Number(previous?.center);
+  if (!Number.isFinite(previousX) || !Number.isFinite(previousY)
+    || !Number.isFinite(previousScale) || !Number.isFinite(previousCenter)) return next;
   const parsedProgress = Number(progress);
   const clampedProgress = Math.max(0, Math.min(1, Number.isFinite(parsedProgress) ? parsedProgress : 1));
-  if (clampedProgress >= 1) return paths;
-  const previousByAt = new Map();
-  let previousEndpoint = null;
-  for (const path of Array.isArray(previousPaths) ? previousPaths : []) {
-    for (const point of Array.isArray(path) ? path : []) {
-      const px = Number(point?.px);
-      const py = Number(point?.py);
+  if (clampedProgress >= 1) return next;
+  return {
+    x: previousX + (Number(next.x) - previousX) * clampedProgress,
+    y: previousY + (Number(next.y) - previousY) * clampedProgress,
+    scale: previousScale + (Number(next.scale) - previousScale) * clampedProgress,
+    center: previousCenter + (Number(next.center) - previousCenter) * clampedProgress
+  };
+}
+
+// 只有比上一帧末端更新的采样需要"从旧末端长出来"; 这靠一个锚点和一个时间阈值即可完成,
+// 不需要逐点身份配对, 所以采样集合怎么变都不会影响老轨迹的平移。
+function projectMapTrailPathsCore(paths, camera, options = {}) {
+  if (!camera) return [];
+  const parsedProgress = Number(options?.progress);
+  const clampedProgress = Math.max(0, Math.min(1, Number.isFinite(parsedProgress) ? parsedProgress : 1));
+  const anchorPx = Number(options?.anchor?.px);
+  const anchorPy = Number(options?.anchor?.py);
+  const sinceAt = Number(options?.sinceAt);
+  const growNew = clampedProgress < 1
+    && Number.isFinite(anchorPx) && Number.isFinite(anchorPy) && Number.isFinite(sinceAt);
+  return (Array.isArray(paths) ? paths : []).map(path => (Array.isArray(path) ? path : [])
+    .map(point => {
+      const x = Number(point?.x);
+      const y = Number(point?.y);
       const at = Number(point?.at);
-      if (!Number.isFinite(px) || !Number.isFinite(py)) continue;
-      previousEndpoint = { px, py };
-      if (Number.isFinite(at)) previousByAt.set(at, { px, py });
-    }
-  }
-  if (!previousEndpoint) return paths;
-  return paths.map(path => {
-    // 没配上 at 的点(新追加的采样、断点后的新段)先向前继承最近的已配对点, 首部缺失再向后继承,
-    // 整段都没配上时回落到上一帧轨迹末端, 让新线段从旧末端"长"出来而不是凭空闪现。
-    const anchors = path.map(point => (Number.isFinite(point.at) ? previousByAt.get(point.at) : null) || null);
-    let carry = null;
-    for (let index = 0; index < anchors.length; index += 1) {
-      if (anchors[index]) carry = anchors[index];
-      else if (carry) anchors[index] = carry;
-    }
-    carry = null;
-    for (let index = anchors.length - 1; index >= 0; index -= 1) {
-      if (anchors[index]) carry = anchors[index];
-      else if (carry) anchors[index] = carry;
-    }
-    return path.map((point, index) => interpolateMapPointCore(point, anchors[index] || previousEndpoint, clampedProgress));
-  });
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+      const px = camera.center + (x - camera.x) * camera.scale;
+      const py = camera.center + (y - camera.y) * camera.scale;
+      if (!growNew || !(at > sinceAt)) return { px, py, at };
+      return {
+        px: anchorPx + (px - anchorPx) * clampedProgress,
+        py: anchorPy + (py - anchorPy) * clampedProgress,
+        at
+      };
+    })
+    .filter(Boolean));
+}
+
+// 采样时间来自后端时钟, 过期与淡出必须用同一把尺子。浏览器时钟只要有几百毫秒偏差,
+// 按本地 Date.now() 过滤就会周期性砍掉最新或最老的一段采样, 表现为轨迹忽长忽短。
+function mapTrailReferenceNowMsCore(mapTrails, browserNowMs) {
+  const observedAtMs = Date.parse(String(mapTrails?.observedAt || ''));
+  const ageMs = Number(mapTrails?.ageMs);
+  if (Number.isFinite(observedAtMs) && Number.isFinite(ageMs) && ageMs >= 0) return observedAtMs + ageMs;
+  const browserNow = Number(browserNowMs);
+  return Number.isFinite(browserNow) ? browserNow : Date.now();
 }
 
 function pruneMapTrailHistoryCore(history, observedKeys) {
@@ -845,7 +875,8 @@ function renderBrowserlessWebPanel() {
     let mapRenderedMarkerPositions = new Map();
     let mapRenderedCanvasSize = 0;
     let mapTrailRenderHistory = new Map();
-    let mapRenderedTrailPaths = new Map();
+    let mapRenderedTrailGeometry = new Map();
+    let mapRenderedTrailCamera = null;
     let mapRenderedTargetLinePositions = new Map();
     let highDropSortField = 'drop';
     let panelCollapseState = readPanelCollapseState();
@@ -867,8 +898,10 @@ function renderBrowserlessWebPanel() {
     const mapRemoteTargetPosition = ${mapRemoteTargetPositionCore.toString()};
     const mapAnimationProgress = ${mapAnimationProgressCore.toString()};
     const interpolateMapPoint = ${interpolateMapPointCore.toString()};
-    const interpolateMapTrailPaths = ${interpolateMapTrailPathsCore.toString()
-      .replaceAll('interpolateMapPointCore', 'interpolateMapPoint')};
+    const mapTrailCamera = ${mapTrailCameraCore.toString()};
+    const interpolateMapCamera = ${interpolateMapCameraCore.toString()};
+    const projectMapTrailPaths = ${projectMapTrailPathsCore.toString()};
+    const mapTrailReferenceNowMs = ${mapTrailReferenceNowMsCore.toString()};
     const interpolateMapMarker = ${interpolateMapMarkerCore.toString()};
     const mapTrailOpacity = ${mapTrailOpacityCore.toString()};
     const transportMetricValueClass = ${transportMetricValueClassCore.toString()};
@@ -2430,7 +2463,8 @@ function renderBrowserlessWebPanel() {
     }
     function clearMapTrails() {
       mapTrailRenderHistory = new Map();
-      mapRenderedTrailPaths = new Map();
+      mapRenderedTrailGeometry = new Map();
+      mapRenderedTrailCamera = null;
     }
     function mapTrailSampleFromBackend(sample) {
       const array = Array.isArray(sample) ? sample : null;
@@ -2481,56 +2515,77 @@ function renderBrowserlessWebPanel() {
       if (current.length) paths.push(current);
       return paths.filter(path => path.length >= 2);
     }
+    // 世界坐标几何: 只决定画哪些身份、线段怎么分段, 不含任何屏幕位置。
     function buildMapTrailGeometry(scene, markers, frame, history = mapTrailRenderHistory) {
-      const currentMarkers = new Map(
-        markers.filter(marker => marker.mapKey).map(marker => [marker.mapKey, marker])
-      );
-      currentMarkers.set(scene.selfMapKey, { px: frame.center, py: frame.center });
+      const trailKeys = new Set(markers.filter(marker => marker.mapKey).map(marker => marker.mapKey));
+      trailKeys.add(scene.selfMapKey);
       const geometry = new Map();
       for (const [key, entry] of history.entries()) {
+        if (!trailKeys.has(key)) continue;
         const samples = entry.samples.filter(sample => scene.trailNowMs - Number(sample.at) <= MAP_TRAIL_MAX_AGE_MS);
         if (samples.length < 2) continue;
-        const currentMarker = currentMarkers.get(key);
-        if (!currentMarker) continue;
-        const paths = mapTrailPathSamples(samples);
-        // 每个点都带上后端采样时间 at, 补间时靠它把同一个采样点在两帧之间配对起来。
-        const points = paths.map((pathSamples, pathIndex) => pathSamples.map((sample, index) => {
-          const pinnedToMarker = pathIndex === paths.length - 1 && index === pathSamples.length - 1;
-          return {
-            px: pinnedToMarker ? currentMarker.px : frame.center + (Number(sample.x) - scene.selfX) * scene.scale,
-            py: pinnedToMarker ? currentMarker.py : frame.center + (Number(sample.y) - scene.selfY) * scene.scale,
+        const paths = mapTrailPathSamples(samples)
+          .map(pathSamples => pathSamples.map(sample => ({
+            x: Number(sample.x),
+            y: Number(sample.y),
             at: Number(sample.at)
-          };
-        }));
-        const drawablePaths = points.filter(path => path.length >= 2);
-        if (!drawablePaths.length) continue;
+          })))
+          .filter(path => path.length >= 2);
+        if (!paths.length) continue;
         geometry.set(key, {
           color: entry.color,
           opacity: mapTrailOpacity(samples.at(-1).at, scene.trailNowMs, MAP_TRAIL_MAX_AGE_MS),
-          paths: drawablePaths
+          latestAt: Number(samples.at(-1).at),
+          paths
         });
       }
       return geometry;
     }
-    function interpolateMapTrailGeometry(previous, next, progress) {
-      const geometry = new Map();
-      for (const [key, entry] of next.entries()) {
-        const previousEntry = previous instanceof Map ? previous.get(key) : null;
-        geometry.set(key, {
-          ...entry,
-          paths: interpolateMapTrailPaths(entry.paths, previousEntry?.paths, progress)
+    function mapTrailPinPositions(markers, frame, selfMapKey) {
+      const positions = new Map(
+        markers.filter(marker => marker.mapKey).map(marker => [marker.mapKey, { px: marker.px, py: marker.py }])
+      );
+      positions.set(selfMapKey, { px: frame.center, py: frame.center });
+      return positions;
+    }
+    // 轨迹末端钉在当前标记上, 标记本身按自己的键做位置补间, 两者因此始终连着。
+    function pinMapTrailPaths(paths, pin) {
+      const lastPath = paths.at(-1);
+      if (!pin || !Array.isArray(lastPath) || !lastPath.length) return paths;
+      lastPath[lastPath.length - 1] = { ...lastPath.at(-1), px: pin.px, py: pin.py };
+      return paths;
+    }
+    function renderedMapTrailGeometry(scene, markers, frame, camera, progress = 1) {
+      const geometry = buildMapTrailGeometry(scene, markers, frame, mapTrailRenderHistory);
+      const pinPositions = mapTrailPinPositions(markers, frame, scene.selfMapKey);
+      const rendered = new Map();
+      for (const [key, entry] of geometry.entries()) {
+        const previousEntry = scene.previousTrailGeometry instanceof Map
+          ? scene.previousTrailGeometry.get(key)
+          : null;
+        const paths = pinMapTrailPaths(
+          projectMapTrailPaths(entry.paths, camera, {
+            progress,
+            anchor: previousEntry?.endpoint || null,
+            sinceAt: previousEntry?.latestAt ?? null
+          }),
+          pinPositions.get(key)
+        ).filter(path => path.length >= 2);
+        if (!paths.length) continue;
+        rendered.set(key, {
+          color: entry.color,
+          opacity: entry.opacity,
+          latestAt: entry.latestAt,
+          endpoint: { px: paths.at(-1).at(-1).px, py: paths.at(-1).at(-1).py },
+          paths
         });
       }
-      return geometry;
+      return rendered;
     }
     function drawMapTrails(context, scene, markers, frame, progress = 1) {
-      const nextGeometry = buildMapTrailGeometry(
-        scene,
-        scene.nextMarkers || markers,
-        frame,
-        mapTrailRenderHistory
-      );
-      const geometry = interpolateMapTrailGeometry(scene.previousTrailPaths, nextGeometry, progress);
+      const camera = interpolateMapCamera(mapTrailCamera(scene, frame), scene.previousTrailCamera, progress);
+      if (!camera) return;
+      const geometry = renderedMapTrailGeometry(scene, markers, frame, camera, progress);
       context.save();
       context.lineCap = 'round';
       context.lineJoin = 'round';
@@ -2667,13 +2722,17 @@ function renderBrowserlessWebPanel() {
     }
     function mapLineGeometryMoved(scene, markers) {
       const frame = mapLineFrame(scene);
-      const nextTrailPaths = buildMapTrailGeometry(scene, markers, frame, mapTrailRenderHistory);
-      return mapTrailGeometryMoved(mapRenderedTrailPaths, nextTrailPaths)
-        || mapTargetLineGeometryMoved(scene, markers, frame);
+      const camera = mapTrailCamera(scene, frame);
+      return mapTrailGeometryMoved(
+        mapRenderedTrailGeometry,
+        renderedMapTrailGeometry(scene, markers, frame, camera, 1)
+      ) || mapTargetLineGeometryMoved(scene, markers, frame);
     }
     function rememberMapLineGeometry(scene, markers) {
       const frame = mapLineFrame(scene);
-      mapRenderedTrailPaths = buildMapTrailGeometry(scene, markers, frame, mapTrailRenderHistory);
+      const camera = mapTrailCamera(scene, frame);
+      mapRenderedTrailGeometry = renderedMapTrailGeometry(scene, markers, frame, camera, 1);
+      mapRenderedTrailCamera = camera;
       mapRenderedTargetLinePositions = new Map(
         mapTargetLineEntries(scene.status, markers, scene, frame)
           .map(entry => [entry.key, { px: entry.point.px, py: entry.point.py }])
@@ -2716,7 +2775,8 @@ function renderBrowserlessWebPanel() {
       if (resetPositions) {
         mapRenderedMarkerPositions = new Map();
         mapRenderedCanvasSize = 0;
-        mapRenderedTrailPaths = new Map();
+        mapRenderedTrailGeometry = new Map();
+        mapRenderedTrailCamera = null;
         mapRenderedTargetLinePositions = new Map();
       }
     }
@@ -2800,8 +2860,8 @@ function renderBrowserlessWebPanel() {
       const previousPositions = mapRenderedMarkerPositions;
       const animationScene = {
         ...scene,
-        nextMarkers: markers,
-        previousTrailPaths: mapRenderedTrailPaths,
+        previousTrailGeometry: mapRenderedTrailGeometry,
+        previousTrailCamera: mapRenderedTrailCamera,
         previousTargetLinePositions: mapRenderedTargetLinePositions
       };
       const lineGeometryMoved = mapLineGeometryMoved(animationScene, markers);
@@ -2962,7 +3022,7 @@ function renderBrowserlessWebPanel() {
       } else {
         setMapHeader('', visibleRange, markers.filter(marker => marker.kind === 'coin').length, markers.filter(marker => marker.kind === 'player').length);
       }
-      const trailNowMs = Date.now();
+      const trailNowMs = mapTrailReferenceNowMs(status?.mapTrails, Date.now());
       syncMapTrailHistory(status, markers, trailNowMs);
       startMapMarkerAnimation({
         context,
@@ -4436,16 +4496,19 @@ module.exports = {
   groupChatMessagesForDisplay,
   highDropRankValueCore,
   highDropSortValueCore,
+  interpolateMapCameraCore,
   interpolateMapPointCore,
   interpolateMapMarkerCore,
-  interpolateMapTrailPathsCore,
   isStaminaExhaustionExitReasonCore,
   lastExitPanelVisibleCore,
   mapAnimationProgressCore,
   mapMarkerKeyCore,
   mapRemoteTargetPositionCore,
+  projectMapTrailPathsCore,
   pruneMapTrailHistoryCore,
+  mapTrailCameraCore,
   mapTrailOpacityCore,
+  mapTrailReferenceNowMsCore,
   missCloseExitReasonTextCore,
   recoveryContactExitReasonTextCore,
   remoteSnapshotProfitTargetTitleCore,

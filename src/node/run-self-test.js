@@ -222,11 +222,14 @@ const {
   formatSpentStaminaCore,
   groupChatMessagesForDisplay,
   highDropBalanceValueCore,
+  interpolateMapCameraCore,
   interpolateMapPointCore,
   interpolateMapMarkerCore,
-  interpolateMapTrailPathsCore,
   mapAnimationProgressCore,
   mapMarkerKeyCore,
+  mapTrailCameraCore,
+  mapTrailReferenceNowMsCore,
+  projectMapTrailPathsCore,
   missCloseExitReasonTextCore,
   nearbyCoinIconCore,
   panelSessionFlagsCore,
@@ -37323,24 +37326,32 @@ async function runSelfTest() {
           { px: 10, py: 20 },
           halfway
         );
-        // 采样点按 at 配对: 前两个点从各自的旧屏幕位置平移到新位置, 第三个是新追加的采样,
-        // 从上一帧末端(at=2000 的旧位置)长出来, 而不是整条线被端点位移平移。
-        const halfwayTrail = interpolateMapTrailPathsCore(
-          [
-            [
-              { px: 110, py: 220, at: 1000 },
-              { px: 110, py: 320, at: 2000 },
-              { px: 210, py: 320, at: 3000 }
-            ]
-          ],
-          [
-            [
-              { px: 10, py: 20, at: 1000 },
-              { px: 10, py: 120, at: 2000 }
-            ]
-          ],
+        // 轨迹点保存世界坐标, 补间的是相机而不是顶点: 老采样在世界里没有动, 半程时整条线只随相机
+        // 平移(50,100), 不依赖两次导出之间的采样配对; 只有比上一帧末端更新的采样(at > sinceAt)
+        // 才从旧末端锚点长出来。
+        const nextCamera = mapTrailCameraCore({ selfX: 100, selfY: 0, scale: 1 }, { center: 100 });
+        const halfwayCamera = interpolateMapCameraCore(
+          nextCamera,
+          { x: 0, y: 0, scale: 1, center: 100 },
           0.5
         );
+        const worldPaths = [
+          [
+            { x: 0, y: 0, at: 1000 },
+            { x: 50, y: 0, at: 2000 },
+            { x: 50, y: 100, at: 3000 }
+          ]
+        ];
+        const halfwayTrail = projectMapTrailPathsCore(worldPaths, halfwayCamera, {
+          progress: 0.5,
+          anchor: { px: 150, py: 100 },
+          sinceAt: 2000
+        });
+        const settledTrail = projectMapTrailPathsCore(worldPaths, nextCamera, { progress: 1 });
+        const trailNowOffsetMs = mapTrailReferenceNowMsCore(
+          { observedAt: '2026-08-25T00:00:00.000Z', ageMs: 120 },
+          5
+        ) - Date.parse('2026-08-25T00:00:00.000Z');
         const withoutPrevious = interpolateMapMarkerCore({ px: 110, py: 220 }, null, 0);
         return [
           BROWSERLESS_WEB_PANEL_VERSION,
@@ -37354,33 +37365,43 @@ async function runSelfTest() {
           interpolated.py.toFixed(1),
           linePoint.px.toFixed(1),
           linePoint.py.toFixed(1),
+          halfwayCamera.x.toFixed(1),
           halfwayTrail.length,
           halfwayTrail[0].length,
           halfwayTrail[0][0].px.toFixed(1),
           halfwayTrail[0][0].py.toFixed(1),
           halfwayTrail[0][2].px.toFixed(1),
           halfwayTrail[0][2].py.toFixed(1),
+          settledTrail[0][2].px.toFixed(1),
+          settledTrail[0][2].py.toFixed(1),
+          trailNowOffsetMs,
+          mapTrailReferenceNowMsCore(null, 42),
           withoutPrevious.px,
           withoutPrevious.py,
           panelScript.includes('const MAP_MOVE_ANIMATION_MS = 260;'),
           panelScript.includes('const MAP_TRAIL_MAX_SAMPLES = 180;'),
           panelScript.includes('const mapAnimationProgress = function mapAnimationProgressCore'),
           panelScript.includes('const interpolateMapPoint = function interpolateMapPointCore'),
-          panelScript.includes('const interpolateMapTrailPaths = function interpolateMapTrailPathsCore'),
+          panelScript.includes('const mapTrailCamera = function mapTrailCameraCore'),
+          panelScript.includes('const interpolateMapCamera = function interpolateMapCameraCore'),
+          panelScript.includes('const projectMapTrailPaths = function projectMapTrailPathsCore'),
+          panelScript.includes('const mapTrailReferenceNowMs = function mapTrailReferenceNowMsCore'),
           !panelScript.includes('appendMapTrailSample'),
           !panelScript.includes('advanceMapTrailSamples'),
           panelScript.includes('const samples = backendSamples.slice(-MAP_TRAIL_MAX_SAMPLES);'),
           !panelScript.includes('interpolateMapPolyline'),
-          panelScript.includes('const previousByAt = new Map();'),
+          !panelScript.includes('const previousByAt = new Map();'),
           panelScript.includes('at: Number(sample.at)'),
-          panelScript.includes('paths: interpolateMapTrailPaths(entry.paths, previousEntry?.paths, progress)'),
+          panelScript.includes('const camera = interpolateMapCamera(mapTrailCamera(scene, frame), scene.previousTrailCamera, progress);'),
           !panelScript.includes('resampleMapPolyline'),
           panelScript.includes('function buildMapTrailGeometry(scene, markers, frame'),
-          panelScript.includes('function interpolateMapTrailGeometry(previous, next, progress)'),
+          panelScript.includes('function renderedMapTrailGeometry(scene, markers, frame, camera, progress = 1)'),
           panelScript.includes('function drawMapTrails(context, scene, markers, frame, progress = 1)'),
           panelScript.includes('lineProgress: progress'),
-          panelScript.includes('previousTrailPaths: mapRenderedTrailPaths'),
+          panelScript.includes('previousTrailGeometry: mapRenderedTrailGeometry'),
+          panelScript.includes('previousTrailCamera: mapRenderedTrailCamera'),
           panelScript.includes('previousTargetLinePositions: mapRenderedTargetLinePositions'),
+          panelScript.includes('const trailNowMs = mapTrailReferenceNowMs(status?.mapTrails, Date.now());'),
           panelScript.includes('context.lineTo(points[index].px, points[index].py)'),
           panelScript.includes('context.setLineDash([5, 4])'),
           !panelScript.includes('quadraticCurveTo('),
@@ -37394,7 +37415,7 @@ async function runSelfTest() {
           panelScript.includes('context.moveTo(center, center)'),
           panelScript.includes('context.lineTo(marker.px, marker.py)'),
           panelScript.includes('const MAP_TRAIL_LINE_WIDTH = 2;'),
-          panelScript.includes('mapRenderedTrailPaths = new Map();'),
+          panelScript.includes('mapRenderedTrailGeometry = new Map();'),
           panelScript.includes("return 'target-line:' + role;"),
           panelScript.includes('rememberMapLineGeometry(animationScene, markers)'),
           panelScript.includes("mapKey: mapMarkerKey('coin', item?.[0])"),
@@ -37411,8 +37432,9 @@ async function runSelfTest() {
       want: [
         BROWSERLESS_WEB_PANEL_VERSION,
         'coin:0', 'player:alice', '', 0, '0.875', 1, '97.5', '195.0', '97.5', '195.0',
-        1, 3, '60.0', '120.0', '110.0', '220.0', 110, 220,
-        ...Array(44).fill(true)
+        '50.0', 1, 3, '50.0', '100.0', '125.0', '150.0', '50.0', '200.0',
+        120, 42, 110, 220,
+        ...Array(49).fill(true)
       ].join('|')
     },
     {
