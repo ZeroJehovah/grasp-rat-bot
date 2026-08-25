@@ -9255,6 +9255,11 @@ async function runBrowserlessRunnerSelfTest() {
           // 每一列都要有右 padding, 末列不得例外, 否则额度数字会贴到 scrollbar-gutter 上。
           && pageHtml.includes('.high-drop-cell{box-sizing:border-box;min-width:0;padding-right:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}')
           && !pageHtml.includes('.high-drop-row>.high-drop-cell:last-child{padding-right')
+          // 页内所有滚动条都不要背景, 只留一条半透明滑块。
+          && pageHtml.includes(':root{scrollbar-width:thin;scrollbar-color:rgba(155,167,180,.42) transparent}')
+          && pageHtml.includes('::-webkit-scrollbar{width:8px;height:8px;background:transparent}')
+          && pageHtml.includes('::-webkit-scrollbar-track,::-webkit-scrollbar-track-piece,::-webkit-scrollbar-corner{background:transparent;border:0;box-shadow:none}')
+          && pageHtml.includes('::-webkit-scrollbar-thumb{border-radius:999px;background:rgba(155,167,180,.42)}')
           && pageHtml.includes('id="transportHealthMode"')
           && pageHtml.includes('id="transportLatency"')
           && pageHtml.includes('id="transportFrameLoss"')

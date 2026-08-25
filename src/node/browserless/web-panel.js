@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.25.2';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.25.3';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -466,6 +466,14 @@ function renderBrowserlessWebPanel() {
   <style>
     :root{color-scheme:dark;--bg:#101214;--panel:#181b1f;--panel2:#121518;--line:#30363d;--text:#eef2f5;--muted:#9ba7b4;--green:#4ade80;--amber:#fbbf24;--red:#fb7185;--blue:#60a5fa;--coin:#fbbf24}
     *{box-sizing:border-box}
+    /* 页内所有滚动条都不要背景: 轨道/边角/箭头全透明, 只留一条半透明滑块。
+       scrollbar-width/scrollbar-color 是继承属性, 放在 :root 即可覆盖整页。 */
+    :root{scrollbar-width:thin;scrollbar-color:rgba(155,167,180,.42) transparent}
+    ::-webkit-scrollbar{width:8px;height:8px;background:transparent}
+    ::-webkit-scrollbar-track,::-webkit-scrollbar-track-piece,::-webkit-scrollbar-corner{background:transparent;border:0;box-shadow:none}
+    ::-webkit-scrollbar-thumb{border-radius:999px;background:rgba(155,167,180,.42)}
+    ::-webkit-scrollbar-thumb:hover{background:rgba(155,167,180,.62)}
+    ::-webkit-scrollbar-button{display:none;width:0;height:0}
     body{margin:0;background:var(--bg);color:var(--text);font:13px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
     main{max-width:1180px;margin:0 auto;padding:14px}
     header{display:flex;align-items:center;gap:10px;margin-bottom:10px}

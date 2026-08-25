@@ -37661,6 +37661,12 @@ async function runSelfTest() {
           /\.high-drop-values\.offline,\.high-drop-values\.unknown\{color:var\(--muted\)\}/.test(panelText),
           /class="player-insights-grid"/.test(panelText),
           /\.player-insights-body\{height:186px;overflow-y:auto;scrollbar-gutter:stable\}/.test(panelText),
+          // 页内所有滚动条都不要背景: 轨道/边角/箭头全透明, 只留一条半透明滑块。
+          panelText.includes(':root{scrollbar-width:thin;scrollbar-color:rgba(155,167,180,.42) transparent}')
+            && panelText.includes('::-webkit-scrollbar{width:8px;height:8px;background:transparent}')
+            && panelText.includes('::-webkit-scrollbar-track,::-webkit-scrollbar-track-piece,::-webkit-scrollbar-corner{background:transparent;border:0;box-shadow:none}')
+            && panelText.includes('::-webkit-scrollbar-thumb{border-radius:999px;background:rgba(155,167,180,.42)}')
+            && panelText.includes('::-webkit-scrollbar-button{display:none;width:0;height:0}'),
           /function highDropValueParts/.test(panelScript),
           /current: Math\.max\(0, Math\.round\(current\)\)/.test(panelScript),
           /delta: initial === null \? null : Math\.round\(current - initial\)/.test(panelScript),
@@ -37697,7 +37703,7 @@ async function runSelfTest() {
           panelText.indexOf('id="highDropPlayers"') < panelText.indexOf('id="nearbyGrid"')
         ].join('|');
       })(),
-      want: '2026-07-14|ws|gap-http|alice-renamed,520,700,600,8,true,1000000,500000|bob,500,500,450,9,false,500000,500000|2|false|false|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
+      want: '2026-07-14|ws|gap-http|alice-renamed,520,700,600,8,true,1000000,500000|bob,500,500,450,9,false,500000,500000|2|false|false|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless compact status exposes completed source IP probe schedule',
