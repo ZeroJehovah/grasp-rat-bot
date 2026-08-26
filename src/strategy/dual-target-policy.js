@@ -1,5 +1,7 @@
 'use strict';
 
+const { COMBAT_CONSTANTS } = require('./combat-constants');
+
 const DEFAULT_SECONDARY_WINDOW_MS = 5000;
 const DEFAULT_SECONDARY_BASE_CADENCE_MS = 160;
 const DEFAULT_SECONDARY_MAX_CADENCE_MS = 160;
@@ -10,9 +12,17 @@ const DEFAULT_SECONDARY_PRESSURE_MIN_SHOTS = 2;
 const DEFAULT_SECONDARY_PRESSURE_MAX_LAST_SHOT_AGE_MS = 750;
 const DEFAULT_INCOMING_PRESSURE_EVIDENCE_LEASE_MS = 2500;
 const DEFAULT_SECONDARY_RETENTION_WINDOW_MS = DEFAULT_INCOMING_PRESSURE_EVIDENCE_LEASE_MS;
+const DEFAULT_SECONDARY_RETENTION_LOW_HP_THRESHOLD = COMBAT_CONSTANTS.LOW_HP_THRESHOLD;
+const DEFAULT_SECONDARY_RETENTION_ATTACK_RANGE_CM = COMBAT_CONSTANTS.ATTACK_RANGE;
 const DEFAULT_PRIMARY_FINISH_RACE_WINDOW_MS = 1800;
 const DEFAULT_PRIMARY_FINISH_RACE_MAX_SHOTS = 3;
 const DEFAULT_PRIMARY_FINISH_RACE_TARGET_HP_MAX = 55;
+
+function numberOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
 
 function idOf(value) {
   const id = value?.user_id ?? value?.userId ?? value?.targetId ?? value?.id ?? value?.entity_id ?? value?.entityId;
@@ -699,7 +709,88 @@ function secondaryFirePolicy(input = {}, options = {}) {
   };
 }
 
-function secondaryRetentionPolicy(combatTargetState = null, nowMs = Date.now(), options = {}) {
+// 已经打出伤害的防御交战不应该因为对手火力间歇而脱战: 对手断火 2500ms 就放人,
+// 会把一场本来能零伤害收掉的战斗拆成多次重新接触, 每次重新接触都要重新吃伤害。
+// 这条证据只延长“不脱战”, 不授予追击: 目标一旦离开攻击距离或者自身血量掉到脱离
+// 阈值, 证据立即失效, 交战按原有规则释放。
+function secondaryOwnDamageRetentionEvidence(
+  combatTargetState = null,
+  nowMs = Date.now(),
+  windowMs = DEFAULT_SECONDARY_RETENTION_WINDOW_MS,
+  options = {},
+  context = {}
+) {
+  const enabled = options.secondaryOwnDamageRetentionEnabled !== false;
+  const damageProgress = Math.max(
+    0,
+    Number(combatTargetState?.damageFromStart || 0),
+    Number(combatTargetState?.lastDamageAmount || 0)
+  );
+  const lastDamageAt = Number(combatTargetState?.lastDamageAt || 0);
+  const ageMs = lastDamageAt > 0 ? Math.max(0, Number(nowMs) - lastDamageAt) : null;
+  const selfHp = numberOrNull(context.selfHp);
+  const lowHpThreshold = Math.max(0, numberOrNull(
+    context.lowHpThreshold
+      ?? options.combatLowHpLeaveThreshold
+      ?? options.combatLowHpThreshold
+      ?? options.lowHpThreshold
+  ) ?? DEFAULT_SECONDARY_RETENTION_LOW_HP_THRESHOLD);
+  const attackRange = Math.max(0, numberOrNull(
+    context.attackRange
+      ?? options.combatAttackRange
+      ?? options.attackRange
+  ) ?? DEFAULT_SECONDARY_RETENTION_ATTACK_RANGE_CM);
+  const distance = numberOrNull(context.targetDistance);
+  const visible = context.targetVisible === true;
+  const inRange = distance !== null && distance <= attackRange;
+  const healthy = selfHp !== null && selfHp > lowHpThreshold;
+  const fresh = ageMs !== null && ageMs <= windowMs;
+  const priorIncomingEvidence = context.priorIncomingEvidence !== false;
+  const eligible = Boolean(enabled
+    && priorIncomingEvidence
+    && damageProgress > 0
+    && fresh
+    && healthy
+    && visible
+    && inRange);
+  const reason = eligible
+    ? 'own-damage-progress'
+    : (!enabled
+        ? 'own-damage-retention-disabled'
+        : (!priorIncomingEvidence
+            ? 'no-defensive-entry-evidence'
+            : (damageProgress <= 0
+                ? 'no-own-damage-progress'
+                : (!healthy
+                    ? 'self-hp-at-or-below-leave-threshold'
+                    : (!visible
+                        ? 'target-not-realtime-visible'
+                        : (!inRange ? 'target-outside-attack-range' : 'own-damage-progress-expired'))))));
+  return {
+    enabled,
+    eligible,
+    reason,
+    damageProgress,
+    lastDamageAt: lastDamageAt || null,
+    ageMs,
+    selfHp,
+    lowHpThreshold,
+    attackRange,
+    distance,
+    visible,
+    inRange,
+    healthy,
+    fresh,
+    priorIncomingEvidence
+  };
+}
+
+function secondaryRetentionPolicy(
+  combatTargetState = null,
+  nowMs = Date.now(),
+  options = {},
+  context = {}
+) {
   const secondary = combatTargetState?.combatRole === 'secondary'
     || combatTargetState?.secondaryTarget === true;
   const windowMs = Math.max(1000, Number(
@@ -716,8 +807,18 @@ function secondaryRetentionPolicy(combatTargetState = null, nowMs = Date.now(), 
       : 0]
   ]
     .map(([type, at]) => ({ type, at: Number(at || 0) }))
-    .filter(item => item.at > 0)
-    .sort((left, right) => right.at - left.at);
+    .filter(item => item.at > 0);
+  const ownDamageProgress = secondaryOwnDamageRetentionEvidence(
+    combatTargetState,
+    nowMs,
+    windowMs,
+    options,
+    { ...context, priorIncomingEvidence: evidence.length > 0 }
+  );
+  if (ownDamageProgress.eligible) {
+    evidence.push({ type: 'own-damage-progress', at: ownDamageProgress.lastDamageAt });
+  }
+  evidence.sort((left, right) => right.at - left.at);
   const latest = evidence[0] || null;
   const ageMs = latest ? Math.max(0, Number(nowMs) - latest.at) : null;
   const retained = Boolean(secondary && latest && ageMs <= windowMs);
@@ -728,14 +829,19 @@ function secondaryRetentionPolicy(combatTargetState = null, nowMs = Date.now(), 
     latestEvidenceAt: latest?.at || null,
     latestEvidenceType: latest?.type || '',
     ageMs,
+    ownDamageProgress,
     reason: retained
-      ? 'secondary-defensive-evidence-grace'
+      ? (latest?.type === 'own-damage-progress'
+          ? 'secondary-own-damage-progress-grace'
+          : 'secondary-defensive-evidence-grace')
       : (secondary ? 'secondary-defensive-evidence-expired' : 'not-secondary')
   };
 }
 
 module.exports = {
   DEFAULT_INCOMING_PRESSURE_EVIDENCE_LEASE_MS,
+  DEFAULT_SECONDARY_RETENTION_ATTACK_RANGE_CM,
+  DEFAULT_SECONDARY_RETENTION_LOW_HP_THRESHOLD,
   DEFAULT_SECONDARY_RETENTION_WINDOW_MS,
   DEFAULT_SECONDARY_BASE_CADENCE_MS,
   DEFAULT_SECONDARY_CLOSE_DISTANCE_CM,
@@ -764,5 +870,6 @@ module.exports = {
   secondaryCadenceMs,
   secondaryClosePressurePolicy,
   secondaryFirePolicy,
+  secondaryOwnDamageRetentionEvidence,
   secondaryRetentionPolicy
 };

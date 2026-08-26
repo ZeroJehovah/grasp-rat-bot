@@ -5177,10 +5177,36 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     ? options.whitelistCheck
     : null;
   const configuredTargetWhitelist = targetWhitelistFromOptions(options);
+  const establishedCombatTargetId = stateful?.combatTarget?.id
+    ?? stateful?.combatTarget?.userId
+    ?? stateful?.combatTarget?.user_id
+    ?? '';
+  const establishedCombatOriginIntent = String(
+    stateful?.combatTarget?.originIntent || stateful?.combatTarget?.intent || ''
+  );
+  const establishedVisibleTarget = establishedCombatTargetId
+    ? targets.find(target => String(combatTargetId(target) || '') === String(establishedCombatTargetId)) || null
+    : null;
+  const combatAttackRange = Math.max(0, Number(options.combatAttackRange || options.attackRange || COMBAT_CONSTANTS.ATTACK_RANGE));
+  const establishedRealtimeVisible = Boolean(establishedVisibleTarget
+    && establishedVisibleTarget.alive !== false
+    && (!establishedVisibleTarget.authority || establishedVisibleTarget.authority === 'realtime'));
+  const establishedRealtimeDistance = establishedRealtimeVisible
+    ? (Number.isFinite(Number(establishedVisibleTarget.distance))
+        ? Number(establishedVisibleTarget.distance)
+        : distanceBetween(self, establishedVisibleTarget))
+    : null;
   const secondaryRetention = secondaryRetentionPolicy(
     stateful?.combatTarget,
     Number(options.nowMs || Date.now()),
-    options
+    options,
+    {
+      selfHp,
+      lowHpThreshold,
+      attackRange: combatAttackRange,
+      targetVisible: establishedRealtimeVisible,
+      targetDistance: establishedRealtimeDistance
+    }
   );
   const establishedDefensiveTargetId = !secondaryRetention.secondary
     && [stateful?.combatTarget?.intent, stateful?.combatTarget?.originIntent]
@@ -5194,16 +5220,6 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     ? null
     : (stateful?.profitMission || options.profitMission || null);
   const profitMissionTargetId = missionTargetId(profitMission);
-  const establishedCombatTargetId = stateful?.combatTarget?.id
-    ?? stateful?.combatTarget?.userId
-    ?? stateful?.combatTarget?.user_id
-    ?? '';
-  const establishedCombatOriginIntent = String(
-    stateful?.combatTarget?.originIntent || stateful?.combatTarget?.intent || ''
-  );
-  const establishedVisibleTarget = establishedCombatTargetId
-    ? targets.find(target => String(combatTargetId(target) || '') === String(establishedCombatTargetId)) || null
-    : null;
   const establishedCombatDrop = Math.max(
     0,
     Number(stateful?.combatTarget?.drop || 0),
@@ -5218,7 +5234,6 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
           || establishedCombatDrop > COMBAT_CONSTANTS.LOW_VALUE_ACTIVE_DROP_MAX)
         ? 'primary'
         : (establishedCombatTargetId ? 'secondary' : ''));
-  const combatAttackRange = Math.max(0, Number(options.combatAttackRange || options.attackRange || COMBAT_CONSTANTS.ATTACK_RANGE));
   const secondaryTargetIds = new Set(targets
     .filter(target => {
       const targetId = String(combatTargetId(target) || '');

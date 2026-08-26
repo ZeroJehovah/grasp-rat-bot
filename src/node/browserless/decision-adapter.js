@@ -152,7 +152,9 @@ const {
   evaluateDynamicWhitelistContactCore
 } = require('../../strategy/dynamic-whitelist-safety');
 const {
+  DEFAULT_ENGAGED_THREAT_EVIDENCE_LEASE_MS,
   previousActionWasRecoveryCore,
+  recoveryEngagedThreatPolicy,
   updateRecoveryContactGuardCore
 } = require('../../strategy/recovery-contact-guard');
 const {
@@ -9274,6 +9276,43 @@ function buildRecoveryDecision(input, opportunity, options = {}) {
   };
 }
 
+// 交火判定只认“对方在打我们”的交战: 正在开火、防御交战、或者租约内还有可归因的
+// 来袭证据。单纯把某个目标选成战斗目标不算交火, 所以 AFK/送人头目标旁边的恢复
+// 站桩保持原样; 租约过期的旧目标也不再算交火, 避免早就散场的对手长期压住恢复。
+function recoveryEngagedThreatTargetId(input, combatDecision, stateful = {}, nowMs = 0, options = {}) {
+  const leaseMs = Math.max(0, Number(
+    options.recoveryEngagedThreatEvidenceLeaseMs
+      ?? options.incomingPressureEvidenceLeaseMs
+      ?? DEFAULT_ENGAGED_THREAT_EVIDENCE_LEASE_MS
+  ));
+  const retained = stateful?.combatTarget || null;
+  const retainedId = retained?.id === null || retained?.id === undefined ? '' : String(retained.id);
+  // 本场交战是否是“对方打过我们”: 这些证据在同一场交战内是粘性的, 交战一释放就随
+  // combatTarget 一起清掉, 所以不会跨场泄漏。对方火力间歇时不需要重新举证。
+  const retainedHostileEngagement = Boolean(retainedId
+    && (retained.hasDamagedSelf === true
+      || Number(retained.lastFiringAt || 0) > 0
+      || Number(retained.lastThreatAt || 0) > 0
+      || Number(retained.lastIncomingBulletAt || 0) > 0
+      || [retained.intent, retained.originIntent]
+        .some(intent => String(intent || '') === 'defensive')));
+  const retainedObservedAt = Number(retained?.at || 0);
+  const retainedHostile = Boolean(retainedHostileEngagement
+    && retainedObservedAt > 0
+    && Number(nowMs) > 0
+    && Math.max(0, Number(nowMs) - retainedObservedAt) <= leaseMs);
+  const liveTarget = combatDecision?.target || combatDecision?.dryRun?.target || null;
+  const liveId = liveTarget ? String(targetKey(liveTarget) || '') : '';
+  if (liveId) {
+    const liveHostile = Boolean(liveTarget.firing
+      || liveTarget.combatIntent === 'defensive'
+      || targetHasRealBulletPressure(input, liveTarget, retained)
+      || (retainedHostile && retainedId === liveId));
+    return liveHostile ? liveId : '';
+  }
+  return retainedHostile ? retainedId : '';
+}
+
 function lowHpRecoveryThreatRadiusForHp(selfHp, options = {}) {
   const hp = numberOrNull(selfHp);
   if (hp === null) return null;
@@ -14693,9 +14732,34 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const recoveryFootCoinAction = (profitLive || nonCombatProfit) && !whitelistSafetyCombat
     ? buildRecoveryFootCoinDecision(profitSelectionInput, options)
     : null;
-  const recoveryAction = (profitLive || nonCombatProfit) && !whitelistSafetyCombat
+  const rawRecoveryAction = (profitLive || nonCombatProfit) && !whitelistSafetyCombat
     ? buildRecoveryDecision(input, opportunity, options)
     : null;
+  const recoveryEngagedThreat = rawRecoveryAction?.kind === 'recover'
+    ? recoveryEngagedThreatPolicy(
+        {
+          self: input.self,
+          recovering: true,
+          nowMs: input.nowMs,
+          targets: input.visibleTargets || [],
+          engagedTargetId: recoveryEngagedThreatTargetId(
+            input,
+            combat,
+            stateful,
+            input.nowMs,
+            safetyContextOptions
+          ),
+          realBulletOwnerIds: incomingThreatAssessment?.ownerIds || [],
+          recentSelfDamageOwnerId: stateful.combatTarget?.hasDamagedSelf === true
+            ? stateful.combatTarget?.id
+            : '',
+          recentSelfDamageAt: stateful.combatTarget?.lastSelfDamageAt
+        },
+        safetyContextOptions
+      )
+    : null;
+  // 交火中不站桩: 只丢掉“原地等待恢复”这一个候选, 其余候选照常竞争。
+  const recoveryAction = recoveryEngagedThreat?.suppressed ? null : rawRecoveryAction;
   const recoveryPriority = recoveryPriorityDecision(
     input.self,
     opportunity,
@@ -15088,6 +15152,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     dropRaceEvents,
     finalSelection,
     whitelistSafety: summarizeWhitelistSafetyState(input, incomingThreatAssessment, safetyContextOptions),
+    recoveryEngagedThreat: recoveryEngagedThreat?.suppressed ? recoveryEngagedThreat : null,
     input: {
       self: summarizeTarget(input.self),
       stamina: input.stamina,

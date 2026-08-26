@@ -11,8 +11,11 @@ const {
   DEFAULT_PRIMARY_FINISH_RACE_TARGET_HP_MAX,
   DEFAULT_PRIMARY_FINISH_RACE_WINDOW_MS,
   dualTargetFireArbitration,
-  primaryFinishRaceAuthorization
+  primaryFinishRaceAuthorization,
+  secondaryRetentionPolicy
 } = require('../src/strategy/dual-target-policy');
+const { recoveryEngagedThreatPolicy } = require('../src/strategy/recovery-contact-guard');
+const { COMBAT_CONSTANTS } = require('../src/strategy/combat-constants');
 
 const DEFAULTS = {
   hitRadiusCm: 90,
@@ -27,6 +30,7 @@ const DEFAULTS = {
   primaryFinishRaceMaxShots: DEFAULT_PRIMARY_FINISH_RACE_MAX_SHOTS,
   primaryFinishRaceTargetHpMax: DEFAULT_PRIMARY_FINISH_RACE_TARGET_HP_MAX,
   incomingPressureEvidenceLeaseMs: 2500,
+  combatLowHpLeaveThreshold: COMBAT_CONSTANTS.LOW_HP_THRESHOLD,
   combatShootHardReserveMs: 1800,
   combatShotStaminaCostMs: 500,
   liveDivergencePrecisionCm: 1200,
@@ -681,6 +685,30 @@ function normalizeBrowserlessCombatLiveEntry(entry, state = {}) {
           desiredActionReason: String(desiredAction.reason || ''),
           movementReason: String(movement.reason || '')
         },
+    secondaryRetentionReplay: {
+      targetId: target.user_id === undefined || target.user_id === null
+        ? ''
+        : String(target.user_id),
+      secondary: secondaryRetention.secondary === true
+        || String(target.combatRole || '') === 'secondary'
+        || target.secondaryTarget === true,
+      retained: secondaryRetention.retained === true,
+      windowMs: numberOrNull(secondaryRetention.windowMs),
+      evidenceAt: numberOrNull(secondaryRetention.latestEvidenceAt),
+      evidenceType: String(secondaryRetention.latestEvidenceType || ''),
+      evidenceAgeMs: numberOrNull(secondaryRetention.ageMs),
+      distanceCm: numberOrNull(target.distance),
+      authority: String(target.authority || ''),
+      alive: target.alive !== false,
+      active: target.active === true,
+      firing: target.firing === true,
+      whitelisted: Boolean(target.whitelisted || target.profitProtected || target.creatorProtected),
+      loggedFinalActionKind: String(finalAction.kind || ''),
+      loggedFinalActionBand: String(finalAction.band || ''),
+      loggedFinalActionReason: String(finalAction.reason || ''),
+      loggedFinalActionStopMotion: finalAction.stopMotion === true,
+      loggedRecoveringSelf: detail.contactEntryGuard?.assessment?.recoveringSelf === true
+    },
     dualTargetReplay: primaryId === null || primaryId === undefined || primaryId === ''
       ? null
       : {
@@ -1024,6 +1052,68 @@ function runLoadFramesSelfTest() {
         && avoidance?.correctedEscortFrames === 1
         && avoidance?.preservedIncomingDodgeFrames === 1
         && avoidance?.improved === true);
+
+    const retentionEntry = (offsetMs, targetHp, distance, selfHp, evidenceAgeMs) => ({
+      at: new Date(Date.parse('2026-08-26T06:39:02.000Z') + offsetMs).toISOString(),
+      type: 'combat-live',
+      detail: {
+        self: { userId: '7', x: 0, y: 0, hp: selfHp, stamina5s: 2239 },
+        target: {
+          userId: '8',
+          name: 'target',
+          x: distance,
+          y: 0,
+          hp: targetHp,
+          distance,
+          active: true,
+          firing: false,
+          authority: 'realtime',
+          combatRole: 'secondary',
+          combatIntent: 'engaged'
+        },
+        secondaryRetention: {
+          secondary: true,
+          retained: evidenceAgeMs <= 2500,
+          ageMs: evidenceAgeMs,
+          latestEvidenceAt: Date.parse('2026-08-26T06:39:02.000Z') + offsetMs - evidenceAgeMs,
+          latestEvidenceType: 'collision-path-bullet',
+          windowMs: 2500
+        },
+        contactEntryGuard: { assessment: { recoveringSelf: true } },
+        combatAudit: {
+          finalAction: { kind: 'combat-live', band: 'combat', reason: 'combat-live-realtime' }
+        },
+        metrics: { engagementId: '8:1', acceptedShots: 0, confirmedHits: 0 }
+      }
+    });
+    const retentionEntries = [
+      retentionEntry(0, 79, 1900, 100, 100),
+      retentionEntry(2000, 52, 2140, 94, 2100),
+      retentionEntry(2600, 52, 2246, 94, 2700),
+      retentionEntry(2650, 52, 20000, 94, 2750),
+      retentionEntry(2700, 52, 2246, 50, 2800)
+    ];
+    const retentionFile = path.join(root, 'secondary-retention.jsonl.gz');
+    fs.writeFileSync(retentionFile, zlib.gzipSync(Buffer.from(retentionEntries.map(JSON.stringify).join('\n') + '\n')));
+    const retentionLoaded = loadFrames({
+      file: retentionFile,
+      startLine: 1,
+      endLine: retentionEntries.length,
+      selfId: '',
+      targetId: '',
+      targetName: ''
+    });
+    const retention = runSecondaryOwnDamageRetentionReplay(retentionLoaded.frames, {});
+    assert('browserless replay corrects secondary release without granting chase or low-hp retention',
+      retention?.secondaryFrames === retentionEntries.length
+        && retention?.loggedReleaseFrames === 3
+        && retention?.correctedRetentionFrames === 1
+        && retention?.firstCorrection?.line === 3
+        && retention?.droppedRetentionFrames === 0
+        && retention?.chaseRiskFrames === 0
+        && retention?.lowHpRetentionFrames === 0
+        && retention?.recoveryOwnedFrames === retentionEntries.length
+        && retention?.improved === true);
 
     const invalidFile = path.join(root, 'invalid.jsonl');
     fs.writeFileSync(invalidFile, JSON.stringify({ type: 'other', at: 1 }) + '\n');
@@ -2659,6 +2749,184 @@ function runInvulnerableAvoidanceArbitrationReplay(frames = []) {
   };
 }
 
+// 副目标交战因对手火力间歇被释放, 会把一场战斗拆成多段重新接触。这里用日志里的
+// 目标血量序列还原“我们自己的伤害进度”, 对同一批帧分别跑关闭/开启该证据的
+// secondaryRetentionPolicy, 统计被纠正的释放帧, 并强制检查它没有带来追击
+// (超出攻击距离仍维持) 或低血量滞留 (血量到脱离阈值仍维持)。
+function retentionEvidenceState(replay, damage) {
+  const evidenceAt = Number(replay.evidenceAt || 0);
+  const state = {
+    combatRole: 'secondary',
+    secondaryTarget: true,
+    lastFiringAt: 0,
+    lastThreatAt: 0,
+    lastIncomingBulletAt: 0,
+    hasDamagedSelf: false,
+    lastSelfDamageAt: 0,
+    damageFromStart: Number(damage.damageFromStart || 0),
+    lastDamageAmount: Number(damage.lastDamageAmount || 0),
+    lastDamageAt: Number(damage.lastDamageAt || 0)
+  };
+  if (!evidenceAt) return state;
+  if (replay.evidenceType === 'target-firing') state.lastFiringAt = evidenceAt;
+  else if (replay.evidenceType === 'incoming-bullet') state.lastIncomingBulletAt = evidenceAt;
+  else if (replay.evidenceType === 'attributable-self-damage') {
+    state.hasDamagedSelf = true;
+    state.lastSelfDamageAt = evidenceAt;
+  } else state.lastThreatAt = evidenceAt;
+  return state;
+}
+
+function runSecondaryOwnDamageRetentionReplay(frames = [], options = {}) {
+  const candidates = frames.filter(frame => frame.entry?.secondaryRetentionReplay?.targetId);
+  if (!candidates.length) return null;
+  const attackRange = Number(options.combatAttackRange || DEFAULTS.combatAttackRange);
+  const lowHpThreshold = Number(
+    options.combatLowHpLeaveThreshold || DEFAULTS.combatLowHpLeaveThreshold
+  );
+  const policyOptions = {
+    combatAttackRange: attackRange,
+    combatLowHpLeaveThreshold: lowHpThreshold
+  };
+  const damage = { damageFromStart: 0, lastDamageAmount: 0, lastDamageAt: 0 };
+  let firstTargetHp = null;
+  let minTargetHp = null;
+  let secondaryFrames = 0;
+  let loggedAgreementFrames = 0;
+  let loggedReleaseFrames = 0;
+  let correctedRetentionFrames = 0;
+  let droppedRetentionFrames = 0;
+  let chaseRiskFrames = 0;
+  let lowHpRetentionFrames = 0;
+  let recoveryOwnedFrames = 0;
+  let loggedRecoveryHoldFrames = 0;
+  let suppressedRecoveryHoldFrames = 0;
+  let firstCorrection = null;
+  let lastEvaluation = null;
+
+  for (const frame of candidates) {
+    const replay = frame.entry.secondaryRetentionReplay;
+    const targetHp = Number.isFinite(frame.targetHp) ? Number(frame.targetHp) : null;
+    if (targetHp !== null) {
+      if (firstTargetHp === null) {
+        firstTargetHp = targetHp;
+        minTargetHp = targetHp;
+      } else if (targetHp < minTargetHp) {
+        damage.lastDamageAmount = minTargetHp - targetHp;
+        minTargetHp = targetHp;
+        damage.lastDamageAt = frame.at;
+      }
+      damage.damageFromStart = Math.max(0, firstTargetHp - minTargetHp);
+    }
+    if (!replay.secondary) continue;
+    secondaryFrames += 1;
+    const state = retentionEvidenceState(replay, damage);
+    const context = {
+      selfHp: frame.selfHp,
+      lowHpThreshold,
+      attackRange,
+      targetVisible: Boolean(replay.alive && (!replay.authority || replay.authority === 'realtime')),
+      targetDistance: replay.distanceCm
+    };
+    const previous = secondaryRetentionPolicy(
+      state,
+      frame.at,
+      { ...policyOptions, secondaryOwnDamageRetentionEnabled: false },
+      context
+    );
+    const corrected = secondaryRetentionPolicy(state, frame.at, policyOptions, context);
+    if (previous.retained === replay.retained) loggedAgreementFrames += 1;
+    if (previous.retained === false) loggedReleaseFrames += 1;
+    if (previous.retained === false && corrected.retained === true) {
+      correctedRetentionFrames += 1;
+      if (!firstCorrection) {
+        firstCorrection = {
+          line: frame.lineNo,
+          time: formatTime(frame.at),
+          atMs: frame.at,
+          selfHp: frame.selfHp,
+          targetHp,
+          previousEvidenceType: previous.latestEvidenceType || '',
+          previousEvidenceAgeMs: previous.ageMs,
+          ownDamageAgeMs: corrected.ownDamageProgress?.ageMs ?? null,
+          damageProgress: corrected.ownDamageProgress?.damageProgress ?? null,
+          distanceCm: replay.distanceCm,
+          loggedFinalActionReason: replay.loggedFinalActionReason
+        };
+      }
+    }
+    if (previous.retained === true && corrected.retained === false) droppedRetentionFrames += 1;
+    if (corrected.retained === true) {
+      if (!(Number(replay.distanceCm) <= attackRange)) chaseRiskFrames += 1;
+      if (Number(frame.selfHp) <= lowHpThreshold) lowHpRetentionFrames += 1;
+    }
+    if (replay.loggedRecoveringSelf) recoveryOwnedFrames += 1;
+    const engagedThreat = recoveryEngagedThreatPolicy({
+      self: { hp: frame.selfHp },
+      recovering: true,
+      nowMs: frame.at,
+      targets: [{
+        userId: replay.targetId,
+        distance: replay.distanceCm,
+        active: replay.active,
+        firing: replay.firing,
+        authority: replay.authority || 'realtime',
+        whitelisted: replay.whitelisted
+      }],
+      engagedTargetId: corrected.retained === true ? replay.targetId : ''
+    }, policyOptions);
+    const loggedHold = replay.loggedFinalActionKind === 'recover'
+      || replay.loggedFinalActionReason === 'wait-for-full-stamina-and-hp';
+    if (loggedHold) {
+      loggedRecoveryHoldFrames += 1;
+      if (engagedThreat.suppressed) suppressedRecoveryHoldFrames += 1;
+    }
+    lastEvaluation = {
+      line: frame.lineNo,
+      time: formatTime(frame.at),
+      previousRetained: previous.retained,
+      previousEvidenceAgeMs: previous.ageMs,
+      correctedRetained: corrected.retained,
+      correctedReason: corrected.reason,
+      ownDamageAgeMs: corrected.ownDamageProgress?.ageMs ?? null,
+      distanceCm: replay.distanceCm,
+      selfHp: frame.selfHp,
+      targetHp,
+      engagedThreatSuppressed: engagedThreat.suppressed === true,
+      engagedThreatTrigger: engagedThreat.evidence?.trigger || ''
+    };
+  }
+
+  if (!secondaryFrames) return null;
+  const improved = correctedRetentionFrames > 0
+    && droppedRetentionFrames === 0
+    && chaseRiskFrames === 0
+    && lowHpRetentionFrames === 0;
+  return {
+    secondaryFrames,
+    loggedAgreementFrames,
+    loggedReleaseFrames,
+    correctedRetentionFrames,
+    droppedRetentionFrames,
+    chaseRiskFrames,
+    lowHpRetentionFrames,
+    recoveryOwnedFrames,
+    loggedRecoveryHoldFrames,
+    suppressedRecoveryHoldFrames,
+    ownDamageProgress: damage.damageFromStart,
+    attackRangeCm: attackRange,
+    lowHpThreshold,
+    firstCorrection,
+    segmentEnd: lastEvaluation,
+    improved,
+    reason: improved
+      ? 'own-damage-progress-retains-secondary-engagement-without-chase-or-low-hp-hold'
+      : (correctedRetentionFrames > 0
+          ? 'own-damage-retention-violated-a-chase-or-low-hp-invariant'
+          : 'no-secondary-release-frame-to-correct')
+  };
+}
+
 function replay(options) {
   const loaded = loadFrames(options);
   const frames = loaded.frames;
@@ -2721,6 +2989,7 @@ function replay(options) {
   const targetHpValues = Array.from(new Set(frames.map(frame => frame.targetHp).filter(Number.isFinite))).sort((a, b) => a - b);
   const dualTargetFire = runDualTargetFireArbitrationReplay(frames, loaded.sourceEvents);
   const invulnerableAvoidance = runInvulnerableAvoidanceArbitrationReplay(frames);
+  const secondaryOwnDamageRetention = runSecondaryOwnDamageRetentionReplay(frames, options);
   return {
     file: loaded.file,
     lineRange: [frames[0].lineNo, frames[frames.length - 1].lineNo],
@@ -2735,6 +3004,7 @@ function replay(options) {
     targetHpValues,
     dualTargetFire,
     invulnerableAvoidance,
+    secondaryOwnDamageRetention,
     coordinateDivergence: {
       samples: divergences.length,
       over10m: divergences.filter(value => value > 1000).length,
@@ -2786,6 +3056,16 @@ function printReport(result) {
     console.log(`Invulnerable-avoidance replay primary ${avoidance.primaryTargetId} vs secondary ${avoidance.secondaryTargetId}: loggedAvoidance=${avoidance.loggedAvoidanceFrames}, correctedEscort=${avoidance.correctedEscortFrames}, alreadyEscorted=${avoidance.alreadyEscortedFrames}, preservedIncomingDodge=${avoidance.preservedIncomingDodgeFrames}, evidenceAge=${avoidance.secondaryEvidenceAgeMs.min}-${avoidance.secondaryEvidenceAgeMs.max}ms, improved=${avoidance.improved}`);
     if (avoidance.firstCorrection) {
       console.log(`First corrected escort action line ${avoidance.firstCorrection.line} at ${avoidance.firstCorrection.time}, age=${avoidance.firstCorrection.secondaryEvidenceAgeMs}ms, logged=${avoidance.firstCorrection.loggedFinalActionReason}, corrected=${avoidance.firstCorrection.correctedActionReason}, movement=${avoidance.firstCorrection.movementReason}`);
+    }
+  }
+  if (result.secondaryOwnDamageRetention) {
+    const retention = result.secondaryOwnDamageRetention;
+    console.log(`Secondary own-damage retention replay: secondaryFrames=${retention.secondaryFrames}, loggedAgreement=${retention.loggedAgreementFrames}, loggedRelease=${retention.loggedReleaseFrames}, correctedRetention=${retention.correctedRetentionFrames}, dropped=${retention.droppedRetentionFrames}, chaseRisk=${retention.chaseRiskFrames}, lowHpHold=${retention.lowHpRetentionFrames}, ownDamage=${retention.ownDamageProgress}, improved=${retention.improved}`);
+    if (retention.firstCorrection) {
+      console.log(`First corrected release line ${retention.firstCorrection.line} at ${retention.firstCorrection.time}, oldEvidence=${retention.firstCorrection.previousEvidenceType}/${retention.firstCorrection.previousEvidenceAgeMs}ms, ownDamage=${retention.firstCorrection.damageProgress}@${retention.firstCorrection.ownDamageAgeMs}ms, distance=${retention.firstCorrection.distanceCm}cm, HP self/target=${retention.firstCorrection.selfHp}/${retention.firstCorrection.targetHp}, logged=${retention.firstCorrection.loggedFinalActionReason || '-'}`);
+    }
+    if (retention.segmentEnd) {
+      console.log(`Segment end line ${retention.segmentEnd.line} at ${retention.segmentEnd.time}: oldRetained=${retention.segmentEnd.previousRetained}@${retention.segmentEnd.previousEvidenceAgeMs}ms, correctedRetained=${retention.segmentEnd.correctedRetained} (${retention.segmentEnd.correctedReason}), distance=${retention.segmentEnd.distanceCm}cm, HP self/target=${retention.segmentEnd.selfHp}/${retention.segmentEnd.targetHp}, recoveryOwned=${retention.recoveryOwnedFrames}, loggedHold=${retention.loggedRecoveryHoldFrames}, holdSuppressed=${retention.suppressedRecoveryHoldFrames}, engagedThreat=${retention.segmentEnd.engagedThreatSuppressed}/${retention.segmentEnd.engagedThreatTrigger || '-'}`);
     }
   }
   if (result.dynamicStart) {

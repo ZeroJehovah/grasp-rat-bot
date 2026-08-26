@@ -472,6 +472,94 @@ function runStrategyModuleSelfTests() {
       && proximityOnlySecondary.retained === false
   });
 
+  // 自身伤害进度维持副目标: 只延长不脱战, 边界条件全部收紧。
+  const ownDamageSecondaryState = {
+    combatRole: 'secondary',
+    lastFiringAt: 9000,
+    lastThreatAt: 9000,
+    damageFromStart: 48,
+    lastDamageAmount: 3,
+    lastDamageAt: 11800
+  };
+  const ownDamageContext = {
+    selfHp: 94,
+    lowHpThreshold: 50,
+    attackRange: 14500,
+    targetVisible: true,
+    targetDistance: 2385
+  };
+  const ownDamageRetained = secondaryRetentionPolicy(ownDamageSecondaryState, 12000, {}, ownDamageContext);
+  const ownDamageRetainedAtLease = secondaryRetentionPolicy(
+    { ...ownDamageSecondaryState, lastDamageAt: 9500 },
+    12000,
+    {},
+    ownDamageContext
+  );
+  const ownDamageExpiredAtLease = secondaryRetentionPolicy(
+    { ...ownDamageSecondaryState, lastDamageAt: 9499 },
+    12000,
+    {},
+    ownDamageContext
+  );
+  const ownDamageLowHp = secondaryRetentionPolicy(ownDamageSecondaryState, 12000, {}, {
+    ...ownDamageContext,
+    selfHp: 50
+  });
+  const ownDamageOutOfRange = secondaryRetentionPolicy(ownDamageSecondaryState, 12000, {}, {
+    ...ownDamageContext,
+    targetDistance: 14501
+  });
+  const ownDamageInvisible = secondaryRetentionPolicy(ownDamageSecondaryState, 12000, {}, {
+    ...ownDamageContext,
+    targetVisible: false
+  });
+  const ownDamageWithoutIncomingEvidence = secondaryRetentionPolicy(
+    {
+      combatRole: 'secondary',
+      damageFromStart: 48,
+      lastDamageAmount: 3,
+      lastDamageAt: 11800
+    },
+    12000,
+    {},
+    ownDamageContext
+  );
+  const ownDamageWithoutProgress = secondaryRetentionPolicy(
+    { ...ownDamageSecondaryState, damageFromStart: 0, lastDamageAmount: 0 },
+    12000,
+    {},
+    ownDamageContext
+  );
+  const ownDamageDisabled = secondaryRetentionPolicy(
+    ownDamageSecondaryState,
+    12000,
+    { secondaryOwnDamageRetentionEnabled: false },
+    ownDamageContext
+  );
+  results.push({
+    name: 'secondary-own-damage-progress-retains-engagement-without-chase-authority',
+    passed: ownDamageRetained.retained === true
+      && ownDamageRetained.latestEvidenceType === 'own-damage-progress'
+      && ownDamageRetained.ageMs === 200
+      && ownDamageRetained.reason === 'secondary-own-damage-progress-grace'
+      && ownDamageRetainedAtLease.retained === true
+      && ownDamageRetainedAtLease.ageMs === 2500
+      && ownDamageExpiredAtLease.retained === false
+      && ownDamageExpiredAtLease.ownDamageProgress.reason === 'own-damage-progress-expired'
+      && ownDamageLowHp.retained === false
+      && ownDamageLowHp.ownDamageProgress.reason === 'self-hp-at-or-below-leave-threshold'
+      && ownDamageOutOfRange.retained === false
+      && ownDamageOutOfRange.ownDamageProgress.reason === 'target-outside-attack-range'
+      && ownDamageInvisible.retained === false
+      && ownDamageInvisible.ownDamageProgress.reason === 'target-not-realtime-visible'
+      && ownDamageWithoutIncomingEvidence.retained === false
+      && ownDamageWithoutIncomingEvidence.ownDamageProgress.reason === 'no-defensive-entry-evidence'
+      && ownDamageWithoutProgress.retained === false
+      && ownDamageWithoutProgress.ownDamageProgress.reason === 'no-own-damage-progress'
+      && ownDamageDisabled.retained === false
+      && ownDamageDisabled.ownDamageProgress.reason === 'own-damage-retention-disabled'
+  });
+
   const unsafePrimaryRace = primaryRewardSurvivalRacePolicy({
     nowMs: 10000,
     selfHp: 67,

@@ -7,6 +7,7 @@ const {
   createBrowserlessDecisionAdapter
 } = require('./decision-adapter');
 const {
+  recoveryEngagedThreatPolicy,
   updateRecoveryContactGuardCore
 } = require('../../strategy/recovery-contact-guard');
 const {
@@ -109,6 +110,105 @@ function nonZeroDirection(action) {
   return Boolean(Number(action?.dx || 0) || Number(action?.dy || 0));
 }
 
+// 2026-08-26 14:39 与 mango 的交战: 主目标只是一个 1 金币, mango 只作为副目标防御
+// 交战。对方火力间歇 2562ms 时旧逻辑放掉交战, 当轮 recover 硬门候选原地站桩,
+// 我们在攻击距离内白吃伤害并被迫重新接触三次。
+function engagedSecondaryScenario(nowMs, options = {}) {
+  const self = {
+    entity_id: 106,
+    user_id: 7,
+    name: 'self',
+    x: 0,
+    y: 0,
+    vx: 0,
+    vy: 0,
+    hp: Number(options.hp ?? 94),
+    max_hp: 100,
+    drop: 11702,
+    current_join_mode: 'Active',
+    stamina_5s_remaining_milli: 2239,
+    stamina_5s_limit_milli: 10000,
+    stamina_1h_remaining_milli: 2462603,
+    stamina_1h_limit_milli: 3600000,
+    stamina_1d_remaining_milli: 7131632,
+    stamina_1d_limit_milli: 10000000
+  };
+  const target = {
+    entity_id: 207,
+    user_id: 8,
+    name: 'mango',
+    x: Number(options.targetX ?? 2385),
+    y: 0,
+    vx: 0,
+    vy: 0,
+    hp: 52,
+    max_hp: 100,
+    drop: 4,
+    current_join_mode: 'Active',
+    firing: false,
+    stamina_5s_remaining_milli: 2350,
+    stamina_5s_limit_milli: 10000
+  };
+  return {
+    input: {
+      userId: 7,
+      realtime: {
+        tick: 6100,
+        frameAgeMs: 0,
+        receivedAtMs: nowMs,
+        self,
+        entities: [self, target],
+        bullets: [],
+        coinDrops: []
+      },
+      fallback: {
+        tick: 6100,
+        frameAgeMs: 0,
+        receivedAtMs: nowMs,
+        entities: [],
+        coinDrops: [],
+        messages: []
+      }
+    },
+    stateful: {
+      lastDecisionAction: { kind: 'combat-live', band: 'combat', reason: 'combat-live-realtime' },
+      combatTarget: {
+        id: '8',
+        at: nowMs - 120,
+        firstSeenAt: nowMs - 22000,
+        name: 'mango',
+        x: target.x,
+        y: target.y,
+        hp: 52,
+        firstHp: 100,
+        minHp: 52,
+        damageFromStart: 48,
+        lastDamageAmount: 3,
+        lastDamageAt: nowMs - 494,
+        distance: target.x,
+        drop: 4,
+        active: true,
+        firing: false,
+        intent: 'defensive',
+        originIntent: 'defensive',
+        combatRole: 'secondary',
+        secondaryTarget: true,
+        lastFiringAt: nowMs - 2562,
+        lastThreatAt: nowMs - 2562,
+        lastIncomingBulletAt: 0,
+        hasDamagedSelf: true,
+        lastSelfDamageAt: nowMs - 2658,
+        lastInRangeAt: nowMs - 120,
+        reason: 'realtime-defensive-evidence'
+      }
+    }
+  };
+}
+
+function candidateKeys(decision) {
+  return (decision?.finalSelection?.candidates || []).map(item => `${item.kind}:${item.reason}`);
+}
+
 function confirmLowHpContact(decide, stateful, extra = {}) {
   decide(state({ nowMs: 1000, tick: 100, hp: 50, targetX: 19000, targetVx: -50, ...extra }), stateful, decisionOptions(1000));
   return decide(
@@ -205,7 +305,151 @@ function runRecoveryContactSelfTest() {
     assert.strictEqual(decision.combat.target, null);
     assert.notStrictEqual(decision.reason, 'recovery-low-hp-contact-leave');
     assert.strictEqual(stateful.recoveryContactGuard, null);
+    assert.strictEqual(decision.recoveryEngagedThreat, null);
     cases.push('high-hp-recovery-contact-without-attack-evidence-keeps-waiting');
+  }
+
+  {
+    const nowMs = 1000000;
+    const held = engagedSecondaryScenario(nowMs);
+    const heldDecision = buildBrowserlessDecision(held.input, held.stateful, decisionOptions(nowMs));
+    const released = engagedSecondaryScenario(nowMs);
+    const releasedDecision = buildBrowserlessDecision(
+      released.input,
+      released.stateful,
+      decisionOptions(nowMs, { secondaryOwnDamageRetentionEnabled: false })
+    );
+    assert.strictEqual(heldDecision.reason, 'combat-live-realtime');
+    assert.strictEqual(heldDecision.combat.target.userId, 8);
+    assert.strictEqual(heldDecision.combat.secondaryRetention.retained, true);
+    assert.strictEqual(heldDecision.combat.secondaryRetention.latestEvidenceType, 'own-damage-progress');
+    assert.strictEqual(heldDecision.combat.secondaryRetention.reason, 'secondary-own-damage-progress-grace');
+    assert.strictEqual(heldDecision.combat.secondaryRetention.ageMs, 494);
+    assert.strictEqual(Boolean(heldDecision.action.stopMotion), false);
+    assert.strictEqual(releasedDecision.reason, 'wait-for-full-stamina-and-hp');
+    assert.strictEqual(releasedDecision.combat.target, null);
+    assert.strictEqual(releasedDecision.combat.secondaryRetention.retained, false);
+    assert.strictEqual(
+      releasedDecision.combat.secondaryRetention.ownDamageProgress.reason,
+      'own-damage-retention-disabled'
+    );
+    assert.strictEqual(releasedDecision.action.stopMotion, true);
+    cases.push('own-damage-progress-keeps-secondary-engagement-through-hostile-fire-gap');
+  }
+
+  {
+    const nowMs = 1000000;
+    const guarded = engagedSecondaryScenario(nowMs);
+    const guardedDecision = buildBrowserlessDecision(guarded.input, guarded.stateful, decisionOptions(nowMs));
+    const ungated = engagedSecondaryScenario(nowMs);
+    const ungatedDecision = buildBrowserlessDecision(
+      ungated.input,
+      ungated.stateful,
+      decisionOptions(nowMs, { recoveryEngagedThreatHoldSuppressionEnabled: false })
+    );
+    assert.strictEqual(guardedDecision.recoveryEngagedThreat.suppressed, true);
+    assert.strictEqual(guardedDecision.recoveryEngagedThreat.evidence.trigger, 'established-engagement');
+    assert.strictEqual(guardedDecision.recoveryEngagedThreat.evidence.distance, 2385);
+    assert.strictEqual(guardedDecision.recoveryEngagedThreat.evidence.attackRange, 14500);
+    assert.strictEqual(
+      candidateKeys(guardedDecision).includes('recover:wait-for-full-stamina-and-hp'),
+      false
+    );
+    assert.strictEqual(ungatedDecision.recoveryEngagedThreat, null);
+    assert.strictEqual(
+      candidateKeys(ungatedDecision).includes('recover:wait-for-full-stamina-and-hp'),
+      true
+    );
+    assert.strictEqual(guardedDecision.reason, ungatedDecision.reason);
+    cases.push('engaged-threat-in-attack-range-drops-the-recovery-hold-candidate');
+  }
+
+  {
+    const nowMs = 1000000;
+    const outOfRange = engagedSecondaryScenario(nowMs, { targetX: 14501 });
+    const outOfRangeDecision = buildBrowserlessDecision(
+      outOfRange.input,
+      outOfRange.stateful,
+      decisionOptions(nowMs)
+    );
+    const lowHp = engagedSecondaryScenario(nowMs, { hp: 50 });
+    const lowHpDecision = buildBrowserlessDecision(lowHp.input, lowHp.stateful, decisionOptions(nowMs));
+    assert.strictEqual(outOfRangeDecision.recoveryEngagedThreat, null);
+    assert.strictEqual(outOfRangeDecision.combat.secondaryRetention.retained, false);
+    assert.strictEqual(
+      outOfRangeDecision.combat.secondaryRetention.ownDamageProgress.reason,
+      'target-outside-attack-range'
+    );
+    assert.strictEqual(lowHpDecision.recoveryEngagedThreat, null);
+    assert.strictEqual(lowHpDecision.combat.secondaryRetention.retained, false);
+    assert.strictEqual(
+      lowHpDecision.combat.secondaryRetention.ownDamageProgress.reason,
+      'self-hp-at-or-below-leave-threshold'
+    );
+    cases.push('own-damage-retention-grants-no-chase-and-no-low-hp-hold');
+  }
+
+  {
+    const nowMs = 1000000;
+    const self = { user_id: 7, x: 0, y: 0, hp: 94 };
+    const engagedTarget = {
+      user_id: 8,
+      name: 'mango',
+      x: 2385,
+      y: 0,
+      distance: 2385,
+      active: true,
+      firing: false,
+      authority: 'realtime'
+    };
+    const context = {
+      self,
+      recovering: true,
+      nowMs,
+      targets: [engagedTarget],
+      engagedTargetId: '8'
+    };
+    const suppressed = recoveryEngagedThreatPolicy(context);
+    const idle = recoveryEngagedThreatPolicy({ ...context, engagedTargetId: '' });
+    const firingOnly = recoveryEngagedThreatPolicy({
+      ...context,
+      engagedTargetId: '',
+      targets: [{ ...engagedTarget, firing: true }]
+    });
+    const outOfRange = recoveryEngagedThreatPolicy({
+      ...context,
+      targets: [{ ...engagedTarget, x: 14501, distance: 14501 }]
+    });
+    const whitelisted = recoveryEngagedThreatPolicy({
+      ...context,
+      targets: [{ ...engagedTarget, whitelisted: true }]
+    });
+    const snapshotOnly = recoveryEngagedThreatPolicy({
+      ...context,
+      targets: [{ ...engagedTarget, authority: 'snapshot' }]
+    });
+    const lowHp = recoveryEngagedThreatPolicy({ ...context, self: { ...self, hp: 50 } });
+    const notRecovering = recoveryEngagedThreatPolicy({ ...context, recovering: false });
+    const disabled = recoveryEngagedThreatPolicy(context, {
+      recoveryEngagedThreatHoldSuppressionEnabled: false
+    });
+    assert.strictEqual(suppressed.suppressed, true);
+    assert.strictEqual(suppressed.reason, 'engaged-threat-in-attack-range');
+    assert.strictEqual(suppressed.evidence.trigger, 'established-engagement');
+    assert.strictEqual(idle.suppressed, false);
+    assert.strictEqual(idle.reason, 'no-engaged-threat-in-attack-range');
+    assert.strictEqual(firingOnly.suppressed, true);
+    assert.strictEqual(firingOnly.evidence.trigger, 'target-firing');
+    assert.strictEqual(outOfRange.suppressed, false);
+    assert.strictEqual(whitelisted.suppressed, false);
+    assert.strictEqual(snapshotOnly.suppressed, false);
+    assert.strictEqual(lowHp.suppressed, false);
+    assert.strictEqual(lowHp.reason, 'low-hp-recovery-owns-contact');
+    assert.strictEqual(notRecovering.suppressed, false);
+    assert.strictEqual(notRecovering.reason, 'not-recovering');
+    assert.strictEqual(disabled.suppressed, false);
+    assert.strictEqual(disabled.reason, 'engaged-threat-hold-suppression-disabled');
+    cases.push('engaged-threat-hold-suppression-requires-realtime-hostile-contact');
   }
 
   {
