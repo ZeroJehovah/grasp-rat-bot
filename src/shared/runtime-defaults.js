@@ -125,6 +125,8 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     combatEvasiveAimEarlyDetectionEnabled: config.combatEvasiveAimEarlyDetectionEnabled !== false,
     dynamicWhitelistProximitySafetyEnabled: config.dynamicWhitelistProximitySafetyEnabled !== false,
     dynamicWhitelistStaminaExemptionEnabled: config.dynamicWhitelistStaminaExemptionEnabled !== false,
+    // 该豁免独立于通用 staminaFullRatio: 必须长周期体力 100% 满才认定成员没有在消耗该窗口。
+    dynamicWhitelistStaminaExemptionFullRatio: numberDefault(config.dynamicWhitelistStaminaExemptionFullRatio, 1),
     preTargetIncomingDodgeEnabled: config.preTargetIncomingDodgeEnabled !== false,
     combatRobustDodgeEnabled: config.combatRobustDodgeEnabled !== false,
     combatDistanceAwareDodgeEnabled: config.combatDistanceAwareDodgeEnabled !== false,

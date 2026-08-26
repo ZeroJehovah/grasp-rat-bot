@@ -170,6 +170,11 @@ const {
 
 const BROWSER_RUNTIME_DEFAULTS = buildRuntimeDefaults({}, false);
 const DYNAMIC_WHITELIST_STAMINA_EXEMPT_WINDOWS = ['1h', '1d'];
+// 长周期体力必须 100% 满(例如 1h 3000000/3000000)才算"完全没有在消耗该窗口的体力"。
+// 通用的 staminaFullRatio=0.98 在单场战斗尺度上无效: 1h 预算 3000000 的 2% 是 60000 milli
+// (约 120 发), 正在对射的成员一小时内也跌不破该阈值, 会被一直判成挂机而被设成主目标。
+const DYNAMIC_WHITELIST_STAMINA_EXEMPTION_FULL_RATIO = 1;
+const PLAYER_PROFIT_MISSION_TYPES = ['enemy', 'remote-player-navigation'];
 const NO_DYNAMIC_WHITELIST_STAMINA_EXEMPTION = Object.freeze({
   exempt: false,
   window: '',
@@ -678,13 +683,20 @@ function declaredWhitelistProtected(entity, options = {}) {
   );
 }
 
-// 观察到动态白名单成员的 1h 或 1d 体力已满, 说明他没有在消耗长周期体力, 允许把他设为战斗目标。
+// 观察到动态白名单成员的 1h 或 1d 体力 100% 满, 说明他没有在消耗长周期体力, 允许把他设为战斗目标。
+// 只要他动了一下(哪怕一次射击的 500 milli), 该窗口就不再是满值, 豁免立刻失效, 保护立刻恢复,
+// 于是他只能重新回到"最多防御副目标"的路径: 有攻击证据时降级为防御副目标, 没有攻击证据时直接释放。
 // 1h/1d 体力字段只出现在快照元数据中(实时 pos 帧不携带), 因此这里读到的是已合并到实时实体上的
 // 快照字段, 其新鲜度由 snapshotCoinFallbackMaxAgeMs 约束; 豁免结果只写在实时实体上, 远端快照
 // 选目标路径不经过这里, 所以只影响视野内的目标选择。
 function dynamicWhitelistStaminaExemption(entity, options = {}) {
   if (options.dynamicWhitelistStaminaExemptionEnabled === false) return NO_DYNAMIC_WHITELIST_STAMINA_EXEMPTION;
-  const summaryOptions = { staminaFullRatio: options.staminaFullRatio };
+  const configuredRatio = Number(options.dynamicWhitelistStaminaExemptionFullRatio);
+  const summaryOptions = {
+    staminaFullRatio: Number.isFinite(configuredRatio) && configuredRatio > 0
+      ? configuredRatio
+      : DYNAMIC_WHITELIST_STAMINA_EXEMPTION_FULL_RATIO
+  };
   for (const windowName of DYNAMIC_WHITELIST_STAMINA_EXEMPT_WINDOWS) {
     const summary = summarizeStaminaWindow(entity, windowName, summaryOptions);
     if (!summary.full) continue;
@@ -753,11 +765,13 @@ function annotateWhitelistSafetyPolicy(entity, self, identityContext, options = 
     recovering: isRecoveringSelf(self),
     recoveryRadiusCm: recoveryRadius
   }, options);
-  const contactPolicy = identity.dynamicWhitelistStaminaExempt
+  // 动态白名单成员一律带上豁免诊断(含 exempt=false), 这样"他行动了→豁免撤销→保护恢复"这一步
+  // 在日志里可复核; 非成员保持原对象, 不额外分配。
+  const contactPolicy = identity.dynamicWhitelistRawMember
     ? {
         ...policy,
         dynamicWhitelistRawMember: true,
-        dynamicWhitelistStaminaExempt: true,
+        dynamicWhitelistStaminaExempt: identity.dynamicWhitelistStaminaExempt,
         dynamicWhitelistStaminaExemptWindow: identity.dynamicWhitelistStaminaExemptWindow,
         dynamicWhitelistStaminaExemptAuthority: identity.dynamicWhitelistStaminaExemptAuthority
       }
@@ -2833,6 +2847,9 @@ function summarizeWhitelistContactPolicy(policy) {
     profitProtected: Boolean(policy.profitProtected),
     creatorProtected: Boolean(policy.creatorProtected),
     dynamicWhitelistMember: Boolean(policy.dynamicWhitelistMember),
+    dynamicWhitelistRawMember: Boolean(policy.dynamicWhitelistRawMember),
+    dynamicWhitelistStaminaExempt: Boolean(policy.dynamicWhitelistStaminaExempt),
+    dynamicWhitelistStaminaExemptWindow: String(policy.dynamicWhitelistStaminaExemptWindow || ''),
     dynamicWhitelistEnabled: Boolean(policy.dynamicWhitelistEnabled),
     damagedSelfToday: Boolean(policy.damagedSelfToday),
     legacyWhitelistProtected: Boolean(policy.legacyWhitelistProtected),
@@ -2872,7 +2889,9 @@ function summarizeTarget(target) {
     stamina5s: staminaRemainingValue(target, '5s'),
     stamina5sLimit: staminaLimitForWindow(target, '5s'),
     stamina1h: staminaRemainingValue(target, '1h'),
+    stamina1hLimit: staminaLimitForWindow(target, '1h'),
     stamina1d: staminaRemainingValue(target, '1d'),
+    stamina1dLimit: staminaLimitForWindow(target, '1d'),
     staminaMetadataAuthority: target.staminaMetadataAuthority || '',
     distance: Number.isFinite(Number(target.distance)) ? Math.round(Number(target.distance)) : null,
     active: target.active === undefined ? isCurrentlyActiveEntity(target) : Boolean(target.active),
@@ -7853,6 +7872,20 @@ function profitMissionRemoteState(input = {}, mission = {}, nowMs = Date.now(), 
   return state;
 }
 
+// 玩家收益任务在提交后仍需按当前标注复核保护状态: 体力豁免消失、动态白名单重新生效或创建者保护
+// 出现时, 该玩家立刻不再是合法的收益主目标。硬币/坐标类任务不走这条判定。
+function playerProfitMissionProtectionRestored(mission = null, entity = null) {
+  if (!mission || !entity) return false;
+  if (!PLAYER_PROFIT_MISSION_TYPES.includes(String(mission.type || ''))) return false;
+  const policy = entity.whitelistContactPolicy || null;
+  return Boolean(
+    policy?.dynamicWhitelistMember === true
+      || policy?.creatorProtected === true
+      || entity.dynamicWhitelistMember === true
+      || entity.creatorProtected === true
+  );
+}
+
 function clearProfitMission(stateful = {}, reason = '', nowMs = Date.now()) {
   if (!stateful || typeof stateful !== 'object') return false;
   if (!stateful.profitMission) return false;
@@ -8143,6 +8176,13 @@ function reconcileProfitMissionState(input = {}, stateful = {}, options = {}, re
   ));
   if (visible && (visible.alive === false || Number(visible.hp) <= 0)) {
     clearProfitMission(stateful, 'target-completed', nowMs);
+    return null;
+  }
+  // 玩家收益任务的对象重新拿回白名单/创建者保护时立刻释放该任务: 受保护成员永远不能是主目标,
+  // 留着旧任务会让 sameAsProfitMission/primaryTargetId 继续指向他, 也会继续以他为中心规划移动。
+  // 同时清掉指向他的机会选择/切换锁, 否则切换锁会在锁定期内挡住换成其他合法收益目标。
+  if (visible && playerProfitMissionProtectionRestored(mission, visible)) {
+    clearExpiredRealtimeEnemyMissionState(stateful, mission, 'player-whitelist-protection-restored');
     return null;
   }
   const combat = stateful.combatTarget || null;

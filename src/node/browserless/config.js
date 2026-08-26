@@ -87,6 +87,10 @@ const DEFAULTS = {
   combatEnabled: false,
   dynamicWhitelistProximitySafetyEnabled: true,
   dynamicWhitelistStaminaExemptionEnabled: true,
+  // 长周期体力豁免要求 100% 满(1h 3000000/3000000, 1d 20000000/20000000), 不使用通用的
+  // staminaFullRatio=0.98: 0.98 的 2% 余量在 1h 预算上是 60000 milli(约 120 发), 正在对射的
+  // 动态白名单成员也跌不破该阈值, 会被一直判成挂机并被设成主目标。
+  dynamicWhitelistStaminaExemptionFullRatio: 1,
   preTargetIncomingDodgeEnabled: true,
   combatRobustDodgeEnabled: true,
   combatDistanceAwareDodgeEnabled: true,
@@ -320,6 +324,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     dynamicWhitelistStaminaExemptionEnabled: boolEnv(
       env.GRASP_RAT_BROWSERLESS_DYNAMIC_WHITELIST_STAMINA_EXEMPTION_ENABLED,
       DEFAULTS.dynamicWhitelistStaminaExemptionEnabled
+    ),
+    dynamicWhitelistStaminaExemptionFullRatio: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_DYNAMIC_WHITELIST_STAMINA_EXEMPTION_FULL_RATIO,
+      DEFAULTS.dynamicWhitelistStaminaExemptionFullRatio
     ),
     preTargetIncomingDodgeEnabled: boolEnv(
       env.GRASP_RAT_BROWSERLESS_PRE_TARGET_INCOMING_DODGE_ENABLED,

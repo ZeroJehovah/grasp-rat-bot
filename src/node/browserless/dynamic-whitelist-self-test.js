@@ -819,12 +819,18 @@ async function runDynamicWhitelistSelfTest() {
     }
 
     {
-      // 视野内观察到成员 1h 或 1d 体力已满时解除保护, 允许设为目标;
-      // 创建者、静态白名单与配置开关仍然优先, 部分体力不触发豁免。
+      // 视野内观察到成员 1h 或 1d 体力 100% 满时解除保护, 允许设为目标;
+      // 创建者、静态白名单与配置开关仍然优先, 差一点满也不触发豁免。
       const visible = (state, options) => buildBrowserlessStrategyInput(state, options, {}).visibleTargets[0];
       const base = { hp: 100, withBullet: false, targetDistance: 20000 };
       const guarded = visible(decisionState(base), decisionOptions());
       const partial1h = visible(decisionState({ ...base, targetStamina1h: 300000 }), decisionOptions());
+      // 边界: 少 1 milli 与通用 staminaFullRatio=0.98 的阈值都必须保持保护。0.98 曾让一个正在
+      // 对射的成员(1h 余量 98.0%)被判成挂机并设为主目标, 这两条断言是该缺陷的回归门。
+      const oneBelow1h = visible(decisionState({ ...base, targetStamina1h: 599999 }), decisionOptions());
+      const ratio1h = visible(decisionState({ ...base, targetStamina1h: 588000 }), decisionOptions());
+      const oneBelow1d = visible(decisionState({ ...base, targetStamina1d: 3599999 }), decisionOptions());
+      const ratio1d = visible(decisionState({ ...base, targetStamina1d: 3528000 }), decisionOptions());
       const full1h = visible(decisionState({ ...base, targetStamina1h: 600000 }), decisionOptions());
       const full1d = visible(decisionState({ ...base, targetStamina1d: 3600000 }), decisionOptions());
       const rolledBack = visible(
@@ -839,10 +845,22 @@ async function runDynamicWhitelistSelfTest() {
         decisionState({ ...base, targetStamina1h: 600000 }),
         decisionOptions({ targetWhitelistUserIds: [8] })
       );
-      for (const [label, entity] of [['guarded', guarded], ['partial-1h', partial1h], ['rolled-back', rolledBack]]) {
+      for (const [label, entity] of [
+        ['guarded', guarded],
+        ['partial-1h', partial1h],
+        ['one-below-1h', oneBelow1h],
+        ['ratio-098-1h', ratio1h],
+        ['one-below-1d', oneBelow1d],
+        ['ratio-098-1d', ratio1d],
+        ['rolled-back', rolledBack]
+      ]) {
         assert.strictEqual(entity.dynamicWhitelistMember, true, label);
         assert.strictEqual(entity.dynamicWhitelistStaminaExempt, false, label);
+        assert.strictEqual(entity.dynamicWhitelistStaminaExemptWindow, '', label);
         assert.strictEqual(entity.whitelisted, true, label);
+        // 成员即使没被豁免也要带上诊断字段, 否则事后无法从日志判断豁免为什么没成立。
+        assert.strictEqual(entity.whitelistContactPolicy.dynamicWhitelistRawMember, true, label);
+        assert.strictEqual(entity.whitelistContactPolicy.dynamicWhitelistStaminaExempt, false, label);
       }
       for (const [label, entity, window] of [['full-1h', full1h, '1h'], ['full-1d', full1d, '1d']]) {
         assert.strictEqual(entity.dynamicWhitelistRawMember, true, label);
@@ -852,6 +870,8 @@ async function runDynamicWhitelistSelfTest() {
         assert.strictEqual(entity.legacyWhitelistProtected, false, label);
         assert.strictEqual(entity.profitProtected, false, label);
         assert.strictEqual(entity.whitelisted, false, label);
+        assert.strictEqual(entity.whitelistContactPolicy.dynamicWhitelistStaminaExempt, true, label);
+        assert.strictEqual(entity.whitelistContactPolicy.dynamicWhitelistStaminaExemptWindow, window, label);
       }
       assert.strictEqual(creator.creatorProtected, true);
       assert.strictEqual(creator.dynamicWhitelistStaminaExempt, false);
@@ -873,6 +893,71 @@ async function runDynamicWhitelistSelfTest() {
       assert.strictEqual(Number(exemptCombat.combat.target.userId ?? exemptCombat.combat.target.user_id), 8);
       assert.strictEqual(exemptCombat.combat.target.dynamicWhitelistMember, false);
       cases.push('full-1h-or-1d-stamina-exempts-visible-dynamic-whitelist-members-from-targeting');
+    }
+
+    {
+      // 成员一动(哪怕一次射击的 500 milli)长周期体力就不再是满值, 豁免立刻失效, 保护立刻恢复:
+      // 有攻击证据时降级为防御副目标, 没有攻击证据时释放战斗目标, 并且旧的玩家收益任务必须一起
+      // 释放 —— 否则 sameAsProfitMission/primaryTargetId 会继续指向受保护成员并围着他规划移动。
+      const engagement = { hp: 100, withBullet: false, targetDistance: 5000, targetMode: 'Active', targetVx: 50 };
+      const statefulWithMission = () => ({
+        profitMission: {
+          active: true,
+          key: 'enemy:8',
+          missionKey: 'enemy:8',
+          type: 'enemy',
+          subjectId: '8',
+          targetId: '8',
+          selectedAt: 1000,
+          expiresAt: 200000,
+          navigationTarget: { user_id: 8, entity_id: 2, x: 5000, y: 0, hp: 100 },
+          choice: { type: 'enemy', id: 8 }
+        }
+      });
+      const exemptStateful = statefulWithMission();
+      const exemptHold = buildBrowserlessDecision(
+        decisionState({ ...engagement, targetStamina1h: 600000 }),
+        exemptStateful,
+        decisionOptions()
+      );
+      const revokedWithEvidenceStateful = statefulWithMission();
+      const revokedWithEvidence = buildBrowserlessDecision(
+        decisionState({
+          ...engagement,
+          targetStamina1h: 599500,
+          targetFiring: true,
+          withBullet: true,
+          bulletOwnerId: 8
+        }),
+        revokedWithEvidenceStateful,
+        decisionOptions()
+      );
+      const revokedStateful = statefulWithMission();
+      const revoked = buildBrowserlessDecision(
+        decisionState({ ...engagement, targetStamina1h: 599500 }),
+        revokedStateful,
+        decisionOptions()
+      );
+
+      // 满值仍然豁免: 任务与主目标都保留, 不能被新的释放逻辑误伤。
+      assert.strictEqual(exemptHold.combat.target.combatRole, 'primary');
+      assert.strictEqual(exemptHold.profit.mission.targetId, '8');
+      assert.strictEqual(exemptStateful.profitMission.targetId, '8');
+
+      assert.strictEqual(revokedWithEvidence.combat.target.combatRole, 'secondary');
+      assert.strictEqual(revokedWithEvidence.combat.target.combatIntent, 'defensive');
+      assert.strictEqual(revokedWithEvidence.combat.target.dynamicWhitelistMember, true);
+      assert.strictEqual(
+        revokedWithEvidence.combat.target.whitelistContactPolicy.dynamicWhitelistStaminaExempt,
+        false
+      );
+      assert.strictEqual(revokedWithEvidence.profit.mission, null);
+      assert.strictEqual(revokedWithEvidenceStateful.profitMission, null);
+
+      assert.strictEqual(revoked.combat.target, null);
+      assert.strictEqual(revoked.profit.mission, null);
+      assert.strictEqual(revokedStateful.profitMission, null);
+      cases.push('stamina-exemption-revocation-downgrades-to-defensive-secondary-and-releases-profit-mission');
     }
 
     {

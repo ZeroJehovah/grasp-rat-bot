@@ -1819,7 +1819,11 @@ function summarizeCombatTarget(target) {
     stamina5s: numberOrNull(target.stamina_5s_remaining_milli ?? target.stamina5sRemainingMilli),
     stamina5sLimit: numberOrNull(target.stamina_5s_limit_milli ?? target.stamina5sLimitMilli),
     stamina1h: numberOrNull(target.stamina_1h_remaining_milli ?? target.stamina1hRemainingMilli),
+    // 长周期上限必须与剩余值一起落盘: 动态白名单体力豁免判定的是"剩余 == 上限", 只记录剩余值
+    // 无法在事后从日志里复核豁免为什么成立或不成立。
+    stamina1hLimit: numberOrNull(target.stamina_1h_limit_milli ?? target.stamina1hLimitMilli),
     stamina1d: numberOrNull(target.stamina_1d_remaining_milli ?? target.stamina1dRemainingMilli),
+    stamina1dLimit: numberOrNull(target.stamina_1d_limit_milli ?? target.stamina1dLimitMilli),
     staminaMetadataAuthority: target.staminaMetadataAuthority || '',
     active: target && Object.prototype.hasOwnProperty.call(target, 'active')
       ? Boolean(target.active)
@@ -1858,6 +1862,9 @@ function summarizeCombatTarget(target) {
       profitProtected: Boolean(target.whitelistContactPolicy.profitProtected),
       creatorProtected: Boolean(target.whitelistContactPolicy.creatorProtected),
       dynamicWhitelistMember: Boolean(target.whitelistContactPolicy.dynamicWhitelistMember),
+      dynamicWhitelistRawMember: Boolean(target.whitelistContactPolicy.dynamicWhitelistRawMember),
+      dynamicWhitelistStaminaExempt: Boolean(target.whitelistContactPolicy.dynamicWhitelistStaminaExempt),
+      dynamicWhitelistStaminaExemptWindow: String(target.whitelistContactPolicy.dynamicWhitelistStaminaExemptWindow || ''),
       dynamicWhitelistEnabled: Boolean(target.whitelistContactPolicy.dynamicWhitelistEnabled),
       damagedSelfToday: Boolean(target.whitelistContactPolicy.damagedSelfToday),
       legacyWhitelistProtected: Boolean(target.whitelistContactPolicy.legacyWhitelistProtected),
