@@ -15404,6 +15404,9 @@ async function runSelfTest() {
         ]), {}, { ...options, dynamicProfitThresholdEnabled: false });
         const inactiveWindow = buildBrowserlessDecision(makeState([
           { drop_id: 'inactive-window', amount: 1, x: 900, y: 0 }
+        ]), {}, { ...options, nowMs: Date.parse('2026-07-12T09:00:00.000Z') });
+        const resetReserveWindow = buildBrowserlessDecision(makeState([
+          { drop_id: 'reserve-window', amount: 1, x: 900, y: 0 }
         ]), {}, { ...options, nowMs: Date.parse('2026-07-12T15:30:00.000Z') });
         const thresholdAdapter = createBrowserlessDecisionAdapter(options);
         thresholdAdapter.decide(makeState([
@@ -15434,12 +15437,15 @@ async function runSelfTest() {
           inactiveWindow.reason,
           inactiveWindow.profit.threshold.reason,
           inactiveWindow.profit.singleCoinBait === null,
+          resetReserveWindow.reason,
+          resetReserveWindow.profit.threshold.reason,
+          resetReserveWindow.profit.threshold.active,
           clearedAfterDisable.reason,
           thresholdAdapter.getState().singleCoinBait === null,
           clearedAfterDisable.input.nearby.c.find(item => item[0] === 'clear-on-inactive')?.[6] || 0
         ].join('|');
       })(),
-      want: 'wait|profit|single-coin-bait-hold|bait|hold|1|foot-coin-priority|foot-coin-priority|foot-coin-priority|single-coin-bait-hold|snapshot|1|foot-coin-priority|native-two|realtime|foot-coin-priority|feature-disabled|true|foot-coin-priority|insufficient-burn-window|true|foot-coin-priority|true|0'
+      want: 'wait|profit|single-coin-bait-hold|bait|hold|1|foot-coin-priority|foot-coin-priority|foot-coin-priority|single-coin-bait-hold|snapshot|1|foot-coin-priority|native-two|realtime|foot-coin-priority|feature-disabled|true|foot-coin-priority|insufficient-burn-window|true|single-coin-bait-hold|reset-reserve-window|true|foot-coin-priority|true|0'
     },
     {
       name: 'browserless single coin bait ignores threshold-ineligible display-only route legs',
@@ -37223,7 +37229,7 @@ async function runSelfTest() {
             /class="nearby-combined"/.test(panelText),
             /nearby-players-pane\{border-left:1px solid var\(--line\)/.test(panelText),
             /grid-template-columns:minmax\(170px,.55fr\) minmax\(0,1.45fr\)/.test(panelText),
-            /\.player-row\{grid-template-columns:minmax\(150px,2.8fr\)/.test(panelText),
+            /\.player-row\{grid-template-columns:minmax\(150px,2.7fr\)/.test(panelText),
             panelText.indexOf('class="stats-grid"') < panelText.indexOf('id="nearbyGrid"'),
             /id="sessionPanelTitle"[^>]*>本次游戏<\/h2>/.test(panelText),
             !/id="refreshBtn"/.test(panelText),
@@ -37408,7 +37414,20 @@ async function runSelfTest() {
           !panelScript.includes('resampleMapPolyline'),
           panelScript.includes('function buildMapTrailGeometry(scene, markers, frame'),
           panelScript.includes('function renderedMapTrailGeometry(scene, markers, frame, camera, progress = 1)'),
-          panelScript.includes('function drawMapTrails(context, scene, markers, frame, progress = 1)'),
+          panelScript.includes('function drawMapTrails(context, scene, markers, frame, progress = 1, fadeProgress = progress)'),
+          // 每次刷新丢掉的末段改成线性淡出: 位移补间是 ease-out, 淡出必须单独吃线性进度,
+          // 并且淡出几何要和主轨迹共用同一台插值相机, 否则淡出过程中会错位。
+          panelScript.includes('const mapTrailDroppedTail = function mapTrailDroppedTailCore')
+            && panelScript.includes('const mapTrailFadeAlpha = function mapTrailFadeAlphaCore')
+            && panelScript.includes('let mapTrailFadingTails = new Map();')
+            && panelScript.includes('const tail = mapTrailDroppedTail(entry.samples, nextEntry ? nextEntry.samples : []);')
+            && panelScript.includes('mapTrailFadingTails = fading;')
+            && panelScript.includes('function renderedMapTrailFadeGeometry(scene, camera, fading = mapTrailFadingTails)')
+            && panelScript.includes('const fadeAlpha = mapTrailFadeAlpha(fadeProgress);')
+            && panelScript.includes('context.globalAlpha = entry.opacity * fadeAlpha;')
+            && panelScript.includes('renderAtProgress(progress, Math.max(0, Math.min(1, elapsedMs / MAP_MOVE_ANIMATION_MS)));')
+            && panelScript.includes('|| mapTrailFadingTails.size > 0);')
+            && panelScript.includes('trailFadeProgress: fadeProgress'),
           panelScript.includes('lineProgress: progress'),
           panelScript.includes('previousTrailGeometry: mapRenderedTrailGeometry'),
           panelScript.includes('previousTrailCamera: mapRenderedTrailCamera'),
@@ -37446,7 +37465,7 @@ async function runSelfTest() {
         'coin:0', 'player:alice', '', 0, '0.875', 1, '97.5', '195.0', '97.5', '195.0',
         '50.0', 1, 3, '50.0', '100.0', '125.0', '150.0', '50.0', '200.0',
         120, 42, 110, 220,
-        ...Array(49).fill(true)
+        ...Array(50).fill(true)
       ].join('|')
     },
     {
@@ -37776,7 +37795,7 @@ async function runSelfTest() {
           panelScript.includes('rankedItems.push({')
             && panelScript.includes('rankedItems.sort((left, right) => highDropSortValue(right.item, highDropSortField) - highDropSortValue(left.item, highDropSortField)'),
           // 四列全部使用 minmax(0,…fr): 固定最小宽度会让网格总宽超出面板, 把额度列挤出可视区。
-          /\.high-drop-row\{display:grid;grid-template-columns:minmax\(0,1\.3fr\) minmax\(0,\.44fr\) minmax\(0,\.55fr\) minmax\(0,\.8fr\)/.test(panelText)
+          /\.high-drop-row\{display:grid;grid-template-columns:minmax\(0,1\.23fr\) minmax\(0,\.44fr\) minmax\(0,\.62fr\) minmax\(0,\.8fr\)/.test(panelText)
             && !/\.high-drop-row\{[^}]*grid-template-columns:minmax\([1-9]/.test(panelText)
             // 每一列都要有右 padding (UC): 末列不得例外, 否则额度数字会贴到 scrollbar-gutter 上。
             && panelText.includes('.high-drop-cell{box-sizing:border-box;min-width:0;padding-right:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}')
@@ -38032,7 +38051,13 @@ async function runSelfTest() {
           /\.target-current,\.target-route-next\{position:relative;background:var\(--target-bg\);background-clip:padding-box;/.test(panelText),
           /\.nearby-list\{display:grid;gap:0;/.test(panelText),
           /\.target-current,\.target-route-next\{[^}]*padding:3px 0;margin:0\}/.test(panelText),
-          /\.coin-row \.nearby-cell:last-child,\.player-row \.nearby-cell:last-child\{text-align:right\}/.test(panelText),
+          // 附近信息两张表: 名称/ID 列之外的表头和数据都靠右, 且每一列都带左右 padding (UC-016),
+          // 末列不得例外, 否则距离数字会贴到 scrollbar-gutter 上。
+          /\.nearby-row>\.nearby-cell:nth-child\(n\+2\)\{text-align:right\}/.test(panelText)
+            && !/\.nearby-cell:last-child\{text-align:right\}/.test(panelText)
+            && panelText.includes('.nearby-cell{box-sizing:border-box;min-width:0;padding-left:6px;padding-right:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}')
+            && panelText.includes('.nearby-cell{padding-left:5px;padding-right:5px}')
+            && /\.nearby-row\{display:grid;align-items:center;gap:0;/.test(panelText),
           !/\.target-current\{border:1px solid/.test(panelText),
           /\.target-flee\{--target-color:rgba\(96,165,250,\.82\)/.test(panelText),
           /\.target-bait\{--target-color:rgba\(251,191,36,\.95\)/.test(panelText),
@@ -39175,7 +39200,10 @@ async function runSelfTest() {
           panelScript.includes("'missing-realtime-self',\n        'unknown-realtime-frame-age'"),
           panelScript.includes("return '快照金币备用被阻止：快照金币超出可见范围';"),
           panelScript.includes("setText('sessionPanelTitle', online ? '本次游戏' : '上次游戏');"),
-          panelScript.includes("['进入时间', fullStamp(currentSession.enteredAt), true]"),
+          // 游戏结束时间已由"上次退出"面板给出, 本次/上次游戏面板不再重复这一行。
+          panelScript.includes("['进入时间', fullStamp(currentSession.enteredAt), true]")
+            && panelScript.includes("['持续时间', durationClock(currentSession.durationMs)]\n      ]);")
+            && !panelScript.includes("['游戏结束', fullStamp(currentSession.endedAt)]"),
           !panelScript.includes("'状态/进入'"),
           !/function isLowValueFullStaminaNearbyPlayer/.test(panelScript),
           !panelScript.includes('const visibleItems = items.filter(item => !isLowValueFullStaminaNearbyPlayer(item));'),

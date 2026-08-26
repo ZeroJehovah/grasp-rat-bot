@@ -367,6 +367,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     profitThresholdCoinsPer10Stamina: 1,
     profitThresholdHourlyStaminaLimit: 3000,
     profitThresholdResetReserveMs: 3600000,
+    profitThresholdResetReserveStamina: 1000,
     targetWhitelistUrl: String(config.targetWhitelistUrl || ''),
     targetWhitelistPollMs: 10000,
     targetWhitelistTimeoutMs: 7000,

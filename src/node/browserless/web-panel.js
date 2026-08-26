@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.25.6';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.26.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -158,6 +158,30 @@ function mapTrailOpacityCore(sampleAtMs, nowMs, maxAgeMs = 30000) {
   const age = Math.max(0, Number(nowMs) - Number(sampleAtMs));
   const freshness = Math.max(0, Math.min(1, 1 - age / maxAge));
   return 0.12 + freshness * 0.52;
+}
+
+// 每次刷新后端只保留窗口内的采样, 轨迹末段(最旧的一截)会被整段丢掉。直接丢弃是瞬间截断,
+// 所以把被丢掉的采样连同第一个仍然存活的采样单独取出来, 由渲染层做线性淡出; 淡出用的是
+// 上一轮的世界坐标, 因此它和主轨迹共用同一台插值相机, 不会在淡出过程中错位。
+function mapTrailDroppedTailCore(previousSamples, nextSamples) {
+  const previous = Array.isArray(previousSamples) ? previousSamples : [];
+  if (!previous.length) return [];
+  const next = Array.isArray(nextSamples) ? nextSamples : [];
+  const nextFirstAt = next.length ? Number(next[0]?.at) : null;
+  const dropped = nextFirstAt === null || !Number.isFinite(nextFirstAt)
+    ? previous.slice()
+    : previous.filter(sample => Number(sample?.at) < nextFirstAt);
+  if (!dropped.length) return [];
+  const connector = next.length && !next[0]?.breakBefore ? [next[0]] : [];
+  const tail = dropped.concat(connector);
+  return tail.length >= 2 ? tail : [];
+}
+
+// 位移补间用的是 ease-out, 末段淡出要求线性, 所以它单独吃一份线性进度。
+function mapTrailFadeAlphaCore(progress) {
+  const parsed = Number(progress);
+  const clamped = Math.max(0, Math.min(1, Number.isFinite(parsed) ? parsed : 1));
+  return 1 - clamped;
 }
 
 function highDropRankValueCore(item) {
@@ -602,14 +626,14 @@ function renderBrowserlessWebPanel() {
     .nearby-pane{min-width:0}
     .nearby-players-pane{border-left:1px solid var(--line);padding-left:10px}
     .nearby-list{display:grid;gap:0;min-width:0}
-    .nearby-row{display:grid;align-items:center;gap:6px;min-height:26px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)}
+    .nearby-row{display:grid;align-items:center;gap:0;min-height:26px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)}
     .nearby-row:last-child{border-bottom:0}
     .nearby-head{color:var(--muted);font-size:11px;font-weight:700}
     .nearby-summary .nearby-cell{grid-column:1/-1;color:var(--muted)}
-    .coin-row{grid-template-columns:minmax(48px,1fr) minmax(34px,.5fr) minmax(46px,.65fr)}
-    .player-row{grid-template-columns:minmax(150px,2.8fr) minmax(40px,.55fr) minmax(42px,.55fr) minmax(42px,.5fr) minmax(52px,.65fr)}
+    .coin-row{grid-template-columns:minmax(58px,.95fr) minmax(50px,.6fr) minmax(60px,.65fr)}
+    .player-row{grid-template-columns:minmax(150px,2.7fr) minmax(52px,.58fr) minmax(52px,.58fr) minmax(50px,.52fr) minmax(64px,.68fr)}
     .high-drop-list{display:grid;gap:0;min-width:0}
-    .high-drop-row{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,.44fr) minmax(0,.55fr) minmax(0,.8fr);gap:2px;align-items:center;min-height:26px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)}
+    .high-drop-row{display:grid;grid-template-columns:minmax(0,1.23fr) minmax(0,.44fr) minmax(0,.62fr) minmax(0,.8fr);gap:2px;align-items:center;min-height:26px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.06)}
     .high-drop-row:last-child{border-bottom:0}
     .high-drop-head{position:sticky;top:0;z-index:1;color:var(--muted);font-size:11px;font-weight:700;background:var(--panel)}
     /* 每一列都要有右 padding: 末列同样保留, 否则额度数字会贴到 scrollbar-gutter 上。 */
@@ -668,8 +692,8 @@ function renderBrowserlessWebPanel() {
     .chat-empty{display:flex;height:100%;align-items:center;justify-content:center;color:var(--muted)}
     .chat-compose{display:flex;gap:7px;margin-top:8px}.chat-compose input{flex:1;min-width:0;min-height:34px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--text);padding:6px 9px}.chat-compose input:disabled{opacity:.6}.chat-compose button{flex:0 0 auto}.chat-compose .chat-collapse-toggle{min-width:52px}
     .chat-hint{margin-top:6px;color:var(--muted);overflow-wrap:anywhere}.chat-hint:empty{display:none}
-    .nearby-cell{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .coin-row .nearby-cell:last-child,.player-row .nearby-cell:last-child{text-align:right}
+    .nearby-cell{box-sizing:border-box;min-width:0;padding-left:6px;padding-right:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .nearby-row>.nearby-cell:nth-child(n+2){text-align:right}
     .distance-badge{font-variant-numeric:tabular-nums}
     .range-attack{color:var(--green)}
     .range-view{color:var(--blue)}
@@ -691,7 +715,7 @@ function renderBrowserlessWebPanel() {
     @media (max-width:760px){.layout{grid-template-columns:1fr}.stats-grid{grid-template-columns:1fr}}
     @media (max-width:600px){.player-insights-grid{grid-template-columns:1fr}}
     @media (max-width:600px){.nearby-combined{grid-template-columns:1fr}.nearby-players-pane{border-left:0;border-top:1px solid var(--line);padding-left:0;padding-top:10px}}
-    @media (max-width:520px){.player-row{grid-template-columns:minmax(112px,2fr) minmax(34px,.5fr) minmax(38px,.55fr) minmax(36px,.5fr) minmax(44px,.6fr);gap:4px}.high-drop-row{grid-template-columns:minmax(0,1.05fr) minmax(0,.44fr) minmax(0,.55fr) minmax(0,.8fr);gap:2px}.high-drop-cell{padding-right:5px}.battle-fighters{grid-template-columns:minmax(0,1fr) 26px minmax(0,1fr);column-gap:5px}.battle-meta{gap:5px;font-size:11px}.battle-meta strong{font-size:11px}}
+    @media (max-width:520px){.player-row{grid-template-columns:minmax(112px,2fr) minmax(46px,.5fr) minmax(48px,.55fr) minmax(44px,.5fr) minmax(56px,.6fr)}.coin-row{grid-template-columns:minmax(52px,.95fr) minmax(46px,.6fr) minmax(54px,.65fr)}.nearby-cell{padding-left:5px;padding-right:5px}.high-drop-row{grid-template-columns:minmax(0,.98fr) minmax(0,.44fr) minmax(0,.62fr) minmax(0,.8fr);gap:2px}.high-drop-cell{padding-right:5px}.battle-fighters{grid-template-columns:minmax(0,1fr) 26px minmax(0,1fr);column-gap:5px}.battle-meta{gap:5px;font-size:11px}.battle-meta strong{font-size:11px}}
     @media (max-width:520px){main{padding:10px}header{align-items:flex-start;flex-direction:column}}
   </style>
 </head>
@@ -878,6 +902,7 @@ function renderBrowserlessWebPanel() {
     let mapRenderedMarkerPositions = new Map();
     let mapRenderedCanvasSize = 0;
     let mapTrailRenderHistory = new Map();
+    let mapTrailFadingTails = new Map();
     let mapRenderedTrailGeometry = new Map();
     let mapRenderedTrailCamera = null;
     let mapRenderedTargetLinePositions = new Map();
@@ -907,6 +932,8 @@ function renderBrowserlessWebPanel() {
     const mapTrailReferenceNowMs = ${mapTrailReferenceNowMsCore.toString()};
     const interpolateMapMarker = ${interpolateMapMarkerCore.toString()};
     const mapTrailOpacity = ${mapTrailOpacityCore.toString()};
+    const mapTrailDroppedTail = ${mapTrailDroppedTailCore.toString()};
+    const mapTrailFadeAlpha = ${mapTrailFadeAlphaCore.toString()};
     const transportMetricValueClass = ${transportMetricValueClassCore.toString()};
     const remoteTargetActivityText = ${remoteTargetActivityTextCore.toString()};
     const remoteSnapshotProfitTargetTitle = ${remoteSnapshotProfitTargetTitleCore.toString().replace('remoteTargetActivityTextCore', 'remoteTargetActivityText')};
@@ -2481,6 +2508,7 @@ function renderBrowserlessWebPanel() {
     }
     function clearMapTrails() {
       mapTrailRenderHistory = new Map();
+      mapTrailFadingTails = new Map();
       mapRenderedTrailGeometry = new Map();
       mapRenderedTrailCamera = null;
     }
@@ -2518,6 +2546,14 @@ function renderBrowserlessWebPanel() {
           samples
         });
       }
+      const fading = new Map();
+      for (const [key, entry] of mapTrailRenderHistory.entries()) {
+        const nextEntry = next.get(key);
+        const tail = mapTrailDroppedTail(entry.samples, nextEntry ? nextEntry.samples : []);
+        if (tail.length < 2) continue;
+        fading.set(key, { color: nextEntry?.color || entry.color, samples: tail });
+      }
+      mapTrailFadingTails = fading;
       mapTrailRenderHistory = next;
     }
     function mapTrailPathSamples(samples) {
@@ -2600,10 +2636,45 @@ function renderBrowserlessWebPanel() {
       }
       return rendered;
     }
-    function drawMapTrails(context, scene, markers, frame, progress = 1) {
+    // 被丢弃的末段用同一台插值相机投影, 位置和主轨迹完全一致, 只有透明度线性衰减到 0。
+    function renderedMapTrailFadeGeometry(scene, camera, fading = mapTrailFadingTails) {
+      if (!camera || !(fading instanceof Map) || !fading.size) return [];
+      const rendered = [];
+      for (const entry of fading.values()) {
+        const paths = projectMapTrailPaths(
+          mapTrailPathSamples(entry.samples).map(pathSamples => pathSamples.map(sample => ({
+            x: Number(sample.x),
+            y: Number(sample.y),
+            at: Number(sample.at)
+          }))),
+          camera,
+          {}
+        ).filter(path => path.length >= 2);
+        if (!paths.length) continue;
+        rendered.push({
+          color: entry.color,
+          opacity: mapTrailOpacity(entry.samples.at(-1).at, scene.trailNowMs, MAP_TRAIL_MAX_AGE_MS),
+          paths
+        });
+      }
+      return rendered;
+    }
+    function strokeMapTrailPaths(context, paths) {
+      for (const points of paths) {
+        if (!Array.isArray(points) || points.length < 2) continue;
+        context.beginPath();
+        context.moveTo(points[0].px, points[0].py);
+        for (let index = 1; index < points.length; index += 1) {
+          context.lineTo(points[index].px, points[index].py);
+        }
+        context.stroke();
+      }
+    }
+    function drawMapTrails(context, scene, markers, frame, progress = 1, fadeProgress = progress) {
       const camera = interpolateMapCamera(mapTrailCamera(scene, frame), scene.previousTrailCamera, progress);
       if (!camera) return;
       const geometry = renderedMapTrailGeometry(scene, markers, frame, camera, progress);
+      const fadeAlpha = mapTrailFadeAlpha(fadeProgress);
       context.save();
       context.lineCap = 'round';
       context.lineJoin = 'round';
@@ -2611,14 +2682,13 @@ function renderBrowserlessWebPanel() {
       for (const entry of geometry.values()) {
         context.globalAlpha = entry.opacity;
         context.strokeStyle = entry.color;
-        for (const points of entry.paths) {
-          if (!Array.isArray(points) || points.length < 2) continue;
-          context.beginPath();
-          context.moveTo(points[0].px, points[0].py);
-          for (let index = 1; index < points.length; index += 1) {
-            context.lineTo(points[index].px, points[index].py);
-          }
-          context.stroke();
+        strokeMapTrailPaths(context, entry.paths);
+      }
+      if (fadeAlpha > 0) {
+        for (const entry of renderedMapTrailFadeGeometry(scene, camera)) {
+          context.globalAlpha = entry.opacity * fadeAlpha;
+          context.strokeStyle = entry.color;
+          strokeMapTrailPaths(context, entry.paths);
         }
       }
       context.restore();
@@ -2818,6 +2888,7 @@ function renderBrowserlessWebPanel() {
       if (resetPositions) {
         mapRenderedMarkerPositions = new Map();
         mapRenderedCanvasSize = 0;
+        mapTrailFadingTails = new Map();
         mapRenderedTrailGeometry = new Map();
         mapRenderedTrailCamera = null;
         mapRenderedTargetLinePositions = new Map();
@@ -2851,13 +2922,16 @@ function renderBrowserlessWebPanel() {
     function paintTargetMapScene(scene, markers) {
       const { context, size, status, visibleRange, attackRange, emptyReason } = scene;
       const lineProgress = Number.isFinite(Number(scene.lineProgress)) ? Number(scene.lineProgress) : 1;
+      const trailFadeProgress = Number.isFinite(Number(scene.trailFadeProgress))
+        ? Number(scene.trailFadeProgress)
+        : lineProgress;
       context.clearRect(0, 0, size, size);
       const frame = drawMapBase(context, size, attackRange, visibleRange || 1);
       context.save();
       context.beginPath();
       context.arc(frame.center, frame.center, frame.radius, 0, Math.PI * 2);
       context.clip();
-      drawMapTrails(context, scene, markers, frame, lineProgress);
+      drawMapTrails(context, scene, markers, frame, lineProgress, trailFadeProgress);
       const coinMarkers = markers.filter(marker => marker.kind === 'coin');
       const routeMarkers = coinMarkers.filter(marker => marker.routeOrder > 0).sort((a, b) => a.routeOrder - b.routeOrder);
       drawMapTargetPath(
@@ -2908,23 +2982,29 @@ function renderBrowserlessWebPanel() {
         previousTargetLinePositions: mapRenderedTargetLinePositions
       };
       const lineGeometryMoved = mapLineGeometryMoved(animationScene, markers);
+      // 末段被删掉时主几何未必"移动"过(整条轨迹消失时更是完全不在新几何里),
+      // 所以待淡出的末段本身也要能触发这一轮动画。
       const shouldAnimate = animate
         && mapRenderedCanvasSize === scene.size
         && mapMotionAnimationAllowed()
-        && (mapMarkerPositionsMoved(markers, previousPositions) || lineGeometryMoved);
-      const renderAtProgress = progress => {
+        && (mapMarkerPositionsMoved(markers, previousPositions)
+          || lineGeometryMoved
+          || mapTrailFadingTails.size > 0);
+      const renderAtProgress = (progress, fadeProgress = progress) => {
         const renderedMarkers = markers.map(marker => (
           interpolateMapMarker(marker, marker.mapKey ? previousPositions.get(marker.mapKey) : null, progress)
         ));
         paintTargetMapScene({
           ...animationScene,
-          lineProgress: progress
+          lineProgress: progress,
+          trailFadeProgress: fadeProgress
         }, renderedMarkers);
         rememberMapMarkerPositions(renderedMarkers, scene.size);
       };
       if (!shouldAnimate) {
         renderAtProgress(1);
         rememberMapLineGeometry(animationScene, markers);
+        mapTrailFadingTails = new Map();
         return;
       }
       renderAtProgress(0);
@@ -2933,12 +3013,13 @@ function renderBrowserlessWebPanel() {
         const frameTime = Number(frameAt);
         const elapsedMs = (Number.isFinite(frameTime) ? frameTime : mapAnimationNow()) - startedAt;
         const progress = mapAnimationProgress(elapsedMs, MAP_MOVE_ANIMATION_MS);
-        renderAtProgress(progress);
+        renderAtProgress(progress, Math.max(0, Math.min(1, elapsedMs / MAP_MOVE_ANIMATION_MS)));
         if (progress < 1) {
           mapAnimationFrame = requestAnimationFrame(step);
         } else {
           mapAnimationFrame = 0;
           rememberMapLineGeometry(animationScene, markers);
+          mapTrailFadingTails = new Map();
         }
       };
       mapAnimationFrame = requestAnimationFrame(step);
@@ -4354,8 +4435,7 @@ function renderBrowserlessWebPanel() {
       setText('sessionPanelTitle', online ? '本次游戏' : '上次游戏');
       rows('currentSession', [
         ['进入时间', fullStamp(currentSession.enteredAt), true],
-        ['持续时间', durationClock(currentSession.durationMs)],
-        ['游戏结束', fullStamp(currentSession.endedAt)]
+        ['持续时间', durationClock(currentSession.durationMs)]
       ]);
       rows('todayStats', [
         ['日期', todayStats.day],
@@ -4573,6 +4653,8 @@ module.exports = {
   projectMapTrailPathsCore,
   pruneMapTrailHistoryCore,
   mapTrailCameraCore,
+  mapTrailDroppedTailCore,
+  mapTrailFadeAlphaCore,
   mapTrailOpacityCore,
   mapTrailReferenceNowMsCore,
   missCloseExitReasonTextCore,

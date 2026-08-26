@@ -4,6 +4,7 @@ const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 const UTC8_OFFSET_MS = 8 * HOUR_MS;
 const STAMINA_MILLI_PER_UNIT = 1000;
+const DEFAULT_RESERVE_STAMINA_UNITS = 1000;
 
 function finiteNumber(value) {
   if (value === null || value === undefined || value === '') return null;
@@ -38,10 +39,16 @@ function buildDynamicProfitThresholdCore(input = {}, options = {}) {
   const hourlyStaminaLimit = finiteNumber(options.hourlyStaminaLimit);
   const hourlyBurnMilli = (hourlyStaminaLimit !== null && hourlyStaminaLimit > 0 ? hourlyStaminaLimit : 3000)
     * STAMINA_MILLI_PER_UNIT;
+  const reserveStaminaMilli = Math.max(0, finiteNumber(options.reserveStaminaMilli)
+    ?? ((finiteNumber(options.reserveStaminaUnits) ?? DEFAULT_RESERVE_STAMINA_UNITS) * STAMINA_MILLI_PER_UNIT));
   const resetAt = nextDailyProfitResetAtCore(nowMs, options);
   const timeUntilResetMs = resetAt === null || nowMs === null ? null : Math.max(0, resetAt - nowMs);
   const usableTimeMs = timeUntilResetMs === null ? null : Math.max(0, timeUntilResetMs - reserveMs);
   const burnCapacityMilli = usableTimeMs === null ? null : usableTimeMs / HOUR_MS * hourlyBurnMilli;
+  const burnTargetMilli = remaining1dMilli === null
+    ? null
+    : Math.max(0, remaining1dMilli - reserveStaminaMilli);
+  const inResetReserveWindow = timeUntilResetMs !== null && timeUntilResetMs <= reserveMs;
   let reason = 'active';
   let active = true;
   if (!enabled) {
@@ -53,7 +60,10 @@ function buildDynamicProfitThresholdCore(input = {}, options = {}) {
   } else if (remaining1dMilli <= 0) {
     active = false;
     reason = 'daily-stamina-exhausted';
-  } else if (burnCapacityMilli === null || remaining1dMilli > burnCapacityMilli) {
+  } else if (inResetReserveWindow) {
+    active = true;
+    reason = 'reset-reserve-window';
+  } else if (burnCapacityMilli === null || burnTargetMilli > burnCapacityMilli) {
     active = false;
     reason = 'insufficient-burn-window';
   }
@@ -66,6 +76,9 @@ function buildDynamicProfitThresholdCore(input = {}, options = {}) {
     timeUntilResetMs,
     usableTimeMs,
     reserveMs,
+    reserveStaminaMilli,
+    burnTargetMilli,
+    inResetReserveWindow,
     hourlyStaminaLimit: hourlyBurnMilli / STAMINA_MILLI_PER_UNIT,
     burnCapacityMilli
   };
@@ -115,6 +128,7 @@ function filterProfitCandidatesCore(candidates = [], thresholdContext = {}, opti
 
 module.exports = {
   DAY_MS,
+  DEFAULT_RESERVE_STAMINA_UNITS,
   HOUR_MS,
   STAMINA_MILLI_PER_UNIT,
   UTC8_OFFSET_MS,

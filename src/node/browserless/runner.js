@@ -337,6 +337,7 @@ function publicConfig(config) {
     profitThresholdCoinsPer10Stamina: Number(config.profitThresholdCoinsPer10Stamina || 0),
     profitThresholdHourlyStaminaLimit: Number(config.profitThresholdHourlyStaminaLimit || 0),
     profitThresholdResetReserveMs: Number(config.profitThresholdResetReserveMs || 0),
+    profitThresholdResetReserveStamina: Number(config.profitThresholdResetReserveStamina || 0),
     recoveryPriorityLowHpApproachStaminaMilli: Number(config.recoveryPriorityLowHpApproachStaminaMilli || 0),
     recoveryPriorityHighHpApproachStaminaMilli: Number(config.recoveryPriorityHighHpApproachStaminaMilli || 0),
     userId: Number(config.userId || 0),
@@ -9302,7 +9303,7 @@ async function runBrowserlessRunnerSelfTest() {
           && remoteTargetActivityTextCore({ active: true }) === '活动玩家'
           && remoteTargetActivityTextCore({ active: false, moving: false, firing: false }) === '挂机玩家'
           && pageHtml.includes('>Drop排行</h2>')
-          && pageHtml.includes('grid-template-columns:minmax(0,1.3fr) minmax(0,.44fr) minmax(0,.55fr) minmax(0,.8fr)')
+          && pageHtml.includes('grid-template-columns:minmax(0,1.23fr) minmax(0,.44fr) minmax(0,.62fr) minmax(0,.8fr)')
           // 每一列都要有右 padding, 末列不得例外, 否则额度数字会贴到 scrollbar-gutter 上。
           && pageHtml.includes('.high-drop-cell{box-sizing:border-box;min-width:0;padding-right:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}')
           && !pageHtml.includes('.high-drop-row>.high-drop-cell:last-child{padding-right')
@@ -9646,7 +9647,9 @@ async function runBrowserlessRunnerSelfTest() {
           && pageHtml.includes('先使用主 IP 做快照安全检查')
           && pageHtml.includes('function startMapMarkerAnimation(scene, markers, animate = true)')
           && pageHtml.includes('function syncMapTrailHistory(status, markers, nowMs)')
-          && pageHtml.includes('function drawMapTrails(context, scene, markers, frame, progress = 1)')
+          && pageHtml.includes('function drawMapTrails(context, scene, markers, frame, progress = 1, fadeProgress = progress)')
+          && pageHtml.includes('function renderedMapTrailFadeGeometry(scene, camera, fading = mapTrailFadingTails)')
+          && pageHtml.includes('const fadeAlpha = mapTrailFadeAlpha(fadeProgress);')
           && pageHtml.includes('function buildMapTrailGeometry(scene, markers, frame')
           && pageHtml.includes('function renderedMapTrailGeometry(scene, markers, frame, camera, progress = 1)')
           && pageHtml.includes('const backend = status?.mapTrails')

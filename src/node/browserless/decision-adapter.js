@@ -3128,7 +3128,8 @@ function buildProfitThresholdContext(input, options = {}) {
     enabled: options.dynamicProfitThresholdEnabled !== false,
     coinsPer10Stamina: options.profitThresholdCoinsPer10Stamina,
     hourlyStaminaLimit: options.profitThresholdHourlyStaminaLimit,
-    reserveMs: options.profitThresholdResetReserveMs
+    reserveMs: options.profitThresholdResetReserveMs,
+    reserveStaminaUnits: options.profitThresholdResetReserveStamina
   });
 }
 

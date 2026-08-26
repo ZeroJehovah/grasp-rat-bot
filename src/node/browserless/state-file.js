@@ -2374,8 +2374,10 @@ function compactDecision(decision, nowMs = Date.now()) {
           coinsPer10Stamina: compactNumber(decision.profit.threshold.threshold?.coinsPer10Stamina),
           remaining1dMilli: compactNumber(decision.profit.threshold.remaining1dMilli),
           burnCapacityMilli: compactNumber(decision.profit.threshold.burnCapacityMilli),
+          burnTargetMilli: compactNumber(decision.profit.threshold.burnTargetMilli),
           resetAt: compactNumber(decision.profit.threshold.resetAt),
           reserveMs: compactNumber(decision.profit.threshold.reserveMs),
+          reserveStaminaMilli: compactNumber(decision.profit.threshold.reserveStaminaMilli),
           rawCount: compactNumber(decision.profit.threshold.rawCount),
           eligibleCount: compactNumber(decision.profit.threshold.eligibleCount),
           filteredCount: compactNumber(decision.profit.threshold.filteredCount)
@@ -2559,8 +2561,10 @@ function compactProfit(profit) {
           coinsPer10Stamina: compactNumber(profit.threshold.threshold?.coinsPer10Stamina),
           remaining1dMilli: compactNumber(profit.threshold.remaining1dMilli),
           burnCapacityMilli: compactNumber(profit.threshold.burnCapacityMilli),
+          burnTargetMilli: compactNumber(profit.threshold.burnTargetMilli),
           resetAt: compactNumber(profit.threshold.resetAt),
           reserveMs: compactNumber(profit.threshold.reserveMs),
+          reserveStaminaMilli: compactNumber(profit.threshold.reserveStaminaMilli),
           rawCount: compactNumber(profit.threshold.rawCount),
           eligibleCount: compactNumber(profit.threshold.eligibleCount),
           filteredCount: compactNumber(profit.threshold.filteredCount)
@@ -3818,8 +3822,10 @@ function compactProfitSource(profit) {
       },
       remaining1dMilli: threshold.remaining1dMilli,
       burnCapacityMilli: threshold.burnCapacityMilli,
+      burnTargetMilli: threshold.burnTargetMilli,
       resetAt: threshold.resetAt,
       reserveMs: threshold.reserveMs,
+      reserveStaminaMilli: threshold.reserveStaminaMilli,
       rawCount: threshold.rawCount,
       eligibleCount: threshold.eligibleCount,
       filteredCount: threshold.filteredCount
