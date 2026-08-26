@@ -229,6 +229,7 @@ const {
   mapMarkerKeyCore,
   mapTrailCameraCore,
   mapTrailReferenceNowMsCore,
+  mapTrailRetractPathsCore,
   projectMapTrailPathsCore,
   missCloseExitReasonTextCore,
   nearbyCoinIconCore,
@@ -37371,6 +37372,16 @@ async function runSelfTest() {
           5
         ) - Date.parse('2026-08-25T00:00:00.000Z');
         const withoutPrevious = interpolateMapMarkerCore({ px: 110, py: 220 }, null, 0);
+        // 末段回缩按屏幕弧长从最旧的一端裁, 不是按采样个数, 否则采样疏密不同的两段会以不同
+        // 速度缩短。单段总长 100: 25% 落在第一节内, 70% 已经吃掉整节并切进第二节。
+        const retractSource = [[{ px: 0, py: 0 }, { px: 60, py: 0 }, { px: 100, py: 0 }]];
+        const retractQuarter = mapTrailRetractPathsCore(retractSource, 0.25);
+        const retractPastJoint = mapTrailRetractPathsCore(retractSource, 0.7);
+        // 断开的两段共用同一条总弧长, 前一段被整段吃掉后余量继续切进后一段。
+        const retractSplit = mapTrailRetractPathsCore(
+          [[{ px: 0, py: 0 }, { px: 40, py: 0 }], [{ px: 0, py: 50 }, { px: 60, py: 50 }]],
+          0.5
+        );
         return [
           BROWSERLESS_WEB_PANEL_VERSION,
           mapMarkerKeyCore('coin', 0),
@@ -37396,6 +37407,18 @@ async function runSelfTest() {
           mapTrailReferenceNowMsCore(null, 42),
           withoutPrevious.px,
           withoutPrevious.py,
+          mapTrailRetractPathsCore(retractSource, 0).length,
+          retractQuarter.length,
+          retractQuarter[0].length,
+          retractQuarter[0][0].px.toFixed(1),
+          retractPastJoint.length,
+          retractPastJoint[0].length,
+          retractPastJoint[0][0].px.toFixed(1),
+          mapTrailRetractPathsCore(retractSource, 1).length,
+          mapTrailRetractPathsCore(retractSource, 'x').length,
+          retractSplit.length,
+          retractSplit[0].length,
+          retractSplit[0][0].px.toFixed(1),
           panelScript.includes('const MAP_MOVE_ANIMATION_MS = 260;'),
           panelScript.includes('const MAP_TRAIL_MAX_SAMPLES = 180;'),
           panelScript.includes('const mapAnimationProgress = function mapAnimationProgressCore'),
@@ -37414,20 +37437,27 @@ async function runSelfTest() {
           !panelScript.includes('resampleMapPolyline'),
           panelScript.includes('function buildMapTrailGeometry(scene, markers, frame'),
           panelScript.includes('function renderedMapTrailGeometry(scene, markers, frame, camera, progress = 1)'),
-          panelScript.includes('function drawMapTrails(context, scene, markers, frame, progress = 1, fadeProgress = progress)'),
-          // 每次刷新丢掉的末段改成线性淡出: 位移补间是 ease-out, 淡出必须单独吃线性进度,
-          // 并且淡出几何要和主轨迹共用同一台插值相机, 否则淡出过程中会错位。
+          panelScript.includes('function drawMapTrails(context, scene, markers, frame, progress = 1, retractProgress = progress)'),
+          // 每次刷新丢掉的末段改成线尾线性回缩(不是整段淡出): 位移补间是 ease-out, 回缩必须
+          // 单独吃线性进度; 回缩几何要和主轨迹共用同一台插值相机, 否则回缩过程中会错位;
+          // 并且必须按主轨迹同一档透明度描边, 否则又退回成淡出效果。
           panelScript.includes('const mapTrailDroppedTail = function mapTrailDroppedTailCore')
-            && panelScript.includes('const mapTrailFadeAlpha = function mapTrailFadeAlphaCore')
-            && panelScript.includes('let mapTrailFadingTails = new Map();')
+            && panelScript.includes('const mapTrailRetractPaths = function mapTrailRetractPathsCore')
+            && panelScript.includes('let mapTrailRetractingTails = new Map();')
             && panelScript.includes('const tail = mapTrailDroppedTail(entry.samples, nextEntry ? nextEntry.samples : []);')
-            && panelScript.includes('mapTrailFadingTails = fading;')
-            && panelScript.includes('function renderedMapTrailFadeGeometry(scene, camera, fading = mapTrailFadingTails)')
-            && panelScript.includes('const fadeAlpha = mapTrailFadeAlpha(fadeProgress);')
-            && panelScript.includes('context.globalAlpha = entry.opacity * fadeAlpha;')
+            && panelScript.includes('mapTrailRetractingTails = retracting;')
+            && panelScript.includes('function renderedMapTrailRetractGeometry(scene, camera, progress, retracting = mapTrailRetractingTails)')
+            && panelScript.includes('const paths = mapTrailRetractPaths(projected, progress);')
+            && panelScript.includes([
+              'for (const entry of renderedMapTrailRetractGeometry(scene, camera, retractProgress)) {',
+              '        context.globalAlpha = entry.opacity;',
+              '        context.strokeStyle = entry.color;',
+              '        strokeMapTrailPaths(context, entry.paths);'
+            ].join('\n'))
+            && !panelScript.includes('mapTrailFadeAlpha')
             && panelScript.includes('renderAtProgress(progress, Math.max(0, Math.min(1, elapsedMs / MAP_MOVE_ANIMATION_MS)));')
-            && panelScript.includes('|| mapTrailFadingTails.size > 0);')
-            && panelScript.includes('trailFadeProgress: fadeProgress'),
+            && panelScript.includes('|| mapTrailRetractingTails.size > 0);')
+            && panelScript.includes('trailRetractProgress: retractProgress'),
           panelScript.includes('lineProgress: progress'),
           panelScript.includes('previousTrailGeometry: mapRenderedTrailGeometry'),
           panelScript.includes('previousTrailCamera: mapRenderedTrailCamera'),
@@ -37465,6 +37495,7 @@ async function runSelfTest() {
         'coin:0', 'player:alice', '', 0, '0.875', 1, '97.5', '195.0', '97.5', '195.0',
         '50.0', 1, 3, '50.0', '100.0', '125.0', '150.0', '50.0', '200.0',
         120, 42, 110, 220,
+        1, 1, 3, '25.0', 1, 2, '70.0', 0, 0, 1, 2, '10.0',
         ...Array(50).fill(true)
       ].join('|')
     },

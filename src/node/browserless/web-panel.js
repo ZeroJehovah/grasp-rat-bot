@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.26.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.26.2';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -161,8 +161,8 @@ function mapTrailOpacityCore(sampleAtMs, nowMs, maxAgeMs = 30000) {
 }
 
 // 每次刷新后端只保留窗口内的采样, 轨迹末段(最旧的一截)会被整段丢掉。直接丢弃是瞬间截断,
-// 所以把被丢掉的采样连同第一个仍然存活的采样单独取出来, 由渲染层做线性淡出; 淡出用的是
-// 上一轮的世界坐标, 因此它和主轨迹共用同一台插值相机, 不会在淡出过程中错位。
+// 所以把被丢掉的采样连同第一个仍然存活的采样单独取出来, 由渲染层从最旧的一端线性回缩;
+// 回缩用的是上一轮的世界坐标, 因此它和主轨迹共用同一台插值相机, 不会在回缩过程中错位。
 function mapTrailDroppedTailCore(previousSamples, nextSamples) {
   const previous = Array.isArray(previousSamples) ? previousSamples : [];
   if (!previous.length) return [];
@@ -177,11 +177,59 @@ function mapTrailDroppedTailCore(previousSamples, nextSamples) {
   return tail.length >= 2 ? tail : [];
 }
 
-// 位移补间用的是 ease-out, 末段淡出要求线性, 所以它单独吃一份线性进度。
-function mapTrailFadeAlphaCore(progress) {
+// 末段不做透明度淡出, 而是按屏幕弧长从最旧的一端裁掉 progress 比例, 看起来就是线尾在逐渐
+// 缩短。裁剪在投影之后做, 所以缩短速度按像素长度均匀; 位移补间用的是 ease-out, 这里单独吃
+// 一份线性进度。
+function mapTrailRetractPathsCore(paths, progress) {
+  const list = Array.isArray(paths) ? paths.filter(path => Array.isArray(path) && path.length >= 2) : [];
   const parsed = Number(progress);
-  const clamped = Math.max(0, Math.min(1, Number.isFinite(parsed) ? parsed : 1));
-  return 1 - clamped;
+  const ratio = Math.max(0, Math.min(1, Number.isFinite(parsed) ? parsed : 1));
+  if (!list.length || ratio >= 1) return [];
+  if (ratio <= 0) return list;
+  const lengths = list.map(points => {
+    let total = 0;
+    for (let index = 1; index < points.length; index += 1) {
+      total += Math.hypot(points[index].px - points[index - 1].px, points[index].py - points[index - 1].py);
+    }
+    return total;
+  });
+  const totalLength = lengths.reduce((sum, value) => sum + value, 0);
+  if (!(totalLength > 0)) return list;
+  let cutRemaining = totalLength * ratio;
+  const kept = [];
+  for (let pathIndex = 0; pathIndex < list.length; pathIndex += 1) {
+    const points = list[pathIndex];
+    if (cutRemaining <= 0) {
+      kept.push(points);
+      continue;
+    }
+    if (cutRemaining >= lengths[pathIndex]) {
+      cutRemaining -= lengths[pathIndex];
+      continue;
+    }
+    const trimmed = [];
+    for (let index = 1; index < points.length; index += 1) {
+      const from = points[index - 1];
+      const to = points[index];
+      if (cutRemaining > 0) {
+        const segment = Math.hypot(to.px - from.px, to.py - from.py);
+        if (cutRemaining >= segment) {
+          cutRemaining -= segment;
+          continue;
+        }
+        const cutRatio = cutRemaining / segment;
+        trimmed.push({
+          ...from,
+          px: from.px + (to.px - from.px) * cutRatio,
+          py: from.py + (to.py - from.py) * cutRatio
+        });
+        cutRemaining = 0;
+      }
+      trimmed.push(to);
+    }
+    if (trimmed.length >= 2) kept.push(trimmed);
+  }
+  return kept;
 }
 
 function highDropRankValueCore(item) {
@@ -902,7 +950,7 @@ function renderBrowserlessWebPanel() {
     let mapRenderedMarkerPositions = new Map();
     let mapRenderedCanvasSize = 0;
     let mapTrailRenderHistory = new Map();
-    let mapTrailFadingTails = new Map();
+    let mapTrailRetractingTails = new Map();
     let mapRenderedTrailGeometry = new Map();
     let mapRenderedTrailCamera = null;
     let mapRenderedTargetLinePositions = new Map();
@@ -933,7 +981,7 @@ function renderBrowserlessWebPanel() {
     const interpolateMapMarker = ${interpolateMapMarkerCore.toString()};
     const mapTrailOpacity = ${mapTrailOpacityCore.toString()};
     const mapTrailDroppedTail = ${mapTrailDroppedTailCore.toString()};
-    const mapTrailFadeAlpha = ${mapTrailFadeAlphaCore.toString()};
+    const mapTrailRetractPaths = ${mapTrailRetractPathsCore.toString()};
     const transportMetricValueClass = ${transportMetricValueClassCore.toString()};
     const remoteTargetActivityText = ${remoteTargetActivityTextCore.toString()};
     const remoteSnapshotProfitTargetTitle = ${remoteSnapshotProfitTargetTitleCore.toString().replace('remoteTargetActivityTextCore', 'remoteTargetActivityText')};
@@ -2508,7 +2556,7 @@ function renderBrowserlessWebPanel() {
     }
     function clearMapTrails() {
       mapTrailRenderHistory = new Map();
-      mapTrailFadingTails = new Map();
+      mapTrailRetractingTails = new Map();
       mapRenderedTrailGeometry = new Map();
       mapRenderedTrailCamera = null;
     }
@@ -2546,14 +2594,14 @@ function renderBrowserlessWebPanel() {
           samples
         });
       }
-      const fading = new Map();
+      const retracting = new Map();
       for (const [key, entry] of mapTrailRenderHistory.entries()) {
         const nextEntry = next.get(key);
         const tail = mapTrailDroppedTail(entry.samples, nextEntry ? nextEntry.samples : []);
         if (tail.length < 2) continue;
-        fading.set(key, { color: nextEntry?.color || entry.color, samples: tail });
+        retracting.set(key, { color: nextEntry?.color || entry.color, samples: tail });
       }
-      mapTrailFadingTails = fading;
+      mapTrailRetractingTails = retracting;
       mapTrailRenderHistory = next;
     }
     function mapTrailPathSamples(samples) {
@@ -2636,12 +2684,13 @@ function renderBrowserlessWebPanel() {
       }
       return rendered;
     }
-    // 被丢弃的末段用同一台插值相机投影, 位置和主轨迹完全一致, 只有透明度线性衰减到 0。
-    function renderedMapTrailFadeGeometry(scene, camera, fading = mapTrailFadingTails) {
-      if (!camera || !(fading instanceof Map) || !fading.size) return [];
+    // 被丢弃的末段用同一台插值相机投影, 位置和主轨迹完全一致, 只是按进度从最旧的一端裁短,
+    // 透明度保持主轨迹同一档, 所以看到的是线尾在缩短而不是整段变淡。
+    function renderedMapTrailRetractGeometry(scene, camera, progress, retracting = mapTrailRetractingTails) {
+      if (!camera || !(retracting instanceof Map) || !retracting.size) return [];
       const rendered = [];
-      for (const entry of fading.values()) {
-        const paths = projectMapTrailPaths(
+      for (const entry of retracting.values()) {
+        const projected = projectMapTrailPaths(
           mapTrailPathSamples(entry.samples).map(pathSamples => pathSamples.map(sample => ({
             x: Number(sample.x),
             y: Number(sample.y),
@@ -2650,6 +2699,7 @@ function renderBrowserlessWebPanel() {
           camera,
           {}
         ).filter(path => path.length >= 2);
+        const paths = mapTrailRetractPaths(projected, progress);
         if (!paths.length) continue;
         rendered.push({
           color: entry.color,
@@ -2670,11 +2720,10 @@ function renderBrowserlessWebPanel() {
         context.stroke();
       }
     }
-    function drawMapTrails(context, scene, markers, frame, progress = 1, fadeProgress = progress) {
+    function drawMapTrails(context, scene, markers, frame, progress = 1, retractProgress = progress) {
       const camera = interpolateMapCamera(mapTrailCamera(scene, frame), scene.previousTrailCamera, progress);
       if (!camera) return;
       const geometry = renderedMapTrailGeometry(scene, markers, frame, camera, progress);
-      const fadeAlpha = mapTrailFadeAlpha(fadeProgress);
       context.save();
       context.lineCap = 'round';
       context.lineJoin = 'round';
@@ -2684,12 +2733,10 @@ function renderBrowserlessWebPanel() {
         context.strokeStyle = entry.color;
         strokeMapTrailPaths(context, entry.paths);
       }
-      if (fadeAlpha > 0) {
-        for (const entry of renderedMapTrailFadeGeometry(scene, camera)) {
-          context.globalAlpha = entry.opacity * fadeAlpha;
-          context.strokeStyle = entry.color;
-          strokeMapTrailPaths(context, entry.paths);
-        }
+      for (const entry of renderedMapTrailRetractGeometry(scene, camera, retractProgress)) {
+        context.globalAlpha = entry.opacity;
+        context.strokeStyle = entry.color;
+        strokeMapTrailPaths(context, entry.paths);
       }
       context.restore();
     }
@@ -2888,7 +2935,7 @@ function renderBrowserlessWebPanel() {
       if (resetPositions) {
         mapRenderedMarkerPositions = new Map();
         mapRenderedCanvasSize = 0;
-        mapTrailFadingTails = new Map();
+        mapTrailRetractingTails = new Map();
         mapRenderedTrailGeometry = new Map();
         mapRenderedTrailCamera = null;
         mapRenderedTargetLinePositions = new Map();
@@ -2922,8 +2969,8 @@ function renderBrowserlessWebPanel() {
     function paintTargetMapScene(scene, markers) {
       const { context, size, status, visibleRange, attackRange, emptyReason } = scene;
       const lineProgress = Number.isFinite(Number(scene.lineProgress)) ? Number(scene.lineProgress) : 1;
-      const trailFadeProgress = Number.isFinite(Number(scene.trailFadeProgress))
-        ? Number(scene.trailFadeProgress)
+      const trailRetractProgress = Number.isFinite(Number(scene.trailRetractProgress))
+        ? Number(scene.trailRetractProgress)
         : lineProgress;
       context.clearRect(0, 0, size, size);
       const frame = drawMapBase(context, size, attackRange, visibleRange || 1);
@@ -2931,7 +2978,7 @@ function renderBrowserlessWebPanel() {
       context.beginPath();
       context.arc(frame.center, frame.center, frame.radius, 0, Math.PI * 2);
       context.clip();
-      drawMapTrails(context, scene, markers, frame, lineProgress, trailFadeProgress);
+      drawMapTrails(context, scene, markers, frame, lineProgress, trailRetractProgress);
       const coinMarkers = markers.filter(marker => marker.kind === 'coin');
       const routeMarkers = coinMarkers.filter(marker => marker.routeOrder > 0).sort((a, b) => a.routeOrder - b.routeOrder);
       drawMapTargetPath(
@@ -2983,28 +3030,28 @@ function renderBrowserlessWebPanel() {
       };
       const lineGeometryMoved = mapLineGeometryMoved(animationScene, markers);
       // 末段被删掉时主几何未必"移动"过(整条轨迹消失时更是完全不在新几何里),
-      // 所以待淡出的末段本身也要能触发这一轮动画。
+      // 所以待回缩的末段本身也要能触发这一轮动画。
       const shouldAnimate = animate
         && mapRenderedCanvasSize === scene.size
         && mapMotionAnimationAllowed()
         && (mapMarkerPositionsMoved(markers, previousPositions)
           || lineGeometryMoved
-          || mapTrailFadingTails.size > 0);
-      const renderAtProgress = (progress, fadeProgress = progress) => {
+          || mapTrailRetractingTails.size > 0);
+      const renderAtProgress = (progress, retractProgress = progress) => {
         const renderedMarkers = markers.map(marker => (
           interpolateMapMarker(marker, marker.mapKey ? previousPositions.get(marker.mapKey) : null, progress)
         ));
         paintTargetMapScene({
           ...animationScene,
           lineProgress: progress,
-          trailFadeProgress: fadeProgress
+          trailRetractProgress: retractProgress
         }, renderedMarkers);
         rememberMapMarkerPositions(renderedMarkers, scene.size);
       };
       if (!shouldAnimate) {
         renderAtProgress(1);
         rememberMapLineGeometry(animationScene, markers);
-        mapTrailFadingTails = new Map();
+        mapTrailRetractingTails = new Map();
         return;
       }
       renderAtProgress(0);
@@ -3019,7 +3066,7 @@ function renderBrowserlessWebPanel() {
         } else {
           mapAnimationFrame = 0;
           rememberMapLineGeometry(animationScene, markers);
-          mapTrailFadingTails = new Map();
+          mapTrailRetractingTails = new Map();
         }
       };
       mapAnimationFrame = requestAnimationFrame(step);
@@ -4654,7 +4701,7 @@ module.exports = {
   pruneMapTrailHistoryCore,
   mapTrailCameraCore,
   mapTrailDroppedTailCore,
-  mapTrailFadeAlphaCore,
+  mapTrailRetractPathsCore,
   mapTrailOpacityCore,
   mapTrailReferenceNowMsCore,
   missCloseExitReasonTextCore,
