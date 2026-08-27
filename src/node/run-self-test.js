@@ -36486,11 +36486,143 @@ async function runSelfTest() {
           afterDeath,
           spentBeforeReset,
           resetCount,
+          state.stats.today.staminaResetAt,
+          state.stats.today.staminaCarryoverSampleCount,
           compact.stats.today.staminaSpentMs,
           state.stats.today.staminaSpentMs
         ].join('|');
       })(),
-      want: '3852864|3852864|1|13537229|13537229'
+      want: '3852864|3852864|1|2026-07-29T00:00:02.000Z|0|13537229|13537229'
+    },
+    {
+      // 2026-08-27: the UTC+8 day rolled over while a session was live and the first
+      // sample of the new day predated the server's daily stamina refresh. Seeding the
+      // day segment with it made the refresh look like a death refill and settled a
+      // whole previous day into the prefix, showing 39197 against a 20000 daily cap.
+      name: 'browserless today stamina ignores a pre-refresh sample at the UTC+8 day boundary',
+      got: (() => {
+        const state = { session: { userId: 77, sessionToken: 'state-secret-token' } };
+        const dayStart = Date.parse('2026-08-26T16:00:00.000Z');
+        const decision = (offset, remaining) => ({
+          at: new Date(dayStart + offset).toISOString(),
+          input: {
+            self: { userId: 77, name: 'self', drop: 10 },
+            stamina: { stamina1dRemainingMilli: remaining, stamina1dLimitMilli: 20000000 },
+            selfKillEvidence: []
+          }
+        });
+        state.stats = browserlessStatsForDecision(state, decision(814, 437472), { nowMs: dayStart + 814 });
+        const atCarryover = buildCompactBrowserlessStatus(state, { nowMs: dayStart + 814 });
+        state.stats = browserlessStatsForDecision(state, decision(1947, 20000000), { nowMs: dayStart + 1947 });
+        state.stats = browserlessStatsForDecision(state, decision(3600000, 19634768), { nowMs: dayStart + 3600000 });
+        const compact = buildCompactBrowserlessStatus(state, { nowMs: dayStart + 3600000 });
+        return [
+          state.stats.today.staminaSpentBeforeResetMs,
+          state.stats.today.staminaResetCount,
+          state.stats.today.staminaCarryoverSampleCount,
+          state.stats.today.lastStamina1dRemaining,
+          atCarryover.stats.today.staminaSpentMs,
+          compact.stats.today.staminaSpentMs
+        ].join('|');
+      })(),
+      want: '0|0|1|19634768|0|365232'
+    },
+    {
+      // 2026-08-28 shape: offline across midnight, so the first sample of the day is
+      // already refreshed and must seed the segment normally.
+      name: 'browserless today stamina seeds a refreshed first sample after the day boundary',
+      got: (() => {
+        const state = { session: { userId: 77, sessionToken: 'state-secret-token' } };
+        const dayStart = Date.parse('2026-08-27T16:00:00.000Z');
+        const decision = (offset, remaining) => ({
+          at: new Date(dayStart + offset).toISOString(),
+          input: {
+            self: { userId: 77, name: 'self', drop: 10 },
+            stamina: { stamina1dRemainingMilli: remaining, stamina1dLimitMilli: 20000000 },
+            selfKillEvidence: []
+          }
+        });
+        state.stats = browserlessStatsForDecision(state, decision(16000, 20000000), { nowMs: dayStart + 16000 });
+        state.stats = browserlessStatsForDecision(state, decision(20 * 60 * 1000, 19800000), { nowMs: dayStart + 20 * 60 * 1000 });
+        const compact = buildCompactBrowserlessStatus(state, { nowMs: dayStart + 20 * 60 * 1000 });
+        return [
+          state.stats.today.staminaSpentBeforeResetMs,
+          state.stats.today.staminaResetCount,
+          state.stats.today.staminaCarryoverSampleCount,
+          compact.stats.today.staminaSpentMs
+        ].join('|');
+      })(),
+      want: '0|0|0|200000'
+    },
+    {
+      // A gap the elapsed day could plausibly have consumed is real spending, not
+      // carryover, so a mid-session restart still seeds from a partially drained value.
+      name: 'browserless today stamina seeds a plausible partially drained first sample',
+      got: (() => {
+        const state = { session: { userId: 77, sessionToken: 'state-secret-token' } };
+        const dayStart = Date.parse('2026-08-27T16:00:00.000Z');
+        const decision = (offset, remaining) => ({
+          at: new Date(dayStart + offset).toISOString(),
+          input: {
+            self: { userId: 77, name: 'self', drop: 10 },
+            stamina: { stamina1dRemainingMilli: remaining, stamina1dLimitMilli: 20000000 },
+            selfKillEvidence: []
+          }
+        });
+        state.stats = browserlessStatsForDecision(state, decision(20 * 60 * 1000, 19000000), { nowMs: dayStart + 20 * 60 * 1000 });
+        state.stats = browserlessStatsForDecision(state, decision(25 * 60 * 1000, 18500000), { nowMs: dayStart + 25 * 60 * 1000 });
+        const compact = buildCompactBrowserlessStatus(state, { nowMs: dayStart + 25 * 60 * 1000 });
+        return [
+          state.stats.today.staminaSpentBeforeResetMs,
+          state.stats.today.staminaResetCount,
+          state.stats.today.staminaCarryoverSampleCount,
+          compact.stats.today.staminaSpentMs
+        ].join('|');
+      })(),
+      want: '0|0|0|1500000'
+    },
+    {
+      name: 'browserless stats drop unverifiable daily stamina reset prefixes once',
+      got: (() => {
+        const todayStats = extra => ({
+          day: '2026-08-27',
+          uptimeMs: 1000,
+          staminaSpentMs: 39197296,
+          staminaSpentBeforeResetMs: 19562528,
+          staminaResetCount: 1,
+          lastStamina1dRemaining: 365232,
+          lastStamina1dLimit: 20000000,
+          lastStamina1dObservedAt: '2026-08-27T14:00:00.000Z',
+          ...extra
+        });
+        const compactWith = stats => buildCompactBrowserlessStatus({
+          session: { userId: 77, sessionToken: 'state-secret-token' },
+          stats
+        }, { nowMs: Date.parse('2026-08-27T15:50:00.000Z') });
+        // No accounting version: the prefix carries no evidence and is dropped.
+        const migrated = compactWith({ today: todayStats() });
+        // Versioned but physically impossible for the elapsed day: still dropped.
+        const implausible = compactWith({
+          staminaAccountingVersion: 1,
+          today: todayStats({ staminaResetAt: '2026-08-26T16:00:01.947Z' })
+        });
+        // Versioned with a plausible reset timestamp: preserved.
+        const preserved = compactWith({
+          staminaAccountingVersion: 1,
+          today: todayStats({
+            staminaSpentMs: 13537229,
+            staminaSpentBeforeResetMs: 3852864,
+            staminaResetAt: '2026-08-26T18:00:00.000Z',
+            lastStamina1dRemaining: 10315635
+          })
+        });
+        return [
+          migrated.stats.today.staminaSpentMs,
+          implausible.stats.today.staminaSpentMs,
+          preserved.stats.today.staminaSpentMs
+        ].join('|');
+      })(),
+      want: '19634768|19634768|13537229'
     },
     {
       name: 'browserless stats ignore kill messages already present at session entry',

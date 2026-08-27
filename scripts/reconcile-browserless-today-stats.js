@@ -9,6 +9,7 @@ const {
   readBrowserlessStateFile,
   updateBrowserlessStateFile
 } = require('../src/node/browserless/state-file');
+const { isPreviousDayStaminaCarryover } = require('../src/shared/daily-stamina-window');
 
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -290,6 +291,8 @@ async function analyzeDay(options) {
   let staminaSamples = 0;
   let staminaSpentBeforeResetMs = 0;
   let staminaResetCount = 0;
+  let staminaResetAt = '';
+  let staminaCarryoverSampleCount = 0;
   let lastStamina1dRemaining = null;
   let lastStamina1dLimit = null;
   let lastStamina1dObservedAt = '';
@@ -303,6 +306,18 @@ async function analyzeDay(options) {
   });
   exitStaminaEvents.sort((a, b) => a.atMs - b.atMs);
   function observeStamina(stamina, at) {
+    // Same rule as the runtime: the first sample of a UTC+8 day can predate the
+    // server's daily refresh and still carry the previous day's drained remaining.
+    // Seeding the day segment with it would turn the refresh into a fake refill.
+    if (lastStamina1dRemaining === null
+      && isPreviousDayStaminaCarryover({
+        remaining: stamina.remaining,
+        limit: stamina.limit,
+        sampleAtMs: Date.parse(String(at || ''))
+      })) {
+      staminaCarryoverSampleCount += 1;
+      return;
+    }
     const fullDailyRefill = lastStamina1dRemaining !== null
       && stamina.remaining > lastStamina1dRemaining
       && stamina.remaining >= stamina.limit;
@@ -312,6 +327,7 @@ async function analyzeDay(options) {
         : stamina.limit;
       staminaSpentBeforeResetMs += Math.max(0, completedSegmentLimit - lastStamina1dRemaining);
       staminaResetCount += 1;
+      staminaResetAt = at;
     }
     lastStamina1dRemaining = stamina.remaining;
     lastStamina1dLimit = stamina.limit;
@@ -389,6 +405,8 @@ async function analyzeDay(options) {
       lastDrop,
       staminaSamples,
       staminaResetCount,
+      staminaResetAt,
+      staminaCarryoverSampleCount,
       lastStamina1dRemaining,
       lastStamina1dLimit,
       lastStamina1dObservedAt
@@ -397,6 +415,7 @@ async function analyzeDay(options) {
       uptimeMs: inGameDurationMs,
       staminaSpentMs,
       staminaSpentBeforeResetMs: Math.max(0, Math.round(staminaSpentBeforeResetMs)),
+      staminaResetAt,
       dropUnitsGained: positiveDropUnits,
       coinsGained: positiveDropUnits * 2,
       pickedCoins: positiveDropUnits * 2,
@@ -444,6 +463,8 @@ function reconcileState(state, analysis) {
     ...(analysis.evidence.staminaSamples > 0 ? {
       staminaSpentBeforeResetMs: analysis.stats.staminaSpentBeforeResetMs,
       staminaResetCount: analysis.evidence.staminaResetCount,
+      staminaResetAt: analysis.evidence.staminaResetAt,
+      staminaCarryoverSampleCount: analysis.evidence.staminaCarryoverSampleCount,
       lastStamina1dRemaining: analysis.evidence.lastStamina1dRemaining,
       lastStamina1dLimit: analysis.evidence.lastStamina1dLimit,
       lastStamina1dObservedAt: analysis.evidence.lastStamina1dObservedAt
@@ -631,6 +652,30 @@ async function runSelfTest() {
         }
       }
     }, runnerOnlyAnalysis);
+    // Reproduces 2026-08-27: the UTC+8 day rolled over while a session was live and
+    // the first sample predated the server's daily refresh.
+    const midnightGapLogDir = path.join(root, 'midnight-gap-logs');
+    const midnightGapDir = path.join(midnightGapLogDir, '2026-08-27');
+    fs.mkdirSync(midnightGapDir, { recursive: true });
+    const midnightGapDecisions = [
+      ['2026-08-26T16:00:00.814Z', 437472],
+      ['2026-08-26T16:00:01.947Z', 20000000],
+      ['2026-08-26T16:30:00.000Z', 19000000]
+    ].map(([at, remaining]) => JSON.stringify({
+      at,
+      detail: {
+        input: {
+          stamina: { stamina1dRemainingMilli: remaining, stamina1dLimitMilli: 20000000 }
+        }
+      }
+    })).join('\n') + '\n';
+    fs.writeFileSync(path.join(midnightGapDir, 'decisions.jsonl'), midnightGapDecisions);
+    const midnightGapAnalysis = await analyzeDay({
+      day: '2026-08-27',
+      cutoffMs: Date.parse('2026-08-27T07:59:59.000Z'),
+      logDir: midnightGapLogDir,
+      userId: 7
+    });
     let mismatchedDayRejected = false;
     try {
       assertApplySafe({
@@ -650,8 +695,17 @@ async function runSelfTest() {
         && analysis.stats.staminaSpentMs === 1800000
         && analysis.stats.staminaSpentBeforeResetMs === 1200000
         && analysis.evidence.staminaResetCount === 1
+        && analysis.evidence.staminaResetAt === '2026-07-15T00:01:00.000Z'
+        && analysis.evidence.staminaCarryoverSampleCount === 0
         && reconciled.today.staminaSpentMs === 1800000
         && reconciled.today.staminaSpentBeforeResetMs === 1200000
+        && midnightGapAnalysis.evidence.staminaCarryoverSampleCount === 1
+        && midnightGapAnalysis.evidence.staminaSamples === 2
+        && midnightGapAnalysis.evidence.staminaResetCount === 0
+        && midnightGapAnalysis.evidence.staminaResetAt === ''
+        && midnightGapAnalysis.evidence.lastStamina1dRemaining === 19000000
+        && midnightGapAnalysis.stats.staminaSpentBeforeResetMs === 0
+        && midnightGapAnalysis.stats.staminaSpentMs === 1000000
         && analysis.stats.uptimeMs === 30000
         && analysis.evidence.dropResetCount === 1
         && crossDayAnalysis.evidence.initialDrop === 4000

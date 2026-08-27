@@ -10,7 +10,9 @@ const {
 } = require('./source-ip-preflight');
 const {
   dailyStaminaExitExemptAt,
-  effectiveLongStaminaExhaustedWindows
+  effectiveLongStaminaExhaustedWindows,
+  isPreviousDayStaminaCarryover,
+  maxPlausibleDailyStaminaSpentMs
 } = require('../../shared/daily-stamina-window');
 const {
   boundedRecoveryAttemptId,
@@ -20,6 +22,7 @@ const {
 const SCHEMA_VERSION = 1;
 const KILL_ACCOUNTING_VERSION = 3;
 const COIN_ACCOUNTING_VERSION = 4;
+const STAMINA_ACCOUNTING_VERSION = 1;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const PICKED_COINS_PER_SELF_DROP = 2;
@@ -119,6 +122,7 @@ function defaultBrowserlessStats() {
   return {
     killAccountingVersion: KILL_ACCOUNTING_VERSION,
     coinAccountingVersion: COIN_ACCOUNTING_VERSION,
+    staminaAccountingVersion: STAMINA_ACCOUNTING_VERSION,
     currentSession: {
       online: false,
       sessionId: '',
@@ -155,6 +159,8 @@ function defaultBrowserlessStats() {
       staminaSpentMs: 0,
       staminaSpentBeforeResetMs: 0,
       staminaResetCount: 0,
+      staminaResetAt: '',
+      staminaCarryoverSampleCount: 0,
       lastStamina1dRemaining: null,
       lastStamina1dLimit: null,
       lastStamina1dObservedAt: '',
@@ -699,9 +705,32 @@ function normalizeCrossDayDropPending(value) {
   return { sessionId, previousDrop, previousTick };
 }
 
+// A settled daily segment prefix is only trustworthy when it carries the reset
+// timestamp that produced it and stays inside what the day could physically have
+// consumed by then. Prefixes written by an older accounting version have no such
+// evidence and are dropped once, the way kill/coin counters are.
+function verifiedTodayStaminaResetPrefix(today, versionTrusted) {
+  const prefixMs = Math.max(0, Math.round(Number(today?.staminaSpentBeforeResetMs || 0) || 0));
+  const resetCount = Math.max(0, Math.round(Number(today?.staminaResetCount || 0) || 0));
+  const resetAt = compactString(today?.staminaResetAt, 48);
+  const dropped = { staminaSpentBeforeResetMs: 0, staminaResetCount: 0, staminaResetAt: '' };
+  if (!versionTrusted) return dropped;
+  if (!(prefixMs > 0)) return { staminaSpentBeforeResetMs: 0, staminaResetCount: resetCount, staminaResetAt: resetAt };
+  const resetAtMs = parseTimeMs(resetAt);
+  const dayStartMs = browserlessStatsDayStartMs(compactString(today?.day, 16));
+  if (!(resetAtMs > 0) || !(dayStartMs > 0)) return dropped;
+  if (prefixMs > maxPlausibleDailyStaminaSpentMs(resetAtMs - dayStartMs)) return dropped;
+  return {
+    staminaSpentBeforeResetMs: prefixMs,
+    staminaResetCount: Math.max(1, resetCount),
+    staminaResetAt: resetAt
+  };
+}
+
 function normalizeBrowserlessStats(stats, rawStats = stats) {
   const inputKillAccountingVersion = Number(rawStats?.killAccountingVersion || 0);
   const inputCoinAccountingVersion = Number(rawStats?.coinAccountingVersion || 0);
+  const inputStaminaAccountingVersion = Number(rawStats?.staminaAccountingVersion || 0);
   const resetUntrustedKills = inputKillAccountingVersion !== KILL_ACCOUNTING_VERSION;
   const migrateLegacyCoins = inputCoinAccountingVersion < 2;
   const normalized = mergeState(defaultBrowserlessStats(), stats || {});
@@ -754,8 +783,19 @@ function normalizeBrowserlessStats(stats, rawStats = stats) {
     migratedTodayDropFloor
   );
   const activeBaseCoinsGained = Math.max(0, Math.round(Number(today.activeBaseCoinsGained || 0) * coinMultiplier || 0));
+  const verifiedStaminaReset = verifiedTodayStaminaResetPrefix(
+    today,
+    inputStaminaAccountingVersion === STAMINA_ACCOUNTING_VERSION
+  );
+  // A dropped prefix must also leave the persisted daily total, which was stored
+  // as prefix + consumed segment.
+  const droppedStaminaPrefixMs = Math.max(
+    0,
+    Math.round(Number(today.staminaSpentBeforeResetMs || 0) || 0) - verifiedStaminaReset.staminaSpentBeforeResetMs
+  );
   normalized.killAccountingVersion = KILL_ACCOUNTING_VERSION;
   normalized.coinAccountingVersion = COIN_ACCOUNTING_VERSION;
+  normalized.staminaAccountingVersion = STAMINA_ACCOUNTING_VERSION;
   normalized.currentSession = {
     ...session,
     online: Boolean(session.online),
@@ -793,9 +833,14 @@ function normalizeBrowserlessStats(stats, rawStats = stats) {
     maxDrop: compactNumber(today.maxDrop),
     latestDrop: compactNumber(today.latestDrop),
     uptimeMs: Math.max(0, Math.round(Number(today.uptimeMs || 0) || 0)),
-    staminaSpentMs: Math.max(0, Math.round(Number(today.staminaSpentMs || 0) || 0)),
-    staminaSpentBeforeResetMs: Math.max(0, Math.round(Number(today.staminaSpentBeforeResetMs || 0) || 0)),
-    staminaResetCount: Math.max(0, Math.round(Number(today.staminaResetCount || 0) || 0)),
+    staminaSpentMs: Math.max(
+      0,
+      Math.round(Number(today.staminaSpentMs || 0) || 0) - droppedStaminaPrefixMs
+    ),
+    staminaSpentBeforeResetMs: verifiedStaminaReset.staminaSpentBeforeResetMs,
+    staminaResetCount: verifiedStaminaReset.staminaResetCount,
+    staminaResetAt: verifiedStaminaReset.staminaResetAt,
+    staminaCarryoverSampleCount: Math.max(0, Math.round(Number(today.staminaCarryoverSampleCount || 0) || 0)),
     lastStamina1dRemaining: compactNumber(today.lastStamina1dRemaining),
     lastStamina1dLimit: compactNumber(today.lastStamina1dLimit),
     lastStamina1dObservedAt: compactString(today.lastStamina1dObservedAt, 48),
@@ -825,6 +870,7 @@ function browserlessStatsReadyForLiveUpdate(stats) {
     stats
       && Number(stats.killAccountingVersion) === KILL_ACCOUNTING_VERSION
       && Number(stats.coinAccountingVersion) === COIN_ACCOUNTING_VERSION
+      && Number(stats.staminaAccountingVersion) === STAMINA_ACCOUNTING_VERSION
       && isPlainObject(stats.currentSession)
       && isPlainObject(stats.today)
       && isPlainObject(stats.lastExit)
@@ -1068,6 +1114,18 @@ function updateBrowserlessStatsSessionStamina(stats, session, stamina, self, now
     const effectiveLimit = stamina1dLimit !== null && stamina1dLimit > 0
       ? stamina1dLimit
       : previousDailyLimit;
+    // The UTC+8 day rolls over before the server refreshes native 1d stamina, so a
+    // sample taken in that gap still reports the previous day's drained remaining.
+    // Seeding the new day's segment with it would make the refreshed value look like
+    // a death refill and settle a whole previous day into the prefix. Skip the seed
+    // instead: previousDailyStamina stays null, so no refill can be settled from it.
+    if (previousDailyStamina === null
+      && isPreviousDayStaminaCarryover({ remaining: stamina1d, limit: effectiveLimit, sampleAtMs: nowMs })) {
+      today.staminaCarryoverSampleCount = Math.max(0, Math.round(
+        Number(today.staminaCarryoverSampleCount || 0) + 1
+      ));
+      return true;
+    }
     const fullDailyRefill = previousDailyStamina !== null
       && effectiveLimit !== null
       && effectiveLimit > 0
@@ -1082,6 +1140,7 @@ function updateBrowserlessStatsSessionStamina(stats, session, stamina, self, now
           + Math.max(0, completedSegmentLimit - previousDailyStamina)
       ));
       today.staminaResetCount = Math.max(0, Math.round(Number(today.staminaResetCount || 0) + 1));
+      today.staminaResetAt = isoFromMs(nowMs);
     }
     today.lastStamina1dRemaining = stamina1d;
     if (effectiveLimit !== null && effectiveLimit > 0) today.lastStamina1dLimit = effectiveLimit;
