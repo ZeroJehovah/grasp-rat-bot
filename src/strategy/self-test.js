@@ -283,6 +283,9 @@ const {
   evaluateDynamicWhitelistContactCore
 } = require('./dynamic-whitelist-safety');
 const { runRemoteProfitTargetsSelfTest } = require('./remote-profit-targets-self-test');
+const {
+  runLoginPointReloginShortcutSelfTest
+} = require('./login-point-relogin-shortcut-self-test');
 const { playerProfitScoreMultiplierCore } = require('./player-profit-score');
 
 function runStrategyModuleSelfTests() {
@@ -1305,6 +1308,13 @@ function runStrategyModuleSelfTests() {
     name: 'remote-profit-target-boundaries',
     passed: remoteProfitTargets.ok === true,
     cases: remoteProfitTargets.cases
+  });
+
+  const loginPointReloginShortcut = runLoginPointReloginShortcutSelfTest();
+  results.push({
+    name: 'login-point-relogin-shortcut-boundaries',
+    passed: loginPointReloginShortcut.ok === true,
+    cases: loginPointReloginShortcut.cases
   });
 
   const hpAttributionSelfTest = runCombatHpLossAttributionSelfTest();

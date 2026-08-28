@@ -57,6 +57,22 @@ const DEFAULTS = {
   loginPointSafetyLowHpBaseRadius: 15000,
   loginPointSafetyLowHpRadiusIncrement: 500,
   loginPointSingleBlockerBypassMs: 3600000,
+  loginPointReloginShortcutEnabled: true,
+  loginPointReloginShortcutMinCurrentDistanceCm: 40000,
+  loginPointReloginShortcutMinGainCm: 30000,
+  loginPointReloginShortcutMaxLoginDistanceRatio: 0.75,
+  loginPointReloginShortcutMinNetGainMs: 30000,
+  loginPointReloginShortcutPlanSpeedCmPerS: 950,
+  loginPointReloginShortcutBaseOverheadMs: 12000,
+  loginPointReloginShortcutSnapshotEdgeOverheadMs: 65000,
+  loginPointReloginShortcutSourceIpProbeOverheadMs: 50000,
+  loginPointReloginShortcutFreshMaxMs: 120000,
+  loginPointReloginShortcutMaxPointDriftCm: 5000,
+  loginPointReloginShortcutTargetMinDrop: 50,
+  loginPointReloginShortcutTargetMaxDriftCm: 2000,
+  loginPointReloginShortcutMaxPerSession: 1,
+  loginPointReloginShortcutMaxPerDay: 6,
+  loginPointReloginShortcutCooldownMs: 300000,
   snapshotEdgeEnabled: true,
   snapshotEdgeIntervalMs: MIN_SNAPSHOT_EDGE_INTERVAL_MS,
   snapshotEdgeMaxWaitMs: 60000,
@@ -472,6 +488,70 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     loginPointX: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_X, DEFAULTS.loginPointX),
     loginPointY: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_Y, DEFAULTS.loginPointY),
     loginPointHp: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_HP, DEFAULTS.loginPointHp),
+    loginPointReloginShortcutEnabled: boolEnv(
+      env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_RELOGIN_SHORTCUT,
+      DEFAULTS.loginPointReloginShortcutEnabled
+    ),
+    loginPointReloginShortcutMinCurrentDistanceCm: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_RELOGIN_SHORTCUT_MIN_CURRENT_DISTANCE_CM,
+      DEFAULTS.loginPointReloginShortcutMinCurrentDistanceCm
+    ),
+    loginPointReloginShortcutMinGainCm: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_RELOGIN_SHORTCUT_MIN_GAIN_CM,
+      DEFAULTS.loginPointReloginShortcutMinGainCm
+    ),
+    loginPointReloginShortcutMaxLoginDistanceRatio: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_RELOGIN_SHORTCUT_MAX_LOGIN_DISTANCE_RATIO,
+      DEFAULTS.loginPointReloginShortcutMaxLoginDistanceRatio
+    ),
+    loginPointReloginShortcutMinNetGainMs: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_RELOGIN_SHORTCUT_MIN_NET_GAIN_MS,
+      DEFAULTS.loginPointReloginShortcutMinNetGainMs
+    ),
+    loginPointReloginShortcutPlanSpeedCmPerS: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_RELOGIN_SHORTCUT_PLAN_SPEED_CM_PER_S,
+      DEFAULTS.loginPointReloginShortcutPlanSpeedCmPerS
+    ),
+    loginPointReloginShortcutBaseOverheadMs: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_RELOGIN_SHORTCUT_BASE_OVERHEAD_MS,
+      DEFAULTS.loginPointReloginShortcutBaseOverheadMs
+    ),
+    loginPointReloginShortcutSnapshotEdgeOverheadMs: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_RELOGIN_SHORTCUT_SNAPSHOT_EDGE_OVERHEAD_MS,
+      DEFAULTS.loginPointReloginShortcutSnapshotEdgeOverheadMs
+    ),
+    loginPointReloginShortcutSourceIpProbeOverheadMs: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_RELOGIN_SHORTCUT_SOURCE_IP_PROBE_OVERHEAD_MS,
+      DEFAULTS.loginPointReloginShortcutSourceIpProbeOverheadMs
+    ),
+    loginPointReloginShortcutFreshMaxMs: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_RELOGIN_SHORTCUT_FRESH_MAX_MS,
+      DEFAULTS.loginPointReloginShortcutFreshMaxMs
+    ),
+    loginPointReloginShortcutMaxPointDriftCm: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_RELOGIN_SHORTCUT_MAX_POINT_DRIFT_CM,
+      DEFAULTS.loginPointReloginShortcutMaxPointDriftCm
+    ),
+    loginPointReloginShortcutTargetMinDrop: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_RELOGIN_SHORTCUT_TARGET_MIN_DROP,
+      DEFAULTS.loginPointReloginShortcutTargetMinDrop
+    ),
+    loginPointReloginShortcutTargetMaxDriftCm: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_RELOGIN_SHORTCUT_TARGET_MAX_DRIFT_CM,
+      DEFAULTS.loginPointReloginShortcutTargetMaxDriftCm
+    ),
+    loginPointReloginShortcutMaxPerSession: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_RELOGIN_SHORTCUT_MAX_PER_SESSION,
+      DEFAULTS.loginPointReloginShortcutMaxPerSession
+    ),
+    loginPointReloginShortcutMaxPerDay: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_RELOGIN_SHORTCUT_MAX_PER_DAY,
+      DEFAULTS.loginPointReloginShortcutMaxPerDay
+    ),
+    loginPointReloginShortcutCooldownMs: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_RELOGIN_SHORTCUT_COOLDOWN_MS,
+      DEFAULTS.loginPointReloginShortcutCooldownMs
+    ),
     playerDropPickupRadiusCm: numberEnv(
       env.GRASP_RAT_BROWSERLESS_PLAYER_DROP_PICKUP_RADIUS_CM,
       numberEnv(
@@ -817,6 +897,40 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.loginPointY = numberEnv(argv[++i], config.loginPointY);
     } else if (arg === '--login-point-hp') {
       config.loginPointHp = numberEnv(argv[++i], config.loginPointHp);
+    } else if (arg === '--login-point-relogin-shortcut') {
+      config.loginPointReloginShortcutEnabled = true;
+    } else if (arg === '--no-login-point-relogin-shortcut') {
+      config.loginPointReloginShortcutEnabled = false;
+    } else if (arg === '--login-point-relogin-shortcut-min-current-distance-cm') {
+      config.loginPointReloginShortcutMinCurrentDistanceCm = numberEnv(argv[++i], config.loginPointReloginShortcutMinCurrentDistanceCm);
+    } else if (arg === '--login-point-relogin-shortcut-min-gain-cm') {
+      config.loginPointReloginShortcutMinGainCm = numberEnv(argv[++i], config.loginPointReloginShortcutMinGainCm);
+    } else if (arg === '--login-point-relogin-shortcut-max-login-distance-ratio') {
+      config.loginPointReloginShortcutMaxLoginDistanceRatio = numberEnv(argv[++i], config.loginPointReloginShortcutMaxLoginDistanceRatio);
+    } else if (arg === '--login-point-relogin-shortcut-min-net-gain-ms') {
+      config.loginPointReloginShortcutMinNetGainMs = numberEnv(argv[++i], config.loginPointReloginShortcutMinNetGainMs);
+    } else if (arg === '--login-point-relogin-shortcut-plan-speed-cm-per-s') {
+      config.loginPointReloginShortcutPlanSpeedCmPerS = numberEnv(argv[++i], config.loginPointReloginShortcutPlanSpeedCmPerS);
+    } else if (arg === '--login-point-relogin-shortcut-base-overhead-ms') {
+      config.loginPointReloginShortcutBaseOverheadMs = numberEnv(argv[++i], config.loginPointReloginShortcutBaseOverheadMs);
+    } else if (arg === '--login-point-relogin-shortcut-snapshot-edge-overhead-ms') {
+      config.loginPointReloginShortcutSnapshotEdgeOverheadMs = numberEnv(argv[++i], config.loginPointReloginShortcutSnapshotEdgeOverheadMs);
+    } else if (arg === '--login-point-relogin-shortcut-source-ip-probe-overhead-ms') {
+      config.loginPointReloginShortcutSourceIpProbeOverheadMs = numberEnv(argv[++i], config.loginPointReloginShortcutSourceIpProbeOverheadMs);
+    } else if (arg === '--login-point-relogin-shortcut-fresh-max-ms') {
+      config.loginPointReloginShortcutFreshMaxMs = numberEnv(argv[++i], config.loginPointReloginShortcutFreshMaxMs);
+    } else if (arg === '--login-point-relogin-shortcut-max-point-drift-cm') {
+      config.loginPointReloginShortcutMaxPointDriftCm = numberEnv(argv[++i], config.loginPointReloginShortcutMaxPointDriftCm);
+    } else if (arg === '--login-point-relogin-shortcut-target-min-drop') {
+      config.loginPointReloginShortcutTargetMinDrop = numberEnv(argv[++i], config.loginPointReloginShortcutTargetMinDrop);
+    } else if (arg === '--login-point-relogin-shortcut-target-max-drift-cm') {
+      config.loginPointReloginShortcutTargetMaxDriftCm = numberEnv(argv[++i], config.loginPointReloginShortcutTargetMaxDriftCm);
+    } else if (arg === '--login-point-relogin-shortcut-max-per-session') {
+      config.loginPointReloginShortcutMaxPerSession = numberEnv(argv[++i], config.loginPointReloginShortcutMaxPerSession);
+    } else if (arg === '--login-point-relogin-shortcut-max-per-day') {
+      config.loginPointReloginShortcutMaxPerDay = numberEnv(argv[++i], config.loginPointReloginShortcutMaxPerDay);
+    } else if (arg === '--login-point-relogin-shortcut-cooldown-ms') {
+      config.loginPointReloginShortcutCooldownMs = numberEnv(argv[++i], config.loginPointReloginShortcutCooldownMs);
     } else if (arg === '--dynamic-profit-threshold') {
       config.dynamicProfitThresholdEnabled = true;
     } else if (arg === '--no-dynamic-profit-threshold') {

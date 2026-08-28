@@ -3638,6 +3638,27 @@ async function runReadOnlyCanary(config, options = {}) {
       stopDetail: event.detail
     }), { state: currentState, decision: result.decisions.last, atMs });
   };
+  // The runner supplies the persisted half of the login-point relogin shortcut
+  // context (day budget, last login, login-point safety, source-IP reuse). The
+  // half that only exists inside a live session - where this login actually
+  // spawned - is filled in here as soon as the first self frame arrives.
+  const loginPointReloginShortcutBaseContext = options.loginPointReloginShortcutContext || null;
+  const loginPointReloginShortcutDecisionContext = atMs => {
+    if (!loginPointReloginShortcutBaseContext) return null;
+    const dayKey = utc8DayKey(atMs);
+    const sameDay = String(loginPointReloginShortcutBaseContext.dayKey || '') === dayKey;
+    const firstSelf = result.entry.firstSelf;
+    const entryPointUsable = Number.isFinite(Number(firstSelf?.x)) && Number.isFinite(Number(firstSelf?.y));
+    return {
+      ...loginPointReloginShortcutBaseContext,
+      dayKey,
+      dayCount: sameDay ? loginPointReloginShortcutBaseContext.dayCount : 0,
+      lastTriggeredAt: sameDay ? loginPointReloginShortcutBaseContext.lastTriggeredAt : 0,
+      sessionId: runId,
+      entryLoginPoint: entryPointUsable ? { x: Number(firstSelf.x), y: Number(firstSelf.y) } : null,
+      entryLoginAtMs: Date.parse(result.entry.firstSelfAt || '') || null
+    };
+  };
   const dispatchWorkerDecision = (currentState, atMs) => {
     if (!decisionWorker || plannerInFlight || ending || result.safety.event) return false;
     if (!currentState?.realtime?.self) return false;
@@ -3655,7 +3676,9 @@ async function runReadOnlyCanary(config, options = {}) {
       creatorUserIds,
       dynamicWhitelistMemberUserIds: dynamicWhitelistStatus.memberUserIds || [],
       dynamicWhitelistEnabledUserIds: dynamicWhitelistStatus.userIds || [],
-      dailyDamageUserIds: context.damageStatus?.userIds || []
+      dailyDamageUserIds: context.damageStatus?.userIds || [],
+      loginIntervalMs: config.loginIntervalMs,
+      loginPointReloginShortcutContext: loginPointReloginShortcutDecisionContext(atMs)
     };
     const statePatch = realtimePersistenceState();
     decisionWorker.decide(currentState, workerOptions, context, statePatch)
@@ -4520,7 +4543,9 @@ async function runReadOnlyCanary(config, options = {}) {
                   nowMs: atMs,
                   controlMode,
                   combatEnabled: config.combatEnabled,
-                  remoteProfitBatch: plannerContext?.remoteProfitBatch || null
+                  remoteProfitBatch: plannerContext?.remoteProfitBatch || null,
+                  loginIntervalMs: config.loginIntervalMs,
+                  loginPointReloginShortcutContext: loginPointReloginShortcutDecisionContext(atMs)
                 });
                 lastDecisionAtMs = atMs;
                 publishFullDecision(decision, currentState, atMs);

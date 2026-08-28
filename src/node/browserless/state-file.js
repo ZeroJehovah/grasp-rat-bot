@@ -63,6 +63,12 @@ function defaultBrowserlessState() {
       pendingLoginRecovery: null,
       recoveredFromExitAttemptId: '',
       lastLoginAt: '',
+      loginPointReloginShortcut: {
+        dayKey: '',
+        dayCount: 0,
+        lastTriggeredAt: 0,
+        lastSummary: null
+      },
       restartDrain: null,
       currentAction: null,
       lastRun: null,
@@ -315,6 +321,16 @@ function updateBrowserlessStateFile(file, patch, options = {}) {
   return writeBrowserlessStateFile(file, updated);
 }
 
+function normalizeLoginPointReloginShortcut(value) {
+  const source = isPlainObject(value) ? value : {};
+  return {
+    dayKey: String(source.dayKey || ''),
+    dayCount: Math.max(0, Math.round(Number(source.dayCount || 0)) || 0),
+    lastTriggeredAt: Math.max(0, Math.round(Number(source.lastTriggeredAt || 0)) || 0),
+    lastSummary: isPlainObject(source.lastSummary) ? cloneJson(source.lastSummary) : null
+  };
+}
+
 function normalizeBrowserlessState(state, file = '') {
   const normalized = mergeState(defaultBrowserlessState(), state || {});
   normalized.schemaVersion = SCHEMA_VERSION;
@@ -339,6 +355,9 @@ function normalizeBrowserlessState(state, file = '') {
   );
   normalized.runner.recoveredFromExitAttemptId = boundedRecoveryAttemptId(
     normalized.runner.recoveredFromExitAttemptId
+  );
+  normalized.runner.loginPointReloginShortcut = normalizeLoginPointReloginShortcut(
+    normalized.runner.loginPointReloginShortcut
   );
   normalized.lastKnown = normalizeBrowserlessLastKnown(
     normalized.lastKnown,

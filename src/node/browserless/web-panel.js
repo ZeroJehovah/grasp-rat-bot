@@ -1577,6 +1577,7 @@ function renderBrowserlessWebPanel() {
       'dynamic-profit-threshold-wait': '当日时间充裕，动态收益门槛生效，等待更高收益目标',
       'outside-center-hard-boundary-leave': '已超出中心区 1300 米硬边界且无大额金币目标，立即退出',
       'outside-center-idle-timeout-leave': '超出中心区等待 3 分钟仍无收益，退出后重连',
+      'login-point-relogin-shortcut-leave': '登录点距离目标更近，退出重登以缩短接近距离',
       'wait-for-full-stamina-and-hp': '等待血量和体力恢复',
       'combat-target-frame-gap-hold': '战斗目标短暂缺帧，保持交战状态',
       'realtime-control-released': '当前没有需要实时接管的战斗或避险动作，等待常规规划',

@@ -12183,6 +12183,180 @@ async function runSelfTest() {
       want: 'no-profitable-candidate|wait|no-profitable-candidate|179999|leave|safety|outside-center-idle-timeout-leave|true|30000|180000|1000|outside-center-idle-timeout-leave|true|30000'
     },
     {
+      // Reconstruction of the 2026-08-28 00:11 CST chase that lost a drop-179
+      // AFK player 1517m away while the login point sat 835m from the same
+      // target. Coordinates, drop and login point are the logged values.
+      name: 'browserless decision relogs when the login point is materially closer than the current approach start',
+      got: (() => {
+        const nowMs = 1000000;
+        const self = {
+          entity_id: 1,
+          user_id: 7,
+          name: 'self',
+          x: -21493,
+          y: -60138,
+          hp: 100,
+          max_hp: 100,
+          stamina_5s_remaining_milli: 10000,
+          stamina_5s_limit_milli: 10000
+        };
+        const state = {
+          userId: 7,
+          realtime: { tick: 60, frameAgeMs: 100, self, entities: [self], bullets: [], coinDrops: [] },
+          fallback: { tick: 60, frameAgeMs: 100, entities: [], coinDrops: [], messages: [] }
+        };
+        const baseOptions = {
+          nowMs,
+          controlMode: 'profit-live',
+          combatEnabled: false,
+          singleCoinBaitEnabled: false,
+          browserlessCenterActivityRadiusCm: 1000000,
+          finalActionArbitrationHoldMs: 0,
+          opportunitySwitchConfirmFrames: 1,
+          opportunitySwitchMargin: 0,
+          opportunitySwitchRelativeMargin: 0,
+          remoteProfitBatch: {
+            generation: 1,
+            source: 'gap-http',
+            observedAtMs: nowMs - 5000,
+            expiresAtMs: nowMs + 200000,
+            candidates: [{
+              userId: 6502,
+              name: 'afk-target',
+              x: 87010,
+              y: 45872,
+              hp: 100,
+              drop: 179,
+              active: false,
+              classification: 'high-drop-afk',
+              expectedReward: 179,
+              staminaCost: 1000,
+              baseScore: 10,
+              adjustedScore: 10
+            }],
+            realtimeSupersededIds: [],
+            missSuppressedIds: []
+          }
+        };
+        const shortcutContext = {
+          sessionId: 'shortcut-self-test',
+          dayKey: '2026-08-28',
+          entryLoginPoint: { x: 6023, y: 66244 },
+          safetyLoginPoint: { x: 6023, y: 66244 },
+          entryLoginAtMs: nowMs - 600000,
+          lastLoginAtMs: nowMs - 600000,
+          loginPointSafety: { ok: true, checkedAtMs: nowMs - 20000 },
+          snapshotEdgeEnabled: true,
+          sourceIpProbeReusable: true,
+          dayCount: 0,
+          lastTriggeredAt: 0
+        };
+        // Without the context the bot reproduces the logged behaviour: it walks.
+        const logged = buildBrowserlessDecision(state, {}, baseOptions);
+        const stateful = {};
+        const decision = buildBrowserlessDecision(state, stateful, {
+          ...baseOptions,
+          loginPointReloginShortcutContext: shortcutContext
+        });
+        // The per-session budget is 1, so the same session cannot oscillate.
+        const repeat = buildBrowserlessDecision(state, stateful, {
+          ...baseOptions,
+          nowMs: nowMs + 1000,
+          loginPointReloginShortcutContext: shortcutContext
+        });
+        // UC-004: an unsatisfied login interval keeps the approach.
+        const beforeInterval = buildBrowserlessDecision(state, {}, {
+          ...baseOptions,
+          loginPointReloginShortcutContext: {
+            ...shortcutContext,
+            entryLoginAtMs: nowMs - 59000,
+            lastLoginAtMs: nowMs - 59000
+          }
+        });
+        const disabled = buildBrowserlessDecision(state, {}, {
+          ...baseOptions,
+          loginPointReloginShortcutEnabled: false,
+          loginPointReloginShortcutContext: shortcutContext
+        });
+        const safety = evaluateBrowserlessSafety(state, { decision, nowMs });
+        const plan = browserlessLoopPlan(
+          { ok: true, canary: { runId: 'shortcut-self-test', safety: { event: safety } } },
+          { once: false, loopDelayMs: 30000 }
+        );
+        return [
+          logged.action.kind,
+          decision.kind,
+          decision.band,
+          decision.reason,
+          decision.action.reloginDelayMs,
+          decision.action.target?.userId,
+          decision.loginPointReloginShortcut.distanceCurrentCm,
+          decision.loginPointReloginShortcut.distanceLoginCm,
+          decision.loginPointReloginShortcut.gainCm,
+          decision.loginPointReloginShortcut.channel,
+          decision.loginPointReloginShortcut.netGainMs,
+          safety.reason,
+          safety.shouldLeave,
+          safety.detail.decision.loginPointShortcut?.gainCm,
+          plan.reason,
+          plan.delayMs,
+          repeat.action.kind,
+          repeat.loginPointReloginShortcut.blockReason,
+          beforeInterval.action.kind,
+          beforeInterval.loginPointReloginShortcut.blockReason,
+          disabled.action.kind,
+          disabled.loginPointReloginShortcut.blockReason
+        ].join('|');
+      })(),
+      want: [
+        'seek-remote-player',
+        'leave|safety|login-point-relogin-shortcut-leave|1000|6502',
+        '151694|83510|68184|immediate-high-self-hp|59773',
+        'login-point-relogin-shortcut-leave|true|68184',
+        'login-point-relogin-shortcut-leave|1000',
+        'seek-remote-player|session-limit',
+        'seek-remote-player|login-cooldown',
+        'seek-remote-player|disabled'
+      ].join('|')
+    },
+    {
+      name: 'browserless state file carries the login-point relogin shortcut day budget',
+      got: (() => {
+        const fresh = defaultBrowserlessState();
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-login-shortcut-'));
+        const file = path.join(dir, 'state.json');
+        updateBrowserlessStateFile(file, {
+          runner: {
+            loginPointReloginShortcut: {
+              dayKey: '2026-08-28',
+              dayCount: '3',
+              lastTriggeredAt: 1756339879527.4,
+              lastSummary: { gainCm: 68184 }
+            }
+          }
+        }, { updatedAt: '2026-08-28T00:11:19.527Z' });
+        const carried = readBrowserlessStateFile(file);
+        updateBrowserlessStateFile(file, {
+          runner: { loginPointReloginShortcut: { dayCount: -5, lastTriggeredAt: 'x', lastSummary: 'x' } }
+        }, { updatedAt: '2026-08-28T00:12:19.527Z' });
+        const invalid = readBrowserlessStateFile(file);
+        fs.rmSync(dir, { recursive: true, force: true });
+        return [
+          fresh.runner.loginPointReloginShortcut.dayKey === '',
+          fresh.runner.loginPointReloginShortcut.dayCount,
+          fresh.runner.loginPointReloginShortcut.lastSummary === null,
+          carried.runner.loginPointReloginShortcut.dayKey,
+          carried.runner.loginPointReloginShortcut.dayCount,
+          carried.runner.loginPointReloginShortcut.lastTriggeredAt,
+          carried.runner.loginPointReloginShortcut.lastSummary.gainCm,
+          invalid.runner.loginPointReloginShortcut.dayCount,
+          invalid.runner.loginPointReloginShortcut.lastTriggeredAt,
+          invalid.runner.loginPointReloginShortcut.lastSummary === null
+        ].join('|');
+      })(),
+      want: 'true|0|true|2026-08-28|3|1756339879527|68184|0|0|true'
+    },
+    {
       name: 'browserless center hard boundary permits only large coins beyond 1300m',
       got: (() => {
         const options = {
@@ -38561,12 +38735,13 @@ async function runSelfTest() {
           panelText.includes("'action-settlement-stalled': '非战斗移动指令未产生位置变化，正在重连'"),
           panelText.includes("'outside-center-hard-boundary-leave': '已超出中心区 1300 米硬边界且无大额金币目标，立即退出'"),
           panelText.includes("'outside-center-idle-timeout-leave': '超出中心区等待 3 分钟仍无收益，退出后重连'"),
+          panelText.includes("'login-point-relogin-shortcut-leave': '登录点距离目标更近，退出重登以缩短接近距离'"),
           panelText.includes("return 'WS实时位置'"),
           panelText.includes("return 'WS状态帧'"),
           panelText.includes(BROWSERLESS_WEB_PANEL_VERSION)
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|true|true|true'
+      want: 'true|true|true|true|true|true|true|true|true'
     },
     {
       name: 'browserless compact exit preserves trigger hp evidence',

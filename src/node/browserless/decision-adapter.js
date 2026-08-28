@@ -136,6 +136,10 @@ const {
   activeCoinPickupCompetitionCore
 } = require('../../strategy/coin-competition');
 const { updateOutsideCenterIdleCore } = require('../../strategy/outside-center-idle');
+const {
+  commitLoginPointReloginShortcutCore,
+  evaluateLoginPointReloginShortcutCore
+} = require('../../strategy/login-point-relogin-shortcut');
 const { recoveryPriorityDecision } = require('../../strategy/recovery-profit-priority');
 const { secondaryCombatExitPolicy } = require('../../strategy/dual-target-policy');
 const {
@@ -14296,6 +14300,117 @@ function buildOutsideCenterIdleTimeoutLeaveDecision(input, outsideCenterIdle, op
   };
 }
 
+// A snapshot-sourced approach target refreshes about every 30s while decisions
+// run about once a second, so consecutive decide calls carry identical
+// coordinates even for a player who is walking. The stationary gate therefore
+// compares against an anchor that is at least MIN_AGE old, and re-anchors once
+// the sample leaves the window.
+const LOGIN_POINT_RELOGIN_SHORTCUT_SAMPLE_MIN_AGE_MS = 20000;
+const LOGIN_POINT_RELOGIN_SHORTCUT_SAMPLE_WINDOW_MS = 120000;
+const LOGIN_POINT_RELOGIN_SHORTCUT_SAMPLE_LIMIT = 32;
+
+// The shortcut only ever replaces how an approach the planner already chose is
+// executed. Anything with real authority - a hard gate, combat, recovery, a coin
+// at our feet - wins the first arbitration pass and never reaches this test.
+function loginPointReloginShortcutApproachTarget(action) {
+  if (!action || action.combat) return null;
+  const kind = String(action.kind || '');
+  if (kind !== 'seek-enemy' && kind !== 'seek-remote-player') return null;
+  const band = String(action.finalCandidate?.priorityBand || action.band || '');
+  if (band !== 'profit') return null;
+  const target = action.target || null;
+  if (!target || !Number.isFinite(Number(target.x)) || !Number.isFinite(Number(target.y))) return null;
+  // A target that is moving can close the gap on its own, and paying the relogin
+  // overhead against a mover risks arriving at a position it has left.
+  if (target.moving === true || target.active === true || target.recentlyMoved === true) return null;
+  return target;
+}
+
+function loginPointReloginShortcutTargetSample(stateful, targetKey, target, nowMs) {
+  if (!targetKey || !target) return { previousPosition: null, sampleAgeMs: null };
+  const x = Number(target.x);
+  const y = Number(target.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return { previousPosition: null, sampleAgeMs: null };
+  const samples = stateful.loginPointReloginShortcutTargetSamples
+    || (stateful.loginPointReloginShortcutTargetSamples = {});
+  const sample = samples[targetKey];
+  const ageMs = sample ? nowMs - Number(sample.at) : null;
+  if (ageMs === null || !(ageMs >= 0) || ageMs > LOGIN_POINT_RELOGIN_SHORTCUT_SAMPLE_WINDOW_MS) {
+    for (const [key, item] of Object.entries(samples)) {
+      if (!item || !(nowMs - Number(item.at) <= LOGIN_POINT_RELOGIN_SHORTCUT_SAMPLE_WINDOW_MS)) delete samples[key];
+    }
+    const keys = Object.keys(samples);
+    if (keys.length >= LOGIN_POINT_RELOGIN_SHORTCUT_SAMPLE_LIMIT) {
+      const oldest = keys.sort((a, b) => Number(samples[a]?.at || 0) - Number(samples[b]?.at || 0))[0];
+      if (oldest) delete samples[oldest];
+    }
+    samples[targetKey] = { x, y, at: nowMs };
+    return { previousPosition: null, sampleAgeMs: null };
+  }
+  if (ageMs < LOGIN_POINT_RELOGIN_SHORTCUT_SAMPLE_MIN_AGE_MS) {
+    return { previousPosition: null, sampleAgeMs: ageMs };
+  }
+  return { previousPosition: { x: sample.x, y: sample.y }, sampleAgeMs: ageMs };
+}
+
+function evaluateLoginPointReloginShortcutForAction(input, stateful, action, options = {}) {
+  const context = options.loginPointReloginShortcutContext || {};
+  const nowMs = Number.isFinite(Number(input?.nowMs)) ? Number(input.nowMs) : Date.now();
+  const target = loginPointReloginShortcutApproachTarget(action);
+  const targetKey = target ? String(target.userId ?? target.entityId ?? '') : '';
+  const sample = loginPointReloginShortcutTargetSample(stateful, targetKey, target, nowMs);
+  const result = evaluateLoginPointReloginShortcutCore(
+    stateful.loginPointReloginShortcut || null,
+    {
+      nowMs,
+      sessionId: String(context.sessionId || ''),
+      dayKey: String(context.dayKey || ''),
+      self: input?.self || null,
+      target,
+      targetKind: target ? 'enemy' : '',
+      targetKey,
+      targetPreviousPosition: sample.previousPosition,
+      entryLoginPoint: context.entryLoginPoint || null,
+      safetyLoginPoint: context.safetyLoginPoint || null,
+      entryLoginAtMs: context.entryLoginAtMs ?? null,
+      lastLoginAtMs: context.lastLoginAtMs ?? null,
+      loginPointSafety: context.loginPointSafety || null,
+      snapshotEdgeEnabled: context.snapshotEdgeEnabled,
+      sourceIpProbeReusable: context.sourceIpProbeReusable,
+      dayCount: context.dayCount,
+      lastTriggeredAt: context.lastTriggeredAt
+    },
+    options
+  );
+  stateful.loginPointReloginShortcut = result.state;
+  return {
+    ...result,
+    target,
+    summary: { ...result.summary, targetSampleAgeMs: sample.sampleAgeMs }
+  };
+}
+
+function buildLoginPointReloginShortcutLeaveDecision(input, shortcut) {
+  if (!shortcut?.shouldRelogin || !input?.self || !shortcut.target) return null;
+  return {
+    kind: 'leave',
+    // `safety` is what the safety controller accepts as a voluntary leave
+    // (`band === 'safety' && shouldLeave`); the hard gate below is what makes it
+    // preempt the approach it replaces, so the band never has to be `exit`.
+    band: 'safety',
+    reason: 'login-point-relogin-shortcut-leave',
+    shouldLeave: true,
+    stopMotion: true,
+    // The UC-004 login interval is already satisfied before the shortcut can
+    // fire, so the runner reconnects on its fast path instead of idling out the
+    // ordinary loop delay and giving the saving back.
+    reloginDelayMs: 1000,
+    self: summarizeTarget(input.self),
+    target: cloneJson(shortcut.target),
+    loginPointShortcut: cloneJson(shortcut.summary)
+  };
+}
+
 function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const input = buildBrowserlessStrategyInput(state, options, stateful);
   observePostAttackCoinBaseline(input, stateful, {
@@ -14912,6 +15027,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   let action = { kind: 'wait', band: 'wait', reason: '' };
   let finalSelection = null;
   let outsideCenterIdle = null;
+  let loginPointReloginShortcut = null;
   let centerHardBoundary = null;
   if (!input.self) {
     reason = 'missing-realtime-self';
@@ -15042,6 +15158,32 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       ].filter(Boolean);
       finalSelection = selectFinalActionCandidateCore(candidates);
       action = finalSelection?.action || action;
+    }
+    // Third pass. The shortcut is evaluated against the action that already won
+    // arbitration, never injected as a competing plan: a `leave` candidate maps
+    // to the `exit` band and would otherwise outrank every profit and recovery
+    // candidate in the ladder regardless of what the bot was doing.
+    loginPointReloginShortcut = evaluateLoginPointReloginShortcutForAction(input, stateful, action, options);
+    if (loginPointReloginShortcut.shouldRelogin) {
+      const shortcutLeaveAction = buildLoginPointReloginShortcutLeaveDecision(input, loginPointReloginShortcut);
+      if (shortcutLeaveAction) {
+        candidates = [
+          candidate(shortcutLeaveAction, 6, 'login-point-relogin-shortcut', true, { riskScore: 100 }),
+          ...candidates
+        ].filter(Boolean);
+        finalSelection = selectFinalActionCandidateCore(candidates);
+        action = finalSelection?.action || action;
+        if (action?.reason === 'login-point-relogin-shortcut-leave') {
+          stateful.loginPointReloginShortcut = commitLoginPointReloginShortcutCore(
+            loginPointReloginShortcut.state,
+            {
+              nowMs: input.nowMs,
+              sessionId: String(options.loginPointReloginShortcutContext?.sessionId || ''),
+              dayKey: String(options.loginPointReloginShortcutContext?.dayKey || '')
+            }
+          );
+        }
+      }
     }
     kind = action.finalCandidate?.switchReason === 'best-eligible-profit'
       ? 'profit-candidate'
@@ -15193,6 +15335,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     finalSelection,
     whitelistSafety: summarizeWhitelistSafetyState(input, incomingThreatAssessment, safetyContextOptions),
     recoveryEngagedThreat: recoveryEngagedThreat?.suppressed ? recoveryEngagedThreat : null,
+    loginPointReloginShortcut: cloneJson(loginPointReloginShortcut?.summary || null),
     input: {
       self: summarizeTarget(input.self),
       stamina: input.stamina,
@@ -15291,6 +15434,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       legacyStateMigration: cloneJson(stateful.legacyStateMigration || null),
       singleCoinBait: cloneJson(stateful.singleCoinBait || null),
       outsideCenterIdle: cloneJson(stateful.outsideCenterIdle || null),
+      loginPointReloginShortcut: cloneJson(stateful.loginPointReloginShortcut || null),
       recoveryContactGuard: cloneJson(stateful.recoveryContactGuard || null)
     }
   };

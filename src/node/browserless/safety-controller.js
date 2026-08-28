@@ -100,6 +100,7 @@ function decisionSafetyDetail(decision) {
     reloginDelayMs: action.reloginDelayMs ?? action.staminaBudgetExit?.reloginDelayMs ?? null,
     staminaBlocked: action.staminaBlocked || null,
     recoverySafety: action.recoverySafety || null,
+    loginPointShortcut: action.loginPointShortcut || null,
     combat: (combat || action.combatExit) ? {
       startedAt: combat?.startedAt || '',
       durationMs: combat?.durationMs ?? null,

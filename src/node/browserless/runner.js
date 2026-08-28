@@ -136,7 +136,7 @@ const {
   restartDrainRetainsCommittedDecision
 } = require('./restart-readiness');
 const { browserlessRuntimeRevision, browserlessRuntimeRevisionStatus } = require('./runtime-revision');
-const { runSnapshotEdgeSelfTest } = require('./snapshot-edge-wait');
+const { runSnapshotEdgeSelfTest, utc8DayKey } = require('./snapshot-edge-wait');
 const {
   REQUEST_CLASSES,
   runRequestRatePolicySelfTest
@@ -974,6 +974,38 @@ function sourceIpPreflightCanReuse(state = {}) {
   return reusableSourceIpPreflight(state);
 }
 
+// Per-day budget for the login-point relogin shortcut. The per-session budget
+// lives in the decision adapter's stateful block and dies with the session; the
+// day counter and the cooldown have to survive the exit the shortcut performs,
+// so they are carried through the state file.
+function browserlessLoginPointReloginShortcutCounters(state = {}, nowMs = Date.now()) {
+  const stored = state?.runner?.loginPointReloginShortcut || {};
+  const dayKey = utc8DayKey(nowMs);
+  const sameDay = String(stored.dayKey || '') === dayKey;
+  return {
+    dayKey,
+    dayCount: sameDay ? Math.max(0, Math.round(Number(stored.dayCount || 0))) : 0,
+    lastTriggeredAt: sameDay ? Math.max(0, Number(stored.lastTriggeredAt || 0)) : 0
+  };
+}
+
+function browserlessLoginPointReloginShortcutContext(state = {}, config = {}, nowMs = Date.now()) {
+  const safetyPoint = state?.loginPointSafety?.point || null;
+  const safetyPointUsable = Number.isFinite(Number(safetyPoint?.x))
+    && Number.isFinite(Number(safetyPoint?.y));
+  return {
+    ...browserlessLoginPointReloginShortcutCounters(state, nowMs),
+    safetyLoginPoint: safetyPointUsable ? { x: Number(safetyPoint.x), y: Number(safetyPoint.y) } : null,
+    lastLoginAtMs: parseIsoTimeMs(state?.runner?.lastLoginAt) || null,
+    loginPointSafety: {
+      ok: state?.loginPointSafety?.ok === true,
+      checkedAtMs: parseIsoTimeMs(state?.loginPointSafety?.checkedAt) || null
+    },
+    snapshotEdgeEnabled: config.snapshotEdgeEnabled === true,
+    sourceIpProbeReusable: Boolean(sourceIpPreflightCanReuse(state))
+  };
+}
+
 function staminaExhaustedThresholdMs(config = {}) {
   return Math.max(0, Number(
     config.staminaExhaustedBelowMs
@@ -1636,6 +1668,13 @@ function browserlessLoopPlan(result, config = {}) {
   if (safetyReason === 'no-self') return resume('no-self');
   if (/websocket unexpected response 403|http 403|missing-manual-session|login-point-bootstrap-failed/i.test(error)) {
     return resume(error || 'auth-or-bootstrap-retry');
+  }
+  // The shortcut leave only fires when the login point is materially closer to
+  // an already-chosen approach target and the UC-004 login interval is already
+  // satisfied. Falling through to the ordinary loop delay would hand the whole
+  // distance saving back, so it takes the fast path ahead of `cycle-complete`.
+  if (safetyReason === 'login-point-relogin-shortcut-leave') {
+    return resumeFast('login-point-relogin-shortcut-leave');
   }
   if (result.ok) return resume('cycle-complete');
   if (safetyReason === 'stamina-budget-coin-leave' || safetyReason === 'stamina-exhausted-leave') {
@@ -4955,6 +4994,11 @@ async function runBrowserlessRunner(config, deps = {}) {
         bypassPreLoginSafetyReason,
         precheckedSnapshotSafety,
         transportRecoveryEscalation,
+        loginPointReloginShortcutContext: browserlessLoginPointReloginShortcutContext(
+          stateBeforeCanary,
+          config,
+          now()
+        ),
         onSnapshotSafety: recordSnapshotSafetyProgress,
         onSnapshotPayload: observeLoginSnapshotPayload,
         onSnapshotAuditPayload: recordSnapshotAudit,
@@ -5238,6 +5282,24 @@ async function runBrowserlessRunner(config, deps = {}) {
         elapsedMs: Math.max(0, now() - activeTransportRecovery.startedAtMs),
         exitAttemptId: canary?.safety?.leavePending?.exitAttemptId || nextPendingExit?.exitAttemptId || ''
       });
+    }
+
+    if (canary?.safety?.event?.reason === 'login-point-relogin-shortcut-leave') {
+      const triggeredAtMs = now();
+      const counters = browserlessLoginPointReloginShortcutCounters(
+        liveState || stateBeforeCanary,
+        triggeredAtMs
+      );
+      patchLiveState({
+        runner: {
+          loginPointReloginShortcut: {
+            dayKey: counters.dayKey,
+            dayCount: counters.dayCount + 1,
+            lastTriggeredAt: triggeredAtMs,
+            lastSummary: canary.safety.event.detail?.decision?.loginPointShortcut || null
+          }
+        }
+      }, { updatedAt: new Date(triggeredAtMs).toISOString() });
     }
 
     const loopPlan = browserlessLoopPlan(result, config);
