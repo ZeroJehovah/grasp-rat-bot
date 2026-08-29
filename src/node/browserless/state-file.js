@@ -200,6 +200,11 @@ function isPlainObject(value) {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
+// Every observation snapshot must replace its predecessor wholesale. A deep
+// merge would keep fields the newer observation does not carry, so an enemy
+// mission's name/hp/drop would survive onto the next coin mission and the panel
+// would report a player as the current primary target while the bot is only
+// collecting coins.
 function shouldReplaceStatePath(pathKey) {
   return pathKey === 'runner.currentAction'
     || pathKey === 'runner.lastRun'
@@ -210,6 +215,8 @@ function shouldReplaceStatePath(pathKey) {
     || pathKey === 'current.action'
     || pathKey === 'current.decision'
     || pathKey === 'current.decisionState'
+    || pathKey === 'current.profit'
+    || pathKey === 'current.combatSummary'
     || pathKey === 'network.sourceIpRisk'
     || pathKey === 'network.sourceIpPreflight'
     || pathKey === 'network.transportHealth'
@@ -222,8 +229,7 @@ function shouldReplaceStateObject(pathParts) {
 }
 
 function shouldReplaceLiveStatePath(pathKey) {
-  return shouldReplaceStatePath(pathKey)
-    || pathKey === 'current.combatSummary';
+  return shouldReplaceStatePath(pathKey);
 }
 
 function mergeState(base, patch, pathParts = []) {

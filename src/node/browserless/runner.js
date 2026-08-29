@@ -9078,6 +9078,151 @@ async function runBrowserlessRunnerSelfTest() {
       {}
     );
     const panelProfitHoldRoles = panelTargetRolesCore(panelProfitHoldCompact);
+    // A player profit mission carries name/hp/drop; the coin mission that
+    // replaces it carries none of those. Merging the two observations field by
+    // field would leave the player's identity on the coin, so the panel would
+    // report a player as the current primary target while the bot only collects
+    // coins. Both the live and persisted merge paths must replace wholesale.
+    const missionResidueBaseState = {
+      session: { userId: 7, sessionToken: 'panel-mission-residue-self-test-token' },
+      runner: { running: true },
+      current: { self: { userId: 7, name: 'self', x: 0, y: 0, hp: 100, maxHp: 100 } }
+    };
+    const missionResidueEnemyTarget = {
+      type: 'enemy',
+      userId: 5501,
+      name: 'residue-player',
+      authority: 'realtime',
+      x: 4400,
+      y: 0,
+      hp: 1,
+      maxHp: 100,
+      drop: 9,
+      distance: 4400,
+      active: false,
+      moving: false,
+      firing: false
+    };
+    const missionResidueCoinTarget = {
+      type: 'coin',
+      id: 265,
+      amount: 1,
+      authority: 'snapshot',
+      x: 10300,
+      y: 0,
+      distance: 10300
+    };
+    const missionResidueEnemyPatch = {
+      runner: { currentAction: { kind: 'move', band: 'profit', reason: 'seek-enemy', target: missionResidueEnemyTarget } },
+      current: {
+        action: { kind: 'move', band: 'profit', reason: 'seek-enemy', target: missionResidueEnemyTarget },
+        profit: {
+          mission: {
+            active: true,
+            key: 'enemy:5501',
+            type: 'enemy',
+            targetId: '5501',
+            navigationAuthority: 'realtime',
+            currentDistanceCm: 4400,
+            navigationTarget: missionResidueEnemyTarget
+          },
+          candidateCount: 3
+        },
+        combatSummary: {
+          target: null,
+          fireTarget: null,
+          profitMission: {
+            active: true,
+            key: 'enemy:5501',
+            type: 'enemy',
+            targetId: '5501',
+            navigationAuthority: 'realtime',
+            currentDistanceCm: 4400,
+            navigationTarget: missionResidueEnemyTarget
+          }
+        }
+      }
+    };
+    const missionResidueCoinPatch = {
+      runner: { currentAction: { kind: 'move', band: 'profit', reason: 'best-opportunity-coin', target: missionResidueCoinTarget } },
+      current: {
+        action: { kind: 'move', band: 'profit', reason: 'best-opportunity-coin', target: missionResidueCoinTarget },
+        profit: {
+          mission: {
+            active: true,
+            key: 'coin:id:265',
+            type: 'coin',
+            targetId: '265',
+            navigationAuthority: 'snapshot',
+            currentDistanceCm: 10300,
+            navigationTarget: missionResidueCoinTarget
+          },
+          candidateCount: 5
+        },
+        combatSummary: {
+          target: null,
+          fireTarget: null,
+          profitMission: {
+            active: true,
+            key: 'coin:id:265',
+            type: 'coin',
+            targetId: '265',
+            navigationAuthority: 'snapshot',
+            currentDistanceCm: 10300,
+            navigationTarget: missionResidueCoinTarget
+          }
+        }
+      }
+    };
+    const missionResidueLiveCompact = buildCompactBrowserlessStatus(
+      browserlessCompactStatusSource(mergeLiveState(
+        mergeLiveState(missionResidueBaseState, missionResidueEnemyPatch),
+        missionResidueCoinPatch
+      )),
+      {}
+    );
+    const missionResiduePersistedCompact = buildCompactBrowserlessStatus(
+      browserlessCompactStatusSource(mergeState(
+        mergeState(missionResidueBaseState, missionResidueEnemyPatch),
+        missionResidueCoinPatch
+      )),
+      {}
+    );
+    const missionResidueRoles = panelTargetRolesCore(missionResidueLiveCompact);
+    const missionResidueCoinOnly = target => Boolean(
+      target
+      && target.type === 'coin'
+      && String(target.id) === '265'
+      && target.amount === 1
+      && target.name === ''
+      && target.userId === null
+      && target.hp === null
+      && target.drop === null
+      && target.active === null
+      && target.moving === null
+      && target.firing === null
+    );
+    const missionResidueTest = {
+      ok: Boolean(
+        missionResidueLiveCompact.profit?.mission?.key === 'coin:id:265'
+        && missionResidueCoinOnly(missionResidueLiveCompact.profit?.mission?.navigationTarget)
+        && missionResidueCoinOnly(missionResidueLiveCompact.targets?.primary)
+        && missionResidueLiveCompact.targets?.secondary === null
+        && missionResidueCoinOnly(missionResidueLiveCompact.combat?.profitMission?.navigationTarget)
+        && missionResiduePersistedCompact.profit?.mission?.key === 'coin:id:265'
+        && missionResidueCoinOnly(missionResiduePersistedCompact.profit?.mission?.navigationTarget)
+        && missionResidueCoinOnly(missionResiduePersistedCompact.targets?.primary)
+        && missionResidueCoinOnly(missionResiduePersistedCompact.combat?.profitMission?.navigationTarget)
+        && missionResidueRoles.mode === 'primary-only'
+        && missionResidueCoinOnly(missionResidueRoles.primary)
+      ),
+      liveMissionKey: missionResidueLiveCompact.profit?.mission?.key || '',
+      livePrimaryName: missionResidueLiveCompact.targets?.primary?.name ?? null,
+      livePrimaryUserId: missionResidueLiveCompact.targets?.primary?.userId ?? null,
+      persistedPrimaryName: missionResiduePersistedCompact.targets?.primary?.name ?? null,
+      persistedPrimaryUserId: missionResiduePersistedCompact.targets?.primary?.userId ?? null,
+      rolesMode: missionResidueRoles.mode
+    };
     const panelAfkPresentationInitial = browserlessBattlePresentation(null, {
       kind: 'attack',
       band: 'profit',
@@ -9362,6 +9507,7 @@ async function runBrowserlessRunnerSelfTest() {
           && panelRecoveryRoles.secondary === null
           && panelProfitHoldCompact.targets?.primary?.id === 'hold-coin'
           && panelProfitHoldRoles.primary?.id === 'hold-coin'
+          && missionResidueTest.ok
           && remoteTargetActivityTextCore({ active: true }) === '活动玩家'
           && remoteTargetActivityTextCore({ active: false, moving: false, firing: false }) === '挂机玩家'
           && pageHtml.includes('>Drop排行</h2>')
@@ -9790,6 +9936,7 @@ async function runBrowserlessRunnerSelfTest() {
             lastAttemptAt: panelUnconfirmedRecoveryErrorCompact.exitRecovery.lastAttemptAt
           }
         },
+        missionResidueTest,
         panelDetailTest
       };
     } finally {
