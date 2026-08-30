@@ -12,6 +12,12 @@ const DEFAULT_SECONDARY_PRESSURE_MIN_SHOTS = 2;
 const DEFAULT_SECONDARY_PRESSURE_MAX_LAST_SHOT_AGE_MS = 750;
 const DEFAULT_INCOMING_PRESSURE_EVIDENCE_LEASE_MS = 2500;
 const DEFAULT_SECONDARY_RETENTION_WINDOW_MS = DEFAULT_INCOMING_PRESSURE_EVIDENCE_LEASE_MS;
+// 已经打出可归因伤害的同一场交战单独用一条更长的租约。对手用横向绕行拉开火力
+// 间隔时, 观测到的来弹间隔中位数只有约 1.3s, 但十分之一以上超过 4s, 基础
+// 2500ms 租约撑不过一个绕行周期, 于是一场连续交火被拆成多段, 每段都要重新吃
+// 伤害。这条更长的租约只作用于 own-damage 分支: 没打出伤害的陌生目标仍然严格
+// 走 2500ms/2501ms 边界。它只延长“不脱战”, 不授予追击。
+const DEFAULT_SECONDARY_OWN_DAMAGE_RETENTION_WINDOW_MS = 5000;
 const DEFAULT_SECONDARY_RETENTION_LOW_HP_THRESHOLD = COMBAT_CONSTANTS.LOW_HP_THRESHOLD;
 const DEFAULT_SECONDARY_RETENTION_ATTACK_RANGE_CM = COMBAT_CONSTANTS.ATTACK_RANGE;
 const DEFAULT_PRIMARY_FINISH_RACE_WINDOW_MS = 1800;
@@ -713,6 +719,16 @@ function secondaryFirePolicy(input = {}, options = {}) {
 // 会把一场本来能零伤害收掉的战斗拆成多次重新接触, 每次重新接触都要重新吃伤害。
 // 这条证据只延长“不脱战”, 不授予追击: 目标一旦离开攻击距离或者自身血量掉到脱离
 // 阈值, 证据立即失效, 交战按原有规则释放。
+function secondaryOwnDamageRetentionWindowMs(baseWindowMs, options = {}) {
+  const base = Math.max(1000, Number(baseWindowMs) || DEFAULT_SECONDARY_RETENTION_WINDOW_MS);
+  const configured = Number(options.secondaryOwnDamageRetentionWindowMs);
+  const extended = Number.isFinite(configured) && configured > 0
+    ? configured
+    : DEFAULT_SECONDARY_OWN_DAMAGE_RETENTION_WINDOW_MS;
+  // 更长的租约永远不会短于基础租约: 打出过伤害不应该反而更早脱战。
+  return Math.max(base, extended);
+}
+
 function secondaryOwnDamageRetentionEvidence(
   combatTargetState = null,
   nowMs = Date.now(),
@@ -744,7 +760,9 @@ function secondaryOwnDamageRetentionEvidence(
   const visible = context.targetVisible === true;
   const inRange = distance !== null && distance <= attackRange;
   const healthy = selfHp !== null && selfHp > lowHpThreshold;
-  const fresh = ageMs !== null && ageMs <= windowMs;
+  const baseWindowMs = Math.max(1000, Number(windowMs) || DEFAULT_SECONDARY_RETENTION_WINDOW_MS);
+  const effectiveWindowMs = secondaryOwnDamageRetentionWindowMs(baseWindowMs, options);
+  const fresh = ageMs !== null && ageMs <= effectiveWindowMs;
   const priorIncomingEvidence = context.priorIncomingEvidence !== false;
   const eligible = Boolean(enabled
     && priorIncomingEvidence
@@ -781,6 +799,8 @@ function secondaryOwnDamageRetentionEvidence(
     inRange,
     healthy,
     fresh,
+    baseWindowMs,
+    windowMs: effectiveWindowMs,
     priorIncomingEvidence
   };
 }
@@ -818,14 +838,23 @@ function secondaryRetentionPolicy(
   if (ownDamageProgress.eligible) {
     evidence.push({ type: 'own-damage-progress', at: ownDamageProgress.lastDamageAt });
   }
+  // own-damage 证据用它自己的更长租约, 其余证据仍然按基础租约判定。每条证据各自
+  // 对照自己的租约: 否则一条较新但已过基础租约的开火证据会盖住仍然有效的伤害
+  // 进度证据, 反而比没有伤害进度时更早脱战。
+  const leaseFor = type => (type === 'own-damage-progress' ? ownDamageProgress.windowMs : windowMs);
   evidence.sort((left, right) => right.at - left.at);
-  const latest = evidence[0] || null;
+  const qualifying = evidence.filter(item => (
+    Math.max(0, Number(nowMs) - item.at) <= leaseFor(item.type)
+  ));
+  const latest = qualifying[0] || evidence[0] || null;
   const ageMs = latest ? Math.max(0, Number(nowMs) - latest.at) : null;
-  const retained = Boolean(secondary && latest && ageMs <= windowMs);
+  const effectiveWindowMs = latest ? leaseFor(latest.type) : windowMs;
+  const retained = Boolean(secondary && qualifying.length > 0);
   return {
     secondary,
     retained,
-    windowMs,
+    windowMs: effectiveWindowMs,
+    baseWindowMs: windowMs,
     latestEvidenceAt: latest?.at || null,
     latestEvidenceType: latest?.type || '',
     ageMs,
@@ -840,6 +869,7 @@ function secondaryRetentionPolicy(
 
 module.exports = {
   DEFAULT_INCOMING_PRESSURE_EVIDENCE_LEASE_MS,
+  DEFAULT_SECONDARY_OWN_DAMAGE_RETENTION_WINDOW_MS,
   DEFAULT_SECONDARY_RETENTION_ATTACK_RANGE_CM,
   DEFAULT_SECONDARY_RETENTION_LOW_HP_THRESHOLD,
   DEFAULT_SECONDARY_RETENTION_WINDOW_MS,
@@ -871,5 +901,6 @@ module.exports = {
   secondaryClosePressurePolicy,
   secondaryFirePolicy,
   secondaryOwnDamageRetentionEvidence,
+  secondaryOwnDamageRetentionWindowMs,
   secondaryRetentionPolicy
 };

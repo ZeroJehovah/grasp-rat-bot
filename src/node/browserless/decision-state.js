@@ -134,6 +134,7 @@ function createInitialDecisionState(options = {}) {
     dropRaceObservations: asRecord(options.dropRaceObservations),
     dropRacePendingEvents: asArray(options.dropRacePendingEvents),
     combatTarget: cloneJson(options.combatTarget || null),
+    combatEngagementCarry: cloneJson(options.combatEngagementCarry || null),
     combatEngagements: asRecord(options.combatEngagements),
     combatMetricsByTarget: asRecord(options.combatMetricsByTarget),
     combatTargetSwitchGate: cloneJson(options.combatTargetSwitchGate || null),

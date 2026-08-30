@@ -110,12 +110,24 @@ function filterProfitCandidatesCore(candidates = [], thresholdContext = {}, opti
   });
   const eligible = annotated.filter(item => item.profitThresholdEligible);
   const filtered = annotated.filter(item => !item.profitThresholdEligible);
+  // `filtered` 只投影前 limit 条, 所以从日志看不出被截掉的那些是什么类型。
+  // 按类型计数补上这个缺口: 一个本该被评分的玩家从未进池时, 计数会直接暴露
+  // “候选里一个 enemy 都没有”。
+  const countsByType = {};
+  for (const item of annotated) {
+    const type = String(item?.type || 'unknown');
+    const bucket = countsByType[type] || (countsByType[type] = { raw: 0, eligible: 0, filtered: 0 });
+    bucket.raw += 1;
+    if (item.profitThresholdEligible) bucket.eligible += 1;
+    else bucket.filtered += 1;
+  }
   return {
     candidates: eligible,
     annotated,
     rawCount: annotated.length,
     eligibleCount: eligible.length,
     filteredCount: filtered.length,
+    countsByType,
     filtered: filtered.slice(0, limit).map(item => ({
       type: item.type || '',
       id: item.id ?? '',

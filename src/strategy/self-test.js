@@ -498,8 +498,23 @@ function runStrategyModuleSelfTests() {
     {},
     ownDamageContext
   );
-  const ownDamageExpiredAtLease = secondaryRetentionPolicy(
+  // own-damage 分支用它自己的更长租约 (5000ms): 打出过可归因伤害的同一场交战
+  // 不该因为对手绕行断火而脱战。2501ms 仍然保留, 5000ms 是边界内最后一帧,
+  // 5001ms 过期。没有伤害进度的证据仍然严格走 2500/2501ms 基础租约。
+  const ownDamageRetainedPastBaseLease = secondaryRetentionPolicy(
     { ...ownDamageSecondaryState, lastDamageAt: 9499 },
+    12000,
+    {},
+    ownDamageContext
+  );
+  const ownDamageRetainedAtOwnDamageLease = secondaryRetentionPolicy(
+    { ...ownDamageSecondaryState, lastDamageAt: 7000 },
+    12000,
+    {},
+    ownDamageContext
+  );
+  const ownDamageExpiredAtLease = secondaryRetentionPolicy(
+    { ...ownDamageSecondaryState, lastDamageAt: 6999 },
     12000,
     {},
     ownDamageContext
@@ -547,7 +562,18 @@ function runStrategyModuleSelfTests() {
       && ownDamageRetained.reason === 'secondary-own-damage-progress-grace'
       && ownDamageRetainedAtLease.retained === true
       && ownDamageRetainedAtLease.ageMs === 2500
+      && ownDamageRetainedPastBaseLease.retained === true
+      && ownDamageRetainedPastBaseLease.ageMs === 2501
+      && ownDamageRetainedPastBaseLease.windowMs === 5000
+      && ownDamageRetainedPastBaseLease.baseWindowMs === 2500
+      && ownDamageRetainedAtOwnDamageLease.retained === true
+      && ownDamageRetainedAtOwnDamageLease.ageMs === 5000
       && ownDamageExpiredAtLease.retained === false
+      // 伤害进度过了 5000ms 后不再是有效证据, 回落到基础租约下的开火证据,
+      // 而那条也已经过期 (3000ms > 2500ms), 所以整体脱战。
+      && ownDamageExpiredAtLease.ageMs === 3000
+      && ownDamageExpiredAtLease.latestEvidenceType === 'target-firing'
+      && ownDamageExpiredAtLease.windowMs === 2500
       && ownDamageExpiredAtLease.ownDamageProgress.reason === 'own-damage-progress-expired'
       && ownDamageLowHp.retained === false
       && ownDamageLowHp.ownDamageProgress.reason === 'self-hp-at-or-below-leave-threshold'

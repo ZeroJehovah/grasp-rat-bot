@@ -1448,6 +1448,84 @@ function assertDualTargetRuntimeRules() {
   assert.strictEqual(racePickupRadius.combat?.shooting?.wouldShoot, true);
 }
 
+// 续接只在 TTL 内一次性生效。捕获在上面的租约释放里核对; 这里核对消费侧: 同一
+// 对手在 TTL 内重建交战时继续同一场交火, 过期后仍然从零开始。
+function assertCombatEngagementCarryReuse(common, player, state) {
+  const carry = {
+    targetId: '8',
+    at: 4501,
+    reason: 'secondary-defensive-evidence-cleared',
+    firstHp: 100,
+    minHp: 84,
+    damageFromStart: 16,
+    lastDamageAt: 4200,
+    lastDamageAmount: 3,
+    acceptedShotsAtLastDamage: 5,
+    hasDamagedSelf: true,
+    lastSelfDamageAt: 4300,
+    incomingHitCount: 4,
+    requestSequenceBaseline: 11,
+    confirmationSequenceBaseline: 9,
+    motionSamples: [],
+    secondaryDispatchTimes: [4000, 4200, 4400]
+  };
+  const reengage = (carryState, nowMs) => {
+    const adapter = createBrowserlessDecisionAdapter(common);
+    adapter.patchState({ combatEngagementCarry: carryState });
+    const decision = decide(
+      adapter,
+      state(fullStaminaSelf({ hp: 100 }), [player({ drop: 1, firing: true })]),
+      nowMs,
+      null,
+      common
+    );
+    return { decision, state: adapter.getState() };
+  };
+
+  const reused = reengage({ ...carry }, 6000);
+  assert.strictEqual(reused.decision.combat?.target?.userId, 8);
+  assert.strictEqual(reused.decision.combat?.target?.combatRole, 'secondary');
+  assert.strictEqual(reused.decision.combat?.engagementCarry?.reason, 'secondary-defensive-evidence-cleared');
+  assert.strictEqual(reused.decision.combat?.engagementCarry?.ageMs, 1499);
+  assert.strictEqual(reused.decision.combat?.engagementCarry?.damageFromStart, 16);
+  assert.strictEqual(reused.decision.combat?.engagementCarry?.lastDamageAt, 4200);
+  assert.strictEqual(reused.state.combatTarget?.damageFromStart, 16);
+  assert.strictEqual(reused.state.combatTarget?.hasDamagedSelf, true);
+  assert.strictEqual(reused.state.combatTarget?.incomingHitCount, 4);
+  assert.strictEqual(reused.state.combatTarget?.lastDamageAt, 4200);
+  assert.deepStrictEqual(reused.state.combatTarget?.secondaryDispatchTimes, [4000, 4200, 4400]);
+  // 归属基线一起恢复, 否则上一段发出的请求会被当成这一段的确认命中。
+  assert.strictEqual(reused.state.combatMetrics?.requestSequenceBaseline, 11);
+  assert.strictEqual(reused.state.combatMetrics?.confirmationSequenceBaseline, 9);
+  // 单次消费: 读走之后状态里不再留存, 下一次重建不会二次继承。
+  assert.strictEqual(reused.state.combatEngagementCarry, null);
+
+  const expired = reengage({ ...carry, at: 0 }, 60000);
+  assert.strictEqual(expired.decision.combat?.target?.userId, 8);
+  assert.strictEqual(expired.decision.combat?.engagementCarry ?? null, null);
+  assert.strictEqual(expired.state.combatEngagementCarry, null);
+  assert.strictEqual(expired.state.combatTarget?.damageFromStart, 0);
+  assert.strictEqual(expired.state.combatTarget?.hasDamagedSelf, false);
+  assert.strictEqual(expired.state.combatTarget?.incomingHitCount, 0);
+
+  // 实时控制跑在 Worker 里时, 捕获和消费都发生在 Worker 自己的适配器上, 但主适配器
+  // 会把 Worker 的持久化投影回灌进来。续接记录必须在这个投影里, 否则主进程侧的
+  // 状态、状态接口和后续 statePatch 都看不到它; 消费后的 null 也必须过桥, 否则主
+  // 适配器里的旧镜像会在下一轮把同一份记录重新注入, 变成可重复继承。
+  const bridge = createBrowserlessDecisionAdapter(common);
+  bridge.patchState({ combatEngagementCarry: { ...carry } });
+  const bridged = bridge.getRealtimePersistenceState();
+  assert.strictEqual(bridged.combatEngagementCarry?.targetId, '8');
+  assert.strictEqual(bridged.combatEngagementCarry?.damageFromStart, 16);
+  assert.strictEqual(bridged.combatEngagementCarry?.requestSequenceBaseline, 11);
+  assert.ok('combatEngagementCarry' in bridged);
+  const mirror = createBrowserlessDecisionAdapter(common);
+  mirror.patchState(bridged);
+  assert.strictEqual(mirror.getState().combatEngagementCarry?.targetId, '8');
+  mirror.patchState({ ...bridge.getState(), combatEngagementCarry: null });
+  assert.strictEqual(mirror.getState().combatEngagementCarry, null);
+}
+
 function assertHpSegmentedSecondaryEngagementRules() {
   const common = {
     userId: 7,
@@ -1716,18 +1794,34 @@ function assertHpSegmentedSecondaryEngagementRules() {
   assert.strictEqual(releasedAfterBoundary.combat?.target?.userId, 42);
   assert.strictEqual(releasedAfterBoundary.combat?.secondaryTargetRelease?.reason, 'secondary-defensive-evidence-cleared');
   assert.strictEqual(releasedAfterBoundary.stateful?.profitMission?.targetId, '42');
-  assert.strictEqual(releasedAfterBoundary.stateful?.combatEngagements?.['8'], undefined);
-  assert.strictEqual(releasedAfterBoundary.stateful?.combatMetricsByTarget?.['8'], undefined);
-  assert.notStrictEqual(String(releasedAfterBoundary.stateful?.combatTarget?.id || ''), '8');
-  assert.notStrictEqual(String(releasedAfterBoundary.stateful?.combatAim?.targetId || ''), '8');
-  assert.strictEqual(releasedAfterBoundary.stateful?.combatHpObservationTargetId === '8', false);
-  assert.ok(releasedAfterBoundary.stateful?.combatTargetSwitchGate == null);
-  assert.ok(releasedAfterBoundary.stateful?.combatTargetSwitchHistory == null);
   assert.strictEqual(releasedAfterBoundary.stateful?.profitEscortContinuity, null);
   assert.strictEqual(
     releasedAfterBoundary.stateful?.profitEscortContinuityLastRelease?.releaseReason,
     'secondary-defensive-evidence-cleared'
   );
+  // 脱战清理必须从真实决策状态核对。`decision.stateful` 是固定投影, 只发布
+  // profitMission/护航等少数字段, 从不携带 combatEngagements 一类的战斗状态,
+  // 所以对它断言 `?.['8'] === undefined` 永远为真而证明不了清理发生过。
+  const releasedState = retentionAdapter.getState();
+  assert.strictEqual(releasedState.combatEngagements?.['8'], undefined);
+  assert.strictEqual(releasedState.combatMetricsByTarget?.['8'], undefined);
+  assert.notStrictEqual(String(releasedState.combatTarget?.id || ''), '8');
+  assert.notStrictEqual(String(releasedState.combatAim?.targetId || ''), '8');
+  assert.notStrictEqual(String(releasedState.combatMetrics?.targetId || ''), '8');
+  assert.strictEqual(releasedState.combatHpObservationTargetId === '8', false);
+  assert.ok(releasedState.combatTargetSwitchGate == null);
+  assert.ok(releasedState.combatTargetSwitchHistory == null);
+  // 脱战清理会把伤害进度和开火基线一起归零, 于是同一个对手的下一发子弹会用零
+  // 进度重建交战: 五秒配额把 opponentShots 读成 0 而挡掉全部副目标火力, 已打出
+  // 的伤害也不能再充当 own-damage 保留证据。这里只为“租约到期”这一种释放留一份
+  // 有界续接记录, 供同一目标在 TTL 内重建时恢复进度。
+  const carriedAfterRelease = releasedState.combatEngagementCarry || null;
+  assert.ok(carriedAfterRelease, 'lease release must capture an engagement carry');
+  assert.strictEqual(String(carriedAfterRelease.targetId), '8');
+  assert.strictEqual(carriedAfterRelease.reason, 'secondary-defensive-evidence-cleared');
+  assert.strictEqual(carriedAfterRelease.at, 4501);
+
+  assertCombatEngagementCarryReuse(common, player, state);
 
   const mediumReleaseAdapter = createBrowserlessDecisionAdapter(common);
   const mediumEntered = decide(

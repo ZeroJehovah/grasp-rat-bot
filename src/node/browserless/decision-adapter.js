@@ -8687,7 +8687,12 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     .filter(target => target?.authority === 'realtime')
     // Profit admission requires the realtime protocol's Active mode. The
     // broader `active` flag also covers movement and firing for safety logic;
-    // those signals alone must never create a profit mission.
+    // those signals alone must never create a profit mission. A native WS
+    // snapshot already promotes its Active join mode onto the realtime entity
+    // through `enrichRealtimeEntityWithSnapshotProfitMetadata`, so a genuinely
+    // Active player arrives here with `joinModeActive === true`. Reading the
+    // non-native `profitMetadataMode` instead would let plain snapshot
+    // metadata create a profit mission and, through it, combat authority.
     .filter(target => (
       target.joinModeActive === true
       || (target.active === true && retainedRealtimeActiveIds.has(String(target.user_id ?? target.userId ?? '')))
@@ -14908,7 +14913,13 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
           recentSelfDamageOwnerId: stateful.combatTarget?.hasDamagedSelf === true
             ? stateful.combatTarget?.id
             : '',
-          recentSelfDamageAt: stateful.combatTarget?.lastSelfDamageAt
+          recentSelfDamageAt: stateful.combatTarget?.lastSelfDamageAt,
+          // 同一场交战已打出的可归因伤害进度决定用哪条证据租约。
+          engagedOwnDamageProgress: Math.max(
+            0,
+            Number(stateful.combatTarget?.damageFromStart || 0),
+            Number(stateful.combatMetrics?.targetDamage || 0)
+          )
         },
         safetyContextOptions
       )
@@ -15456,6 +15467,9 @@ function summarizeBrowserlessDecision(decision) {
     dropRaceEvents: Array.isArray(decision.dropRaceEvents) ? decision.dropRaceEvents : [],
     finalSelection: decision.finalSelection || null,
     whitelistSafety: decision.whitelistSafety || null,
+    // 交火中不站桩的抑制结果必须落日志: 否则从日志无法区分“没有实现”和
+    // “实现了但当帧没触发”。
+    recoveryEngagedThreat: decision.recoveryEngagedThreat || null,
     input: decision.input || null,
     profit: decision.profit || null,
     combat: decision.combat || null
@@ -15855,6 +15869,9 @@ function createBrowserlessDecisionAdapter(options = {}) {
         dropRaceObservations: decisionState.dropRaceObservations || {},
         dropRacePendingEvents: decisionState.dropRacePendingEvents || [],
         combatTarget: decisionState.combatTarget || null,
+        // 有界续接记录跟战斗状态一起过桥。它必须显式带上 null: 消费掉之后的空值
+        // 要覆盖主适配器里的镜像, 否则同一份记录会在下一轮被重新注入。
+        combatEngagementCarry: decisionState.combatEngagementCarry || null,
         combatEngagements: decisionState.combatEngagements || {},
         combatMetricsByTarget: decisionState.combatMetricsByTarget || {},
         combatTargetSwitchGate: decisionState.combatTargetSwitchGate || null,

@@ -8,6 +8,9 @@ const DEFAULT_CONFIRMATIONS = 2;
 const DEFAULT_MINIMUM_CLOSING_SPEED = 20;
 const DEFAULT_MINIMUM_CLOSING_ALIGNMENT = 0.65;
 const DEFAULT_ENGAGED_THREAT_EVIDENCE_LEASE_MS = 2500;
+// 已经打出可归因伤害的同一场交战, 判定“身边还有人在打我们”时用同一条更长的
+// 租约, 否则交战保留还在生效、站桩恢复却已经被放行, 两个策略会互相打脸。
+const DEFAULT_ENGAGED_THREAT_OWN_DAMAGE_LEASE_MS = 5000;
 
 function numberOrNull(value) {
   if (value === null || value === undefined || value === '') return null;
@@ -255,11 +258,19 @@ function recoveryEngagedThreatPolicy(context = {}, options = {}) {
   const ranges = recoveryContactRanges(options);
   const lowHpThreshold = recoveryContactLowHpThreshold(options);
   const currentHp = selfHp(self);
-  const evidenceLeaseMs = Math.max(0, Number(
+  const baseEvidenceLeaseMs = Math.max(0, Number(
     options.recoveryEngagedThreatEvidenceLeaseMs
       ?? options.incomingPressureEvidenceLeaseMs
       ?? DEFAULT_ENGAGED_THREAT_EVIDENCE_LEASE_MS
   ));
+  // 只有同一场交战确实打出过可归因伤害时才用更长的租约; 陌生目标仍走基础租约。
+  const ownDamageLeaseMs = Math.max(baseEvidenceLeaseMs, Number(
+    options.recoveryEngagedThreatOwnDamageLeaseMs
+      ?? options.secondaryOwnDamageRetentionWindowMs
+      ?? DEFAULT_ENGAGED_THREAT_OWN_DAMAGE_LEASE_MS
+  ));
+  const ownDamageProgress = Math.max(0, Number(context.engagedOwnDamageProgress || 0));
+  const evidenceLeaseMs = ownDamageProgress > 0 ? ownDamageLeaseMs : baseEvidenceLeaseMs;
   const base = {
     enabled,
     suppressed: false,
@@ -268,7 +279,9 @@ function recoveryEngagedThreatPolicy(context = {}, options = {}) {
     ranges,
     selfHp: currentHp,
     lowHpThreshold,
-    evidenceLeaseMs
+    evidenceLeaseMs,
+    baseEvidenceLeaseMs,
+    ownDamageProgress
   };
   if (!enabled) return { ...base, reason: 'engaged-threat-hold-suppression-disabled' };
   if (!self || !recovering) return { ...base, reason: recovering ? 'missing-self' : 'not-recovering' };
@@ -341,6 +354,7 @@ function recoveryEngagedThreatPolicy(context = {}, options = {}) {
 
 module.exports = {
   DEFAULT_ENGAGED_THREAT_EVIDENCE_LEASE_MS,
+  DEFAULT_ENGAGED_THREAT_OWN_DAMAGE_LEASE_MS,
   previousActionWasRecoveryCore,
   recoveryContactRanges,
   recoveryContactLowHpThreshold,

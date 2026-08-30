@@ -1278,6 +1278,63 @@ function combatTargetFrameGapHoldLimit(options = {}) {
       : derivedHoldMs);
 }
 
+// 防御租约到期放人不代表这场交火结束: 同一个对手的下一发子弹会立刻重新建交战。
+// 如果每次重建都从零开始, 伤害进度、开火序列基线和对手弹道样本全部丢失, 于是
+// 五秒射击配额把 opponentShots 读成 0 而挡住全部副目标火力, 已打出的伤害也无法
+// 支撑 own-damage 保留证据。这里只为“租约到期”这一种释放保留一份有界的续接
+// 记录, 供同一目标在短时间内重建时恢复进度; 它不延长交战, 也不授予追击。
+const ENGAGEMENT_CARRY_REASONS = new Set(['secondary-defensive-evidence-cleared']);
+const DEFAULT_ENGAGEMENT_CARRY_TTL_MS = 30000;
+
+function captureCombatEngagementCarry(stateful, id, reason, at) {
+  if (!ENGAGEMENT_CARRY_REASONS.has(String(reason || ''))) return;
+  const previous = stateful.combatTarget && String(stateful.combatTarget.id ?? '') === id
+    ? stateful.combatTarget
+    : (stateful.combatEngagements?.[id] || null);
+  if (!previous) return;
+  const metrics = String(stateful.combatMetrics?.targetId ?? '') === id
+    ? stateful.combatMetrics
+    : (stateful.combatMetricsByTarget?.[id] || null);
+  const damageProgress = Math.max(
+    0,
+    Number(previous.damageFromStart || 0),
+    Number(metrics?.targetDamage || 0)
+  );
+  stateful.combatEngagementCarry = {
+    targetId: id,
+    at: Number(at) || Date.now(),
+    reason: String(reason || ''),
+    firstHp: numberOrNull(previous.firstHp),
+    minHp: numberOrNull(previous.minHp),
+    damageFromStart: damageProgress,
+    lastDamageAt: Math.max(0, Number(previous.lastDamageAt || 0)),
+    lastDamageAmount: Math.max(0, Number(previous.lastDamageAmount || 0)),
+    acceptedShotsAtLastDamage: Math.max(0, Number(previous.acceptedShotsAtLastDamage || 0)),
+    hasDamagedSelf: previous.hasDamagedSelf === true,
+    lastSelfDamageAt: Math.max(0, Number(previous.lastSelfDamageAt || 0)),
+    incomingHitCount: Math.max(0, Number(previous.incomingHitCount || 0)),
+    requestSequenceBaseline: Math.max(0, Number(metrics?.requestSequenceBaseline || 0)),
+    confirmationSequenceBaseline: Math.max(0, Number(metrics?.confirmationSequenceBaseline || 0)),
+    // 对手弹道样本是五秒配额和行为模型的输入, 丢掉它等于把对手当成从未开火。
+    motionSamples: Array.isArray(previous.motionSamples) ? previous.motionSamples.slice(-320) : [],
+    secondaryDispatchTimes: Array.isArray(previous.secondaryDispatchTimes)
+      ? previous.secondaryDispatchTimes.slice(-128)
+      : []
+  };
+}
+
+function consumeCombatEngagementCarry(stateful, id, nowMs, options = {}) {
+  const carry = stateful?.combatEngagementCarry || null;
+  if (!carry || String(carry.targetId ?? '') !== String(id)) return null;
+  const ttlMs = Math.max(0, Number(
+    options.combatEngagementCarryTtlMs ?? DEFAULT_ENGAGEMENT_CARRY_TTL_MS
+  ));
+  const ageMs = Math.max(0, Number(nowMs) - Number(carry.at || 0));
+  stateful.combatEngagementCarry = null;
+  if (ttlMs > 0 && ageMs > ttlMs) return null;
+  return { ...carry, ageMs };
+}
+
 function clearBrowserlessCombatEngagementState(stateful, targetId, reason, detail = {}) {
   if (!stateful || typeof stateful !== 'object') return null;
   const id = String(targetId ?? '');
@@ -1285,6 +1342,7 @@ function clearBrowserlessCombatEngagementState(stateful, targetId, reason, detai
   const currentTargetId = String(stateful.combatTarget?.id ?? '');
   if (currentTargetId && currentTargetId !== id) return null;
   const metricsTargetId = String(stateful.combatMetrics?.targetId ?? '');
+  captureCombatEngagementCarry(stateful, id, reason, detail.at);
   if (stateful.combatEngagements && typeof stateful.combatEngagements === 'object') {
     delete stateful.combatEngagements[id];
   }
@@ -4497,6 +4555,12 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   let engagementGeneration = String(stateful.combatMetrics?.engagementGeneration || '');
   let confirmationSequenceBaseline = Math.max(0, Number(stateful.combatMetrics?.confirmationSequenceBaseline || 0));
   let requestSequenceBaseline = Math.max(0, Number(stateful.combatMetrics?.requestSequenceBaseline || 0));
+  // 同一个对手在租约到期后立刻重建交战时, 恢复上一段的伤害进度与开火基线。新的
+  // engagementGeneration 仍然重新生成 (射击归属仍按新一代核对), 只是不再把这场
+  // 交火当成从未打过。
+  const engagementCarry = !continuesActiveGeneration
+    ? consumeCombatEngagementCarry(stateful, id, nowMs, options)
+    : null;
   if (!continuesActiveGeneration || !engagementGeneration) {
     stateful.combatEngagementGenerationSequence = Math.max(
       0,
@@ -4508,8 +4572,20 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
       stateful.combatEngagementGenerationSequence,
       numberOrNull(options.currentTick) ?? Math.round(nowMs)
     ].join(':');
-    confirmationSequenceBaseline = Math.max(0, Number(commandShooting.lastConfirmationSequence || 0));
-    requestSequenceBaseline = Math.max(0, Number(commandShooting.lastRequestSequence || 0));
+    confirmationSequenceBaseline = engagementCarry
+      ? Math.max(
+          0,
+          Number(commandShooting.lastConfirmationSequence || 0),
+          Number(engagementCarry.confirmationSequenceBaseline || 0)
+        )
+      : Math.max(0, Number(commandShooting.lastConfirmationSequence || 0));
+    requestSequenceBaseline = engagementCarry
+      ? Math.max(
+          0,
+          Number(commandShooting.lastRequestSequence || 0),
+          Number(engagementCarry.requestSequenceBaseline || 0)
+        )
+      : Math.max(0, Number(commandShooting.lastRequestSequence || 0));
     stateful.combatExecutionLedger = { engagementGeneration, eventIds: [] };
   }
   const distance = Number.isFinite(Number(target.distance)) ? Number(target.distance) : distanceBetween(self, target);
@@ -4611,10 +4687,13 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   const exchangeRetreatTargetDamageBaseline = same
     ? Math.max(0, Number(previous?.exchangeRetreatTargetDamageBaseline || 0))
     : 0;
+  const carryFirstHp = engagementCarry ? numberOrNull(engagementCarry.firstHp) : null;
+  const carryMinHp = engagementCarry ? numberOrNull(engagementCarry.minHp) : null;
   const previousFirstHp = same && Number.isFinite(Number(previous.firstHp)) ? Number(previous.firstHp) : null;
-  const firstHp = same ? (previousFirstHp ?? previousHp ?? hp) : hp;
+  const firstHp = same ? (previousFirstHp ?? previousHp ?? hp) : (carryFirstHp ?? hp);
   const previousMinHp = same && Number.isFinite(Number(previous.minHp)) ? Number(previous.minHp) : null;
-  const minHp = hp !== null ? Math.min(previousMinHp ?? hp, hp) : previousMinHp;
+  const minHpBaseline = same ? previousMinHp : carryMinHp;
+  const minHp = hp !== null ? Math.min(minHpBaseline ?? hp, hp) : (minHpBaseline ?? previousMinHp);
   const damageFromStart = firstHp !== null && minHp !== null ? Math.max(0, firstHp - minHp) : null;
   const inRange = Number.isFinite(distance)
     && distance <= Math.max(0, Number(options.combatAttackRange || options.attackRange || COMBAT_CONSTANTS.ATTACK_RANGE));
@@ -4676,7 +4755,9 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
         options.currentTick
       )
     : 0;
-  const previousSamples = same && Array.isArray(previous.motionSamples) ? previous.motionSamples : [];
+  const previousSamples = same && Array.isArray(previous.motionSamples)
+    ? previous.motionSamples
+    : (Array.isArray(engagementCarry?.motionSamples) ? engagementCarry.motionSamples : []);
   const sampleWindowMs = Math.max(45000, Number(options.combatMotionHistoryWindowMs || 45000));
   const reuseMotionSamples = same && Array.isArray(previous.motionSamples) && Object.isExtensible(previous.motionSamples);
   const motionSamples = reuseMotionSamples ? previousSamples : [];
@@ -4811,19 +4892,35 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     originReason: continuesActiveGeneration
       ? String(previous.originReason || previous.reason || '')
       : String(options.reason || target.reason || ''),
-    lastDamageAt: damaged ? nowMs : (same ? Number(previous.lastDamageAt || previous.at || nowMs) : nowMs),
+    lastDamageAt: damaged
+      ? nowMs
+      : (same
+          ? Number(previous.lastDamageAt || previous.at || nowMs)
+          : (engagementCarry && Number(engagementCarry.lastDamageAt || 0) > 0
+              ? Number(engagementCarry.lastDamageAt)
+              : nowMs)),
     acceptedShotsAtLastDamage: damaged
       ? Number(previousMetrics.acceptedShots || 0)
-      : (continuesActiveGeneration ? Number(previous.acceptedShotsAtLastDamage || 0) : 0),
-    lastSelfDamageAt: selfDamaged ? nowMs : (same ? Number(previous.lastSelfDamageAt || 0) : 0),
+      : (continuesActiveGeneration
+          ? Number(previous.acceptedShotsAtLastDamage || 0)
+          : Number(engagementCarry?.acceptedShotsAtLastDamage || 0)),
+    lastSelfDamageAt: selfDamaged
+      ? nowMs
+      : (same
+          ? Number(previous.lastSelfDamageAt || 0)
+          : Number(engagementCarry?.lastSelfDamageAt || 0)),
     lastSelfDamage: selfDamaged ? Math.max(0, previousSelfHp - currentSelfHp) : 0,
     selfHpLossObserved: selfDamaged,
-    hasDamagedSelf: Boolean((same && previous.hasDamagedSelf) || attributableSelfDamage),
+    hasDamagedSelf: Boolean((same && previous.hasDamagedSelf)
+      || engagementCarry?.hasDamagedSelf === true
+      || attributableSelfDamage),
     lastThreatAt: attributableSelfDamage || targetThreatBulletPressure
       ? nowMs
       : (same ? Number(previous.lastThreatAt || 0) : 0),
-    incomingHitCount: Math.max(0, Number(same ? previous.incomingHitCount || 0 : 0))
-      + (attributableSelfDamage ? Math.max(1, Math.round((previousSelfHp - currentSelfHp) / 3)) : 0),
+    incomingHitCount: Math.max(
+      0,
+      Number(same ? previous.incomingHitCount || 0 : (engagementCarry?.incomingHitCount || 0))
+    ) + (attributableSelfDamage ? Math.max(1, Math.round((previousSelfHp - currentSelfHp) / 3)) : 0),
     lastIncomingBulletAt,
     lastThreatGeneration,
     lastThreatOwnerIds,
@@ -4841,7 +4938,9 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     exchangeRetreatSinceAt,
     exchangeRetreatSelfDamageBaseline,
     exchangeRetreatTargetDamageBaseline,
-    lastDamageAmount: damaged ? Math.max(0, previousHp - hp) : Number(previous?.lastDamageAmount || 0),
+    lastDamageAmount: damaged
+      ? Math.max(0, previousHp - hp)
+      : Number(previous?.lastDamageAmount || engagementCarry?.lastDamageAmount || 0),
     noDamageMs: Math.max(0, nowMs - (damaged ? nowMs : (same ? Number(previous.lastDamageAt || previous.at || nowMs) : nowMs))),
     attackTimerState: attackClock.attackTimerState,
     attackTimerPauseReason: attackClock.attackTimerPauseReason,
@@ -4856,6 +4955,17 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     attackableObservationCount: attackClock.attackableObservationCount,
     attackClockFrameGapMs: attackClock.frameGapMs,
     motionSamples,
+    engagementCarry: engagementCarry
+      ? {
+          reason: String(engagementCarry.reason || ''),
+          ageMs: Math.round(Math.max(0, Number(engagementCarry.ageMs || 0))),
+          damageFromStart: Math.max(0, Number(engagementCarry.damageFromStart || 0)),
+          lastDamageAt: Number(engagementCarry.lastDamageAt || 0) || null,
+          motionSampleCount: Array.isArray(engagementCarry.motionSamples)
+            ? engagementCarry.motionSamples.length
+            : 0
+        }
+      : (same ? previous.engagementCarry || null : null),
     opponentBehaviorState,
     fireRiskClassification,
     evasiveAimExperiment: continuesActiveGeneration ? previous.evasiveAimExperiment || null : null,
@@ -4863,7 +4973,9 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     closeBandReserve: same ? previous.closeBandReserve || null : null,
     secondaryDispatchTimes: same && Array.isArray(previous.secondaryDispatchTimes)
       ? previous.secondaryDispatchTimes.slice(-128)
-      : [],
+      : (Array.isArray(engagementCarry?.secondaryDispatchTimes)
+          ? engagementCarry.secondaryDispatchTimes.slice(-128)
+          : []),
     ballisticClose: continuesActiveGeneration ? previous.ballisticClose || null : null,
     responsePolicyShadow: same ? previous.responsePolicyShadow || null : null,
     escapeDecision,
@@ -7001,6 +7113,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     },
     secondaryRetention,
     secondaryTargetRelease,
+    engagementCarry: combatTargetState?.engagementCarry || null,
     profitEscortContinuity: {
       active: cloneJson(stateful?.profitEscortContinuity || null),
       lastRelease: cloneJson(stateful?.profitEscortContinuityLastRelease || null),
