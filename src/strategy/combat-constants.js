@@ -68,7 +68,14 @@ const COMBAT_CONSTANTS = {
   INTERCEPT_LOW_CONFIDENCE_FIRE_MS: 520,  // combatInterceptLowConfidenceFireMs
 
   // Combat tick and frame gaps
-  COMBAT_TICK_GAP_OFFLINE_MS: 5000        // combatTickGapOfflineMs
+  COMBAT_TICK_GAP_OFFLINE_MS: 5000,       // combatTickGapOfflineMs
+
+  // Residual-threat Dodge continuation. Derived from bullet physics, not from the defensive
+  // evidence lease: TARGET_SPACING_MAX / BULLET_SPEED_CM_PER_TICK * 50ms = 650ms is the
+  // longest flight time a shot taken at the last observed evidence can still be in the air at
+  // normal combat spacing. Retaining Dodge for the full evidence lease instead kept it forced
+  // ~4x longer than any real projectile could exist.
+  RESIDUAL_DODGE_CONTINUATION_MS: 650     // combatResidualDodgeContinuationMs
 };
 
 /**

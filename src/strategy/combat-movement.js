@@ -512,6 +512,73 @@ function shouldBackAwayFromTarget(self, target) {
   return distance < closeThreshold;
 }
 
+/**
+ * Decide whether the generic close-spacing back-away must be suppressed because it would
+ * push us away from a primary target we are actively finishing for its reward.
+ *
+ * The generic back-away exists to hold standoff against sustained point-blank fire. Against a
+ * rewarding primary target already inside the finish band it inverts the objective: it trades
+ * the reward for standoff we do not need while self HP is healthy, and every centimetre it adds
+ * has to be re-closed before the drop can be picked up.
+ *
+ * This suppresses outward drift only. It commands no movement of its own, so a suppressed frame
+ * holds spacing instead of retreating. Collision-path Dodge, close-pressure and ballistic
+ * separation, invulnerable separation, and every hard safety/exit gate stay authoritative and
+ * are evaluated by the caller before this policy is consulted.
+ *
+ * Every input is observable opponent/self state: no player identity, whitelist membership, or
+ * battle window participates.
+ *
+ * @param {Object} input - { self, target, primaryTarget, distanceCm }
+ * @param {Object} options - runtime options
+ * @returns {Object} { suppress, reason, ... diagnostics }
+ */
+function rewardFinishBackAwaySuppressionPolicy(input = {}, options = {}) {
+  const self = input.self;
+  const target = input.target;
+  const distanceCm = Number.isFinite(Number(input.distanceCm))
+    ? Number(input.distanceCm)
+    : Number(target?.distance);
+  const selfHp = Number(self?.hp ?? self?.max_hp ?? 100);
+  const targetHp = Number(target?.hp ?? target?.knownHp ?? target?.displayHp);
+  const targetDrop = Number(target?.drop ?? 0);
+  const finishHp = Math.max(1, Number(
+    options.combatFinishLowThreatHp ?? COMBAT_CONSTANTS.FINISH_LOW_THREAT_HP
+  ));
+  const minSelfHp = Math.max(0, Number(
+    options.combatRewardFinishHoldMinSelfHp ?? options.combatLowHpLeaveThreshold ?? 50
+  ));
+  const minDrop = Math.max(0, Number(
+    options.combatLowValueActiveDropMax ?? COMBAT_CONSTANTS.LOW_VALUE_ACTIVE_DROP_MAX
+  ));
+  const pickupRadiusCm = Math.max(1, Number(
+    options.profitKillRaceCloseDistanceCm ?? options.playerDropPickupRadiusCm ?? 150
+  ));
+  const base = {
+    suppress: false,
+    enabled: options.combatRewardFinishBackAwayHoldEnabled !== false,
+    selfHp: Number.isFinite(selfHp) ? selfHp : null,
+    targetHp: Number.isFinite(targetHp) ? targetHp : null,
+    targetDrop: Number.isFinite(targetDrop) ? targetDrop : null,
+    distanceCm: Number.isFinite(distanceCm) ? distanceCm : null,
+    finishHp,
+    minSelfHp,
+    minDrop,
+    pickupRadiusCm
+  };
+  if (base.enabled !== true) return { ...base, reason: 'reward-finish-hold-disabled' };
+  if (input.primaryTarget !== true) return { ...base, reason: 'not-primary-target' };
+  if (!Number.isFinite(targetHp) || targetHp <= 0) return { ...base, reason: 'target-hp-unknown' };
+  if (targetHp > finishHp) return { ...base, reason: 'target-above-finish-hp' };
+  if (!Number.isFinite(targetDrop) || targetDrop <= minDrop) {
+    return { ...base, reason: 'target-drop-not-rewarding' };
+  }
+  if (!Number.isFinite(selfHp) || selfHp <= minSelfHp) return { ...base, reason: 'self-hp-not-healthy' };
+  if (!Number.isFinite(distanceCm)) return { ...base, reason: 'distance-unknown' };
+  if (distanceCm <= pickupRadiusCm) return { ...base, reason: 'inside-pickup-radius' };
+  return { ...base, suppress: true, reason: 'reward-finish-no-outward-drift' };
+}
+
 function normalizedPendingVelocityCommands(options = {}) {
   return (options.pendingVelocityCommands || options.velocitySchedule || [])
     .map((command, index) => ({
@@ -2248,6 +2315,7 @@ module.exports = {
   selectCombatMovementArbitrationCore,
   stabilizeCombatMovementDirectionCore,
   shouldBackAwayFromTarget,
+  rewardFinishBackAwaySuppressionPolicy,
   calculateDodgeDirection,
   contactEntryRiskCore,
   contactEntrySyntheticBulletCore,

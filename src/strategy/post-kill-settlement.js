@@ -145,6 +145,9 @@ function settlementSummary(state, nowMs = Date.now()) {
     evidenceMinAtMs: Number(state.evidenceMinAtMs || 0),
     confirmedEvidenceTick: finiteNumber(state.confirmedEvidenceTick),
     primaryTargetDropPriority: state.primaryTargetDropPriority === true,
+    ownDamageAttribution: state.ownDamageAttribution === true,
+    ownDamageFromStart: finiteNumber(state.ownDamageFromStart),
+    ownDamageLastObservedHp: finiteNumber(state.ownDamageLastObservedHp),
     killAttribution: state.killAttribution || '',
     authority: state.authority || '',
     reason: state.reason || ''
@@ -413,6 +416,95 @@ function primaryTargetPostKillSettlement(evidence, context, options = {}) {
   };
 }
 
+// A target we damaged can leave the engagement without ever producing kill
+// evidence: the engagement is released for an unrelated reason (target switch,
+// stale frame, escape) and the opponent dies moments later to someone else.
+// Nothing then created a settlement key, so the whole drop race left no trace
+// and "we did the damage, another player looted it" could not be detected
+// afterwards.  This builds the missing attribution evidence from own damage
+// progress alone.
+//
+// Diagnostic only.  It never selects a target, never authorizes fire, never
+// moves, and never gates an exit; it only opens a settlement so the existing
+// drop-race observation can record who gained Drop.  Every input is observable
+// self/opponent state -- damage we dealt, the last observed HP, and whether the
+// opponent is still visibly alive -- with no identity, name or window involved.
+function ownDamageSettlementEvidenceCore(input = {}, options = {}) {
+  const id = valueId(input.targetId);
+  const damage = finiteNumber(input.damageFromStart);
+  const lastHp = finiteNumber(input.lastObservedHp);
+  const minDamage = Math.max(1, Number(options.minDamage ?? 1));
+  const maxHp = Math.max(1, Number(options.lowHpThreshold ?? 50));
+  const base = {
+    active: false,
+    targetId: id,
+    damageFromStart: damage,
+    lastObservedHp: lastHp,
+    minDamage,
+    lowHpThreshold: maxHp
+  };
+  if (!id) return { ...base, reason: 'missing-target-id' };
+  if (input.authority !== 'realtime') return { ...base, reason: 'non-realtime-evidence' };
+  if (damage === null || damage < minDamage) return { ...base, reason: 'no-own-damage-progress' };
+  if (input.visiblyAlive === true) return { ...base, reason: 'target-still-visibly-alive' };
+  // Without a low last-known HP the disappearance is at least as likely to be a
+  // healthy opponent walking out of view, and a settlement there would invent a
+  // drop race that never happened.
+  if (lastHp === null || lastHp > maxHp) return { ...base, reason: 'last-observed-hp-not-low' };
+  return {
+    ...base,
+    active: true,
+    reason: 'own-damage-progress-without-kill-evidence'
+  };
+}
+
+function ownDamagePostKillSettlement(evidence, context, options = {}) {
+  const id = valueId(evidence?.targetId ?? evidence?.target_id);
+  if (!id || evidence?.authority !== 'realtime') return null;
+  const nowMs = Number.isFinite(Number(context?.nowMs)) ? Number(context.nowMs) : Date.now();
+  const confirmedMs = Math.max(250, Number(options.confirmedMs ?? 5000));
+  const observedTick = snapshotTick(context);
+  const eventTick = evidenceTick(evidence);
+  const eventAtMs = evidenceAtMs(evidence) || nowMs;
+  const remembered = matchingTargetMemory(context, id);
+  const rememberedDrop = knownTargetDrop(remembered);
+  const evidenceDrop = knownTargetDrop(evidence);
+  const drop = evidenceDrop.known ? evidenceDrop : rememberedDrop;
+  return {
+    active: true,
+    phase: 'drop-pending',
+    targetId: id,
+    targetName: String(evidence.targetName || evidence.target_name || remembered?.name || ''),
+    targetDrop: drop.known ? drop.value : null,
+    targetDropKnown: drop.known,
+    x: firstFiniteNumber(evidence.x, remembered?.x),
+    y: firstFiniteNumber(evidence.y, remembered?.y),
+    startedAt: nowMs,
+    confirmedAt: nowMs,
+    expiresAt: nowMs + confirmedMs,
+    matchedCoinKey: '',
+    matchedCoinAmount: null,
+    matchedCoinCreatedTick: null,
+    matchedCoinAuthority: '',
+    matchedCoinObservedAtMs: 0,
+    evidenceKey: `own-damage:${id}:${eventTick !== null ? `tick:${eventTick}` : `at:${eventAtMs}`}`,
+    lastSnapshotTick: observedTick,
+    evidenceMinTick: eventTick,
+    evidenceMinAtMs: eventAtMs,
+    confirmedEvidenceTick: eventTick,
+    // Reuses the primary-target reappearance guard: a target that shows up alive
+    // again immediately settles instead of holding a phantom drop race open.
+    primaryTargetDropPriority: false,
+    ownDamageAttribution: true,
+    ownDamageFromStart: finiteNumber(evidence.damageFromStart),
+    ownDamageLastObservedHp: finiteNumber(evidence.lastObservedHp),
+    killAttribution: 'external-or-unknown',
+    authority: 'realtime',
+    reason: String(evidence.reason || 'own-damage-progress-without-kill-evidence'),
+    updatedAt: nowMs
+  };
+}
+
 function terminalPostKillSettlement(state, nowMs, phase, reason) {
   return {
     ...state,
@@ -435,7 +527,7 @@ function updateExplicitPostKillSettlement(state, context, options = {}) {
     state.targetDrop = visibleDrop.value;
     state.targetDropKnown = true;
   }
-  if (state.primaryTargetDropPriority === true
+  if ((state.primaryTargetDropPriority === true || state.ownDamageAttribution === true)
     && visible
     && visible.alive !== false
     && Number(visible.hp ?? 1) > 0) {
@@ -507,7 +599,7 @@ function updatePostKillSettlementsCore(previous = {}, context = {}, options = {}
   }
 
   for (const [key, state] of Object.entries(states)) {
-    if ((!key.startsWith('evidence:') && !key.startsWith('primary:'))
+    if ((!key.startsWith('evidence:') && !key.startsWith('primary:') && !key.startsWith('own-damage:'))
       || !settlementStateIsActive(state)) continue;
     states[key] = updateExplicitPostKillSettlement(state, context, {
       confirmedMs,
@@ -550,6 +642,29 @@ function updatePostKillSettlementsCore(previous = {}, context = {}, options = {}
     }
   }
 
+  // Own-damage attribution runs after both evidence-backed paths so a real kill
+  // or a primary-disappearance settlement always owns the target first; this only
+  // fills the gap where neither exists.
+  const ownDamageEvidence = Array.isArray(context.ownDamageSettlementEvidence)
+    ? context.ownDamageSettlementEvidence
+    : (context.ownDamageSettlementEvidence ? [context.ownDamageSettlementEvidence] : []);
+  for (const item of ownDamageEvidence) {
+    if (item?.active === false) continue;
+    const id = valueId(item?.targetId ?? item?.target_id);
+    if (!id) continue;
+    const alreadyTracked = Object.values(states).some(state => valueId(state?.targetId) === id
+      && settlementStateIsActive(state));
+    if (alreadyTracked) continue;
+    const created = ownDamagePostKillSettlement(item, context, { confirmedMs });
+    const key = created?.evidenceKey || '';
+    if (!created || !key || Object.prototype.hasOwnProperty.call(seenEvidenceKeys, key)) continue;
+    seenEvidenceKeys[key] = nowMs;
+    states[key] = updateExplicitPostKillSettlement(created, context, {
+      confirmedMs,
+      pickupMs
+    });
+  }
+
   const legacyKeys = Object.keys(states).filter(key => key.startsWith('legacy:'));
   const legacyKey = legacyKeys.sort((left, right) => (
     Number(states[right]?.startedAt || 0) - Number(states[left]?.startedAt || 0)
@@ -582,6 +697,10 @@ function updatePostKillSettlementsCore(previous = {}, context = {}, options = {}
       const leftActive = Number(settlementStateIsActive(leftState));
       const rightActive = Number(settlementStateIsActive(rightState));
       return rightActive - leftActive
+        // Diagnostic own-damage records rank below evidence-backed ones so they
+        // can never push a real settlement out of the bounded window.
+        || Number(leftState?.ownDamageAttribution === true)
+          - Number(rightState?.ownDamageAttribution === true)
         || Number(rightState?.primaryTargetDropPriority === true)
           - Number(leftState?.primaryTargetDropPriority === true)
         || Number(rightState?.phase === 'drop-visible') - Number(leftState?.phase === 'drop-visible')
@@ -591,8 +710,12 @@ function updatePostKillSettlementsCore(previous = {}, context = {}, options = {}
           - Number(leftState?.updatedAt || leftState?.startedAt || 0);
     });
   const boundedStates = Object.fromEntries(orderedEntries.slice(0, maxEntries));
+  // Own-damage attribution is observability, not a commitment: it must never be
+  // selected, because `selected` is what drives settlement approach movement,
+  // drop-priority coin labelling and the restart-readiness blocker.  It stays in
+  // `states` so the drop-race observer can record who actually gained Drop.
   const active = Object.values(boundedStates)
-    .filter(settlementStateIsActive)
+    .filter(state => settlementStateIsActive(state) && state?.ownDamageAttribution !== true)
     .sort((left, right) => (
       Number(right.primaryTargetDropPriority === true) - Number(left.primaryTargetDropPriority === true)
         || Number(right.phase === 'drop-visible') - Number(left.phase === 'drop-visible')
@@ -615,6 +738,8 @@ function updatePostKillSettlementsCore(previous = {}, context = {}, options = {}
 
 module.exports = {
   primaryTargetPostKillSettlement,
+  ownDamageSettlementEvidenceCore,
+  ownDamagePostKillSettlement,
   settlementSummary,
   updatePostKillSettlementCore,
   updatePostKillSettlementsCore,

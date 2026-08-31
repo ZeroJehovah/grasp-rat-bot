@@ -6406,7 +6406,7 @@ async function runSelfTest() {
         const result = runDropRaceObservabilitySelfTest();
         return `${result.ok}:${result.cases}:${result.maxCompetitors}`;
       })(),
-      want: 'true:16:8'
+      want: 'true:18:8'
     },
     {
       // UC-018: a snapshot-sourced Drop reading is valid attribution evidence,

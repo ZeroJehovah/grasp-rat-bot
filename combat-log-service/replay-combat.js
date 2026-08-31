@@ -15,6 +15,7 @@ const {
   secondaryRetentionPolicy
 } = require('../src/strategy/dual-target-policy');
 const { recoveryEngagedThreatPolicy } = require('../src/strategy/recovery-contact-guard');
+const { rewardFinishBackAwaySuppressionPolicy } = require('../src/strategy/combat-movement');
 const { COMBAT_CONSTANTS } = require('../src/strategy/combat-constants');
 
 const DEFAULTS = {
@@ -100,7 +101,13 @@ const DEFAULTS = {
   combatEfficiencyCloseStepCm: 1000,
   combatEfficiencyMinimumDistanceCm: 1000,
   combatEfficiencyRequiredCloserRatio: 0.5,
-  combatEfficiencySampleGapCapMs: 250
+  combatEfficiencySampleGapCapMs: 250,
+  combatResidualDodgeContinuationMs: COMBAT_CONSTANTS.RESIDUAL_DODGE_CONTINUATION_MS,
+  combatRewardFinishBackAwayHoldEnabled: true,
+  combatRewardFinishHoldMinSelfHp: 50,
+  combatFinishLowThreatHp: COMBAT_CONSTANTS.FINISH_LOW_THREAT_HP,
+  combatLowValueActiveDropMax: COMBAT_CONSTANTS.LOW_VALUE_ACTIVE_DROP_MAX,
+  playerDropPickupRadiusCm: 150
 };
 
 function parseArgs(argv) {
@@ -685,6 +692,27 @@ function normalizeBrowserlessCombatLiveEntry(entry, state = {}) {
           desiredActionReason: String(desiredAction.reason || ''),
           movementReason: String(movement.reason || '')
         },
+    // Inputs for the reward-finish close replay: residual-Dodge continuation and
+    // the outward-drift hold both act on movement ownership, so the replay needs the
+    // logged lease age, the logged movement reason and the base radial intent that
+    // owns movement once the Dodge releases.
+    rewardFinishCloseReplay: {
+      reason: String(movement.reason || ''),
+      commandDx: numberOrNull(movement.dx),
+      commandDy: numberOrNull(movement.dy),
+      dodgeApplied: movement.dodge?.applied === true,
+      baseRadialIntent: {
+        dx: numberOrNull(movement.dodge?.baseRadialIntent?.dx),
+        dy: numberOrNull(movement.dodge?.baseRadialIntent?.dy)
+      },
+      residualThreatLeaseActive: movement.residualThreatLease?.active === true,
+      residualThreatCurrentCollision: movement.residualThreatLease?.currentCollision === true,
+      residualThreatAgeMs: numberOrNull(movement.residualThreatLease?.ageMs),
+      selfHp: numberOrNull(self.hp),
+      targetHp: numberOrNull(target.hp),
+      targetDrop: numberOrNull(target.drop),
+      targetDistanceCm: numberOrNull(target.distance)
+    },
     secondaryRetentionReplay: {
       targetId: target.user_id === undefined || target.user_id === null
         ? ''
@@ -834,6 +862,7 @@ function loadFrames(options) {
       target,
       nearbyEntity: nearbyTarget,
       aim: pointOf(entry.aimTarget || entry.combatState?.aim),
+      rewardFinishClose: entry.rewardFinishCloseReplay || null,
       selfHp: null,
       targetHp: null,
       nearbyHp: null,
@@ -2453,6 +2482,136 @@ function runFarNoDamageCloseScenario(frames, shots, targetSamples, options) {
   };
 }
 
+// Reward-finish close: replays the two movement-ownership changes together.
+//   (1) residual-threat Dodge continuation -- past the bullet-flight ceiling with no
+//       current collision path the synthesized residual no longer owns movement, so
+//       the frame's own base radial intent applies instead.
+//   (2) reward-finish outward-drift hold -- a healthy self must not drift away from a
+//       low-HP high-value primary target while it is outside pickup radius.
+// Collision-path Dodge frames are never touched: `residualThreatCurrentCollision`
+// keeps its own authority, exactly as UC-005 requires.
+function simulateRewardFinishCloseSelfSamples(frames, options) {
+  const speedPerMs = Math.max(1, Number(options.combatTargetDodgeSpeedPerTick || 50))
+    / Math.max(1, Number(options.tickMs || 50));
+  const continuationMs = Math.max(0, Number(options.combatResidualDodgeContinuationMs || 0));
+  const pickupRadiusCm = Math.max(1, Number(options.playerDropPickupRadiusCm || 150));
+  const samples = [];
+  const releasedLineNos = new Set();
+  const heldLineNos = new Set();
+  let simulated = null;
+  let lastAt = null;
+  let activeStarted = null;
+  for (const frame of frames) {
+    if (!frame.self) continue;
+    if (!simulated) simulated = { ...frame.self };
+    const replay = frame.rewardFinishClose || null;
+    if (lastAt !== null && replay && frame.nearbyTarget) {
+      let dx = Number(replay.commandDx || 0);
+      let dy = Number(replay.commandDy || 0);
+      const residualExpired = Boolean(
+        continuationMs > 0
+          && replay.residualThreatLeaseActive
+          && !replay.residualThreatCurrentCollision
+          && Number(replay.residualThreatAgeMs) > continuationMs
+          && replay.dodgeApplied
+      );
+      if (residualExpired) {
+        releasedLineNos.add(frame.lineNo);
+        dx = Number(replay.baseRadialIntent?.dx || 0);
+        dy = Number(replay.baseRadialIntent?.dy || 0);
+      }
+      const backAwayHold = rewardFinishBackAwaySuppressionPolicy({
+        primaryTarget: /back-away/.test(replay.reason || ''),
+        self: { hp: replay.selfHp },
+        target: { hp: replay.targetHp, drop: replay.targetDrop },
+        distanceCm: distance(simulated, frame.nearbyTarget)
+      }, options);
+      if (backAwayHold.suppress === true) {
+        heldLineNos.add(frame.lineNo);
+        dx = 0;
+        dy = 0;
+      }
+      const simulatedDistance = distance(simulated, frame.nearbyTarget);
+      if ((residualExpired || backAwayHold.suppress === true)
+        && dx === 0 && dy === 0
+        && simulatedDistance > pickupRadiusCm) {
+        const dir = unit(sub(frame.nearbyTarget, simulated));
+        if (dir) {
+          dx = dir.x;
+          dy = dir.y;
+        }
+      }
+      if (dx !== 0 || dy !== 0) {
+        if (!activeStarted) activeStarted = frame;
+        const dir = unit({ x: dx, y: dy });
+        const dt = Math.max(0, frame.at - lastAt);
+        if (dir) simulated = add(simulated, mul(dir, speedPerMs * dt));
+      }
+    }
+    samples.push({ at: frame.at, x: simulated.x, y: simulated.y });
+    lastAt = frame.at;
+  }
+  return { samples, activeStarted, releasedLineNos, heldLineNos };
+}
+
+function runRewardFinishCloseScenario(frames, shots, targetSamples, options) {
+  const simulation = simulateRewardFinishCloseSelfSamples(frames, options);
+  const finishHp = Math.max(1, Number(
+    options.combatFinishLowThreatHp ?? COMBAT_CONSTANTS.FINISH_LOW_THREAT_HP
+  ));
+  const filteredShots = shots.filter(shot => Number(shot.frame.targetHp) <= finishHp);
+  const simulatedShots = filteredShots.map(shot => cloneShotWithSimulatedSelf(shot, simulation.samples));
+  const scenario = runAimScenario(
+    'reward-finish close dynamic vs live target',
+    simulatedShots,
+    shot => dynamicAimForShot(shot, options),
+    targetSamples,
+    options
+  );
+  const baseline = runAimScenario(
+    'reward-finish old-position dynamic vs live target',
+    filteredShots,
+    shot => dynamicAimForShot(shot, options),
+    targetSamples,
+    options
+  );
+  const finishFrames = frames.filter(frame => Number(frame.targetHp) <= finishHp
+    && frame.self
+    && frame.nearbyTarget);
+  let loggedMin = Infinity;
+  let simulatedMin = Infinity;
+  for (const frame of finishFrames) {
+    const simulatedSelf = interpolate(simulation.samples, frame.at);
+    loggedMin = Math.min(loggedMin, distance(frame.self, frame.nearbyTarget));
+    if (simulatedSelf) simulatedMin = Math.min(simulatedMin, distance(simulatedSelf, frame.nearbyTarget));
+  }
+  const lastFrame = finishFrames.at(-1) || null;
+  const lastSim = lastFrame ? interpolate(simulation.samples, lastFrame.at) : null;
+  const lastOriginalDistance = lastFrame ? distance(lastFrame.self, lastFrame.nearbyTarget) : null;
+  const lastSimDistance = lastSim && lastFrame ? distance(lastSim, lastFrame.nearbyTarget) : null;
+  return {
+    ...scenario,
+    baselineHits: baseline.hits,
+    baselineMinDistanceCm: baseline.minDistanceCm,
+    activeFrames: finishFrames.length,
+    releasedResidualDodgeFrames: simulation.releasedLineNos.size,
+    heldBackAwayFrames: simulation.heldLineNos.size,
+    activeStart: simulation.activeStarted ? {
+      line: simulation.activeStarted.lineNo,
+      time: formatTime(simulation.activeStarted.at),
+      noDamageMs: Math.round(simulation.activeStarted.noDamageMs),
+      distanceCm: Math.round(distance(simulation.activeStarted.self, simulation.activeStarted.nearbyTarget))
+    } : null,
+    loggedClosestApproachCm: Number.isFinite(loggedMin) ? Math.round(loggedMin) : null,
+    simulatedClosestApproachCm: Number.isFinite(simulatedMin) ? Math.round(simulatedMin) : null,
+    originalEndDistanceCm: Number.isFinite(lastOriginalDistance) ? Math.round(lastOriginalDistance) : null,
+    simulatedEndDistanceCm: Number.isFinite(lastSimDistance) ? Math.round(lastSimDistance) : null,
+    simulatedApproachCm: Number.isFinite(lastOriginalDistance) && Number.isFinite(lastSimDistance)
+      ? Math.round(lastOriginalDistance - lastSimDistance)
+      : null
+  };
+}
+
 function findExitFrame(frames, waitMs, options) {
   return frames.find(frame => {
     const hp = frame.selfHp;
@@ -2970,6 +3129,7 @@ function replay(options) {
     runAimScenario('finish-pressure hypothetical dynamic vs live target', finishPressureShots, shot => dynamicAimForShot(shot, options), targetSamples, options),
     runOutOfRangeReengageScenario(frames, targetSamples, options),
     runFarNoDamageCloseScenario(frames, shots, targetSamples, options),
+    runRewardFinishCloseScenario(frames, shots, targetSamples, options),
     runPassiveRunnerScenario(frames, shots, targetSamples, options),
     runPassiveRunnerReserveFireScenario(frames, shots, targetSamples, options),
     runOpponentProbeReserveScenario(frames, shots, options),
@@ -3104,7 +3264,11 @@ function printReport(result) {
     const exit = item.exitFrame
       ? ` exit=line ${item.exitFrame.line} savedMs=${item.savedMs || 0} savedStamina=${item.savedStamina || 0} hp=${item.exitFrame.selfHp}/${item.exitFrame.targetHp} noDamageMs=${item.exitFrame.noDamageMs}${item.exitFrame.rule ? ` rule=${item.exitFrame.rule} closeRatio=${item.exitFrame.closerRatio}` : ''}`
       : '';
-    console.log(`- ${item.label}: hits=${item.hits}/${item.considered}, min=${item.minDistanceCm}cm${first}${suppressed}${extra}${baseline}${active}${approach}${probe}${firstPressure}${exit}`);
+    const rewardFinish = Number.isFinite(Number(item.releasedResidualDodgeFrames))
+      ? ` releasedResidualDodge=${item.releasedResidualDodgeFrames} heldBackAway=${item.heldBackAwayFrames}`
+        + ` closestApproach=${item.loggedClosestApproachCm}cm->${item.simulatedClosestApproachCm}cm`
+      : '';
+    console.log(`- ${item.label}: hits=${item.hits}/${item.considered}, min=${item.minDistanceCm}cm${first}${suppressed}${extra}${baseline}${active}${approach}${rewardFinish}${probe}${firstPressure}${exit}`);
   }
 }
 
@@ -3337,6 +3501,20 @@ function selfTest() {
       selfId: '28886',
       targetId: '34711',
       targetName: 'xuanze00'
+    },
+    {
+      // The lost mango kill-reward race: residual-threat Dodge kept owning movement
+      // long after the last collision path, and generic back-away drifted outward
+      // from a HP-40 / Drop-460 primary, so the finish happened 4800cm away and a
+      // closer player took the drop.
+      id: '2026-08-31-mango-reward-finish-close',
+      file: path.join(__dirname, 'logs/2026-08-31/battles/31361_1788105776230.jsonl.gz'),
+      startLine: 1,
+      endLine: 985,
+      selfId: '28886',
+      targetId: '31361',
+      targetName: 'mango',
+      expectRewardFinishCloseImproved: true
     }
   ];
   const skipped = [];
@@ -3358,6 +3536,7 @@ function selfTest() {
     const opponentProbeReserve = result.scenarios.find(scenario => scenario.label === 'opponent-probe opening reserve');
     const finishLowThreat = result.scenarios.find(scenario => scenario.label === 'finish-low-threat burst vs live target');
     const outOfRangeReengage = result.scenarios.find(scenario => scenario.label === 'out-of-range reengage dynamic vs live target');
+    const rewardFinishClose = result.scenarios.find(scenario => scenario.label === 'reward-finish close dynamic vs live target');
     const sustainedPressureExit = result.scenarios.find(scenario => scenario.label === 'sustained pressure no-damage exit');
     const dynamic = result.scenarios.find(scenario => scenario.label === 'dynamic strategy vs live target');
     const dynamicGrace = result.scenarios.find(scenario => scenario.label === 'dynamic strategy before grace exit');
@@ -3370,6 +3549,8 @@ function selfTest() {
         && (!item.expectOpponentProbeReserveImproved || !opponentProbeReserve || !opponentProbeReserve.reserveMet || !(opponentProbeReserve.skippedShots > 0))
         && (!item.expectFinishLowThreatImproved || !finishLowThreat || !(finishLowThreat.hits > logged.hits))
         && (!item.expectOutOfRangeReengageImproved || !outOfRangeReengage || !(outOfRangeReengage.hits > 0))
+        && (!item.expectRewardFinishCloseImproved || !rewardFinishClose
+          || !(rewardFinishClose.hits > rewardFinishClose.baselineHits))
         && (!item.expectSustainedPressureExit || !sustainedPressureExit || !(sustainedPressureExit.hits > 0))) {
         throw new Error(`${item.id} dynamic replay did not improve hits: ${dynamic.hits} <= ${logged.hits}`);
       }
@@ -3421,6 +3602,16 @@ function selfTest() {
     if (item.expectSustainedPressureExit && (!sustainedPressureExit || !(sustainedPressureExit.hits > 0) || !sustainedPressureExit.exitFrame)) {
       throw new Error(`${item.id} sustained pressure stop-loss did not trigger`);
     }
+    // Releasing the residual Dodge and holding the outward drift has to buy both more
+    // hits on the finish and a genuinely closer position, or the kill race is still lost.
+    if (item.expectRewardFinishCloseImproved && (!rewardFinishClose
+      || !(rewardFinishClose.hits > rewardFinishClose.baselineHits)
+      || !(rewardFinishClose.releasedResidualDodgeFrames > 0)
+      || !(rewardFinishClose.heldBackAwayFrames > 0)
+      || !(rewardFinishClose.simulatedApproachCm > 0)
+      || !(rewardFinishClose.simulatedClosestApproachCm < rewardFinishClose.loggedClosestApproachCm))) {
+      throw new Error(`${item.id} reward-finish close replay did not improve hits/approach: hits=${rewardFinishClose?.hits || 0} vs baseline=${rewardFinishClose?.baselineHits || 0}, released=${rewardFinishClose?.releasedResidualDodgeFrames || 0}, held=${rewardFinishClose?.heldBackAwayFrames || 0}, approach=${rewardFinishClose?.simulatedApproachCm || 0}, closest=${rewardFinishClose?.simulatedClosestApproachCm} vs ${rewardFinishClose?.loggedClosestApproachCm}`);
+    }
     return {
       id: item.id,
       loggedHits: logged.hits,
@@ -3436,6 +3627,13 @@ function selfTest() {
       finishLowThreatExtraShots: finishLowThreat?.extraShots || 0,
       outOfRangeReengageHits: outOfRangeReengage?.hits || 0,
       outOfRangeReengageApproachCm: outOfRangeReengage?.simulatedApproachCm || 0,
+      rewardFinishCloseHits: rewardFinishClose?.hits || 0,
+      rewardFinishCloseBaselineHits: rewardFinishClose?.baselineHits || 0,
+      rewardFinishReleasedResidualDodgeFrames: rewardFinishClose?.releasedResidualDodgeFrames || 0,
+      rewardFinishHeldBackAwayFrames: rewardFinishClose?.heldBackAwayFrames || 0,
+      rewardFinishLoggedClosestApproachCm: rewardFinishClose?.loggedClosestApproachCm ?? null,
+      rewardFinishSimulatedClosestApproachCm: rewardFinishClose?.simulatedClosestApproachCm ?? null,
+      rewardFinishApproachCm: rewardFinishClose?.simulatedApproachCm || 0,
       sustainedPressureExitLine: sustainedPressureExit?.exitFrame?.line || 0,
       dynamicHits: dynamic.hits,
       dynamicGraceHits: dynamicGrace.hits,

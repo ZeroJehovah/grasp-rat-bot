@@ -217,9 +217,10 @@ function runIncomingPressureSelfTest() {
       ownerIds: ['202'],
       threatGeneration: 'residual-self-test',
       evidenceAt: 9000,
-      ageMs: 2500,
+      ageMs: 650,
       leaseMs: 2500,
-      direction: { dx: 1, dy: 0 }
+      direction: { dx: 1, dy: 0 },
+      currentCollision: false
     },
     previousDodgeOwnership: {
       active: true,
@@ -237,8 +238,53 @@ function runIncomingPressureSelfTest() {
     movementOptions
   );
   assert.strictEqual(residualMovement.residualThreatLease.active, true);
+  assert.strictEqual(residualMovement.residualThreatLease.retained, true);
+  assert.strictEqual(residualMovement.residualThreatLease.dodgeContinuationMs, 650);
   assert.strictEqual(residualMovement.ownership.owner, 'emergency-dodge');
   assert.ok(residualMovement.modifiers.includes('dodge'));
+
+  // One millisecond past the Dodge continuation window the retained defensive evidence must
+  // still be retained (the 2500ms lease is untouched) while Dodge is no longer forced.
+  const continuationExpiredMovement = buildCombatMovementPlan(
+    fixture.self,
+    { ...fixture.secondary, distance: 2046 },
+    [],
+    {
+      ...movementOptions,
+      nowMs: 9651,
+      currentTick: 213,
+      residualThreatLease: {
+        ...movementOptions.residualThreatLease,
+        ageMs: 651
+      }
+    }
+  );
+  assert.strictEqual(continuationExpiredMovement.residualThreatLease.active, false);
+  assert.strictEqual(continuationExpiredMovement.residualThreatLease.retained, true);
+  assert.strictEqual(continuationExpiredMovement.residualThreatLease.dodgeContinuationExpired, true);
+  assert.notStrictEqual(continuationExpiredMovement.ownership.owner, 'emergency-dodge');
+  assert.ok(!continuationExpiredMovement.modifiers.includes('dodge'));
+
+  // A current collision-path bullet stays authoritative for the whole retention lease.
+  const collisionMovement = buildCombatMovementPlan(
+    fixture.self,
+    { ...fixture.secondary, distance: 2046 },
+    [],
+    {
+      ...movementOptions,
+      nowMs: 11500,
+      currentTick: 229,
+      residualThreatLease: {
+        ...movementOptions.residualThreatLease,
+        source: 'current-collision-bullet',
+        ageMs: 2500,
+        currentCollision: true
+      }
+    }
+  );
+  assert.strictEqual(collisionMovement.residualThreatLease.active, true);
+  assert.strictEqual(collisionMovement.ownership.owner, 'emergency-dodge');
+  assert.ok(collisionMovement.modifiers.includes('dodge'));
 
   const expiredMovement = buildCombatMovementPlan(
     fixture.self,
@@ -250,11 +296,14 @@ function runIncomingPressureSelfTest() {
       currentTick: 230,
       residualThreatLease: {
         ...movementOptions.residualThreatLease,
-        ageMs: 2501
+        source: 'current-collision-bullet',
+        ageMs: 2501,
+        currentCollision: true
       }
     }
   );
   assert.strictEqual(expiredMovement.residualThreatLease.active, false);
+  assert.strictEqual(expiredMovement.residualThreatLease.retained, false);
   assert.notStrictEqual(expiredMovement.ownership.owner, 'emergency-dodge');
   assert.ok(!expiredMovement.modifiers.includes('dodge'));
 
@@ -266,11 +315,13 @@ function runIncomingPressureSelfTest() {
 
   return {
     ok: true,
-    cases: 4,
+    cases: 6,
     pressureEvidence: result.incomingPressureEvidence,
     primaryFinishRace: result.shooting.primaryFinishRace,
     residualMovement: {
       owner: residualMovement.ownership.owner,
+      continuationExpiredOwner: continuationExpiredMovement.ownership.owner,
+      collisionOwner: collisionMovement.ownership.owner,
       expiredOwner: expiredMovement.ownership.owner
     },
     lowHpExit: lowHpResult.exit?.reason

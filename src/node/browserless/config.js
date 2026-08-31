@@ -128,6 +128,9 @@ const DEFAULTS = {
   primaryFinishRaceMaxShots: 3,
   primaryFinishRaceTargetHpMax: 55,
   incomingPressureEvidenceLeaseMs: 2500,
+  combatResidualDodgeContinuationMs: 650,
+  combatRewardFinishBackAwayHoldEnabled: true,
+  combatRewardFinishHoldMinSelfHp: 50,
   combatRealtimeTargetFreshMs: 500,
   combatDodgeOwnershipHoldMs: 500,
   combatCoverEnabled: true,
@@ -389,6 +392,18 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     incomingPressureEvidenceLeaseMs: numberEnv(
       env.GRASP_RAT_BROWSERLESS_INCOMING_PRESSURE_EVIDENCE_LEASE_MS,
       DEFAULTS.incomingPressureEvidenceLeaseMs
+    ),
+    combatResidualDodgeContinuationMs: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_COMBAT_RESIDUAL_DODGE_CONTINUATION_MS,
+      DEFAULTS.combatResidualDodgeContinuationMs
+    ),
+    combatRewardFinishBackAwayHoldEnabled: boolEnv(
+      env.GRASP_RAT_BROWSERLESS_COMBAT_REWARD_FINISH_BACK_AWAY_HOLD_ENABLED,
+      DEFAULTS.combatRewardFinishBackAwayHoldEnabled
+    ),
+    combatRewardFinishHoldMinSelfHp: numberEnv(
+      env.GRASP_RAT_BROWSERLESS_COMBAT_REWARD_FINISH_HOLD_MIN_SELF_HP,
+      DEFAULTS.combatRewardFinishHoldMinSelfHp
     ),
     combatRealtimeTargetFreshMs: numberEnv(
       env.GRASP_RAT_BROWSERLESS_COMBAT_REALTIME_TARGET_FRESH_MS,

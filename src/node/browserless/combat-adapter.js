@@ -29,7 +29,8 @@ const {
   safeRetreatInterceptCandidateCore,
   stabilizeCombatMovementDirectionCore,
   strategicDirectionProgressCore,
-  shouldBackAwayFromTarget
+  shouldBackAwayFromTarget,
+  rewardFinishBackAwaySuppressionPolicy
 } = require('../../strategy/combat-movement');
 const {
   profitEscortContinuityMatchesCore,
@@ -3301,11 +3302,28 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       && incomingBulletHasCollisionRiskCore(bullet, options)
   ));
   const residualThreatLease = options.residualThreatLease || combatTargetState?.residualThreatLease || null;
-  const residualThreatActive = residualThreatLease?.active === true
-    && Number(residualThreatLease.ageMs ?? 0) <= Math.max(
-      250,
-      Number(residualThreatLease.leaseMs ?? options.incomingPressureEvidenceLeaseMs ?? 2500)
-    );
+  // Dodge continuation is scoped to the physical lifetime of the threat, not to the much
+  // longer defensive-evidence retention lease. The retention lease exists to keep an
+  // engagement alive across a firing pause; reusing it here kept Dodge forced for the whole
+  // window after the projectile was already gone. Collision-path bullets, unavoidable current
+  // shots, direct hits, and every hard safety/exit gate stay authoritative below.
+  const residualDodgeContinuationMs = Math.max(
+    250,
+    Number(
+      options.combatResidualDodgeContinuationMs
+        ?? COMBAT_CONSTANTS.RESIDUAL_DODGE_CONTINUATION_MS
+    )
+  );
+  const residualThreatLeaseMs = Math.max(
+    250,
+    Number(residualThreatLease?.leaseMs ?? options.incomingPressureEvidenceLeaseMs ?? 2500)
+  );
+  const residualThreatAgeMs = Number(residualThreatLease?.ageMs ?? 0);
+  const residualThreatRetained = residualThreatLease?.active === true
+    && residualThreatAgeMs <= residualThreatLeaseMs;
+  const residualThreatActive = residualThreatRetained
+    && (residualThreatLease?.currentCollision === true
+      || residualThreatAgeMs <= Math.min(residualDodgeContinuationMs, residualThreatLeaseMs));
   const nowMs = Number(options.nowMs || Date.now());
   const selfNoDamageMs = Math.max(
     0,
@@ -3542,11 +3560,23 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       && Number(target.distance || Infinity)
         > Number(ballisticClose.targetRangeCm) + Number(ballisticClose.hysteresisCm || 0)
   );
+  const genericBackAway = shouldBackAwayFromTarget(self, target);
+  // A rewarding primary target inside the finish band must not be pushed away by the generic
+  // close-spacing back-away: every centimetre added has to be re-closed before its drop can be
+  // picked up. Close-pressure, ballistic, and invulnerable separation keep their own authority.
+  const rewardFinishBackAwayHold = rewardFinishBackAwaySuppressionPolicy({
+    self,
+    target,
+    primaryTarget: target.combatRole === 'primary',
+    distanceCm: Number(target.distance)
+  }, options);
   const backAway = invulnerableWaitActive
     ? invulnerableWindow.separate
     : (ballisticCloseActive
       ? ballisticCloseTooClose
-      : (closePressureActive ? closePressureTooClose : shouldBackAwayFromTarget(self, target)));
+      : (closePressureActive
+        ? closePressureTooClose
+        : genericBackAway && rewardFinishBackAwayHold.suppress !== true));
   const pressureClose = Boolean(
     closePressureActive
       ? closeAllowed && Number(target.distance || Infinity) > closeRange + closePressureHysteresisCm
@@ -4359,9 +4389,13 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     distanceAwareDodge,
     modifiers: movement.modifiers || [],
     cover: coverCandidate,
-    residualThreatLease: residualThreatActive
-      ? { ...residualThreatLease, active: true }
-      : { ...(residualThreatLease || {}), active: false },
+    residualThreatLease: {
+      ...(residualThreatLease || {}),
+      active: residualThreatActive,
+      retained: residualThreatRetained,
+      dodgeContinuationMs: residualDodgeContinuationMs,
+      dodgeContinuationExpired: Boolean(residualThreatRetained && !residualThreatActive)
+    },
     dodgeOwnership: {
       ...dodgeOwnership,
       currentShotAvoidability: residualThreatActive && !threatGenerationIds.length
@@ -4408,6 +4442,15 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     profitMissionArrivalHold,
     profitMissionArrivalRetry,
     secondaryNavigationDeadZoneHold,
+    rewardFinishBackAwayHold: {
+      ...rewardFinishBackAwayHold,
+      genericBackAway,
+      applied: Boolean(genericBackAway
+        && rewardFinishBackAwayHold.suppress
+        && !invulnerableWaitActive
+        && !ballisticCloseActive
+        && !closePressureActive)
+    },
     profitKillRace,
     competitionApproach: profitKillRace.active ? {
       active: true,

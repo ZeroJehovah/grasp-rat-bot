@@ -228,6 +228,12 @@ function sanitizeDropRaceLifecycle(detail = {}) {
     movement,
     disappearance,
     reason: identifier(source.reason) || 'unresolved',
+    // Reconstructed from our own damage progress after the engagement was released
+    // without kill evidence.  It records who gained Drop on a target we damaged but
+    // did not finish; it is never evidence that we killed it.
+    ownDamageAttribution: source.ownDamageAttribution === true,
+    ownDamageFromStart: finite(source.ownDamageFromStart),
+    ownDamageLastObservedHp: finite(source.ownDamageLastObservedHp),
     runId: identifier(source.runId),
     runtimeRevision: identifier(source.runtimeRevision),
     revision: identifier(source.revision),
@@ -492,6 +498,38 @@ module.exports = {
       || realtime?.attributionAuthority !== '') {
       throw new Error('drop-race attribution authority self-test failed');
     }
-    return { ok: true, cases: 16, maxCompetitors: realtime.competitors.length };
+    // Own-damage attribution: a target we damaged left without kill evidence and a
+    // competitor's Drop rose over the same window.  The record has to carry the
+    // own-damage marker so it is never read as a kill of ours, while the verdict
+    // stays exactly what the observed Drop deltas support.
+    const ownDamage = sanitizeDropRaceLifecycle({
+      ...base,
+      event: 'settled',
+      reason: 'own-damage-progress-without-kill-evidence',
+      ownDamageAttribution: true,
+      ownDamageFromStart: 99,
+      ownDamageLastObservedHp: 1,
+      disappearance: {
+        selfDropDelta: 0,
+        competitorDropDeltas: [{ id: 'other', delta: 230, authority: 'realtime' }]
+      }
+    });
+    if (ownDamage?.ownDamageAttribution !== true
+      || ownDamage?.ownDamageFromStart !== 99
+      || ownDamage?.ownDamageLastObservedHp !== 1
+      || ownDamage?.reason !== 'own-damage-progress-without-kill-evidence'
+      || ownDamage?.classification !== 'strong-inference'
+      || ownDamage?.classificationReason !== 'competitor-drop-increase'
+      || ownDamage?.dropIncreaseCount !== 1) {
+      throw new Error('drop-race own-damage attribution self-test failed');
+    }
+    // Absent the marker the fields must stay false/null rather than defaulting to
+    // an own-damage claim.
+    if (selfIncrease?.ownDamageAttribution !== false
+      || selfIncrease?.ownDamageFromStart !== null
+      || selfIncrease?.ownDamageLastObservedHp !== null) {
+      throw new Error('drop-race own-damage default self-test failed');
+    }
+    return { ok: true, cases: 18, maxCompetitors: realtime.competitors.length };
   }
 };

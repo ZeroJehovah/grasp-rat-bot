@@ -93,6 +93,7 @@ const {
   updatePostAttackSettlementCore
 } = require('../../strategy/post-attack-drop');
 const {
+  ownDamageSettlementEvidenceCore,
   settlementSummary,
   updatePostKillSettlementsCore
 } = require('../../strategy/post-kill-settlement');
@@ -9781,6 +9782,71 @@ function dropRaceDropDeltas(baseline = {}, self, competitors = []) {
   return { selfDropDelta, selfDropAuthority, competitorDropDeltas: competitorDropDeltas.slice(0, 8) };
 }
 
+// A target we damaged can leave the engagement without ever producing kill
+// evidence -- the engagement is released for an unrelated reason (target switch,
+// stale frame, escape) and the opponent dies to someone else moments later.  No
+// settlement key was created, so the drop race left no record at all and "we
+// dealt the damage, another player looted it" could not be told apart from "we
+// simply lost the target".  This collects the missing attribution candidates
+// from the bounded engagement memory.
+//
+// Diagnostic only: the settlements it opens are excluded from `selected`, so they
+// never move the bot, never label a coin as priority drop, and never block a
+// restart.  Selection, aim, fire, Dodge and exit are untouched.
+function ownDamageSettlementCandidates(input, stateful = {}, combat = null, options = {}) {
+  const nowMs = Number(input?.nowMs || Date.now());
+  const maxAgeMs = Math.max(0, Number(options.postKillOwnDamageAttributionMaxAgeMs ?? 3000));
+  if (!(maxAgeMs > 0)) return [];
+  const currentCombatTargetId = String(
+    targetIdForAttackHistory(combat?.target || combat?.dryRun?.target || null) ?? ''
+  );
+  const engagements = stateful.combatEngagements && typeof stateful.combatEngagements === 'object'
+    ? stateful.combatEngagements
+    : {};
+  const candidates = [];
+  for (const [key, engagement] of Object.entries(engagements)) {
+    const id = String(engagement?.id ?? key ?? '');
+    if (!id || id === currentCombatTargetId) continue;
+    const lastVisibleAt = Number(engagement?.at || 0);
+    if (!(lastVisibleAt > 0) || nowMs - lastVisibleAt > maxAgeMs) continue;
+    const metrics = stateful.combatMetricsByTarget?.[id] || null;
+    const damageFromStart = Math.max(
+      0,
+      Number(engagement?.damageFromStart || 0),
+      Number(metrics?.targetDamage || 0)
+    );
+    const visible = (input?.visibleTargets || []).find(item => String(
+      targetIdForAttackHistory(item) ?? ''
+    ) === id) || null;
+    const evidence = ownDamageSettlementEvidenceCore({
+      targetId: id,
+      damageFromStart,
+      lastObservedHp: nullableNumberOrNull(engagement?.minHp ?? engagement?.hp),
+      visiblyAlive: Boolean(visible && visible.alive !== false && Number(visible.hp ?? 1) > 0),
+      authority: 'realtime'
+    }, {
+      minDamage: options.postKillOwnDamageAttributionMinDamage ?? 1,
+      lowHpThreshold: options.combatLowHpLeaveThreshold ?? 50
+    });
+    if (evidence.active !== true) continue;
+    candidates.push({
+      ...evidence,
+      targetName: String(engagement?.name || ''),
+      x: numberOrNull(engagement?.x),
+      y: numberOrNull(engagement?.y),
+      drop: nullableNumberOrNull(engagement?.drop),
+      dropKnown: engagement?.dropKnown === true,
+      dropAuthority: String(engagement?.dropAuthority || ''),
+      observedAtMs: lastVisibleAt,
+      ageMs: Math.max(0, Math.round(nowMs - lastVisibleAt)),
+      authority: 'realtime'
+    });
+  }
+  return candidates
+    .sort((left, right) => Number(right.observedAtMs || 0) - Number(left.observedAtMs || 0))
+    .slice(0, 4);
+}
+
 function observeDropRaceLifecycles(input, stateful, previousSettlements, nextSettlements, options = {}) {
   const memory = stateful.dropRaceObservations && typeof stateful.dropRaceObservations === 'object'
     ? stateful.dropRaceObservations
@@ -9881,6 +9947,12 @@ function observeDropRaceLifecycles(input, stateful, previousSettlements, nextSet
           picker: pickerId ? { id: pickerId, source: 'server-picker', authority: 'server' } : null
         },
         reason: settlement.terminalReason || settlement.reason || event,
+        // Marks the record as reconstructed from our own damage progress rather than
+        // from kill evidence, so a reader never mistakes it for a confirmed kill of
+        // ours.  Diagnostic passthrough only.
+        ownDamageAttribution: settlement.ownDamageAttribution === true,
+        ownDamageFromStart: numberOrNull(settlement.ownDamageFromStart),
+        ownDamageLastObservedHp: numberOrNull(settlement.ownDamageLastObservedHp),
         engagementId: stateful?.combatMetrics?.engagementId || '',
         controlGeneration: stateful?.combatMetrics?.controlGeneration || input?.command?.controlGeneration || '',
         generation: key,
@@ -9973,6 +10045,7 @@ function reconcilePostKillSettlement(input, stateful = {}, combat = {}, previous
     snapshotTick: input?.fallback?.tick ?? observation?.tick ?? null,
     disappearanceKillPlausible,
     primaryTargetSettlementEvidence: stateful.primaryTargetSettlementEvidence || null,
+    ownDamageSettlementEvidence: ownDamageSettlementCandidates(input, stateful, combat, options),
     seenEvidenceKeys: stateful.postKillEvidenceSeen || {}
   }, {
     unconfirmedMs: options.postKillUnconfirmedTailMs

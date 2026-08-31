@@ -51,7 +51,8 @@ const {
   resolveDistanceAwareDodgeCore,
   selectStochasticDodgeCandidateCore,
   safeRetreatInterceptCandidateCore,
-  selectCombatMovementArbitrationCore
+  selectCombatMovementArbitrationCore,
+  rewardFinishBackAwaySuppressionPolicy
 } = require('./combat-movement');
 const {
   profitEscortContinuityMatchesCore,
@@ -205,6 +206,7 @@ const {
 } = require('./evasive-aim-experiment');
 const EVASIVE_AIM_TEST_MODEL = createEvasiveAimModel(require('./evasive-aim-model.json'));
 const {
+  ownDamageSettlementEvidenceCore,
   updatePostKillSettlementCore,
   updatePostKillSettlementsCore,
   postKillEvidenceKey
@@ -7941,6 +7943,181 @@ function runStrategyModuleSelfTests() {
       && switchedTargetDrop.selected?.matchedCoinAmount === 19
       && switchedTargetDropDisappeared.states[switchedTargetSettlementKey]?.active === false
       && switchedTargetReplayed.states[switchedTargetSettlementKey]?.active === false
+  });
+
+  // Own-damage attribution evidence gate: only a target we actually damaged, whose
+  // last observed HP was low and which is no longer visibly alive, opens a record.
+  const ownDamageEvidenceAccepted = ownDamageSettlementEvidenceCore({
+    targetId: 31361,
+    damageFromStart: 99,
+    lastObservedHp: 1,
+    visiblyAlive: false,
+    authority: 'realtime'
+  }, { lowHpThreshold: 50 });
+  const ownDamageEvidenceNoDamage = ownDamageSettlementEvidenceCore({
+    targetId: 31361,
+    damageFromStart: 0,
+    lastObservedHp: 1,
+    visiblyAlive: false,
+    authority: 'realtime'
+  }, { lowHpThreshold: 50 });
+  const ownDamageEvidenceHealthy = ownDamageSettlementEvidenceCore({
+    targetId: 31361,
+    damageFromStart: 40,
+    lastObservedHp: 60,
+    visiblyAlive: false,
+    authority: 'realtime'
+  }, { lowHpThreshold: 50 });
+  const ownDamageEvidenceStillAlive = ownDamageSettlementEvidenceCore({
+    targetId: 31361,
+    damageFromStart: 99,
+    lastObservedHp: 1,
+    visiblyAlive: true,
+    authority: 'realtime'
+  }, { lowHpThreshold: 50 });
+  const ownDamageEvidenceSnapshot = ownDamageSettlementEvidenceCore({
+    targetId: 31361,
+    damageFromStart: 99,
+    lastObservedHp: 1,
+    visiblyAlive: false,
+    authority: 'snapshot'
+  }, { lowHpThreshold: 50 });
+  results.push({
+    name: 'own-damage-settlement-evidence-requires-damage-low-hp-and-realtime',
+    passed: ownDamageEvidenceAccepted.active === true
+      && ownDamageEvidenceAccepted.reason === 'own-damage-progress-without-kill-evidence'
+      && ownDamageEvidenceNoDamage.active === false
+      && ownDamageEvidenceNoDamage.reason === 'no-own-damage-progress'
+      && ownDamageEvidenceHealthy.active === false
+      && ownDamageEvidenceHealthy.reason === 'last-observed-hp-not-low'
+      && ownDamageEvidenceStillAlive.active === false
+      && ownDamageEvidenceStillAlive.reason === 'target-still-visibly-alive'
+      && ownDamageEvidenceSnapshot.active === false
+      && ownDamageEvidenceSnapshot.reason === 'non-realtime-evidence'
+  });
+
+  // The record must exist in `states` so the drop-race observer can settle it, and
+  // must never become `selected`: selection drives settlement approach movement,
+  // priority coin labelling and the restart-readiness blocker.
+  const ownDamageOptions = { confirmedMs: 5000, pickupMs: 45000, tickMs: 50, maxEntries: 4 };
+  const ownDamageOpened = updatePostKillSettlementsCore({}, {
+    nowMs: 2000,
+    snapshotTick: 200,
+    currentCombatTarget: null,
+    visibleTargets: [],
+    selfKillEvidence: [],
+    playerDropCoins: [],
+    targetMemory: [{ userId: 31361, name: 'damaged-target', drop: 460, dropKnown: true, x: 500, y: -700 }],
+    ownDamageSettlementEvidence: [{
+      ...ownDamageEvidenceAccepted,
+      targetName: 'damaged-target',
+      x: 500,
+      y: -700,
+      authority: 'realtime'
+    }]
+  }, ownDamageOptions);
+  const ownDamageKey = Object.keys(ownDamageOpened.states || {}).find(key => key.startsWith('own-damage:')) || '';
+  const ownDamageReappeared = updatePostKillSettlementsCore(ownDamageOpened.states, {
+    nowMs: 2100,
+    snapshotTick: 202,
+    currentCombatTarget: null,
+    visibleTargets: [{ userId: 31361, name: 'damaged-target', hp: 30, alive: true }],
+    selfKillEvidence: [],
+    playerDropCoins: [],
+    targetMemory: []
+  }, ownDamageOptions);
+  results.push({
+    name: 'own-damage-settlement-observes-drop-race-without-being-selected',
+    passed: Boolean(ownDamageKey)
+      && ownDamageOpened.states[ownDamageKey]?.ownDamageAttribution === true
+      && ownDamageOpened.states[ownDamageKey]?.active === true
+      && ownDamageOpened.states[ownDamageKey]?.targetDrop === 460
+      && ownDamageOpened.states[ownDamageKey]?.killAttribution === 'external-or-unknown'
+      && ownDamageOpened.selected === null
+      && ownDamageReappeared.states[ownDamageKey]?.active === false
+      && ownDamageReappeared.states[ownDamageKey]?.terminalReason === 'target-reappeared-alive'
+  });
+
+  // A real kill or primary-disappearance settlement always owns the target first;
+  // own-damage attribution only fills the gap where neither exists.
+  const ownDamageKillEvidence = [{ targetUserId: 31361, tick: 210, kind: 'kill' }];
+  const ownDamageYieldsToKill = updatePostKillSettlementsCore({}, {
+    nowMs: 2200,
+    snapshotTick: 211,
+    currentCombatTarget: null,
+    visibleTargets: [],
+    selfKillEvidence: ownDamageKillEvidence,
+    playerDropCoins: [],
+    targetMemory: [{ userId: 31361, name: 'damaged-target', drop: 460, dropKnown: true, x: 500, y: -700, at: 2100 }],
+    ownDamageSettlementEvidence: [{ ...ownDamageEvidenceAccepted, authority: 'realtime' }]
+  }, ownDamageOptions);
+  results.push({
+    name: 'own-damage-settlement-yields-to-kill-evidence',
+    passed: Object.keys(ownDamageYieldsToKill.states || {}).every(key => !key.startsWith('own-damage:'))
+      && ownDamageYieldsToKill.selected?.targetId === '31361'
+      && ownDamageYieldsToKill.selected?.ownDamageAttribution !== true
+  });
+
+  // Outward drift away from a low-HP high-value primary target loses the kill race
+  // that closing distance would win; only the generic back-away branch is held.
+  const rewardFinishSuppressed = rewardFinishBackAwaySuppressionPolicy({
+    primaryTarget: true,
+    self: { hp: 100 },
+    target: { hp: 40, drop: 460, distance: 3183 },
+    distanceCm: 3183
+  }, {});
+  const rewardFinishHighHpTarget = rewardFinishBackAwaySuppressionPolicy({
+    primaryTarget: true,
+    self: { hp: 100 },
+    target: { hp: 90, drop: 460, distance: 3183 },
+    distanceCm: 3183
+  }, {});
+  const rewardFinishLowDrop = rewardFinishBackAwaySuppressionPolicy({
+    primaryTarget: true,
+    self: { hp: 100 },
+    target: { hp: 40, drop: 2, distance: 3183 },
+    distanceCm: 3183
+  }, {});
+  const rewardFinishHurtSelf = rewardFinishBackAwaySuppressionPolicy({
+    primaryTarget: true,
+    self: { hp: 35 },
+    target: { hp: 40, drop: 460, distance: 3183 },
+    distanceCm: 3183
+  }, {});
+  const rewardFinishInsidePickup = rewardFinishBackAwaySuppressionPolicy({
+    primaryTarget: true,
+    self: { hp: 100 },
+    target: { hp: 40, drop: 460, distance: 120 },
+    distanceCm: 120
+  }, {});
+  const rewardFinishSecondary = rewardFinishBackAwaySuppressionPolicy({
+    primaryTarget: false,
+    self: { hp: 100 },
+    target: { hp: 40, drop: 460, distance: 3183 },
+    distanceCm: 3183
+  }, {});
+  const rewardFinishDisabled = rewardFinishBackAwaySuppressionPolicy({
+    primaryTarget: true,
+    self: { hp: 100 },
+    target: { hp: 40, drop: 460, distance: 3183 },
+    distanceCm: 3183
+  }, { combatRewardFinishBackAwayHoldEnabled: false });
+  results.push({
+    name: 'reward-finish-back-away-hold-blocks-only-rewarding-low-hp-primary-drift',
+    passed: rewardFinishSuppressed.suppress === true
+      && rewardFinishSuppressed.reason === 'reward-finish-no-outward-drift'
+      && rewardFinishHighHpTarget.suppress === false
+      && rewardFinishHighHpTarget.reason === 'target-above-finish-hp'
+      && rewardFinishLowDrop.suppress === false
+      && rewardFinishLowDrop.reason === 'target-drop-not-rewarding'
+      && rewardFinishHurtSelf.suppress === false
+      && rewardFinishHurtSelf.reason === 'self-hp-not-healthy'
+      && rewardFinishInsidePickup.suppress === false
+      && rewardFinishInsidePickup.reason === 'inside-pickup-radius'
+      && rewardFinishSecondary.suppress === false
+      && rewardFinishSecondary.reason === 'not-primary-target'
+      && rewardFinishDisabled.suppress === false
+      && rewardFinishDisabled.reason === 'reward-finish-hold-disabled'
   });
 
   const postAttackCovered = pickPostAttackDropWaitTargetCore([
