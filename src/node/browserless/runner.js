@@ -98,6 +98,8 @@ const {
   observeBrowserlessCoinPickups,
   realtimeNearbyObservationSummary,
   snapshotSelfKillEvidence,
+  snapshotObservedKillEvidence,
+  summarizeKillMessageAuthorship,
   summarizeNearbyForPanel
 } = require('./decision-adapter');
 const {
@@ -2579,13 +2581,52 @@ async function runBrowserlessRunner(config, deps = {}) {
         || liveState?.current?.self
         || liveState?.lastKnown?.self
         || null;
-      easyKillEvidenceResult = easyKillPlayerTracker.observeKillEvidence?.(evidence, {
+      const killEvidenceDetail = {
         atMs: observedAtMs,
         source: detail.source || 'snapshot',
         tick: payload?.tick,
         selfHp: latestSelf?.hp,
         selfMaxHp: latestSelf?.max_hp ?? latestSelf?.maxHp
-      }) || null;
+      };
+      easyKillEvidenceResult = easyKillPlayerTracker.observeKillEvidence?.(
+        evidence,
+        killEvidenceDetail
+      ) || null;
+      // A death of an engaged opponent proves killability whoever landed the final blow, so the
+      // easy-kill score also takes competitor kills. The self-only list above keeps owning
+      // `killCount`, drop settlement, profit-mission completion and the restart gate.
+      const selfKillTargetIdSet = new Set(evidence
+        .map(item => String(item?.targetUserId ?? ''))
+        .filter(Boolean));
+      const competitorKills = snapshotObservedKillEvidence(payload, config.userId)
+        .filter(item => item.killedByOther === true
+          && !selfKillTargetIdSet.has(String(item?.targetUserId ?? '')));
+      const competitorKillResult = competitorKills.length
+        ? easyKillPlayerTracker.observeKillEvidence?.(competitorKills, killEvidenceDetail) || null
+        : null;
+      const authorship = summarizeKillMessageAuthorship(
+        Array.isArray(payload?.messages) ? payload.messages : [],
+        config.userId
+      );
+      if (authorship.killMessages > 0) {
+        logStore.append('runner', 'kill-message-authorship', {
+          source: detail.source || 'snapshot',
+          tick: numberOrNull(payload?.tick),
+          ...authorship,
+          selfKillEvidenceCount: evidence.length,
+          competitorKillEvidenceCount: competitorKills.length,
+          competitorKillConfirmedCount: (competitorKillResult?.confirmed || []).length
+        });
+      }
+      if ((competitorKillResult?.confirmed || []).length) {
+        easyKillEvidenceResult = {
+          ...(easyKillEvidenceResult || { ok: true }),
+          confirmed: [
+            ...(easyKillEvidenceResult?.confirmed || []),
+            ...competitorKillResult.confirmed
+          ]
+        };
+      }
       const confirmed = (easyKillEvidenceResult?.confirmed || []).map(item => ({
         ...item,
         source: detail.source || 'snapshot'

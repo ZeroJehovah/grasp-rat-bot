@@ -77,7 +77,9 @@ const {
   recentCombatResidualThreatContinuityCore,
   recordAttackHistoryFromActionResult,
   singleCoinBaitReturnPlan,
-  snapshotSelfKillEvidence
+  snapshotObservedKillEvidence,
+  snapshotSelfKillEvidence,
+  summarizeKillMessageAuthorship
 } = require('./browserless/decision-adapter');
 const {
   createBrowserlessDecisionState,
@@ -29594,6 +29596,60 @@ async function runSelfTest() {
       want: '1|34711|1287800|xuanze00'
     },
     {
+      name: 'browserless observed-kill evidence adds competitor kills that self-kill evidence drops',
+      got: (() => {
+        const snapshot = {
+          tick: 500,
+          messages: [
+            // Ours: both channels must see it.
+            { kind: 'kill', user_id: 7, target_user_id: 111, tick: 480, target_name: 'weKilled' },
+            // A competitor finishing the target we damaged: killability evidence all the same.
+            { kind: 'kill', user_id: 99, target_user_id: 31361, tick: 470, target_name: 'contested' },
+            // Our own death proves nothing about anyone else.
+            { kind: 'kill', user_id: 99, target_user_id: 7, tick: 460 },
+            // Unknown killer still records the death.
+            { kind: 'kill', target_user_id: 222, tick: 450 },
+            // Not a kill row.
+            { kind: 'chat', user_id: 99, target_user_id: 333, tick: 455 },
+            // Ahead of the observed tick: not yet real.
+            { kind: 'kill', user_id: 99, target_user_id: 444, tick: 900 }
+          ]
+        };
+        const selfOnly = snapshotSelfKillEvidence(snapshot, 7).map(item => item.targetUserId);
+        const observed = snapshotObservedKillEvidence(snapshot, 7);
+        return [
+          selfOnly.join(','),
+          observed.map(item => item.targetUserId).sort((a, b) => a - b).join(','),
+          observed.filter(item => item.killedByOther === true).map(item => item.targetUserId).join(','),
+          observed.find(item => item.targetUserId === 31361)?.killerUserId,
+          observed.find(item => item.targetUserId === 222)?.killerKnown
+        ].join('|');
+      })(),
+      want: '111|111,222,31361|31361|99|false'
+    },
+    {
+      name: 'browserless kill-message authorship diagnostic separates self, other and unknown killers',
+      got: (() => {
+        const authorship = summarizeKillMessageAuthorship([
+          { kind: 'kill', user_id: 7, target_user_id: 111, tick: 480 },
+          { kind: 'kill', user_id: 99, target_user_id: 31361, tick: 470 },
+          { kind: 'kill', user_id: 42, target_user_id: 222, tick: 465 },
+          { kind: 'kill', user_id: 99, target_user_id: 7, tick: 460 },
+          { kind: 'kill', target_user_id: 333, tick: 450 },
+          { kind: 'chat', user_id: 99, target_user_id: 444, tick: 455 }
+        ], 7);
+        return [
+          authorship.killMessages,
+          authorship.selfKiller,
+          authorship.otherKiller,
+          authorship.unknownKiller,
+          authorship.selfVictim,
+          authorship.distinctOtherKillers
+        ].join('|');
+      })(),
+      want: '5|1|3|1|1|2'
+    },
+    {
       name: 'browserless combat input filters passive profit population but retains realtime evidence',
       got: (() => {
         const self = { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, current_join_mode: 'Active' };
@@ -48066,6 +48122,154 @@ async function runSelfTest() {
 	        }
 	      })(),
 	      want: '1|8|new-easy|0'
+	    },
+	    {
+	      name: 'easy-kill tracker scores a competitor kill of our engaged target without crediting killCount',
+	      got: (() => {
+	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-observed-'));
+	        try {
+	          let nowMs = 1000;
+	          const tracker = createEasyKillPlayerTracker({
+	            file: path.join(dir, 'easy-kill-players.json'),
+	            now: () => nowMs,
+	            outcomeGraceMs: 40000
+	          });
+	          const target = { type: 'enemy', userId: 8, name: 'contested', hp: 40, active: true, drop: 460 };
+	          tracker.observeCombatEngagement(target, { atMs: nowMs, tick: 100, selfHp: 100, selfMaxHp: 100 });
+	          nowMs += 5000;
+	          tracker.finishEngagement(8, 'combat-target-switched', { atMs: nowMs });
+	          nowMs += 3000;
+	          const confirmed = tracker.observeKillEvidence([{
+	            targetUserId: 8,
+	            tick: 130,
+	            kind: 'kill',
+	            killerUserId: 99,
+	            killerKnown: true,
+	            killedByOther: true
+	          }], { atMs: nowMs, selfHp: 100, selfMaxHp: 100 }).confirmed;
+	          const player = tracker.status().players.find(item => item.userId === 8) || null;
+	          return [
+	            confirmed.length,
+	            confirmed[0]?.killedByOther,
+	            confirmed[0]?.killerUserId,
+	            confirmed[0]?.previousScore + '->' + confirmed[0]?.score,
+	            player?.killCount,
+	            player?.observedDeathCount
+	          ].join('|');
+	        } finally {
+	          fs.rmSync(dir, { recursive: true, force: true });
+	        }
+	      })(),
+	      want: '1|true|99|0->2|0|1'
+	    },
+	    {
+	      name: 'easy-kill tracker still credits killCount for our own kill of the same engagement shape',
+	      got: (() => {
+	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-self-kill-'));
+	        try {
+	          let nowMs = 1000;
+	          const tracker = createEasyKillPlayerTracker({
+	            file: path.join(dir, 'easy-kill-players.json'),
+	            now: () => nowMs,
+	            outcomeGraceMs: 40000
+	          });
+	          const target = { type: 'enemy', userId: 8, name: 'ours', hp: 40, active: true, drop: 460 };
+	          tracker.observeCombatEngagement(target, { atMs: nowMs, tick: 100, selfHp: 100, selfMaxHp: 100 });
+	          nowMs += 5000;
+	          tracker.finishEngagement(8, 'combat-target-switched', { atMs: nowMs });
+	          nowMs += 3000;
+	          const confirmed = tracker.observeKillEvidence([{
+	            targetUserId: 8,
+	            tick: 130,
+	            kind: 'kill',
+	            killerUserId: 7,
+	            killerKnown: true,
+	            killedByOther: false
+	          }], { atMs: nowMs, selfHp: 100, selfMaxHp: 100 }).confirmed;
+	          const player = tracker.status().players.find(item => item.userId === 8) || null;
+	          return [confirmed[0]?.killedByOther, player?.killCount, player?.observedDeathCount].join('|');
+	        } finally {
+	          fs.rmSync(dir, { recursive: true, force: true });
+	        }
+	      })(),
+	      want: 'false|1|1'
+	    },
+	    {
+	      name: 'easy-kill pending-outcome pass leaves a settled competitor kill alone but still decrements an unresolved failure',
+	      got: (() => {
+	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-settled-'));
+	        try {
+	          let nowMs = 1000;
+	          const events = [];
+	          const tracker = createEasyKillPlayerTracker({
+	            file: path.join(dir, 'easy-kill-players.json'),
+	            now: () => nowMs,
+	            outcomeGraceMs: 40000,
+	            onEvent: event => events.push(event)
+	          });
+	          const settled = { type: 'enemy', userId: 8, name: 'settled', hp: 40, active: true, drop: 460 };
+	          const unresolved = { type: 'enemy', userId: 9, name: 'unresolved', hp: 40, active: true, drop: 460 };
+	          for (const target of [settled, unresolved]) {
+	            tracker.observeCombatEngagement(target, { atMs: nowMs, tick: 100, selfHp: 100, selfMaxHp: 100 });
+	          }
+	          nowMs += 5000;
+	          tracker.finishEngagement(8, 'combat-target-switched', { atMs: nowMs });
+	          tracker.finishEngagement(9, 'combat-target-switched', { atMs: nowMs });
+	          nowMs += 3000;
+	          // Only target 8 is observed dying; target 9 simply got away.
+	          tracker.observeKillEvidence([{
+	            targetUserId: 8, tick: 130, kind: 'kill', killerUserId: 99, killerKnown: true, killedByOther: true
+	          }], { atMs: nowMs, selfHp: 100, selfMaxHp: 100 });
+	          // Give target 9 a score too, so a decrement is observable rather than clamped at zero.
+	          tracker.upsertManualPlayer({ userId: 9, name: 'unresolved' }, { score: 2, atMs: nowMs });
+	          nowMs += 60000;
+	          const expired = tracker.expirePendingOutcomes(nowMs).expired;
+	          const status = tracker.status();
+	          const settledPlayer = status.players.find(item => item.userId === 8) || null;
+	          const unresolvedPlayer = status.players.find(item => item.userId === 9) || null;
+	          return [
+	            expired.length,
+	            expired[0]?.userId,
+	            expired[0]?.decremented,
+	            settledPlayer?.score,
+	            unresolvedPlayer?.score,
+	            status.engagements.length
+	          ].join('|');
+	        } finally {
+	          fs.rmSync(dir, { recursive: true, force: true });
+	        }
+	      })(),
+	      want: '1|9|true|2|1|0'
+	    },
+	    {
+	      name: 'easy-kill tracker ignores observed deaths without an engagement or older than the engagement start',
+	      got: (() => {
+	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-unengaged-'));
+	        try {
+	          let nowMs = 1000;
+	          const tracker = createEasyKillPlayerTracker({
+	            file: path.join(dir, 'easy-kill-players.json'),
+	            now: () => nowMs,
+	            outcomeGraceMs: 40000
+	          });
+	          // Never engaged: a competitor killing a stranger tells us nothing we fought for.
+	          const unengaged = tracker.observeKillEvidence([{
+	            targetUserId: 4242, tick: 130, kind: 'kill', killerUserId: 99, killedByOther: true
+	          }], { atMs: nowMs, selfHp: 100, selfMaxHp: 100 }).confirmed.length;
+	          const target = { type: 'enemy', userId: 8, name: 'stale', hp: 40, active: true, drop: 460 };
+	          tracker.observeCombatEngagement(target, { atMs: nowMs, tick: 200, selfHp: 100, selfMaxHp: 100 });
+	          nowMs += 1000;
+	          // Tick 150 predates the engagement start at tick 200, so it is a different fight.
+	          const stale = tracker.observeKillEvidence([{
+	            targetUserId: 8, tick: 150, kind: 'kill', killerUserId: 99, killedByOther: true
+	          }], { atMs: nowMs, selfHp: 100, selfMaxHp: 100 }).confirmed.length;
+	          const status = tracker.status();
+	          return [unengaged, stale, status.playerCount, status.engagements.length].join('|');
+	        } finally {
+	          fs.rmSync(dir, { recursive: true, force: true });
+	        }
+	      })(),
+	      want: '0|0|0|1'
 	    },
 	    {
 	      name: 'safeStringify handles bigint and circular references',

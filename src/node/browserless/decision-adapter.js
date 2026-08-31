@@ -1918,6 +1918,100 @@ function selfKillTargetTicksFromMessages(messages, userId) {
   return byTarget;
 }
 
+// Killability evidence is independent of who landed the final blow. A target that died is
+// proof it can be killed, whether we finished it or someone else did, and whether or not we
+// collected the reward. This keeps the killer id so the easy-kill score can count an observed
+// death, while `selfKillTargetTicksFromMessages` stays self-only for drop settlement, profit
+// mission completion and the restart gate, which all genuinely require our own kill.
+function observedKillTargetTicksFromMessages(messages, userId) {
+  const selfUserId = Number(userId || 0);
+  const byTarget = new Map();
+  for (const message of messages || []) {
+    if (!message || typeof message !== 'object') continue;
+    const kind = String(message.kind || message.type || '').toLowerCase();
+    if (kind && kind !== 'kill') continue;
+    const targetUserId = messageTargetUserId(message);
+    if (!targetUserId) continue;
+    // A death of our own is not killability evidence about anyone.
+    if (selfUserId && targetUserId === selfUserId) continue;
+    const tick = messageTick(message);
+    const previous = byTarget.get(targetUserId);
+    if (!previous || (tick !== null && tick > previous.tick)) {
+      byTarget.set(targetUserId, { tick: tick ?? 0, message });
+    }
+  }
+  return byTarget;
+}
+
+function summarizeObservedKillEvidence(observedKillTargetTicks, userId) {
+  const selfUserId = Number(userId || 0);
+  return Array.from((observedKillTargetTicks || new Map()).entries())
+    .map(([targetUserId, item]) => {
+      const message = item?.message || null;
+      const killerUserId = messageUserId(message);
+      return {
+        targetUserId: numberOrNull(targetUserId),
+        tick: numberOrNull(item?.tick),
+        kind: String(message?.kind || message?.type || 'kill'),
+        at: String(message?.at || message?.time || message?.created_at || ''),
+        targetName: String(message?.target_name || message?.targetName || message?.victim || ''),
+        killerUserId,
+        killerKnown: killerUserId !== null,
+        killedByOther: killerUserId !== null && selfUserId > 0 && killerUserId !== selfUserId
+      };
+    })
+    .filter(item => item.targetUserId !== null);
+}
+
+function snapshotObservedKillEvidence(snapshot, userId) {
+  const observedTick = numberOrNull(snapshot?.tick);
+  return summarizeObservedKillEvidence(
+    filterSelfKillTargetTicksForObservedTick(
+      observedKillTargetTicksFromMessages(
+        Array.isArray(snapshot?.messages) ? snapshot.messages : [],
+        userId
+      ),
+      observedTick
+    ),
+    userId
+  );
+}
+
+// Bounded diagnostic over the raw kill messages: it answers whether the server pushes kill
+// rows for killers other than us at all. Without it, an empty observed-kill channel is
+// ambiguous between "no such kills happened" and "the transport never carries them".
+function summarizeKillMessageAuthorship(messages, userId) {
+  const selfUserId = Number(userId || 0);
+  const summary = {
+    killMessages: 0,
+    selfKiller: 0,
+    otherKiller: 0,
+    unknownKiller: 0,
+    selfVictim: 0,
+    otherVictim: 0,
+    distinctOtherKillers: 0
+  };
+  const otherKillers = new Set();
+  for (const message of messages || []) {
+    if (!message || typeof message !== 'object') continue;
+    const kind = String(message.kind || message.type || '').toLowerCase();
+    if (kind && kind !== 'kill') continue;
+    summary.killMessages += 1;
+    const killer = messageUserId(message);
+    const victim = messageTargetUserId(message);
+    if (killer === null) summary.unknownKiller += 1;
+    else if (selfUserId && killer === selfUserId) summary.selfKiller += 1;
+    else {
+      summary.otherKiller += 1;
+      if (otherKillers.size < 32) otherKillers.add(killer);
+    }
+    if (victim !== null && selfUserId && victim === selfUserId) summary.selfVictim += 1;
+    else if (victim !== null) summary.otherVictim += 1;
+  }
+  summary.distinctOtherKillers = otherKillers.size;
+  return summary;
+}
+
 function summarizeSelfKillEvidence(selfKillTargetTicks) {
   return Array.from(selfKillTargetTicks.entries())
     .map(([targetUserId, item]) => ({
@@ -2412,7 +2506,24 @@ function refreshRealtimeSnapshotObservation(state, self, stateful = {}, options 
       observedAt: observedAtMs ? new Date(observedAtMs).toISOString() : '',
       tick: numberOrNull(fallback.tick)
     },
-    selfKillEvidence: summarizeSelfKillEvidence(selfKillTargetTicks)
+    selfKillEvidence: summarizeSelfKillEvidence(selfKillTargetTicks),
+    // Killability evidence, killer included. Kept beside the self-only list rather than merged
+    // into it: drop settlement, profit-mission completion and the restart gate all require our
+    // own kill, while the easy-kill score only needs the death.
+    observedKillEvidence: summarizeObservedKillEvidence(
+      filterSelfKillTargetTicksForObservedTick(
+        observedKillTargetTicksFromMessages(
+          Array.isArray(fallback.messages) ? fallback.messages : [],
+          selfUserId
+        ),
+        fallback.tick
+      ),
+      selfUserId
+    ),
+    killMessageAuthorship: summarizeKillMessageAuthorship(
+      Array.isArray(fallback.messages) ? fallback.messages : [],
+      selfUserId
+    )
   };
   const decisionObservedCoins = coinRows
     .filter(row => Array.isArray(row) && row[0] !== undefined && Number(row[1] || 0) > 0)
@@ -4228,6 +4339,18 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   );
   const selfKillTargetIds = Array.from(selfKillTargetTicks.keys());
   const selfKillEvidence = summarizeSelfKillEvidence(selfKillTargetTicks);
+  const observedKillTargetTicks = filterSelfKillTargetTicksForObservedTick(
+    observedKillTargetTicksFromMessages(
+      Array.isArray(fallback.messages) ? fallback.messages : [],
+      selfUserId
+    ),
+    fallback.tick
+  );
+  const observedKillEvidence = summarizeObservedKillEvidence(observedKillTargetTicks, selfUserId);
+  const killMessageAuthorship = summarizeKillMessageAuthorship(
+    Array.isArray(fallback.messages) ? fallback.messages : [],
+    selfUserId
+  );
   const realtimeCoinsRaw = buildNativeCoinSnapshotCore(Array.isArray(realtime.coinDrops) ? realtime.coinDrops : [], { nowMs })
     .map(drop => normalizeCoinForDecision(drop, self, 'realtime'))
     .filter(Boolean)
@@ -4354,6 +4477,8 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     selfKilledPlayerDropCoins,
     selfKillTargetIds,
     selfKillEvidence,
+    observedKillEvidence,
+    killMessageAuthorship,
     profitTickEpoch: currentProfitTickEpoch(stateful),
     profitObservationTick: positiveTick(fallback.tick),
     profitCoins,
@@ -12581,6 +12706,8 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
       nearby: realtimeNearbyObservationSummary(input, combat, lootControl.assessment, options),
       coinPickups: topItems(coinPickups, item => item, 20),
       selfKillEvidence: input.realtimeSnapshotObservation?.selfKillEvidence || [],
+      observedKillEvidence: input.realtimeSnapshotObservation?.observedKillEvidence || [],
+      killMessageAuthorship: input.realtimeSnapshotObservation?.killMessageAuthorship || null,
       postKillSettlement,
       postKillSettlements: summarizePostKillSettlements(stateful, input.nowMs),
       dropRace: dropRaceEvents[0] || null,
@@ -13997,11 +14124,33 @@ function reconcileEasyKillTracker(input, stateful = {}, options = {}, damageStat
     || null;
   const tracker = easyKillPlayerTracker(options);
   if (!tracker) return refreshEasyKillTargetAnnotations(input, stateful, options, null, damageStatus);
-  callEasyKillPlayerTracker(options, 'observeKillEvidence', input.selfKillEvidence || [], {
+  // Killability evidence takes any observed death of an engaged opponent, ours or not. The
+  // self-only list is preferred where both describe the same target so our own kill keeps its
+  // `killCount`; the observed list adds the deaths a competitor finished. Ordering matters:
+  // both run before `expirePendingOutcomes` so a settled death is never scored as a failure.
+  const observedKillEvidence = Array.isArray(input.observedKillEvidence)
+    ? input.observedKillEvidence
+    : [];
+  const selfKillEvidence = Array.isArray(input.selfKillEvidence) ? input.selfKillEvidence : [];
+  const selfKillTargetIds = new Set(selfKillEvidence
+    .map(item => String(item?.targetUserId ?? item?.targetId ?? ''))
+    .filter(Boolean));
+  callEasyKillPlayerTracker(options, 'observeKillEvidence', selfKillEvidence, {
     atMs: input.nowMs,
     selfHp: hpValue(input.self),
     selfMaxHp: numberOrNull(input.self?.max_hp ?? input.self?.maxHp)
   });
+  const competitorKillEvidence = observedKillEvidence.filter(item => (
+    item?.killedByOther === true
+      && !selfKillTargetIds.has(String(item?.targetUserId ?? item?.targetId ?? ''))
+  ));
+  if (competitorKillEvidence.length) {
+    callEasyKillPlayerTracker(options, 'observeKillEvidence', competitorKillEvidence, {
+      atMs: input.nowMs,
+      selfHp: hpValue(input.self),
+      selfMaxHp: numberOrNull(input.self?.max_hp ?? input.self?.maxHp)
+    });
+  }
   callEasyKillPlayerTracker(options, 'expirePendingOutcomes', input.nowMs);
   callEasyKillPlayerTracker(options, 'observeVisibleTargets', input.visibleTargets || [], {
     atMs: input.nowMs,
@@ -16056,6 +16205,8 @@ module.exports = {
   singleCoinBaitReturnPlan,
   summarizeBrowserlessDecision,
   snapshotSelfKillEvidence,
+  snapshotObservedKillEvidence,
+  summarizeKillMessageAuthorship,
   realtimeNearbyObservationSummary,
   summarizeNearbyForPanel,
   summarizeBrowserlessDecisionState

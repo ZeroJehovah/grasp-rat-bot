@@ -97,6 +97,12 @@ function failureShouldDecrementScore(reason = '') {
   );
 }
 
+function killEvidenceKilledByOther(item = {}) {
+  if (item?.killedByOther === true) return true;
+  if (item?.killedByOther === false) return false;
+  return false;
+}
+
 function killScoreIncrement(detail = {}, engagement = null) {
   const engagementSelfHp = numberOrNull(engagement?.lastSelfHp);
   const detailSelfHp = numberOrNull(detail.selfHp ?? detail.self_hp ?? detail.self?.hp);
@@ -144,6 +150,12 @@ function normalizePlayer(key, player) {
     nameObservedTick: numberOrNull(player.nameObservedTick ?? player.lastKillTick),
     score,
     killCount: Math.max(1, Math.round(Number(player.killCount || 1))),
+    // Records written before observed-death tracking have no count; fall back to our own
+    // kill tally so an upgraded state file reads as at least that many witnessed deaths.
+    observedDeathCount: Math.max(
+      0,
+      Math.round(Number(player.observedDeathCount ?? player.killCount ?? 0))
+    ),
     firstKilledAt: String(player.firstKilledAt || player.lastKilledAt || ''),
     lastKilledAt: String(player.lastKilledAt || player.firstKilledAt || ''),
     lastKillTick: numberOrNull(player.lastKillTick),
@@ -676,7 +688,14 @@ function createEasyKillPlayerTracker(options = {}) {
       const previousScore = existing ? normalizedScore(existing.score, INITIAL_SCORE) : 0;
       const scoreAward = killScoreIncrement(detail, engagement);
       const score = Math.min(MAX_SCORE, previousScore + scoreAward.increment);
-      const killCount = Math.max(1, Number(existing?.killCount || 0) + 1);
+      // A death we witnessed is killability evidence regardless of who landed the final blow
+      // and regardless of who collected the reward. `killCount` stays our own confirmed-kill
+      // tally so its meaning does not drift; observed deaths are counted separately.
+      const killedByOther = killEvidenceKilledByOther(item);
+      const killCount = killedByOther
+        ? Math.max(0, Number(existing?.killCount || 0))
+        : Math.max(1, Number(existing?.killCount || 0) + 1);
+      const observedDeathCount = Math.max(1, Number(existing?.observedDeathCount || 0) + 1);
       if (score > 0) {
         store.players[key] = {
           key,
@@ -689,6 +708,7 @@ function createEasyKillPlayerTracker(options = {}) {
           nameObservedTick,
           score,
           killCount,
+          observedDeathCount,
           firstKilledAt: existing?.firstKilledAt || killedAt,
           lastKilledAt: killedAt,
           lastKillTick: tick,
@@ -710,7 +730,10 @@ function createEasyKillPlayerTracker(options = {}) {
         scoreIncrementSource: scoreAward.source,
         selfHp: scoreAward.selfHp,
         selfMaxHp: scoreAward.selfMaxHp,
-        killCount
+        killCount,
+        observedDeathCount,
+        killedByOther,
+        killerUserId: numberOrNull(item?.killerUserId)
       };
       confirmed.push(event);
       emit(event);
@@ -728,6 +751,9 @@ function createEasyKillPlayerTracker(options = {}) {
       if (engagement.active || !(Number(engagement.outcomeDueAtMs || 0) > 0) || atMs < Number(engagement.outcomeDueAtMs)) continue;
       const existing = store.players[key] || null;
       const previousScore = existing ? normalizedScore(existing.score, INITIAL_SCORE) : 0;
+      // A witnessed death cannot reach this point: `observeKillEvidence` deletes the engagement
+      // it scores, and callers run it before this pass, so a settled death leaves nothing pending
+      // to decrement. That deletion is the guard; see the observed-death self-tests.
       const shouldDecrement = failureShouldDecrementScore(engagement.endReason);
       const score = shouldDecrement ? Math.max(0, previousScore - 1) : previousScore;
       if (existing && score > 0) existing.score = score;
