@@ -690,6 +690,22 @@ function updatePostKillSettlementsCore(previous = {}, context = {}, options = {}
     };
   }
 
+  // The legacy disappearance settlement is created after the own-damage block above, so a
+  // target can pick up both records in the same tick: the own-damage creation check cannot see
+  // a state that does not exist yet. Drop the weaker duplicate here, once every evidence-backed
+  // path has had its turn. Evidence-backed settlements always win, and an own-damage record is
+  // only ever removed while a real one is actively tracking the same target.
+  for (const [key, state] of Object.entries(states)) {
+    if (!key.startsWith('own-damage:') || !settlementStateIsActive(state)) continue;
+    const id = valueId(state?.targetId);
+    if (!id) continue;
+    const supersededBy = Object.entries(states).find(([otherKey, other]) => otherKey !== key
+      && other?.ownDamageAttribution !== true
+      && valueId(other?.targetId) === id
+      && settlementStateIsActive(other));
+    if (supersededBy) delete states[key];
+  }
+
   const orderedEntries = Object.entries(states)
     .sort((left, right) => {
       const leftState = left[1];

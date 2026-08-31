@@ -8058,6 +8058,45 @@ function runStrategyModuleSelfTests() {
       && ownDamageYieldsToKill.selected?.ownDamageAttribution !== true
   });
 
+  // Production regression (2026-08-31 12:19:25 UTC, target 31361): the legacy disappearance
+  // settlement is created after the own-damage block, so the creation-time duplicate check
+  // cannot see it and the same target opened both records in one tick — and that drop was
+  // actually won (`settled` / `self-drop-increase`). The post-pass must drop the weaker
+  // duplicate while leaving a lone own-damage record intact.
+  const ownDamageDuplicateContext = {
+    nowMs: 2300,
+    snapshotTick: 500,
+    currentCombatTarget: null,
+    previousCombatTarget: {
+      userId: 31361, name: 'damaged-target', hp: 1, drop: 11, x: 100, y: 200, firstSeenTick: 400
+    },
+    combatMetrics: {
+      targetId: 31361, targetName: 'damaged-target', targetDamage: 99,
+      acceptedShots: 12, actualLastShotAt: 2000, lastAcceptedShotTick: 495,
+      startedTick: 400, startedAt: 1000
+    },
+    visibleTargets: [],
+    selfKillEvidence: [],
+    playerDropCoins: [],
+    targetMemory: [],
+    disappearanceKillPlausible: true,
+    ownDamageSettlementEvidence: [{ ...ownDamageEvidenceAccepted, authority: 'realtime' }]
+  };
+  const ownDamageDuplicate = updatePostKillSettlementsCore({}, ownDamageDuplicateContext, ownDamageOptions);
+  const ownDamageDuplicateKeys = Object.keys(ownDamageDuplicate.states || {});
+  const ownDamageAloneKeys = Object.keys(updatePostKillSettlementsCore({}, {
+    ...ownDamageDuplicateContext,
+    previousCombatTarget: null,
+    combatMetrics: null,
+    disappearanceKillPlausible: false
+  }, ownDamageOptions).states || {});
+  results.push({
+    name: 'own-damage-settlement-drops-duplicate-of-a-later-created-real-settlement',
+    passed: ownDamageDuplicateKeys.length > 0
+      && ownDamageDuplicateKeys.every(key => !key.startsWith('own-damage:'))
+      && ownDamageAloneKeys.filter(key => key.startsWith('own-damage:')).length === 1
+  });
+
   // Outward drift away from a low-HP high-value primary target loses the kill race
   // that closing distance would win; only the generic back-away branch is held.
   const rewardFinishSuppressed = rewardFinishBackAwaySuppressionPolicy({
