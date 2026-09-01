@@ -2037,12 +2037,13 @@ function renderBrowserlessWebPanel() {
       const action = status.action || status.decision || {};
       const scheduled = String(action.nextSnapshotCheckAt || '');
       if (scheduled && Date.parse(scheduled) > Date.now()) return scheduled;
+      const cooldownActive = Boolean(offlineCooldownAt(status));
       const snapshot = snapshotPanelStatus(status);
       const pollerNext = String(snapshot.poller?.nextAttemptAt || '');
-      if (pollerNext && Date.parse(pollerNext) > Date.now()) return pollerNext;
+      if (!cooldownActive && pollerNext && Date.parse(pollerNext) > Date.now()) return pollerNext;
       const nextRunAt = String(action.nextRunAt || '');
       const reasonText = [action.reason, status.loginPointSafety?.reason].filter(Boolean).join(' ');
-      if (!offlineCooldownAt(status)
+      if (!cooldownActive
         && nextRunAt
         && Date.parse(nextRunAt) > Date.now()
         && /pending-snapshot-safety|snapshot-safety-retry|snapshot-edge/i.test(reasonText)) {
