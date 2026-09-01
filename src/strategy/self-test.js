@@ -7945,6 +7945,109 @@ function runStrategyModuleSelfTests() {
       && switchedTargetReplayed.states[switchedTargetSettlementKey]?.active === false
   });
 
+  // A drop collected inside our own pickup radius settles the generation at once.
+  // The coin transport is the snapshot stream, so between the kill and the next
+  // snapshot the coin can already be gone: `drop-pending` then has no visible coin
+  // to match and only the timeout could end it.  Reproduces target 24401 at
+  // 2026-08-30T16:26:48Z (Drop 8, pickup row 953ms later, ~3.1s wasted wait).
+  const pickupSettlementEvidence = [{ targetUserId: 24401, tick: 31884, kind: 'kill' }];
+  const pickupSettlementKey = postKillEvidenceKey(pickupSettlementEvidence[0]);
+  const pickupSettlementOptions = { confirmedMs: 5000, pickupMs: 45000, tickMs: 50, maxEntries: 8 };
+  const pickupSettlementBase = {
+    visibleTargets: [],
+    selfKillEvidence: pickupSettlementEvidence,
+    playerDropCoins: [],
+    targetMemory: [{
+      userId: 24401,
+      name: 'Dyasher',
+      drop: 8,
+      dropKnown: true,
+      x: 8912,
+      y: 79277,
+      at: 1788107200000
+    }]
+  };
+  const pickupSettlementOpenedAt = 1788107208317;
+  const pickupSettlementOpened = updatePostKillSettlementsCore({}, {
+    ...pickupSettlementBase,
+    nowMs: pickupSettlementOpenedAt,
+    snapshotTick: 31901,
+    coinPickups: []
+  }, pickupSettlementOptions);
+  const pickupSettlementRow = [{
+    key: 'id:298',
+    amount: 8,
+    at: pickupSettlementOpenedAt + 953,
+    reason: 'realtime-snapshot-coin-disappeared-near-path'
+  }];
+  const pickupSettled = updatePostKillSettlementsCore(pickupSettlementOpened.states, {
+    ...pickupSettlementBase,
+    nowMs: pickupSettlementOpenedAt + 1009,
+    snapshotTick: 31922,
+    coinPickups: pickupSettlementRow
+  }, pickupSettlementOptions);
+  results.push({
+    name: 'post-kill-settlement-settles-on-collected-drop-pickup-evidence',
+    passed: pickupSettlementOpened.selected?.phase === 'drop-pending'
+      && pickupSettled.states[pickupSettlementKey]?.active === false
+      && pickupSettled.states[pickupSettlementKey]?.phase === 'settled'
+      && pickupSettled.states[pickupSettlementKey]?.terminalReason === 'matched-drop-picked-up'
+      && pickupSettled.states[pickupSettlementKey]?.matchedCoinKey === 'id:298'
+      && pickupSettled.states[pickupSettlementKey]?.matchedCoinAmount === 8
+      && pickupSettled.states[pickupSettlementKey]?.matchedCoinAuthority === 'snapshot'
+      && pickupSettled.states[pickupSettlementKey]?.pickupEvidence === true
+      && pickupSettled.selected === null
+      && pickupSettled.activeCount === 0
+  });
+
+  // The pickup row only settles the kill it belongs to: a different amount, an
+  // observation older than the generation, and a second equal-Drop kill claiming an
+  // already-consumed row all have to leave `drop-pending` untouched.
+  const pickupAmountMismatch = updatePostKillSettlementsCore(pickupSettlementOpened.states, {
+    ...pickupSettlementBase,
+    nowMs: pickupSettlementOpenedAt + 1000,
+    snapshotTick: 31922,
+    coinPickups: [{
+      key: 'id:999',
+      amount: 14,
+      at: pickupSettlementOpenedAt + 500,
+      reason: 'realtime-snapshot-coin-disappeared-near-path'
+    }]
+  }, pickupSettlementOptions);
+  const pickupStaleObservation = updatePostKillSettlementsCore(pickupSettlementOpened.states, {
+    ...pickupSettlementBase,
+    nowMs: pickupSettlementOpenedAt + 1000,
+    snapshotTick: 31922,
+    coinPickups: [{
+      key: 'id:279',
+      amount: 8,
+      at: pickupSettlementOpenedAt - 30000,
+      reason: 'realtime-snapshot-coin-disappeared-near-path'
+    }]
+  }, pickupSettlementOptions);
+  const pickupSecondKillEvidence = [{ targetUserId: 5625, tick: 31930, kind: 'kill' }];
+  const pickupSecondKillKey = postKillEvidenceKey(pickupSecondKillEvidence[0]);
+  const pickupSecondKill = updatePostKillSettlementsCore(pickupSettled.states, {
+    ...pickupSettlementBase,
+    selfKillEvidence: [...pickupSettlementEvidence, ...pickupSecondKillEvidence],
+    targetMemory: [
+      ...pickupSettlementBase.targetMemory,
+      { userId: 5625, name: 'equal-drop-target', drop: 8, dropKnown: true, x: 8900, y: 79280, at: pickupSettlementOpenedAt + 1000 }
+    ],
+    nowMs: pickupSettlementOpenedAt + 1109,
+    snapshotTick: 31932,
+    coinPickups: pickupSettlementRow
+  }, pickupSettlementOptions);
+  results.push({
+    name: 'post-kill-settlement-pickup-evidence-requires-matching-unconsumed-coin',
+    passed: pickupAmountMismatch.states[pickupSettlementKey]?.active === true
+      && pickupAmountMismatch.states[pickupSettlementKey]?.phase === 'drop-pending'
+      && pickupStaleObservation.states[pickupSettlementKey]?.active === true
+      && pickupStaleObservation.states[pickupSettlementKey]?.phase === 'drop-pending'
+      && pickupSecondKill.states[pickupSecondKillKey]?.active === true
+      && pickupSecondKill.states[pickupSecondKillKey]?.phase === 'drop-pending'
+  });
+
   // Own-damage attribution evidence gate: only a target we actually damaged, whose
   // last observed HP was low and which is no longer visibly alive, opens a record.
   const ownDamageEvidenceAccepted = ownDamageSettlementEvidenceCore({

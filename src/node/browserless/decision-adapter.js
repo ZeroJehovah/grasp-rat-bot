@@ -10166,6 +10166,15 @@ function reconcilePostKillSettlement(input, stateful = {}, combat = {}, previous
     visibleTargets: input?.visibleTargets || [],
     selfKillEvidence,
     playerDropCoins,
+    // A drop taken inside our own pickup radius can vanish before any coin frame
+    // carries it, leaving `drop-pending` with nothing to match.  The incidental
+    // pickup ledger is the observation that already credits those coins.  The
+    // retained ledger spans frames; `input.coinPickupEvidence` is this frame's own
+    // observation on the full-planner path, which does not write that ledger.
+    coinPickups: [
+      ...recentRealtimeSnapshotCoinPickups(stateful, input?.nowMs),
+      ...(Array.isArray(input?.coinPickupEvidence) ? input.coinPickupEvidence : [])
+    ],
     targetMemory,
     snapshotTick: input?.fallback?.tick ?? observation?.tick ?? null,
     disappearanceKillPlausible,
@@ -14645,6 +14654,9 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     forcePostAttackCoinDecoration: true
   });
   const coinPickups = observeBrowserlessCoinPickups(input, stateful, options);
+  // This path's pickup observation is per-frame and is not written to the retained
+  // realtime ledger, so hand it to post-kill settlement explicitly.
+  input.coinPickupEvidence = coinPickups;
   releaseProfitMissionForPickups(stateful, coinPickups, input.nowMs, options);
   cleanupCoinProgressState(stateful, input.nowMs, options);
   applyIgnoredCoinFilter(input, stateful, options);

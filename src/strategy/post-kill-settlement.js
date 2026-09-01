@@ -20,6 +20,21 @@ function coinKey(coin) {
   return valueId(coin?.key ?? coin?.drop_id ?? coin?.dropId ?? coin?.id);
 }
 
+// A kill message is observed slightly after the death, so a pickup recorded just
+// before the settlement generation opened can still belong to it.
+const PICKUP_EVIDENCE_LEAD_MS = 1000;
+
+// UC-018 requires every attribution field to name its authority, so a pickup row
+// must state where its coin observation came from rather than inherit a generic
+// label.  The row carries it explicitly; the reason string is the fallback for a
+// record written before the field existed.
+function pickupEvidenceAuthority(pickup) {
+  const explicit = String(pickup?.authority || '').toLowerCase();
+  if (explicit === 'realtime' || explicit === 'native') return 'realtime';
+  if (explicit === 'snapshot') return 'snapshot';
+  return String(pickup?.reason || '').startsWith('realtime-coin-') ? 'realtime' : 'snapshot';
+}
+
 function coinAuthority(coin) {
   if (!coin || typeof coin !== 'object') return '';
   if (coin.snapshotOnly === true || String(coin.authority || '').toLowerCase() === 'snapshot') return 'snapshot';
@@ -119,6 +134,38 @@ function matchingDropCoin(context, state) {
   }) || null;
 }
 
+// A drop collected inside our own pickup radius can settle before any coin
+// frame ever carries it: the coin transport is the snapshot stream, so between
+// the kill and the next snapshot the coin may already be gone.  `drop-pending`
+// then has no visible coin to match and only the timeout can end it, which is
+// the unnecessary wait this resolves.
+//
+// The admitting evidence is a coin that disappeared next to our own path -- the
+// same incidental-pickup observation that already credits session coins -- whose
+// amount equals the target's known Drop and whose observation is not older than
+// the settlement generation.  Amount equality is required because that is what
+// ties the vanished coin to this kill; a source-labelled coin is matched by
+// `matchingDropCoin` instead and never needs this path.
+function matchingPickupEvidence(context, state, options = {}) {
+  const drop = finiteNumber(state?.targetDrop);
+  if (state?.targetDropKnown !== true || drop === null || !(drop > 0)) return null;
+  const startedAt = Math.max(0, Number(state?.startedAt || 0));
+  const confirmedAt = Math.max(0, Number(state?.confirmedAt || 0));
+  // The kill is observed a moment after it happens, so a pickup recorded just
+  // before the settlement opened still belongs to it.
+  const floorAtMs = Math.max(0, (confirmedAt || startedAt) - PICKUP_EVIDENCE_LEAD_MS);
+  // One collected coin settles one kill.  Two kills of equal Drop can otherwise
+  // overlap inside the lead window and both claim the same pickup row.
+  const consumed = options.consumedPickupKeys instanceof Set ? options.consumedPickupKeys : null;
+  return (context.coinPickups || []).find(item => {
+    if (Math.round(Number(item?.amount)) !== Math.round(drop)) return false;
+    const atMs = timestampMs(item?.at ?? item?.atMs ?? item?.observedAtMs);
+    if (!(atMs > 0) || atMs < floorAtMs) return false;
+    const key = coinKey(item);
+    return !(consumed && key && consumed.has(key));
+  }) || null;
+}
+
 function settlementSummary(state, nowMs = Date.now()) {
   if (!state) return null;
   return {
@@ -150,6 +197,9 @@ function settlementSummary(state, nowMs = Date.now()) {
     ownDamageLastObservedHp: finiteNumber(state.ownDamageLastObservedHp),
     killAttribution: state.killAttribution || '',
     authority: state.authority || '',
+    pickupEvidence: state.pickupEvidence === true,
+    pickupEvidenceReason: state.pickupEvidenceReason || '',
+    terminalReason: state.terminalReason || '',
     reason: state.reason || ''
   };
 }
@@ -282,6 +332,11 @@ function updatePostKillSettlementCore(previous, context = {}, options = {}) {
     return { state: null, cleared: true, reason: 'matched-player-drop-disappeared' };
   }
 
+  // Same reasoning as the evidence-backed path: a drop already collected leaves
+  // nothing to wait for, so it must not hold the generation open to its timeout.
+  if (matchingPickupEvidence(context, state, options)) {
+    return { state: null, cleared: true, reason: 'matched-drop-picked-up' };
+  }
   if (nowMs > Number(state.expiresAt || 0)) {
     return { state: null, cleared: true, reason: `${state.phase || 'settlement'}-timeout` };
   }
@@ -560,6 +615,25 @@ function updateExplicitPostKillSettlement(state, context, options = {}) {
     && observedTick > Number(state.lastSnapshotTick || 0)) {
     return terminalPostKillSettlement(state, nowMs, 'settled', 'matched-player-drop-disappeared');
   }
+  // Nothing is left to wait for once the drop is already ours.  Without this the
+  // only remaining exit from `drop-pending` is the timeout, so a kill inside our
+  // pickup radius always burned the full window after the coin was collected.
+  const pickup = matchingPickupEvidence(context, state, options);
+  if (pickup) {
+    const pickupKey = coinKey(pickup);
+    if (pickupKey && options.consumedPickupKeys instanceof Set) {
+      options.consumedPickupKeys.add(pickupKey);
+    }
+    const settled = terminalPostKillSettlement(state, nowMs, 'settled', 'matched-drop-picked-up');
+    settled.matchedCoinKey = coinKey(pickup) || state.matchedCoinKey || '';
+    settled.matchedCoinAmount = finiteNumber(pickup.amount);
+    settled.matchedCoinAuthority = pickupEvidenceAuthority(pickup);
+    settled.matchedCoinObservedAtMs = timestampMs(pickup.at ?? pickup.atMs ?? pickup.observedAtMs) || nowMs;
+    settled.pickupEvidence = true;
+    settled.pickupEvidenceReason = String(pickup.reason || '');
+    settled.reason = 'matched-drop-picked-up';
+    return settled;
+  }
   if (nowMs > Number(state.expiresAt || 0)) {
     return terminalPostKillSettlement(state, nowMs, 'expired', `${state.phase || 'drop-pending'}-timeout`);
   }
@@ -597,14 +671,19 @@ function updatePostKillSettlementsCore(previous = {}, context = {}, options = {}
       seenEvidenceKeys[state.evidenceKey] = Number(state.startedAt || nowMs);
     }
   }
+  // Shared across every settlement updated in this pass so one collected coin can
+  // settle only one kill.  Also seeded with the coins already claimed by retained
+  // generations, so a replayed pickup row cannot settle a second kill later.
+  const consumedPickupKeys = new Set(Object.values(states)
+    .filter(state => state?.pickupEvidence === true)
+    .map(state => valueId(state?.matchedCoinKey))
+    .filter(Boolean));
+  const explicitOptions = { confirmedMs, pickupMs, consumedPickupKeys };
 
   for (const [key, state] of Object.entries(states)) {
     if ((!key.startsWith('evidence:') && !key.startsWith('primary:') && !key.startsWith('own-damage:'))
       || !settlementStateIsActive(state)) continue;
-    states[key] = updateExplicitPostKillSettlement(state, context, {
-      confirmedMs,
-      pickupMs
-    });
+    states[key] = updateExplicitPostKillSettlement(state, context, explicitOptions);
   }
 
   const primaryEvidence = context.primaryTargetSettlementEvidence;
@@ -613,10 +692,7 @@ function updatePostKillSettlementsCore(previous = {}, context = {}, options = {}
     const key = created?.evidenceKey || '';
     if (created && key && !Object.prototype.hasOwnProperty.call(seenEvidenceKeys, key)) {
       seenEvidenceKeys[key] = nowMs;
-      states[key] = updateExplicitPostKillSettlement(created, context, {
-        confirmedMs,
-        pickupMs
-      });
+      states[key] = updateExplicitPostKillSettlement(created, context, explicitOptions);
     }
   }
 
@@ -630,10 +706,7 @@ function updatePostKillSettlementsCore(previous = {}, context = {}, options = {}
       if (!postKillEvidenceIsFresh(item, context, options)) continue;
       const created = explicitPostKillSettlement(item, context, { confirmedMs });
       if (created) {
-        states[key] = updateExplicitPostKillSettlement(created, context, {
-          confirmedMs,
-          pickupMs
-        });
+        states[key] = updateExplicitPostKillSettlement(created, context, explicitOptions);
       }
     } else if (!states[key] || !settlementStateIsActive(states[key])) {
       // A terminal/tombstone state is deliberately not re-armed by the
@@ -659,10 +732,7 @@ function updatePostKillSettlementsCore(previous = {}, context = {}, options = {}
     const key = created?.evidenceKey || '';
     if (!created || !key || Object.prototype.hasOwnProperty.call(seenEvidenceKeys, key)) continue;
     seenEvidenceKeys[key] = nowMs;
-    states[key] = updateExplicitPostKillSettlement(created, context, {
-      confirmedMs,
-      pickupMs
-    });
+    states[key] = updateExplicitPostKillSettlement(created, context, explicitOptions);
   }
 
   const legacyKeys = Object.keys(states).filter(key => key.startsWith('legacy:'));
@@ -676,7 +746,8 @@ function updatePostKillSettlementsCore(previous = {}, context = {}, options = {}
     confirmedMs,
     pickupMs,
     recentShotMs: options.recentShotMs,
-    tickMs: options.tickMs
+    tickMs: options.tickMs,
+    consumedPickupKeys
   });
   for (const key of legacyKeys) delete states[key];
   if (legacyResult.state) {
