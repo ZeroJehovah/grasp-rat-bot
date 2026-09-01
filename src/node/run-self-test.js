@@ -57,9 +57,12 @@ const {
   movementTimingSummary,
   selectRealtimeCombatState
 } = require('./browserless/state-store');
+const { evaluateCombatHpExitCore } = require('../strategy/combat-exit');
 const {
   activeTargetCompletionEstimate,
   attributeBrowserlessHpDropToBullet,
+  browserlessEngagedTargetHpEvidence,
+  rememberBrowserlessAttackerDamage,
   buildBrowserlessDecision,
   buildBrowserlessCombatStrategyInput,
   buildBrowserlessRealtimeControlDecision,
@@ -32139,6 +32142,85 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'predicted-safe-false-negative|bullet-1|vel-7|4|true|23|matched-hit|true|unmatched-hit||1|1|1'
+    },
+    {
+      name: 'engaged target exit hp weights by attributed damage and falls back to the mean without it',
+      got: (() => {
+        // The 2026-09-01 00:06 fight: mango at 55HP dealt most of the 21 damage
+        // while the 97HP harasser dealt little. The arithmetic mean of 76 against
+        // self 52 cleared the 20-point disadvantage gap; the damage-weighted read
+        // does not, because the target actually hurting us is the low-HP one.
+        const nowMs = 1000000;
+        const visibleTargets = [
+          { user_id: 31361, hp: 55, alive: true, name: 'mango' },
+          { user_id: 32551, hp: 97, alive: true, name: 'harasser' }
+        ];
+        const combat = { target: { user_id: 32551, hp: 97, alive: true, name: 'harasser' } };
+        const evidence = state => browserlessEngagedTargetHpEvidence(
+          { visibleTargets },
+          combat,
+          [visibleTargets[0]],
+          ['31361', '32551'],
+          state,
+          nowMs,
+          {}
+        );
+        const weightedState = {};
+        rememberBrowserlessAttackerDamage(weightedState, '31361', 16, nowMs - 500, {});
+        rememberBrowserlessAttackerDamage(weightedState, '32551', 5, nowMs - 400, {});
+        const weighted = evidence(weightedState);
+        // Controls: no attribution, attribution on only one of two engaged
+        // targets, and attribution older than the window must all keep the mean,
+        // so a passing weighted case cannot be the fallback being absent.
+        const unattributed = evidence({});
+        const singleState = {};
+        rememberBrowserlessAttackerDamage(singleState, '31361', 16, nowMs - 300, {});
+        const single = evidence(singleState);
+        const staleState = {};
+        rememberBrowserlessAttackerDamage(staleState, '31361', 16, nowMs - 60000, {});
+        rememberBrowserlessAttackerDamage(staleState, '32551', 5, nowMs - 60000, {});
+        const stale = evidence(staleState);
+        // Weighting must be able to raise the evaluated HP too: when the healthy
+        // opponent is the one hurting us, the exit evidence must not be softened.
+        const dangerState = {};
+        rememberBrowserlessAttackerDamage(dangerState, '32551', 18, nowMs - 300, {});
+        rememberBrowserlessAttackerDamage(dangerState, '31361', 2, nowMs - 300, {});
+        const danger = evidence(dangerState);
+        const unattributedOwner = {};
+        rememberBrowserlessAttackerDamage(unattributedOwner, '', 9, nowMs, {});
+        const capState = {};
+        for (let index = 0; index < 25; index += 1) {
+          rememberBrowserlessAttackerDamage(capState, 'id' + index, 1, nowMs - index, {});
+        }
+        const exitRule = targetHp => evaluateCombatHpExitCore({ selfHp: 52, targetHp }, {})?.rule ?? 'none';
+        return [
+          weighted.source,
+          weighted.targetHp,
+          weighted.averageHp,
+          weighted.attributedTargetCount,
+          exitRule(weighted.targetHp),
+          exitRule(weighted.averageHp),
+          unattributed.source,
+          unattributed.targetHp,
+          single.source,
+          single.targetHp,
+          stale.source,
+          stale.targetHp,
+          danger.source,
+          danger.targetHp > danger.averageHp,
+          exitRule(danger.targetHp),
+          Object.keys(unattributedOwner.browserlessAttackerDamage || {}).length,
+          Object.keys(capState.browserlessAttackerDamage || {}).length
+        ].join('|');
+      })(),
+      want: [
+        'engaged-target-damage-weighted', 65, 76, 2, 'none', 'clear-hp-gap',
+        'engaged-target-average', 76,
+        'engaged-target-average', 76,
+        'engaged-target-average', 76,
+        'engaged-target-damage-weighted', true, 'clear-hp-gap',
+        0, 16
+      ].join('|')
     },
     {
       name: 'browserless runner config accepts source IP binding',

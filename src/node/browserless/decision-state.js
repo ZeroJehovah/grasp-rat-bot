@@ -149,6 +149,7 @@ function createInitialDecisionState(options = {}) {
     seenEntities: asRecord(options.seenEntities),
     browserlessLastSelf: cloneJson(options.browserlessLastSelf || null),
     browserlessInjury: cloneJson(options.browserlessInjury || null),
+    browserlessAttackerDamage: asRecord(options.browserlessAttackerDamage),
     browserlessLeaveRisk: cloneJson(options.browserlessLeaveRisk || null),
     browserlessPursuit: cloneJson(options.browserlessPursuit || null),
     recoveryContactGuard: cloneJson(options.recoveryContactGuard || null),

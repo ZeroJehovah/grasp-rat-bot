@@ -10925,6 +10925,10 @@ function pickBrowserlessInjuryPressure(input, stateful, options = {}) {
   };
 }
 
+function browserlessAttackerDamageWindowMs(options = {}) {
+  return Math.max(1000, Number(options.browserlessAttackerDamageWindowMs || 6000));
+}
+
 function browserlessInjuryRecentMs(options = {}) {
   return Math.max(1000, Number(options.browserlessInjuryLeaveRecentMs || 6000));
 }
@@ -11063,6 +11067,45 @@ function attributeBrowserlessHpDropToBullet(input, stateful, hpDrop, nowMs, opti
   return attribution;
 }
 
+// Per-attacker record of damage actually taken, keyed by attacker id. The exit
+// HP evidence below weights engaged targets by how much each one has really hurt
+// us, so a distant harasser can no longer carry the same weight as the target
+// standing on us. Ownership comes from the bullet attribution that already runs
+// on every HP drop; when a drop cannot be attributed to any owner it is recorded
+// as unattributed rather than spread across the engaged set, because guessing an
+// owner is exactly the error this replaces.
+function rememberBrowserlessAttackerDamage(stateful, ownerId, hpDrop, nowMs, options = {}) {
+  if (!stateful || typeof stateful !== 'object') return null;
+  const windowMs = browserlessAttackerDamageWindowMs(options);
+  const ledger = stateful.browserlessAttackerDamage && typeof stateful.browserlessAttackerDamage === 'object'
+    ? stateful.browserlessAttackerDamage
+    : {};
+  const damage = Math.max(0, Number(hpDrop) || 0);
+  const key = String(ownerId || '');
+  if (key && damage > 0) {
+    const previous = ledger[key] && typeof ledger[key] === 'object' ? ledger[key] : null;
+    const fresh = previous && nowMs - Number(previous.lastAt || 0) <= windowMs ? previous : null;
+    ledger[key] = {
+      damage: Math.round(((fresh ? Number(fresh.damage) || 0 : 0) + damage) * 10) / 10,
+      hits: (fresh ? Math.max(0, Math.round(Number(fresh.hits) || 0)) : 0) + 1,
+      firstAt: fresh ? Number(fresh.firstAt || nowMs) : nowMs,
+      lastAt: nowMs
+    };
+  }
+  for (const [entryKey, entry] of Object.entries(ledger)) {
+    if (!entry || typeof entry !== 'object' || nowMs - Number(entry.lastAt || 0) > windowMs) delete ledger[entryKey];
+  }
+  // Cap the ledger so a busy map cannot grow it without bound; the freshest
+  // attackers are the ones the exit evidence needs.
+  const keys = Object.keys(ledger);
+  if (keys.length > 16) {
+    keys.sort((left, right) => Number(ledger[left]?.lastAt || 0) - Number(ledger[right]?.lastAt || 0));
+    for (const stale of keys.slice(0, keys.length - 16)) delete ledger[stale];
+  }
+  stateful.browserlessAttackerDamage = ledger;
+  return ledger;
+}
+
 function rememberBrowserlessInjury(input, stateful, options = {}) {
   if (!stateful || typeof stateful !== 'object') return null;
   const nowMs = Number(input?.nowMs || Date.now());
@@ -11082,6 +11125,16 @@ function rememberBrowserlessInjury(input, stateful, options = {}) {
     if (Number.isFinite(previousHp) && hpDrop >= minDrop) {
       const pressure = pickBrowserlessInjuryPressure(input, stateful, options);
       const hitAttribution = attributeBrowserlessHpDropToBullet(input, stateful, hpDrop, nowMs, options);
+      // Prefer the bullet's own resolved owner; fall back to the pressure actor
+      // only when that actor is itself attributable evidence, never to a merely
+      // remembered or distance-selected candidate.
+      const damageOwnerId = String(
+        hitAttribution?.ownerId
+          || hitAttribution?.owner
+          || (pressure.attributable ? targetKey(pressure.target) : '')
+          || ''
+      );
+      rememberBrowserlessAttackerDamage(stateful, damageOwnerId, hpDrop, nowMs, options);
       const priorInjury = stateful.browserlessInjury && typeof stateful.browserlessInjury === 'object'
         ? stateful.browserlessInjury
         : null;
@@ -11217,7 +11270,7 @@ function resolveBrowserlessPressureActor(input, stateful, combat, options = {}, 
   };
 }
 
-function browserlessEngagedTargetHpEvidence(input, combat, pressureTargets = [], ownerIds = []) {
+function browserlessEngagedTargetHpEvidence(input, combat, pressureTargets = [], ownerIds = [], stateful = null, nowMs = null, options = {}) {
   const ownerKeys = new Set((ownerIds || []).map(value => String(value || '')).filter(Boolean));
   const byId = new Map();
   const add = (target, source) => {
@@ -11236,15 +11289,55 @@ function browserlessEngagedTargetHpEvidence(input, combat, pressureTargets = [],
   const averageHp = targets.length
     ? targets.reduce((total, item) => total + item.hp, 0) / targets.length
     : null;
+  // The arithmetic mean weighted every engaged target equally, so a distant
+  // harasser at full HP could raise the evaluated HP enough to clear the
+  // disadvantage gap while the target actually hurting us sat far below it.
+  // "血量差距过大" is a statement about the opponents doing the damage, so the
+  // evidence is now weighted by damage each attacker has actually dealt to us
+  // inside the attacker-damage window. Weighting only ever redistributes among
+  // the same engaged set; it never adds or drops a target, and the HP values
+  // themselves stay realtime.
+  const at = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  const windowMs = browserlessAttackerDamageWindowMs(options);
+  const ledger = stateful?.browserlessAttackerDamage && typeof stateful.browserlessAttackerDamage === 'object'
+    ? stateful.browserlessAttackerDamage
+    : null;
+  const weighted = targets.map(item => {
+    const entry = ledger ? ledger[item.id] : null;
+    const fresh = Boolean(entry && at - Number(entry.lastAt || 0) <= windowMs);
+    const damage = fresh ? Math.max(0, Number(entry.damage) || 0) : 0;
+    return { ...item, attributedDamage: damage, attributedHits: fresh ? Math.max(0, Math.round(Number(entry.hits) || 0)) : 0 };
+  });
+  const totalDamage = weighted.reduce((total, item) => total + item.attributedDamage, 0);
+  // Attribution must cover more than one engaged target before it can decide the
+  // weighting. With damage attributed to exactly one of several engaged targets
+  // the others carry weight zero, which would let a single early hit erase every
+  // other opponent from the evidence; the mean is the safer reading there.
+  const attributedTargetCount = weighted.filter(item => item.attributedDamage > 0).length;
+  const damageWeighted = Boolean(targets.length > 1 && totalDamage > 0 && attributedTargetCount > 1);
+  const weightedHp = damageWeighted
+    ? weighted.reduce((total, item) => total + item.hp * (item.attributedDamage / totalDamage), 0)
+    : null;
+  const resolvedHp = damageWeighted ? weightedHp : averageHp;
   return {
-    targetHp: averageHp === null ? null : Math.round(averageHp * 10) / 10,
-    source: targets.length > 1 ? 'engaged-target-average' : (targets[0]?.source || 'unknown'),
+    targetHp: resolvedHp === null ? null : Math.round(resolvedHp * 10) / 10,
+    source: targets.length > 1
+      ? (damageWeighted ? 'engaged-target-damage-weighted' : 'engaged-target-average')
+      : (targets[0]?.source || 'unknown'),
     targetCount: targets.length,
-    targets: targets.map(item => ({
+    damageWeighted,
+    averageHp: averageHp === null ? null : Math.round(averageHp * 10) / 10,
+    attributedDamageTotal: Math.round(totalDamage * 10) / 10,
+    attributedTargetCount,
+    attributedDamageWindowMs: windowMs,
+    targets: weighted.map(item => ({
       id: item.id,
       name: entityDisplayName(item.target),
       hp: item.hp,
-      source: item.source
+      source: item.source,
+      attributedDamage: item.attributedDamage,
+      attributedHits: item.attributedHits,
+      damageWeight: damageWeighted ? Math.round((item.attributedDamage / totalDamage) * 1000) / 1000 : null
     }))
   };
 }
@@ -11290,7 +11383,7 @@ function buildBrowserlessInjuryHpExitDecision(input, stateful, combat, options =
   if (!target && !injury.hasIncoming && !currentPressure.hasIncoming) return null;
   const nowMs = Number(input.nowMs || Date.now());
   const directTargetHpEvidence = browserlessInjuryTargetHpEvidence(stateful, target, injury, nowMs, options);
-  const engagedTargetHpEvidence = browserlessEngagedTargetHpEvidence(input, combat, [target]);
+  const engagedTargetHpEvidence = browserlessEngagedTargetHpEvidence(input, combat, [target], [], stateful, nowMs, options);
   const targetHpEvidence = engagedTargetHpEvidence.targetCount > 1
     ? engagedTargetHpEvidence
     : directTargetHpEvidence;
@@ -11835,7 +11928,10 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
     input,
     combat,
     [pressureActor.actor, ownerTarget],
-    ownerIds
+    ownerIds,
+    stateful,
+    nowMs,
+    options
   );
   // `clear-hp-gap` is suppressed for a healthy defensive secondary on the
   // combat-adapter exit paths (buildCombatExitEvaluation). This realtime
@@ -11957,6 +12053,13 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
     engagedTargetHpSource: engagedTargetHpEvidence.source,
     engagedTargetCount: engagedTargetHpEvidence.targetCount,
     engagedTargets: engagedTargetHpEvidence.targets,
+    engagedTargetDamageWeighting: {
+      damageWeighted: engagedTargetHpEvidence.damageWeighted,
+      averageHp: engagedTargetHpEvidence.averageHp,
+      attributedDamageTotal: engagedTargetHpEvidence.attributedDamageTotal,
+      attributedTargetCount: engagedTargetHpEvidence.attributedTargetCount,
+      windowMs: engagedTargetHpEvidence.attributedDamageWindowMs
+    },
     secondaryClearHpGap: {
       secondary: secondaryExitPolicy.secondary,
       healthy: secondaryExitPolicy.healthy,
@@ -16206,6 +16309,8 @@ module.exports = {
   activeTargetCompletionEstimate,
   activeTargetExpectedReward,
   attributeBrowserlessHpDropToBullet,
+  browserlessEngagedTargetHpEvidence,
+  rememberBrowserlessAttackerDamage,
   effectiveProfitReward,
   establishedCombatLootPriority,
   buildBrowserlessDecision,
