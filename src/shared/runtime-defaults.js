@@ -43,6 +43,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     attackRange: 14500,
     afkAttackFullRangeCm: 1000,
     afkAttackApproachReserveMaxMs: numberDefault(config.afkAttackApproachReserveMaxMs, 5000),
+    afkAttackCombatHandoffReserveMs: numberDefault(config.afkAttackCombatHandoffReserveMs, 3300),
     afkAttackFireMaxRangeCm: numberDefault(config.afkAttackFireMaxRangeCm, 14500),
     afkAttackDynamicFireEnabled: config.afkAttackDynamicFireEnabled !== false,
     afkAttackOwnDamageRateHpPerSec: numberDefault(config.afkAttackOwnDamageRateHpPerSec, 3),

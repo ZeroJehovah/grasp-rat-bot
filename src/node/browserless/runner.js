@@ -170,6 +170,7 @@ const { runMissingEnemyHoldSelfTest } = require('./missing-enemy-hold-self-test'
 const { runActiveJoinModeProfitSelfTest } = require('./active-join-mode-profit-self-test');
 const { runInvulnerableProfitCommitmentSelfTest } = require('./invulnerable-profit-commitment-self-test');
 const { runAfkDynamicFireSelfTest } = require('./afk-dynamic-fire-self-test');
+const { runAfkCombatHandoffReserveSelfTest } = require('./afk-combat-handoff-reserve-self-test');
 const { runProfitMissionArrivalSelfTest } = require('./profit-mission-arrival-self-test');
 const { runInvulnerableAfkSelfTest } = require('../../strategy/invulnerable-afk-self-test');
 
@@ -7070,6 +7071,7 @@ async function runBrowserlessRunnerSelfTest() {
     const remoteProfitDecision = runRemoteProfitDecisionSelfTest();
     const invulnerableProfitCommitment = runInvulnerableProfitCommitmentSelfTest();
     const afkDynamicFire = runAfkDynamicFireSelfTest();
+    const afkCombatHandoffReserve = runAfkCombatHandoffReserveSelfTest();
     const profitMissionArrival = runProfitMissionArrivalSelfTest();
     const invulnerableAfk = runInvulnerableAfkSelfTest();
     const missingEnemyHold = runMissingEnemyHoldSelfTest();
@@ -10054,6 +10056,7 @@ async function runBrowserlessRunnerSelfTest() {
         && remoteProfitDecision.ok
         && invulnerableProfitCommitment.ok
         && afkDynamicFire.ok
+        && afkCombatHandoffReserve.ok
         && profitMissionArrival.ok
         && invulnerableAfk.ok
         && missingEnemyHold.ok
@@ -10166,6 +10169,7 @@ async function runBrowserlessRunnerSelfTest() {
       remoteProfitDecision,
       invulnerableProfitCommitment,
       afkDynamicFire,
+      afkCombatHandoffReserve,
       profitMissionArrival,
       invulnerableAfk,
       missingEnemyHold,

@@ -55,6 +55,17 @@ const DEFAULT_AFK_SHOOT_STAMINA_COST_MS = Math.max(
   0,
   Number(BROWSER_RUNTIME_DEFAULTS.opportunityShotStaminaCostMs || 500)
 );
+// An AFK profit target that is already inside combat handoff range hands the
+// same stamina pool to the combat fire path, which requires
+// hardReserve + shotCost + dodgeActionCost before it may fire at all. The AFK
+// approach reserve only budgets travel, so at full-attack range it floors at
+// zero and can legally drain the pool to the point where the successor cannot
+// take the finish shot. Keep enough for the successor's first shot plus its
+// Dodge reserve whenever a handoff is actually reachable.
+const DEFAULT_AFK_ATTACK_COMBAT_HANDOFF_RESERVE_MS = Math.max(
+  0,
+  Number(BROWSER_RUNTIME_DEFAULTS.afkAttackCombatHandoffReserveMs || 3300)
+);
 const DEFAULT_REPEAT_MAX_DRIFT_MS = 125;
 const DEFAULT_TRANSPORT_HIGH_WATER_BYTES = 64 * 1024;
 const DEFAULT_ATTACK_RANGE_CM = BROWSER_RUNTIME_DEFAULTS.attackRange;
@@ -479,6 +490,15 @@ function afkAttackFullRangeCm(options = {}) {
     ?? options.browserlessAfkAttackFullRangeCm
     ?? DEFAULT_AFK_ATTACK_FULL_RANGE_CM);
   return Number.isFinite(value) ? Math.max(0, value) : DEFAULT_AFK_ATTACK_FULL_RANGE_CM;
+}
+
+function afkAttackCombatHandoffReserveMs(options = {}) {
+  const value = Number(options.afkAttackCombatHandoffReserveMs
+    ?? BROWSER_RUNTIME_DEFAULTS.afkAttackCombatHandoffReserveMs
+    ?? DEFAULT_AFK_ATTACK_COMBAT_HANDOFF_RESERVE_MS);
+  return Number.isFinite(value)
+    ? Math.max(0, value)
+    : DEFAULT_AFK_ATTACK_COMBAT_HANDOFF_RESERVE_MS;
 }
 
 function afkAttackFireMaxRangeCm(options = {}) {
@@ -2460,7 +2480,7 @@ function createBrowserlessActionAdapter(options = {}) {
     };
   }
 
-  function afkShootStaminaPlan(self, target, staminaMode = 'configured-reserve') {
+  function afkShootStaminaPlan(self, target, staminaMode = 'configured-reserve', handoffReachable = false) {
     const mode = staminaMode === 'afk-attack' ? 'afk-attack' : 'configured-reserve';
     const shotCostMs = Math.ceil(afkShootStaminaCostMs);
     const fallback = {
@@ -2472,6 +2492,10 @@ function createBrowserlessActionAdapter(options = {}) {
       uncappedMovementReserveMs: mode === 'afk-attack' ? null : 0,
       movementReserveMaxMs: mode === 'afk-attack' ? null : 0,
       movementReserveCapped: false,
+      combatHandoffRangeCm: null,
+      combatHandoffReachable: false,
+      combatHandoffReserveMs: 0,
+      combatHandoffReserveApplied: false,
       shotCostMs,
       requiredStaminaMs: Math.ceil(afkShootRequiredStaminaMs)
     };
@@ -2506,6 +2530,20 @@ function createBrowserlessActionAdapter(options = {}) {
       : DEFAULT_AFK_ATTACK_APPROACH_RESERVE_MAX_MS;
     const uncappedMovementReserveMs = Math.max(0, distance - fullAttackRange) * movementStaminaPerCm;
     const movementReserveMs = Math.min(uncappedMovementReserveMs, movementReserveMaxMs);
+    // The combat fire path takes over once the target is inside combat attack
+    // range. It cannot fire below hardReserve + shotCost + dodgeActionCost, so
+    // draining the shared pool to the travel-only floor strands the successor's
+    // first shot. Hold the successor's floor while a handoff is reachable.
+    const combatHandoffRangeCm = Math.max(0, Number(
+      options.combatAttackRange ?? options.attackRangeCm ?? options.attackRange ?? DEFAULT_ATTACK_RANGE_CM
+    ));
+    const combatHandoffReachable = handoffReachable === true
+      && Number.isFinite(distance)
+      && distance <= combatHandoffRangeCm;
+    const combatHandoffReserveMs = combatHandoffReachable
+      ? afkAttackCombatHandoffReserveMs(options)
+      : 0;
+    const requiredStaminaMs = Math.max(movementReserveMs, combatHandoffReserveMs);
     return {
       mode,
       source: distance <= fullAttackRange ? 'full-attack' : 'approach',
@@ -2515,9 +2553,24 @@ function createBrowserlessActionAdapter(options = {}) {
       uncappedMovementReserveMs: Math.ceil(uncappedMovementReserveMs),
       movementReserveMaxMs: Math.ceil(movementReserveMaxMs),
       movementReserveCapped: uncappedMovementReserveMs > movementReserveMs,
+      combatHandoffRangeCm: Math.round(combatHandoffRangeCm),
+      combatHandoffReachable,
+      combatHandoffReserveMs: Math.ceil(combatHandoffReserveMs),
+      combatHandoffReserveApplied: combatHandoffReserveMs > movementReserveMs,
       shotCostMs,
-      requiredStaminaMs: Math.ceil(movementReserveMs)
+      requiredStaminaMs: Math.ceil(requiredStaminaMs)
     };
+  }
+
+  // A combat handoff becomes reachable when some other realtime actor can pull
+  // this AFK engagement into the combat fire path: an observed nearby active
+  // competitor for the same target, or an external bullet owner near us. With
+  // no such actor the AFK target cannot fight back and no successor needs the
+  // pool, so ordinary AFK output keeps its travel-only floor.
+  function afkCombatHandoffReachable(stateSnapshot, self, target, profitKillRace = null) {
+    if (Math.round(Number(profitKillRace?.competitorCount || 0)) > 0) return true;
+    const evidence = externalAfkDamageEvidence(stateSnapshot, self, target);
+    return Math.round(Number(evidence?.bulletEvidenceCount || 0)) > 0;
   }
 
   function afkShootGate(self, target, commandShooting = null, gateOptions = {}) {
@@ -2554,7 +2607,12 @@ function createBrowserlessActionAdapter(options = {}) {
       };
     }
     const stamina5s = stamina5sRemaining(self);
-    const staminaPlan = afkShootStaminaPlan(self, target, gateOptions.staminaMode);
+    const staminaPlan = afkShootStaminaPlan(
+      self,
+      target,
+      gateOptions.staminaMode,
+      afkCombatHandoffReachable(gateOptions.stateSnapshot, self, target, profitKillRace)
+    );
     const requiredStaminaMs = staminaPlan.requiredStaminaMs;
     const outstanding = afkOutstandingShot(target, commandShooting);
     let firePolicy = null;
@@ -3130,7 +3188,12 @@ function createBrowserlessActionAdapter(options = {}) {
     state.shootRepeatUntilMs = now() + shootRepeatHoldMs;
     state.lastShootRepeatError = '';
     dispatchShootRepeat();
-    const staminaPlan = afkShootStaminaPlan(self, target, staminaMode);
+    const staminaPlan = afkShootStaminaPlan(
+      self,
+      target,
+      staminaMode,
+      afkCombatHandoffReachable(stateSnapshot, self, target, repeatOptions.profitKillRace || null)
+    );
     return {
       repeatMs: repeatCadenceMs,
       holdMs: shootRepeatHoldMs,
