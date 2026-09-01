@@ -1199,6 +1199,42 @@ function runStrategyModuleSelfTests() {
       && lowHpRetainedSecondaryExitPolicy.suppressMissCloseTimeout === false
   });
 
+  // The realtime leave-risk path composes this policy with the static HP exit,
+  // mirroring the combat-adapter exit paths. Reproduced with the 2026-09-01
+  // 00:06 values: self 52 against an averaged 76 (97 and 55) is a 24-point gap
+  // that tripped `clear-hp-gap` while escorting a healthy defensive secondary.
+  // Suppression must cover only that rule, and must stop at HP 50 inclusive
+  // where the unconditional secondary leave takes over.
+  const escortedSecondary = { combatRole: 'secondary', secondaryTarget: true };
+  const composedStaticHpExit = (selfHp, targetHp, target = escortedSecondary) => {
+    const policy = secondaryCombatExitPolicy(target, selfHp);
+    const raw = evaluateCombatHpExitCore({ selfHp, targetHp }, {});
+    const suppressed = Boolean(raw && raw.rule === 'clear-hp-gap' && policy.suppressClearHpGap);
+    return { rule: raw?.rule ?? null, suppressed, effective: suppressed ? null : raw };
+  };
+  const escortedGapSuppressed = composedStaticHpExit(52, 76);
+  const escortedGapAtHpFifty = composedStaticHpExit(50, 76);
+  const escortedCriticalStillExits = composedStaticHpExit(30, 76);
+  const escortedLowHpBehindStillExits = composedStaticHpExit(49, 55);
+  const soloPrimaryGapStillExits = composedStaticHpExit(52, 76, { combatRole: 'primary' });
+  results.push({
+    name: 'realtime-leave-risk-clear-hp-gap-suppression-matches-combat-path-and-stops-at-hp-fifty',
+    passed: escortedGapSuppressed.rule === 'clear-hp-gap'
+      && escortedGapSuppressed.suppressed === true
+      && escortedGapSuppressed.effective === null
+      && escortedGapAtHpFifty.suppressed === false
+      && escortedGapAtHpFifty.effective?.shouldLeave === true
+      && escortedCriticalStillExits.rule === 'critical-hp'
+      && escortedCriticalStillExits.suppressed === false
+      && escortedCriticalStillExits.effective?.reason === 'combat-critical-hp-leave'
+      && escortedLowHpBehindStillExits.rule === 'low-hp-behind'
+      && escortedLowHpBehindStillExits.suppressed === false
+      && escortedLowHpBehindStillExits.effective?.reason === 'combat-low-hp-disadvantage-leave'
+      && soloPrimaryGapStillExits.rule === 'clear-hp-gap'
+      && soloPrimaryGapStillExits.suppressed === false
+      && soloPrimaryGapStillExits.effective?.reason === 'combat-hp-disadvantage-leave'
+  });
+
   const secondaryAdmissionTargetBase = {
     alive: true,
     authority: 'realtime',
@@ -4332,6 +4368,65 @@ function runStrategyModuleSelfTests() {
       && boundedPressureAttackBudget.suppressFire === true
       && boundedPressureAttackBudget.boundedPressureVolley === true
       && boundedPressureAttackBudget.suppressionReason === 'budget-state-invalid'
+  });
+
+  // A target that is shooting at us resolves the lower pressure reserve, so the
+  // same stamina that authorizes defensive fire authorizes fire at a profit
+  // primary under fire too. Before this, the primary's fire state asserted no
+  // pressure and carried the ordinary dodge reserve, leaving a stamina band
+  // (4100-5300ms at a 1000ms dodge cost) where only the secondary could fire —
+  // the 2026-09-01 00:06 fight sat in that band for 76 of 162 frames. The hard
+  // reserve floor is unchanged and still refuses fire on its own.
+  const pressureReserveContext = {
+    hardReserveMs: 1800,
+    dodgeReserveMs: 3800,
+    pressureReserveMs: 2600,
+    shotCostMs: 500,
+    dodgeActionCostMs: 1000
+  };
+  const primaryUnderFireReady = determineCombatFireState(
+    { stamina_5s_remaining_milli: 4100 },
+    { user_id: 8 },
+    { ...pressureReserveContext, targetPressureFire: true }
+  );
+  const primaryWithoutPressurePaused = determineCombatFireState(
+    { stamina_5s_remaining_milli: 4100 },
+    { user_id: 8 },
+    { ...pressureReserveContext, targetPressureFire: false }
+  );
+  const primaryUnderFireBelowPressureReserve = determineCombatFireState(
+    { stamina_5s_remaining_milli: 4099 },
+    { user_id: 8 },
+    { ...pressureReserveContext, targetPressureFire: true }
+  );
+  const primaryUnderFireBelowHardReserve = determineCombatFireState(
+    { stamina_5s_remaining_milli: 1799 },
+    { user_id: 8 },
+    { ...pressureReserveContext, targetPressureFire: true }
+  );
+  // Without pressure the ordinary dodge reserve still governs, so a target that
+  // is not shooting at us gains nothing from this change.
+  const quietTargetOrdinaryReserve = determineCombatFireState(
+    { stamina_5s_remaining_milli: 5300 },
+    { user_id: 8 },
+    { ...pressureReserveContext, targetPressureFire: false }
+  );
+  results.push({
+    name: 'target-under-fire-resolves-pressure-reserve-while-hard-reserve-stays-absolute',
+    passed: primaryUnderFireReady.state === 'pressure'
+      && primaryUnderFireReady.reason === 'target-pressure-fire'
+      && primaryUnderFireReady.reserve === 2600
+      && primaryUnderFireReady.requiredStaminaMs === 4100
+      && primaryWithoutPressurePaused.state === 'paused'
+      && primaryWithoutPressurePaused.reason === 'dodge-reserve'
+      && primaryWithoutPressurePaused.reserve === 3800
+      && primaryWithoutPressurePaused.requiredStaminaMs === 5300
+      && primaryUnderFireBelowPressureReserve.state === 'paused'
+      && primaryUnderFireBelowPressureReserve.reason === 'pressure-dodge-reserve'
+      && primaryUnderFireBelowHardReserve.state === 'disabled'
+      && primaryUnderFireBelowHardReserve.reason === 'below-hard-reserve'
+      && quietTargetOrdinaryReserve.state !== 'paused'
+      && quietTargetOrdinaryReserve.reserve === 3800
   });
   const economicObserve = evaluateNonThreatCombatEconomicStopLossCore({
     nowMs: 59000,
@@ -9237,6 +9332,107 @@ function runStrategyModuleSelfTests() {
       && incomparableThreatMetrics.significant === false
       && incomparableThreatMetrics.timeToImpactAdvantageMs === null
       && incomparableThreatMetrics.distanceAdvantageCm === null
+  });
+
+  // A close shooter's bullet can impact in fewer frames than the urgent
+  // confirmation window spans. The 2026-09-01 00:06 fight proposed the same
+  // urgent switch four times at TTI 9-83ms and never passed a 3-tick gate,
+  // because each bullet stayed dangerous for only 1-2 frames. The requirement
+  // now scales to the frames actually available while the superiority test and
+  // the reversal guard stay in force.
+  const nearThreatCurrent = { user_id: 8, name: 'far-harasser' };
+  const nearThreatCandidate = { user_id: 9, name: 'close-shooter' };
+  const noThreatCurrentSide = {
+    targetId: '8', bulletCount: 0, urgentBulletCount: 0, urgent: false,
+    riskLevel: 0, minTimeToImpactMs: null, minDistanceCm: null
+  };
+  const imminentThreat = {
+    targetId: '9', bulletCount: 1, urgentBulletCount: 1, urgent: true,
+    riskLevel: 3, minTimeToImpactMs: 9, minDistanceCm: 92
+  };
+  const imminentUrgentSwitch = applyCombatTargetSwitchHysteresisCore({
+    currentTargetId: '8', currentVisibleTarget: nearThreatCurrent, proposedTarget: nearThreatCandidate,
+    urgentSafety: true, currentThreat: noThreatCurrentSide, proposedThreat: imminentThreat, nowMs: 2000
+  }, null);
+  // 83ms at a 50ms control interval leaves one usable frame, so a single
+  // observation is enough; 180ms leaves three and keeps the full window.
+  const shortWindowThreat = applyCombatTargetSwitchHysteresisCore({
+    currentTargetId: '8', currentVisibleTarget: nearThreatCurrent, proposedTarget: nearThreatCandidate,
+    urgentSafety: true,
+    currentThreat: noThreatCurrentSide,
+    proposedThreat: { ...imminentThreat, minTimeToImpactMs: 83 },
+    nowMs: 2050
+  }, null);
+  const unscaledUrgentFirstTick = applyCombatTargetSwitchHysteresisCore({
+    currentTargetId: '8', currentVisibleTarget: nearThreatCurrent, proposedTarget: nearThreatCandidate,
+    urgentSafety: true,
+    currentThreat: noThreatCurrentSide,
+    proposedThreat: { ...imminentThreat, minTimeToImpactMs: 180 },
+    nowMs: 2100
+  }, null);
+  // Scaling must not defeat the oscillation reversal guard when it is enabled.
+  // The proposed side needs a genuinely superior threat to clear the
+  // superiority test first, so it carries the higher risk level here; the
+  // reversal guard is what must still refuse the switch.
+  const imminentReversalStillBlocked = applyCombatTargetSwitchHysteresisCore({
+    currentTargetId: '9',
+    currentVisibleTarget: nearThreatCandidate,
+    proposedTarget: nearThreatCurrent,
+    urgentSafety: true,
+    currentThreat: {
+      targetId: '9', bulletCount: 1, urgentBulletCount: 1, urgent: true,
+      riskLevel: 3, minTimeToImpactMs: 400, minDistanceCm: 900
+    },
+    proposedThreat: {
+      targetId: '8', bulletCount: 1, urgentBulletCount: 1, urgent: true,
+      riskLevel: 3, minTimeToImpactMs: 100, minDistanceCm: 800
+    },
+    lastSwitch: { fromTargetId: '8', toTargetId: '9', at: 2100 },
+    nowMs: 2150
+  }, null, { urgentReversalGuardEnabled: true });
+  // An ordinary (non-urgent) switch never scales, and a missing TTI keeps the
+  // base window rather than collapsing to a single frame.
+  const ordinaryNeverScales = applyCombatTargetSwitchHysteresisCore({
+    currentTargetId: '8', currentVisibleTarget: nearThreatCurrent, proposedTarget: nearThreatCandidate,
+    urgentSafety: false,
+    currentThreat: noThreatCurrentSide,
+    proposedThreat: { ...imminentThreat, minTimeToImpactMs: 9 },
+    nowMs: 2200
+  }, null);
+  const missingTtiKeepsBaseWindow = applyCombatTargetSwitchHysteresisCore({
+    currentTargetId: '8', currentVisibleTarget: nearThreatCurrent, proposedTarget: nearThreatCandidate,
+    urgentSafety: true,
+    currentThreat: noThreatCurrentSide,
+    proposedThreat: { ...imminentThreat, minTimeToImpactMs: null },
+    nowMs: 2250
+  }, null);
+  results.push({
+    name: 'urgent-combat-target-switch-confirmation-scales-to-available-impact-frames',
+    passed: imminentUrgentSwitch.target.user_id === 9
+      && imminentUrgentSwitch.diagnostic.allowed === true
+      && imminentUrgentSwitch.diagnostic.reason === 'urgent-incoming-shooter-confirmed'
+      && imminentUrgentSwitch.diagnostic.confirmationTicks === 1
+      && imminentUrgentSwitch.diagnostic.baseConfirmationTicks === 3
+      && imminentUrgentSwitch.diagnostic.urgentConfirmationScaled === true
+      && imminentUrgentSwitch.diagnostic.ttiAvailableTicks === 1
+      && imminentUrgentSwitch.gate === null
+      && shortWindowThreat.target.user_id === 9
+      && shortWindowThreat.diagnostic.confirmationTicks === 1
+      && shortWindowThreat.diagnostic.urgentConfirmationScaled === true
+      && unscaledUrgentFirstTick.target.user_id === 8
+      && unscaledUrgentFirstTick.diagnostic.allowed === false
+      && unscaledUrgentFirstTick.diagnostic.confirmationTicks === 3
+      && unscaledUrgentFirstTick.diagnostic.urgentConfirmationScaled === false
+      && imminentReversalStillBlocked.target.user_id === 9
+      && imminentReversalStillBlocked.diagnostic.reason === 'urgent-oscillating-reversal-blocked'
+      && ordinaryNeverScales.target.user_id === 8
+      && ordinaryNeverScales.diagnostic.allowed === false
+      && ordinaryNeverScales.diagnostic.confirmationTicks === 3
+      && ordinaryNeverScales.diagnostic.urgentConfirmationScaled === false
+      && ordinaryNeverScales.diagnostic.ttiAvailableTicks === null
+      && missingTtiKeepsBaseWindow.target.user_id === 8
+      && missingTtiKeepsBaseWindow.diagnostic.confirmationTicks === 3
+      && missingTtiKeepsBaseWindow.diagnostic.urgentConfirmationScaled === false
   });
 
   const evasiveBehavior = {

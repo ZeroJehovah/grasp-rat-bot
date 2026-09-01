@@ -882,7 +882,30 @@ function applyCombatTargetSwitchHysteresisCore(input = {}, previousGate = null, 
     };
   }
   const switchMode = urgentRequested ? 'urgent' : 'ordinary';
-  const requiredTicks = urgentRequested ? urgentRequiredTicks : ordinaryRequiredTicks;
+  const baseRequiredTicks = urgentRequested ? urgentRequiredTicks : ordinaryRequiredTicks;
+  // A close shooter's projectile can reach us in fewer frames than the urgent
+  // confirmation window spans, so a fixed tick count made the most urgent
+  // threats the ones least able to pass the gate: a 3-tick window cannot be
+  // satisfied by a bullet that impacts in one. When the proposed threat's
+  // time-to-impact is shorter than the window it must survive, the requirement
+  // is scaled to the frames actually available, never below one. Ordinary
+  // switches, the superiority test above, and the oscillation reversal guard
+  // are untouched.
+  const controlIntervalMs = Math.max(1, Number(options.combatControlIntervalMs ?? 50));
+  // This module's numberOrNull coerces null/'' to 0, which would read a missing
+  // time-to-impact as "impact now" and collapse the window to a single frame.
+  // An unknown TTI is not evidence of urgency, so it must keep the base window.
+  const rawProposedTti = input.proposedThreat?.minTimeToImpactMs;
+  const proposedTtiMs = rawProposedTti === null || rawProposedTti === undefined || rawProposedTti === ''
+    ? null
+    : numberOrNull(rawProposedTti);
+  const ttiAvailableTicks = urgentRequested && proposedTtiMs !== null && proposedTtiMs >= 0
+    ? Math.max(1, Math.floor(proposedTtiMs / controlIntervalMs))
+    : null;
+  const requiredTicks = ttiAvailableTicks === null
+    ? baseRequiredTicks
+    : Math.max(1, Math.min(baseRequiredTicks, ttiAvailableTicks));
+  const urgentConfirmationScaled = requiredTicks < baseRequiredTicks;
   const sameCandidate = previousGate
     && String(previousGate.fromTargetId || '') === currentId
     && String(previousGate.toTargetId || '') === proposedId
@@ -910,6 +933,11 @@ function applyCombatTargetSwitchHysteresisCore(input = {}, previousGate = null, 
       currentThreat: input.currentThreat || null,
       proposedThreat: input.proposedThreat || null,
       threatDifference: threatAdvantage,
+      baseConfirmationTicks: baseRequiredTicks,
+      urgentConfirmationScaled,
+      proposedThreatTtiMs: proposedTtiMs,
+      ttiAvailableTicks,
+      controlIntervalMs,
       urgentReversalAdvantage,
       urgentReversalGuardEnabled,
       urgentReversalWouldBlock,

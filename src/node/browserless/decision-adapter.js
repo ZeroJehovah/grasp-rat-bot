@@ -11837,12 +11837,27 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
     [pressureActor.actor, ownerTarget],
     ownerIds
   );
-  const staticHpExit = engagedTargetHpEvidence.targetCount > 1
+  // `clear-hp-gap` is suppressed for a healthy defensive secondary on the
+  // combat-adapter exit paths (buildCombatExitEvaluation). This realtime
+  // leave-risk path evaluated the same rule without that suppression, so an
+  // escorted secondary engagement could leave here on an averaged multi-target
+  // HP gap that the combat path would have declined. Only the `clear-hp-gap`
+  // rule is suppressed, and only while `healthy` (self HP strictly above 50):
+  // the inclusive HP-50 unconditional secondary leave, `critical-hp`, and
+  // `low-hp-behind` remain untouched.
+  const secondaryExitPolicy = secondaryCombatExitPolicy(combat?.target, selfHp);
+  const rawStaticHpExit = engagedTargetHpEvidence.targetCount > 1
     ? evaluateCombatHpExitCore({
         selfHp,
         targetHp: engagedTargetHpEvidence.targetHp
       }, options)
     : null;
+  const staticHpExitSuppressed = Boolean(
+    rawStaticHpExit
+      && rawStaticHpExit.rule === 'clear-hp-gap'
+      && secondaryExitPolicy.suppressClearHpGap
+  );
+  const staticHpExit = staticHpExitSuppressed ? null : rawStaticHpExit;
   const combatEstablished = Boolean(
     pressureActor.combatCanHandlePressure
       || residualThreatContinuity.active
@@ -11942,6 +11957,14 @@ function buildBrowserlessPredictedThreatExitDecision(state, input, stateful, com
     engagedTargetHpSource: engagedTargetHpEvidence.source,
     engagedTargetCount: engagedTargetHpEvidence.targetCount,
     engagedTargets: engagedTargetHpEvidence.targets,
+    secondaryClearHpGap: {
+      secondary: secondaryExitPolicy.secondary,
+      healthy: secondaryExitPolicy.healthy,
+      suppressClearHpGap: secondaryExitPolicy.suppressClearHpGap,
+      lowHpUnconditionalExit: secondaryExitPolicy.lowHpUnconditionalExit,
+      rawRule: rawStaticHpExit?.rule ?? null,
+      suppressed: staticHpExitSuppressed
+    },
     pressureActor: {
       actorId: pressureActor.actorId,
       actorSource: pressureActor.actorSource,

@@ -5586,7 +5586,8 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     threatDistanceAdvantageCm: options.combatTargetSwitchThreatDistanceAdvantageCm ?? 1500,
     urgentReversalTtiAdvantageMs: options.combatTargetSwitchUrgentReversalTtiAdvantageMs ?? 500,
     urgentReversalDistanceAdvantageCm: options.combatTargetSwitchUrgentReversalDistanceAdvantageCm ?? 2500,
-    urgentReversalGuardEnabled: options.combatTargetSwitchUrgentReversalGuardEnabled === true
+    urgentReversalGuardEnabled: options.combatTargetSwitchUrgentReversalGuardEnabled === true,
+    combatControlIntervalMs: options.combatControlIntervalMs ?? 50
   });
   if (stateful && typeof stateful === 'object') {
     stateful.combatTargetSwitchGate = switchDecision.gate;
@@ -6787,8 +6788,19 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     },
     contactEntryOnly: false
   });
+  // The primary's pressure reserve is resolved from its own realtime bullet
+  // ownership, exactly as the current combat target's is at the fireState call
+  // above. A hardcoded `false` here asserted that a profit primary can never
+  // apply pressure, so the primary carried the ordinary dodge reserve while a
+  // defensive secondary carried the lower pressure reserve. With both under
+  // fire that asymmetry left a stamina band that authorized fire only at the
+  // secondary. The reserve stays a hard gate either way; only its value now
+  // follows observed pressure.
+  const primaryTargetPressureFire = bullets.some(
+    bullet => Number(bullet.ownerId) === Number(primaryFireTarget?.user_id ?? primaryFireTarget?.userId)
+  );
   const primaryFireState = primaryFireTarget ? determineCombatFireState(self || {}, primaryFireTarget, {
-    targetPressureFire: false,
+    targetPressureFire: primaryTargetPressureFire,
     closePressure: false,
     closePressureAttack: false,
     hardReserveMs: runtimeHardReserveMs,
