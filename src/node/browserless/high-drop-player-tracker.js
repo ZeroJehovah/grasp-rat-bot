@@ -97,23 +97,16 @@ function pruneBalanceSnapshots(snapshots, limit = MAX_BALANCE_SNAPSHOTS) {
   return output;
 }
 
-// UTC+8 day rollover keeps balances: 今日收益 is (latest - initial), so a new day's
-// initial baseline must be the previous day's last observed balance. Resetting it to
-// null made the first post-midnight snapshot the baseline and silently understated the gain.
+// UTC+8 day rollover resets balance baseline: 今日收益 is (latest - initial), and the
+// new day's initial baseline is set to null so the first post-midnight snapshot becomes
+// the baseline. This aligns the balance-based gain with the Drop-based coin accounting,
+// which also uses the first post-midnight Drop as its baseline. Cross-midnight tail
+// (last sample before 00:00 to first sample after 00:00) is excluded from both metrics.
 function carryForwardStore(previous, day) {
   const output = emptyStore(day);
   if (!previous || typeof previous !== 'object') return output;
-  const selfLatest = numberOrNull(previous.selfExternalBalanceSnapshot);
-  if (selfLatest !== null) {
-    const at = String(previous.selfExternalBalanceSnapshotAt || '');
-    const tick = numberOrNull(previous.selfExternalBalanceSnapshotTick);
-    output.selfInitialExternalBalanceSnapshot = selfLatest;
-    output.selfInitialExternalBalanceSnapshotAt = at;
-    output.selfInitialExternalBalanceSnapshotTick = tick;
-    output.selfExternalBalanceSnapshot = selfLatest;
-    output.selfExternalBalanceSnapshotAt = at;
-    output.selfExternalBalanceSnapshotTick = tick;
-  }
+  // selfInitialExternalBalanceSnapshot deliberately left null: first post-midnight
+  // snapshot will become the baseline via normalizeStore's fallback logic.
   for (const [key, snapshot] of Object.entries(previous.balanceSnapshots || {})) {
     if (!snapshot || typeof snapshot !== 'object') continue;
     const latest = numberOrNull(snapshot.latest ?? snapshot.latestValue ?? snapshot.value ?? snapshot.initial);
