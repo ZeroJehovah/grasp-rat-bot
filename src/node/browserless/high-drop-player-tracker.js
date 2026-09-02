@@ -40,8 +40,16 @@ function entityDrop(entity) {
   );
 }
 
+// 账户外部余额快照永远只有正值(1 币对应 500000 原始单位); 0 只在每日零点重置瞬间短暂
+// 出现, 之后游戏才会重新填满真实余额。把 0 视作缺失, 否则它会被当成当日开盘基线,
+// 让 今日收益 = latest - 0 把整个账户余额误算成当天收益。
+function snapshottedBalanceOrNull(value) {
+  const number = numberOrNull(value);
+  return number !== null && number > 0 ? number : null;
+}
+
 function entityExternalBalanceSnapshot(entity) {
-  return numberOrNull(entity?.external_balance_snapshot ?? entity?.externalBalanceSnapshot);
+  return snapshottedBalanceOrNull(entity?.external_balance_snapshot ?? entity?.externalBalanceSnapshot);
 }
 
 function entityName(entity, fallback = '') {
@@ -109,7 +117,9 @@ function carryForwardStore(previous, day) {
   // snapshot will become the baseline via normalizeStore's fallback logic.
   for (const [key, snapshot] of Object.entries(previous.balanceSnapshots || {})) {
     if (!snapshot || typeof snapshot !== 'object') continue;
-    const latest = numberOrNull(snapshot.latest ?? snapshot.latestValue ?? snapshot.value ?? snapshot.initial);
+    const latest = snapshottedBalanceOrNull(
+      snapshot.latest ?? snapshot.latestValue ?? snapshot.value ?? snapshot.initial
+    );
     if (latest === null) continue;
     const normalizedKey = String(key || '').startsWith('user:') ? String(key) : `user:${key}`;
     const at = String(snapshot.at || snapshot.latestAt || snapshot.initialAt || '');
@@ -136,21 +146,21 @@ function normalizeStore(value, expectedDay) {
   output.lastSnapshotSource = String(value.lastSnapshotSource || '');
   output.lastGlobalSnapshotAt = String(value.lastGlobalSnapshotAt || '');
   output.lastGlobalSnapshotSource = String(value.lastGlobalSnapshotSource || '');
-  output.selfInitialExternalBalanceSnapshot = numberOrNull(value.selfInitialExternalBalanceSnapshot)
-    ?? numberOrNull(value.selfExternalBalanceSnapshot);
+  output.selfInitialExternalBalanceSnapshot = snapshottedBalanceOrNull(value.selfInitialExternalBalanceSnapshot)
+    ?? snapshottedBalanceOrNull(value.selfExternalBalanceSnapshot);
   output.selfInitialExternalBalanceSnapshotAt = String(
     value.selfInitialExternalBalanceSnapshotAt || value.selfExternalBalanceSnapshotAt || ''
   );
   output.selfInitialExternalBalanceSnapshotTick = numberOrNull(
     value.selfInitialExternalBalanceSnapshotTick ?? value.selfExternalBalanceSnapshotTick
   );
-  output.selfExternalBalanceSnapshot = numberOrNull(value.selfExternalBalanceSnapshot);
+  output.selfExternalBalanceSnapshot = snapshottedBalanceOrNull(value.selfExternalBalanceSnapshot);
   output.selfExternalBalanceSnapshotAt = String(value.selfExternalBalanceSnapshotAt || '');
   output.selfExternalBalanceSnapshotTick = numberOrNull(value.selfExternalBalanceSnapshotTick);
   for (const [key, snapshot] of Object.entries(value.balanceSnapshots || {})) {
     if (!snapshot || typeof snapshot !== 'object') continue;
-    const initial = numberOrNull(snapshot.initial ?? snapshot.initialValue ?? snapshot.value);
-    const latest = numberOrNull(snapshot.latest ?? snapshot.latestValue ?? snapshot.value);
+    const initial = snapshottedBalanceOrNull(snapshot.initial ?? snapshot.initialValue ?? snapshot.value);
+    const latest = snapshottedBalanceOrNull(snapshot.latest ?? snapshot.latestValue ?? snapshot.value);
     if (initial === null && latest === null) continue;
     const normalizedKey = String(key || '').startsWith('user:') ? String(key) : `user:${key}`;
     output.balanceSnapshots[normalizedKey] = {
@@ -172,10 +182,10 @@ function normalizeStore(value, expectedDay) {
     const latestDrop = numberOrNull(player.latestDrop);
     if (initialDrop === null || maxDrop === null || latestDrop === null) continue;
     const normalizedKey = `user:${userId}`;
-    const externalBalanceSnapshot = numberOrNull(
+    const externalBalanceSnapshot = snapshottedBalanceOrNull(
       player.externalBalanceSnapshot ?? player.external_balance_snapshot
     );
-    const initialExternalBalanceSnapshot = numberOrNull(
+    const initialExternalBalanceSnapshot = snapshottedBalanceOrNull(
       player.initialExternalBalanceSnapshot ?? player.initial_external_balance_snapshot
     ) ?? output.balanceSnapshots[normalizedKey]?.initial ?? externalBalanceSnapshot;
     const candidate = {

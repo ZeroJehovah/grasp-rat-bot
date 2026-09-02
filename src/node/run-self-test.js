@@ -35034,7 +35034,52 @@ async function runSelfTest() {
           balanceBaselineLabel
         ].join('|');
       }),
-      want: '2026-07-14|3|alice-after-tick-reset|8|520|800|800|2000000|4000000|bob|500|500|450|1000000|1300000|carol-low|50|50|40|1500000|1400000|true|true|false|900000|900000|false|false|50|ws|gap-http|2026-07-15|0|900000|900000|4000000|4500000|900|2026-07-15|900000|900000|500000|1000000|+1'
+      want: '2026-07-14|3|alice-after-tick-reset|8|520|800|800|2000000|4000000|bob|500|500|450|1000000|1300000|carol-low|50|50|40|1500000|1400000|true|true|false|900000|900000|false|false|50|ws|gap-http|2026-07-15|0|||4000000|4500000|900|2026-07-15|||500000|1000000|+1'
+    },
+    {
+      name: 'browserless high drop tracker ignores the midnight transient zero balance as the day baseline',
+      got: () => withTempDirForTest(async dir => {
+        const file = path.join(dir, 'high-drop-players.json');
+        let t = Date.UTC(2026, 8, 2, 15, 59, 0);
+        const tracker = createHighDropPlayerTracker({ file, now: () => t });
+        const previousBalance = 111444244466;
+        tracker.observeSnapshot({
+          tick: 100,
+          entities: [{ user_id: 7, name: 'self', drop: 900, external_balance_snapshot: previousBalance }]
+        }, { source: 'ws', selfUserId: 7, observedAtMs: t });
+        t = Date.UTC(2026, 8, 2, 16, 0, 0);
+        const rolled = tracker.status();
+        // 零点重置瞬间游戏会把余额字段短暂清零; 该快照既不能成为当日开盘基线, 也不能拉低最新余额。
+        tracker.observeSnapshot({
+          tick: 1,
+          entities: [{ user_id: 7, name: 'self', drop: 10, external_balance_snapshot: 0 }]
+        }, { source: 'ws', selfUserId: 7, observedAtMs: t + 503 });
+        const afterZero = tracker.status();
+        const realOpening = 111500000000;
+        tracker.observeSnapshot({
+          tick: 5000,
+          entities: [{ user_id: 7, name: 'self', drop: 20, external_balance_snapshot: realOpening }]
+        }, { source: 'ws', selfUserId: 7, observedAtMs: t + 20000 });
+        const latched = tracker.status();
+        const latest = 111948845331;
+        tracker.observeSnapshot({
+          tick: 20558,
+          entities: [{ user_id: 7, name: 'self', drop: 30, external_balance_snapshot: latest }]
+        }, { source: 'ws', selfUserId: 7, observedAtMs: t + 17 * 60000 });
+        const final = tracker.status();
+        return [
+          rolled.selfInitialExternalBalanceSnapshot,
+          rolled.selfExternalBalanceSnapshot,
+          afterZero.selfInitialExternalBalanceSnapshot,
+          afterZero.selfExternalBalanceSnapshot,
+          latched.selfInitialExternalBalanceSnapshot,
+          latched.selfExternalBalanceSnapshot,
+          final.selfInitialExternalBalanceSnapshot,
+          final.selfExternalBalanceSnapshot,
+          Math.round(highDropBalanceDeltaValueCore(['self', 20, 30, 30, 7, true, latest, final.selfInitialExternalBalanceSnapshot]))
+        ].join('|');
+      }),
+      want: '||||111500000000|111500000000|111500000000|111948845331|898'
     },
     {
       name: 'browserless snapshot gap poller waits three minutes after any observed snapshot',
