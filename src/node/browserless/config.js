@@ -195,8 +195,8 @@ const DEFAULTS = {
   browserlessRemoteProfitTargetsEnabled: true,
   profitThresholdCoinsPer10Stamina: 1,
   profitThresholdHourlyStaminaLimit: 3000,
-  profitThresholdResetReserveMs: 3600000,
-  profitThresholdResetReserveStamina: 1000,
+  profitThresholdResetReserveMs: 1000,
+  profitThresholdResetReserveStamina: 0,
   recoveryPriorityLowHpApproachStaminaMilli: 75000,
   recoveryPriorityHighHpApproachStaminaMilli: 150000
 };
@@ -1109,8 +1109,8 @@ function usage() {
     '  --no-dynamic-profit-threshold  Disable the dynamic ordinary-profit threshold',
     '  --profit-threshold-coins-per-10-stamina <n>  Reward coins per 10 stamina. Default: 1',
     '  --profit-threshold-hourly-stamina-limit <n>  Theoretical stamina burn per hour. Default: 3000',
-    '  --profit-threshold-reset-reserve-ms <ms>  UTC+8 reset reserve. Default: 3600000',
-    '  --profit-threshold-reset-reserve-stamina <n>  Daily stamina left unburned at 23:00. Default: 1000',
+    '  --profit-threshold-reset-reserve-ms <ms>  UTC+8 reset reserve. Default: 1000',
+    '  --profit-threshold-reset-reserve-stamina <n>  Daily stamina left unburned at UTC+8 reset. Default: 0',
     '  --recovery-priority-low-hp-approach-stamina-milli <ms>  Approach budget at low HP. Default: 75000',
     '  --recovery-priority-high-hp-approach-stamina-milli <ms>  Approach budget near high HP. Default: 150000',
     '  --self-test              Run runner skeleton self-test'

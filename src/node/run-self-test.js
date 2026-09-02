@@ -10453,7 +10453,7 @@ async function runSelfTest() {
         };
         const activePass = makeDecision(Date.parse('2026-07-12T00:00:00.000Z'), 20000000, 9000);
         const activeBlock = makeDecision(Date.parse('2026-07-12T00:00:00.000Z'), 20000000, 11000);
-        const relaxed = makeDecision(Date.parse('2026-07-12T09:00:00.000Z'), 20000000, 11000);
+        const relaxed = makeDecision(Date.parse('2026-07-12T14:00:00.000Z'), 20000000, 11000);
         const unknown = makeDecision(Date.parse('2026-07-12T00:00:00.000Z'), null, 11000);
         return [
           activePass.action.target?.id,
@@ -15584,10 +15584,10 @@ async function runSelfTest() {
         ]), {}, { ...options, dynamicProfitThresholdEnabled: false });
         const inactiveWindow = buildBrowserlessDecision(makeState([
           { drop_id: 'inactive-window', amount: 1, x: 900, y: 0 }
-        ]), {}, { ...options, nowMs: Date.parse('2026-07-12T09:00:00.000Z') });
+        ]), {}, { ...options, nowMs: Date.parse('2026-07-12T14:00:00.000Z') });
         const resetReserveWindow = buildBrowserlessDecision(makeState([
           { drop_id: 'reserve-window', amount: 1, x: 900, y: 0 }
-        ]), {}, { ...options, nowMs: Date.parse('2026-07-12T15:30:00.000Z') });
+        ]), {}, { ...options, nowMs: Date.parse('2026-07-12T15:59:59.500Z') });
         const thresholdAdapter = createBrowserlessDecisionAdapter(options);
         thresholdAdapter.decide(makeState([
           { drop_id: 'clear-on-inactive', amount: 1, x: 900, y: 0 }
@@ -31949,7 +31949,7 @@ async function runSelfTest() {
           exposed.profitThresholdResetReserveMs
         ].join('|');
       })(),
-      want: '3600000|false|2|2500|1800000|true|1.5|2800|900000'
+      want: '1000|false|2|2500|1800000|true|1.5|2800|900000'
     },
     {
       name: 'browserless frame gap safety defaults to strictly over two seconds',

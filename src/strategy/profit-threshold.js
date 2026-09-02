@@ -4,7 +4,8 @@ const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 const UTC8_OFFSET_MS = 8 * HOUR_MS;
 const STAMINA_MILLI_PER_UNIT = 1000;
-const DEFAULT_RESERVE_STAMINA_UNITS = 1000;
+const DEFAULT_RESET_RESERVE_MS = 1000;
+const DEFAULT_RESERVE_STAMINA_UNITS = 0;
 
 function finiteNumber(value) {
   if (value === null || value === undefined || value === '') return null;
@@ -35,7 +36,7 @@ function buildDynamicProfitThresholdCore(input = {}, options = {}) {
   const enabled = options.enabled !== false;
   const nowMs = finiteNumber(input.nowMs);
   const remaining1dMilli = finiteNumber(input.remaining1dMilli);
-  const reserveMs = Math.max(0, finiteNumber(options.reserveMs) ?? HOUR_MS);
+  const reserveMs = Math.max(0, finiteNumber(options.reserveMs) ?? DEFAULT_RESET_RESERVE_MS);
   const hourlyStaminaLimit = finiteNumber(options.hourlyStaminaLimit);
   const hourlyBurnMilli = (hourlyStaminaLimit !== null && hourlyStaminaLimit > 0 ? hourlyStaminaLimit : 3000)
     * STAMINA_MILLI_PER_UNIT;
@@ -141,6 +142,7 @@ function filterProfitCandidatesCore(candidates = [], thresholdContext = {}, opti
 module.exports = {
   DAY_MS,
   DEFAULT_RESERVE_STAMINA_UNITS,
+  DEFAULT_RESET_RESERVE_MS,
   HOUR_MS,
   STAMINA_MILLI_PER_UNIT,
   UTC8_OFFSET_MS,

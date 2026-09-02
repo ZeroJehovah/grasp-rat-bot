@@ -1700,40 +1700,40 @@ function runStrategyModuleSelfTests() {
   });
   const utc8EightAm = Date.parse('2026-07-12T00:00:00.000Z');
   const activeThreshold = buildDynamicProfitThresholdCore({ nowMs: utc8EightAm, remaining1dMilli: 20000000 }, {});
-  const relaxedThreshold = buildDynamicProfitThresholdCore({ nowMs: Date.parse('2026-07-12T09:00:00.000Z'), remaining1dMilli: 20000000 }, {});
-  const equalBoundary = buildDynamicProfitThresholdCore({ nowMs: Date.parse('2026-07-12T14:00:00.000Z'), remaining1dMilli: 4000000 }, {});
-  const overBoundary = buildDynamicProfitThresholdCore({ nowMs: Date.parse('2026-07-12T14:00:00.000Z'), remaining1dMilli: 4000001 }, {});
-  const elevenPmBoundary = buildDynamicProfitThresholdCore({ nowMs: Date.parse('2026-07-12T15:00:00.000Z'), remaining1dMilli: 1 }, {});
+  const relaxedThreshold = buildDynamicProfitThresholdCore({ nowMs: Date.parse('2026-07-12T14:30:00.000Z'), remaining1dMilli: 20000000 }, {});
+  const equalBoundary = buildDynamicProfitThresholdCore({ nowMs: Date.parse('2026-07-12T14:00:00.000Z'), remaining1dMilli: 5999166 }, {});
+  const overBoundary = buildDynamicProfitThresholdCore({ nowMs: Date.parse('2026-07-12T14:00:00.000Z'), remaining1dMilli: 5999167 }, {});
+  const elevenPmBoundary = buildDynamicProfitThresholdCore({ nowMs: Date.parse('2026-07-12T15:59:59.500Z'), remaining1dMilli: 1 }, {});
   const lastHourLeftover = buildDynamicProfitThresholdCore({ nowMs: Date.parse('2026-07-12T15:30:00.000Z'), remaining1dMilli: 20000000 }, {});
   const lastHourExhausted = buildDynamicProfitThresholdCore({ nowMs: Date.parse('2026-07-12T15:30:00.000Z'), remaining1dMilli: 0 }, {});
   results.push({
     name: 'profit-threshold-utc8-reset-reserve-and-burn-window',
     passed: nextDailyProfitResetAtCore(utc8EightAm) === Date.parse('2026-07-12T16:00:00.000Z')
       && activeThreshold.active === true
-      && activeThreshold.reserveMs === 3600000
-      && activeThreshold.reserveStaminaMilli === 1000000
-      && activeThreshold.burnTargetMilli === 19000000
+      && activeThreshold.reserveMs === 1000
+      && activeThreshold.reserveStaminaMilli === 0
+      && activeThreshold.burnTargetMilli === 20000000
       && activeThreshold.inResetReserveWindow === false
-      && Math.round(activeThreshold.burnCapacityMilli) === 45000000
+      && Math.round(activeThreshold.burnCapacityMilli) === 47999167
       && relaxedThreshold.active === false
       && relaxedThreshold.reason === 'insufficient-burn-window'
-      && relaxedThreshold.burnTargetMilli === 19000000
+      && relaxedThreshold.burnTargetMilli === 20000000
       && equalBoundary.active === true
       && equalBoundary.reason === 'active'
-      && Math.round(equalBoundary.burnCapacityMilli) === 3000000
-      && equalBoundary.burnTargetMilli === 3000000
+      && Math.round(equalBoundary.burnCapacityMilli) === 5999167
+      && equalBoundary.burnTargetMilli === 5999166
       && overBoundary.active === false
       && overBoundary.reason === 'insufficient-burn-window'
       && Math.round(elevenPmBoundary.burnCapacityMilli) === 0
   });
   results.push({
-    name: 'profit-threshold-final-reserve-hour-keeps-selecting-by-threshold',
+    name: 'profit-threshold-final-reserve-window-keeps-selecting-by-threshold',
     passed: elevenPmBoundary.active === true
       && elevenPmBoundary.reason === 'reset-reserve-window'
       && elevenPmBoundary.inResetReserveWindow === true
-      && lastHourLeftover.active === true
-      && lastHourLeftover.reason === 'reset-reserve-window'
-      && Math.round(lastHourLeftover.burnCapacityMilli) === 0
+      && lastHourLeftover.active === false
+      && lastHourLeftover.reason === 'insufficient-burn-window'
+      && Math.round(lastHourLeftover.burnCapacityMilli) === 1499167
       && lastHourExhausted.active === false
       && lastHourExhausted.reason === 'daily-stamina-exhausted'
       && buildDynamicProfitThresholdCore(
