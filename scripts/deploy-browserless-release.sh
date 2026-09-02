@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+NODE_BIN="${NODE_BIN:-/home/ubuntu/.local/node/node-v22.23.2-linux-arm64/bin/node}"
 APP_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 SERVICE_NAME="grasp-rat-browserless-runner.service"
 ENV_PATH="/etc/grasp-rat/browserless-runner.env"
@@ -150,7 +151,7 @@ cleanup() {
     echo "Deployment failed after activation; attempting immutable rollback" >&2
     if "$APP_DIR/scripts/activate-browserless-release.sh" --rollback --release-root "$RELEASE_ROOT"; then
       "${SUDO[@]}" systemctl restart "$SERVICE_NAME" || true
-      "${SUDO[@]}" node "$APP_DIR/scripts/browserless-deployment-audit.js" \
+      "${SUDO[@]}" "$NODE_BIN" "$APP_DIR/scripts/browserless-deployment-audit.js" \
         --env-mode live \
         --env "$ENV_PATH" \
         --data-dir "$DATA_DIR" \
@@ -269,7 +270,7 @@ if [ "$RESTART_READY" -ne 1 ]; then
   exit 1
 fi
 
-"${SUDO[@]}" node "$APP_DIR/scripts/browserless-deployment-audit.js" \
+"${SUDO[@]}" "$NODE_BIN" "$APP_DIR/scripts/browserless-deployment-audit.js" \
   --env-mode live \
   --env "$ENV_PATH" \
   --data-dir "$DATA_DIR" \
@@ -301,7 +302,7 @@ if [ "$HEALTH_READY" -ne 1 ]; then
   "${SUDO[@]}" journalctl -u "$SERVICE_NAME" -n 120 --no-pager || true
   exit 1
 fi
-"${SUDO[@]}" node "$APP_DIR/scripts/verify-browserless-runner-start.js" \
+"${SUDO[@]}" "$NODE_BIN" "$APP_DIR/scripts/verify-browserless-runner-start.js" \
   --log-dir "$LOG_DIR" \
   --after "$RESTART_REQUESTED_AT" \
   --revision "$RUNTIME_REVISION"
