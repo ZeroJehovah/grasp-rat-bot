@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+NODE_BIN="${NODE_BIN:-/home/ubuntu/.local/node/node-v22.23.2-linux-arm64/bin/node}"
 set -euo pipefail
 
 APP_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
@@ -62,7 +63,7 @@ if [ -z "$RELEASE_ROOT" ] || [ "$RELEASE_ROOT" = "/" ]; then
   exit 1
 fi
 
-node "$VERIFY_SCRIPT" "$RELEASE_DIR" --require-read-only --require-runtime-compatible >/dev/null
+"$NODE_BIN" "$VERIFY_SCRIPT" "$RELEASE_DIR" --require-read-only --require-runtime-compatible >/dev/null
 RELEASE_ID="$(node -e 'const fs=require("fs"); const path=require("path"); const root=process.argv[1]; process.stdout.write(JSON.parse(fs.readFileSync(path.join(root,"release-manifest.json"),"utf8")).releaseId || "");' "$RELEASE_DIR")"
 if ! [[ "$RELEASE_ID" =~ ^[0-9a-f]{12}-[0-9a-f]{12}$ ]]; then
   echo "Invalid release ID: $RELEASE_ID" >&2
@@ -94,7 +95,7 @@ trap cleanup EXIT
 
 "${SUDO[@]}" install -d -o root -g root -m 0555 "$RELEASE_ROOT" "$RELEASES_DIR"
 if [ -e "$TARGET" ] || [ -L "$TARGET" ]; then
-  "${SUDO[@]}" node "$VERIFY_SCRIPT" "$TARGET" \
+  "${SUDO[@]}" "$NODE_BIN" "$VERIFY_SCRIPT" "$TARGET" \
     --require-read-only \
     --require-root-owned \
     --require-directory-id \
@@ -113,12 +114,12 @@ fi
   "$STAGING/benchmark-browserless-hot-path.cjs" \
   "$STAGING/verify-release.cjs"
 "${SUDO[@]}" find "$STAGING" -type f -name '*.node' -exec chmod 0555 {} +
-"${SUDO[@]}" node "$VERIFY_SCRIPT" "$STAGING" \
+"${SUDO[@]}" "$NODE_BIN" "$VERIFY_SCRIPT" "$STAGING" \
   --require-read-only \
   --require-root-owned \
   --require-runtime-compatible >/dev/null
 "${SUDO[@]}" mv -- "$STAGING" "$TARGET"
-"${SUDO[@]}" node "$VERIFY_SCRIPT" "$TARGET" \
+"${SUDO[@]}" "$NODE_BIN" "$VERIFY_SCRIPT" "$TARGET" \
   --require-read-only \
   --require-root-owned \
   --require-directory-id \
