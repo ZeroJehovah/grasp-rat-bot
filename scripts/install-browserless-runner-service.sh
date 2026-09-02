@@ -1,6 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
+NODE_BIN="${NODE_BIN:-/home/ubuntu/.local/node/node-v22.23.2-linux-arm64/bin/node}"
 SERVICE_NAME="grasp-rat-browserless-runner"
 APP_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 UNIT_SOURCE="${APP_DIR}/deploy/browserless-runner.service"
@@ -92,7 +93,7 @@ if [ ! -L "$RELEASE_ROOT/current" ]; then
   echo "No active immutable browserless release: $RELEASE_ROOT/current" >&2
   exit 1
 fi
-$SUDO node "$VERIFY_SCRIPT" "$(readlink -f "$RELEASE_ROOT/current")" \
+$SUDO "$NODE_BIN" "$VERIFY_SCRIPT" "$(readlink -f "$RELEASE_ROOT/current")" \
   --require-read-only \
   --require-root-owned \
   --require-directory-id \

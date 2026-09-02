@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+NODE_BIN="${NODE_BIN:-/home/ubuntu/.local/node/node-v22.23.2-linux-arm64/bin/node}"
 APP_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 VERIFY_SCRIPT="$APP_DIR/scripts/verify-browserless-release.js"
 RELEASE_ROOT="${GRASP_RAT_BROWSERLESS_RELEASE_ROOT:-/opt/grasp-rat-browserless}"
@@ -96,7 +97,7 @@ verify_installed() {
     echo "Invalid release ID: $id" >&2
     exit 1
   fi
-  "${SUDO[@]}" node "$VERIFY_SCRIPT" "$RELEASES_DIR/$id" \
+  "${SUDO[@]}" "$NODE_BIN" "$VERIFY_SCRIPT" "$RELEASES_DIR/$id" \
     --require-read-only \
     --require-root-owned \
     --require-directory-id \
