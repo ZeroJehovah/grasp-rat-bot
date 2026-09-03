@@ -10,7 +10,7 @@ const {
 
 const SCHEMA_VERSION = 4;
 const INITIAL_SCORE = 1;
-const MAX_SCORE = 3;
+const MAX_SCORE = 10;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DEFAULT_OUTCOME_GRACE_MS = 40000;
 const DEFAULT_PERSIST_INTERVAL_MS = 5000;
@@ -107,7 +107,7 @@ function killScoreIncrement(detail = {}, engagement = null) {
   const engagementSelfHp = numberOrNull(engagement?.lastSelfHp);
   const detailSelfHp = numberOrNull(detail.selfHp ?? detail.self_hp ?? detail.self?.hp);
   const selfHp = engagementSelfHp ?? detailSelfHp;
-  if (selfHp === null) return { increment: 1, selfHp: null, selfMaxHp: null, source: 'unknown-hp-default' };
+  if (selfHp === null) return { increment: 2, selfHp: null, selfMaxHp: null, source: 'unknown-hp-default' };
   const selfMaxHp = positiveNumberOrNull(
     engagementSelfHp !== null
       ? engagement?.lastSelfMaxHp
@@ -116,7 +116,7 @@ function killScoreIncrement(detail = {}, engagement = null) {
           ?? detail.self?.maxHp
           ?? detail.self?.max_hp)
   ) ?? DEFAULT_SELF_MAX_HP;
-  const increment = selfHp >= selfMaxHp ? 2 : (selfHp > 50 ? 1 : 0);
+  const increment = selfHp >= selfMaxHp ? 3 : (selfHp > 50 ? 2 : 1);
   return {
     increment,
     selfHp,

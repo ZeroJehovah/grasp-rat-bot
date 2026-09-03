@@ -486,6 +486,14 @@ function runRemoteProfitTargetsSelfTest() {
     online: true
   }, { scoreTarget: (_entity, details) => scoring({ ...details, drop: _entity.drop, distance: details.distance }) });
   assert.strictEqual(scoreThree.candidates.length, 1, 'score 3 has no self-distance cap');
+  const scoreTen = evaluateRemoteProfitTargets({
+    self: { user_id: 1, x: -100000, y: 0 },
+    entities: [target({ user_id: 26, hp: 1, x: 100000, current_join_mode: 'Active' })],
+    easyKillPlayers: [{ userId: 26, score: 10 }],
+    config: {},
+    online: true
+  }, { scoreTarget: (_entity, details) => scoring({ ...details, drop: _entity.drop, distance: details.distance }) });
+  assert.strictEqual(scoreTen.candidates.length, 1, 'score 10 easy-kill player is admitted without a self-distance cap');
   assert.strictEqual(evaluate([target({ x: 100000 })]).candidates.length, 1);
   assert.strictEqual(evaluate([target({ x: 100001 })]).candidates.length, 0);
 

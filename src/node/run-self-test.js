@@ -34744,7 +34744,7 @@ async function runSelfTest() {
           Object.keys(persisted.players).join(',')
         ].join('|');
       }),
-      want: '3|2|2|0|0|8:true:true:3,9:false:true:3|user:10'
+      want: '3|2|2|0|0|8:true:true:10,9:false:true:10|user:10'
     },
     {
       name: 'browserless runner startup clears stale login point safety progress',
@@ -38028,7 +38028,7 @@ async function runSelfTest() {
             if (name === 'missing') {
               return { ok: false, statusCode: 404, reason: 'player-not-found', error: '该玩家不在动态白名单中' };
             }
-            return { ok: true, removed: true, player: { userId: 8, name }, easyKill: { userId: 8, name, score: 3 } };
+            return { ok: true, removed: true, player: { userId: 8, name }, easyKill: { userId: 8, name, score: 10 } };
           }
         });
         try {
@@ -38055,7 +38055,7 @@ async function runSelfTest() {
           await handle.close();
         }
       })(),
-      want: '200|true|8|3|404|player-not-found|friendly,missing'
+      want: '200|true|8|10|404|player-not-found|friendly,missing'
     },
     {
       name: 'browserless status server accepts async pre-rendered full and compact JSON text',
@@ -38490,7 +38490,8 @@ async function runSelfTest() {
             players: [
               { userId: 8, name: 'score-one', score: 1 },
               { userId: 9, name: 'score-two', score: 2 },
-              { userId: 10, name: 'score-three', score: 3 }
+              { userId: 10, name: 'score-three', score: 3 },
+              { userId: 13, name: 'score-ten', score: 10 }
             ]
           },
           dailyDamagePlayers: {
@@ -38506,7 +38507,7 @@ async function runSelfTest() {
         const panelText = renderBrowserlessWebPanel();
         const panelScript = panelText.match(/<script>([\s\S]*?)<\/script>/)?.[1] || '';
         return String([
-          compact.easyKillPlayers.p.map(item => item.join(',')).join(';') === 'score-one,1;score-two,2;score-three,3',
+          compact.easyKillPlayers.p.map(item => item.join(',')).join(';') === 'score-one,1;score-two,2;score-three,3;score-ten,3',
           compact.dailyDamagePlayers.day === '2026-07-14',
           compact.dailyDamagePlayers.p.join(',') === 'damager',
           compact.dynamicWhitelist.p.join(',') === 'friendly',
@@ -46244,7 +46245,7 @@ async function runSelfTest() {
 	      want: 'offline-leave-wait|offline hold active|61000|120000'
 	    },
 	    {
-	      name: 'browserless easy-kill tracker confirms kills and removes failed rematches after grace',
+	      name: 'browserless easy-kill tracker confirms kills and clears failed rematches after grace',
 	      got: (() => {
 	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-tracker-'));
 	        try {
@@ -46274,7 +46275,7 @@ async function runSelfTest() {
 	          fs.rmSync(dir, { recursive: true, force: true });
 	        }
 	      })(),
-	      want: 'true|1|runner|8|1|0|0'
+	      want: 'true|1|runner|8|1|1|0'
 	    },
 	    {
 	      name: 'browserless easy-kill tracker clears pending failure when target reappears alive',
@@ -46309,7 +46310,7 @@ async function runSelfTest() {
 	          fs.rmSync(dir, { recursive: true, force: true });
 	        }
 	      })(),
-	      want: '8|1|target-reappeared-alive|0|0|1|engagement-pending-cleared'
+	      want: '8|1|target-reappeared-alive|0|0|2|engagement-pending-cleared'
 	    },
 	    {
 	      name: 'browserless easy-kill tracker accepts manual entries capped at the max score',
@@ -46343,7 +46344,7 @@ async function runSelfTest() {
 	          fs.rmSync(dir, { recursive: true, force: true });
 	        }
 	      })(),
-	      want: 'true|true|3|3|false|missing-user-id|false|invalid-score|false|3|2|ex-whitelist|3|3|dynamic-whitelist-remove'
+	      want: 'true|true|3|10|false|missing-user-id|false|invalid-score|false|3|2|ex-whitelist|3|3|dynamic-whitelist-remove'
 	    },
 	    {
 	      name: 'browserless easy-kill tracker keeps user id while refreshing the latest observed name',
@@ -46430,7 +46431,7 @@ async function runSelfTest() {
 	          fs.rmSync(dir, { recursive: true, force: true });
 	        }
 	      })(),
-	      want: '4|2|3|9:3,8:2'
+	      want: '4|2|8|9:8,8:2'
 	    },
 	    {
 	      name: 'browserless easy-kill tracker decays every score at UTC+8 midnight and removes zeroes',
@@ -46471,7 +46472,7 @@ async function runSelfTest() {
 	      want: '10:3,8:1,9:2|2026-07-21|10:2,9:1|true|3|true'
 	    },
 	    {
-	      name: 'browserless easy-kill tracker caps score at three and decrements failures to removal',
+	      name: 'browserless easy-kill tracker caps score at ten and decrements failures to removal',
 	      got: (() => {
 	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-score-'));
 	        try {
@@ -46508,7 +46509,7 @@ async function runSelfTest() {
 	          fs.rmSync(dir, { recursive: true, force: true });
 	        }
 	      })(),
-	      want: '1,2,3,3|3|4|2|1|0'
+	      want: '2,4,6,8|8|4|7|6|1'
 	    },
 	    {
 	      name: 'browserless easy-kill tracker keeps score for technical and stamina combat interruptions',
@@ -46547,10 +46548,10 @@ async function runSelfTest() {
 	          fs.rmSync(dir, { recursive: true, force: true });
 	        }
 	      })(),
-	      want: '10:1,8:1,9:1|3|true'
+	      want: '10:2,8:2,9:2|3|true'
 	    },
 	    {
-	      name: 'browserless easy-kill tracker awards kill score from self hp and keeps low-hp kills neutral',
+	      name: 'browserless easy-kill tracker awards score from self hp tiers and keeps low-hp kills awarding',
 	      got: (() => {
 	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-hp-score-'));
 	        const events = [];
@@ -46592,7 +46593,7 @@ async function runSelfTest() {
 	          fs.rmSync(dir, { recursive: true, force: true });
 	        }
 	      })(),
-	      want: '11:2:1,8:2:1,9:1:2|2|0|0|false|engagement-last-self-hp'
+	      want: '10:1:1,11:3:1,8:3:1,9:3:2|3|1|1|true|engagement-last-self-hp'
 	    },
 	    {
 	      name: 'browserless daily damage tracker records stable player ids and resets on UTC+8 day change',
@@ -48114,7 +48115,7 @@ async function runSelfTest() {
 	          fs.rmSync(dir, { recursive: true, force: true });
 	        }
 	      })(),
-	      want: 'easy-kill-active-profit|easy-kill-approach-no-progress|-500|0|true'
+	      want: 'easy-kill-active-profit|easy-kill-approach-no-progress|-500|1|true'
 	    },
 	    {
 	      name: 'browserless easy-kill approach removes target after realtime disappearance hold',
@@ -48198,7 +48199,7 @@ async function runSelfTest() {
 	          fs.rmSync(dir, { recursive: true, force: true });
 	        }
 	      })(),
-	      want: 'combat-critical-hp-leave|8|0|0'
+	      want: 'combat-critical-hp-leave|8|0|1'
 	    },
 	    {
 	      name: 'browserless successful active combat shot plus kill evidence adds easy-kill player',
@@ -48287,7 +48288,7 @@ async function runSelfTest() {
 	          fs.rmSync(dir, { recursive: true, force: true });
 	        }
 	      })(),
-	      want: '1|true|99|0->2|0|1'
+	      want: '1|true|99|0->3|0|1'
 	    },
 	    {
 	      name: 'easy-kill tracker still credits killCount for our own kill of the same engagement shape',
@@ -48366,7 +48367,7 @@ async function runSelfTest() {
 	          fs.rmSync(dir, { recursive: true, force: true });
 	        }
 	      })(),
-	      want: '1|9|true|2|1|0'
+	      want: '1|9|true|3|1|0'
 	    },
 	    {
 	      name: 'easy-kill tracker ignores observed deaths without an engagement or older than the engagement start',

@@ -7,6 +7,8 @@ const {
 const { estimateEightWayRouteCore } = require('./eight-way-route-eta');
 const { invulnerableProfitSelectionCostCore } = require('./invulnerable-profit-selection');
 
+const EASY_KILL_MAX_SCORE = 10;
+
 const DEFAULT_REMOTE_PROFIT_TARGET_CONFIG = Object.freeze({
   minDrop: 50,
   nearbyMinDrop: 20,
@@ -216,7 +218,7 @@ function easyKillMap(players = []) {
   for (const player of players || []) {
     const userId = entityUserId(player);
     const score = Math.round(Number(player?.score));
-    if (userId === null || !Number.isFinite(score) || score < 1 || score > 3) continue;
+    if (userId === null || !Number.isFinite(score) || score < 1 || score > EASY_KILL_MAX_SCORE) continue;
     map.set(String(userId), { userId, score });
   }
   return map;
