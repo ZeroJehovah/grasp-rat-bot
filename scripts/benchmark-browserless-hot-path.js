@@ -40,6 +40,7 @@ const { createCombatBattleLog } = require('../src/node/browserless/combat-battle
 const { createDynamicWhitelist } = require('../src/node/browserless/dynamic-whitelist');
 const { createMapTrailTracker } = require('../src/node/browserless/map-trail-tracker');
 const { startStatusServer } = require('../src/node/browserless/status-server');
+const { DEFAULT_TRANSPORT_SERVER_TICK_MS } = require('../src/node/browserless/transport-health');
 
 const RELEASE_PROCESS_NICE = -10;
 
@@ -177,6 +178,27 @@ function evaluateCpuGate(tasks, budgetMs) {
     maxCpuMs: measured.length ? Math.max(...measured.map(item => item.maxCpuMs)) : null,
     maxWallMs: measured.length ? Math.max(...measured.map(item => item.maxWallMs)) : null
   };
+}
+
+function createBenchmarkFrameClock(baseTick, now = () => performance.now()) {
+  const startedAtMs = now();
+  let lastTick = baseTick;
+  return () => {
+    lastTick = Math.max(lastTick, baseTick + Math.floor(
+      Math.max(0, now() - startedAtMs) / DEFAULT_TRANSPORT_SERVER_TICK_MS
+    ));
+    return lastTick;
+  };
+}
+
+function completeCallbackValidationErrors(scenario, requestedDurationMs) {
+  const errors = [];
+  if (scenario?.ok !== true) errors.push(`canary-failed:${scenario?.error || 'unknown'}`);
+  const measuredMs = Number(scenario?.measurementWindow?.durationMs);
+  if (!Number.isFinite(measuredMs) || measuredMs < requestedDurationMs) {
+    errors.push('callback-window-incomplete');
+  }
+  return errors;
 }
 
 function measure(iterations, callback) {
@@ -577,16 +599,20 @@ async function runCompleteCallbackScenario(options, combatLearning, activeCombat
     statusRequests.add(tracked);
     tracked.finally(() => statusRequests.delete(tracked));
   };
-  const snapshotFrame = encodeGrzFrame({
+  const snapshotPayload = {
     type: 'snapshot',
     tick: fixture.state.fallback.tick,
     entities: fixture.entities,
     bullets: [],
     coin_drops: fixture.coinDrops,
     messages: []
-  });
+  };
   let simulatedVelocity = { dx: 0, dy: 0 };
-  let posFrameIndex = 0;
+  let measurementStartedAtMs = null;
+  let measurementEndedAtMs = null;
+  const finishMeasurement = () => {
+    if (measurementEndedAtMs === null) measurementEndedAtMs = performance.now();
+  };
   try {
     await Promise.all([refreshStatusCache(false), refreshStatusCache(true)]);
     scheduleStatusRender();
@@ -646,6 +672,8 @@ async function runCompleteCallbackScenario(options, combatLearning, activeCombat
         }
       },
       openBrowserlessWs: async wsOptions => {
+        measurementStartedAtMs = performance.now();
+        const frameTick = createBenchmarkFrameClock(fixture.state.realtime.tick);
         const sendPosFrame = () => {
           fixture.self.vx = simulatedVelocity.dx;
           fixture.self.vy = simulatedVelocity.dy;
@@ -653,11 +681,10 @@ async function runCompleteCallbackScenario(options, combatLearning, activeCombat
           fixture.self.y += simulatedVelocity.dy * 120;
           const frame = encodeGrzFrame({
             type: 'pos',
-            tick: fixture.state.realtime.tick + posFrameIndex + 1,
+            tick: frameTick(),
             entities: fixture.entities,
             bullets: fixture.bullets
           });
-          posFrameIndex += 1;
           wsOptions.onMessage(frame);
         };
         // Production can enter realtime with a crowded native pos frame
@@ -666,13 +693,17 @@ async function runCompleteCallbackScenario(options, combatLearning, activeCombat
         // afterward and sustained pos traffic for the rest of the scenario.
         setImmediate(() => {
           sendPosFrame();
-          setImmediate(() => wsOptions.onMessage(snapshotFrame));
+          setImmediate(() => wsOptions.onMessage(encodeGrzFrame({
+            ...snapshotPayload,
+            tick: frameTick()
+          })));
         });
         timer = setInterval(sendPosFrame, options.frameIntervalMs);
         timer.unref?.();
         return {
           isOpen: () => true,
           close() {
+            finishMeasurement();
             if (timer) clearInterval(timer);
             timer = null;
           },
@@ -685,13 +716,24 @@ async function runCompleteCallbackScenario(options, combatLearning, activeCombat
           sendShoot() {}
         };
       },
-      leaveWithVerification: async () => ({ ok: true, attempts: [{ ok: true }] })
+      leaveWithVerification: async () => {
+        finishMeasurement();
+        return { ok: true, attempts: [{ ok: true }] };
+      }
     });
     return {
       ok: result.ok,
       error: result.error || '',
       safetyReason: result.safety?.event?.reason || '',
       activeCombat,
+      measurementWindow: {
+        requestedDurationMs: options.canaryDurationMs,
+        durationMs: measurementStartedAtMs === null || measurementEndedAtMs === null
+          ? null
+          : measurementEndedAtMs - measurementStartedAtMs,
+        frameIntervalMs: options.frameIntervalMs,
+        serverTickMs: DEFAULT_TRANSPORT_SERVER_TICK_MS
+      },
       frameCount: result.hotPath?.tasks?.['ws-message']?.count || 0,
       ingressFrameCount: result.hotPath?.tasks?.['ws-message-ingress']?.count || 0,
       realtimeControlCount: Number(result.decisions?.realtimeControlCount || 0),
@@ -1039,6 +1081,10 @@ async function runBenchmark(options) {
   const cpuGate = evaluateCpuGate(productionHotTasks, options.maxMs);
   const overBudget = cpuGate.overBudget;
   const validationErrors = [];
+  for (const [name, scenario] of Object.entries({ idle: idleScenario, combat: combatScenario })) {
+    validationErrors.push(...completeCallbackValidationErrors(scenario, options.canaryDurationMs)
+      .map(error => `${name}-${error}`));
+  }
   if (options.failOnBudget
     && process.platform === 'linux'
     && (processNice === null || processNice > RELEASE_PROCESS_NICE)) {
@@ -1128,6 +1174,7 @@ function printHuman(result) {
     const maxCpuTask = scenario?.hotPath?.maxCpuTask || null;
     const workProfile = maxTask?.workProfile || {};
     const publication = scenario?.actionPublication || {};
+    console.log(`- ${name} callback window: ${Number(scenario.measurementWindow?.durationMs || 0).toFixed(3)}ms / ${scenario.measurementWindow?.requestedDurationMs || 0}ms; frames=${scenario.frameCount || 0} controls=${scenario.realtimeControlCount || 0}; canary=${scenario.ok ? 'ok' : scenario.error || 'failed'}`);
     if (maxTask) {
       console.log(`- ${name} max-task detail: task=${maxTask.task || ''} wall=${maxTask.durationMs || 0}ms cpu=${workProfile.cpuWorkMs ?? 'n/a'}ms nonCpu=${workProfile.nonCpuWallMs ?? 'n/a'}ms classification=${workProfile.classification || ''}`);
       console.log(`- ${name} max-task stages: ${JSON.stringify(maxTask.stages || {})}`);
@@ -1180,6 +1227,8 @@ if (require.main === module) {
 }
 
 module.exports = {
+  completeCallbackValidationErrors,
+  createBenchmarkFrameClock,
   createFixture,
   evaluateCpuGate,
   parseArgs,

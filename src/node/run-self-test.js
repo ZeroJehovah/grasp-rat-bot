@@ -6406,6 +6406,15 @@ async function runSelfTest() {
       want: '0:true'
     },
     {
+      name: 'browserless hot-path release clock and Worker feedback self-test passes',
+      got: async () => {
+        const { runHotPathReleaseSelfTest } = require('./browserless/hot-path-release-self-test');
+        const result = await runHotPathReleaseSelfTest();
+        return result.ok;
+      },
+      want: true
+    },
+    {
       name: 'browserless unconfirmed WS entry recovery self-test passes',
       got: async () => {
         const { runWsConnectRecoverySelfTest } = require('./browserless/ws-connect-recovery-self-test');

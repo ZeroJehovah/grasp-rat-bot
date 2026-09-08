@@ -149,8 +149,10 @@ function createBrowserlessRealtimeControlWorker(options = {}) {
 
   function observeActionResult(actionResult, decision, eventOptions = {}) {
     return post('observe-action', {
-      actionResult: serializableDecisionOptions(actionResult),
-      decision: serializableDecisionOptions(decision),
+      // Runtime actions and Worker decisions are already plain data, just
+      // as in the planner Worker. postMessage takes the isolated snapshot.
+      actionResult,
+      decision,
       options: serializableDecisionOptions(eventOptions)
     });
   }
