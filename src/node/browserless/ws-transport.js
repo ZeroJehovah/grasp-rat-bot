@@ -237,9 +237,11 @@ function openBrowserlessWs(options = {}) {
     };
     timer = setTimeout(() => {
       if (!opened) {
+        const timeoutError = new Error('websocket connect timeout');
+        timeoutError.code = 'websocket-connect-timeout';
         failOpen(aborted
           ? createWebSocketConnectAbortError(signal?.reason)
-          : new Error('websocket connect timeout'));
+          : timeoutError);
         try { handle.close(); } catch (_) {}
       }
     }, connectTimeoutMs);

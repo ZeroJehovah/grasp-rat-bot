@@ -1613,6 +1613,7 @@ function browserlessLoopPlan(result, config = {}) {
     'action-settlement-stalled',
     'frame-gap',
     'stale-self',
+    'ws-connect-unconfirmed-leave',
     'ws-closed',
     'ws-error'
   ]);

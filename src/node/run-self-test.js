@@ -6406,6 +6406,15 @@ async function runSelfTest() {
       want: '0:true'
     },
     {
+      name: 'browserless unconfirmed WS entry recovery self-test passes',
+      got: async () => {
+        const { runWsConnectRecoverySelfTest } = require('./browserless/ws-connect-recovery-self-test');
+        const result = await runWsConnectRecoverySelfTest();
+        return result.ok;
+      },
+      want: true
+    },
+    {
       name: 'browserless drop-race observability self-test passes',
       got: (() => {
         const result = runDropRaceObservabilitySelfTest();

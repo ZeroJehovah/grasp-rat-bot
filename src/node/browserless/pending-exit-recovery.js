@@ -103,6 +103,7 @@ function normalizePendingExit(value, nowMs = Date.now(), options = {}) {
     exitAttemptId,
     recoveredFromExitAttemptId: String(value.recoveredFromExitAttemptId || ''),
     originalReason: String(value.originalReason || value.reason || 'unconfirmed-leave'),
+    entryUnconfirmed: value.entryUnconfirmed === true,
     firstAt: new Date(firstAtMs).toISOString(),
     firstAtMs,
     lastAttemptAt: new Date(lastAttemptAtMs).toISOString(),
@@ -188,6 +189,10 @@ function pendingExitFromCanary(previous, canary, nowMs = Date.now(), options = {
     pending?.recoveredFromExitAttemptId
       || event?.detail?.exitRecovery === true
   );
+  const entryUnconfirmed = event?.detail?.entryUnconfirmed === true
+    || event?.detail?.pendingExit?.entryUnconfirmed === true
+    || pending?.entryUnconfirmed === true
+    || prior?.entryUnconfirmed === true;
   // A rejected handshake can still make the generic leave fallback fail. It
   // is not an in-game exit, so it must not start a relogin-blocking chain.
   // An expired pending-exit chain is different: its fresh protected leave has
@@ -196,7 +201,8 @@ function pendingExitFromCanary(previous, canary, nowMs = Date.now(), options = {
   if (!prior
     && isExplicitZeroFrameCanary(canary)
     && !hasCanaryInGameEvidence(canary)
-    && !renewedRecoveryChain) return null;
+    && !renewedRecoveryChain
+    && !entryUnconfirmed) return null;
   const continuesPriorAttempt = Boolean(
     prior && (!pendingAttemptId || pendingAttemptId === String(prior.exitAttemptId || ''))
   );
@@ -252,6 +258,7 @@ function pendingExitFromCanary(previous, canary, nowMs = Date.now(), options = {
     exitAttemptId: pendingAttemptId || chainPrior?.exitAttemptId || createExitAttemptId(canary?.runId || '', firstAtMs, 0),
     recoveredFromExitAttemptId: pending?.recoveredFromExitAttemptId || '',
     originalReason: pending?.originalReason || chainPrior?.originalReason || event?.reason || 'unconfirmed-leave',
+    entryUnconfirmed,
     firstAtMs,
     lastAttemptAtMs: Number(nowMs),
     attemptCount,
@@ -277,7 +284,11 @@ function pendingExitSnapshotResolution(pendingExit, snapshotSafety, options = {}
   const summary = snapshotSafety?.response?.summary || {};
   const freshnessOk = summary?.freshness?.ok === true
     || (summary?.freshness?.ok === undefined && snapshotSafety?.ok === true);
-  if (freshnessOk && summary.selfPresent === false) {
+  // Without a first realtime frame there is no post-upgrade tick watermark.
+  // A cached HTTP snapshot can predate the hidden join and still pass the
+  // ordinary freshness test. This chain therefore needs verified HTTP leave;
+  // snapshot absence alone must not re-enable another login.
+  if (freshnessOk && summary.selfPresent === false && !pending.entryUnconfirmed) {
     return {
       active: false,
       cleared: true,

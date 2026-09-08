@@ -2637,6 +2637,7 @@ async function runReadOnlyCanary(config, options = {}) {
     return summary;
   };
   const publicLeavePending = pending => pending ? {
+    entryUnconfirmed: pending.entryUnconfirmed === true,
     active: Boolean(!pending.settled),
     exitAttemptId: String(pending.exitAttemptId || ''),
     recoveredFromExitAttemptId: String(pending.recoveredFromExitAttemptId || ''),
@@ -2742,6 +2743,8 @@ async function runReadOnlyCanary(config, options = {}) {
       exitAttemptId: continuedPendingExit?.exitAttemptId
         || createExitAttemptId(runId, atMs, exitAttemptSequence++),
       originalReason: String(continuedPendingExit?.originalReason || event.reason || 'unconfirmed-leave'),
+      entryUnconfirmed: event.detail?.entryUnconfirmed === true
+        || event.detail?.pendingExit?.entryUnconfirmed === true,
       sourceRunId: String(continuedPendingExit?.sourceRunId || runId),
       event,
       triggerDecision: detail.decision || result.decisions.last,
@@ -4802,6 +4805,26 @@ async function runReadOnlyCanary(config, options = {}) {
       && authoritativeInGameEvidence
       && (!authOpenFailure || snapshotSafetySelfPresent(result.snapshotSafety))
   );
+  const rejectedBeforeEntry = authOpenFailure
+    || result.connectionFailure?.type === 'cloudflare-challenge'
+    || /^websocket unexpected response 4\d\d\b/i.test(result.error || '');
+  if (openFailedBeforeTransport && pendingWsConnect
+    && !terminalBeforeWsActive && !recoveryConfirmedAbsent
+    && !authoritativeInGameEvidence && !protectedExitEvidence
+    && !rejectedBeforeEntry && config.userId && config.sessionToken) {
+    // A lost upgrade response is not evidence that the server did not join
+    // the role. Close the attempt and use the protected leave lifecycle even
+    // with zero frames (including the healthy-HP snapshot exemption path).
+    // This marker is uncertainty, never fabricated realtime/self authority.
+    const connectError = result.error;
+    const pendingConnectCancel = cancelPendingWsConnect('unconfirmed-entry');
+    recordSafetyEvent(createSafetyEvent('ws-connect-unconfirmed-leave', {
+      source: 'ws-connect-failure',
+      entryUnconfirmed: true,
+      connectError,
+      pendingConnectCancel
+    }, { nowMs: now(), stopMotion: false, selfAuthorityMissing: true }));
+  }
   const shouldAttemptLeave = Boolean(authoritativeInGameEvidence || protectedExitEvidence || leavePending?.promise);
 
   if (shouldAttemptLeave) {

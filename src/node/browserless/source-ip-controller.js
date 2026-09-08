@@ -442,6 +442,7 @@ function createSourceIpController(options = {}) {
       const generation = ++transportGeneration;
       let opened = false;
       let attemptError = null;
+      let openError = null;
       let challengeFailure = null;
       const withGeneration = event => ({
         ...(event && typeof event === 'object' ? event : {}),
@@ -546,6 +547,7 @@ function createSourceIpController(options = {}) {
         attemptDiagnostics.push({ generation, sourceIp, opened: true, status: 101, error: '' });
         return transport;
       } catch (err) {
+        openError = err;
         attemptError = attemptError || err;
         const forbidden = isWebSocketForbiddenError(err) || isWebSocketForbiddenError(attemptError);
         const errorChallenge = detectCloudflareChallenge({
@@ -574,7 +576,10 @@ function createSourceIpController(options = {}) {
           throw err;
         }
       }
-      const error = new Error(attemptError?.message || 'websocket source IP attempt failed');
+      // Closing a timed-out CONNECTING socket emits a secondary error before
+      // this catch resumes. Preserve the rejected operation, not that cleanup
+      // event, including its typed timeout/cancellation classification.
+      const error = openError || new Error(attemptError?.message || 'websocket source IP attempt failed');
       error.attempts = attemptDiagnostics;
       if (connectionFailure) {
         error.code = connectionFailure.type;
