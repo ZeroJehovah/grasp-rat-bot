@@ -11,8 +11,11 @@ const {
   stringifyRedactedJson
 } = require('./session-client');
 const {
+  browserlessCompactStatusSource,
   buildCompactBrowserlessStatus,
-  buildPublicBrowserlessStatus
+  buildPublicBrowserlessStatus,
+  mergeBrowserlessStatusSource,
+  readBrowserlessStateFile
 } = require('./state-file');
 
 let processed = 0;
@@ -135,16 +138,30 @@ function appendChatHistory(message) {
 }
 
 function renderStatus(message) {
-  if (message.compact) return buildCompactBrowserlessStatus(message.state || {}, message.config || {});
-  const state = message.state || {};
-  return redactStructuredSecrets({
-    ...buildPublicBrowserlessStatus(state, message.config || {}),
-    highDropPlayers: state.highDropPlayers || null,
-    easyKillPlayers: state.easyKillPlayers || null,
-    dailyDamagePlayers: state.dailyDamagePlayers || null,
-    dynamicWhitelist: state.dynamicWhitelist || null,
-    chat: state.chat || null
-  });
+  let state = message.state || {};
+  let stateReadMs = 0;
+  let compactProjectionMs = 0;
+  if (message.stateFile) {
+    const readStarted = performance.now();
+    state = mergeBrowserlessStatusSource(readBrowserlessStateFile(message.stateFile), state);
+    stateReadMs = performance.now() - readStarted;
+    if (message.compact) {
+      const projectionStarted = performance.now();
+      state = browserlessCompactStatusSource(state, message.config || {});
+      compactProjectionMs = performance.now() - projectionStarted;
+    }
+  }
+  const status = message.compact
+    ? buildCompactBrowserlessStatus(state, message.config || {})
+    : redactStructuredSecrets({
+        ...buildPublicBrowserlessStatus(state, message.config || {}),
+        highDropPlayers: state.highDropPlayers || null,
+        easyKillPlayers: state.easyKillPlayers || null,
+        dailyDamagePlayers: state.dailyDamagePlayers || null,
+        dynamicWhitelist: state.dynamicWhitelist || null,
+        chat: state.chat || null
+      });
+  return { status, stateSource: message.stateFile ? 'file' : 'memory', stateReadMs, compactProjectionMs };
 }
 
 parentPort.on('message', message => {
@@ -163,8 +180,8 @@ parentPort.on('message', message => {
     else if (message.kind === 'chat-history') appendChatHistory(message);
     else if (message.kind === 'status-render') {
       const started = performance.now();
-      const status = renderStatus(message);
-      const text = JSON.stringify(status, null, 2);
+      const rendered = renderStatus(message);
+      const text = JSON.stringify(rendered.status, null, 2);
       processed += 1;
       parentPort.postMessage({
         kind: 'status-render',
@@ -172,6 +189,9 @@ parentPort.on('message', message => {
         text,
         bytes: Buffer.byteLength(text),
         computeMs: performance.now() - started,
+        stateSource: rendered.stateSource,
+        stateReadMs: rendered.stateReadMs,
+        compactProjectionMs: rendered.compactProjectionMs,
         processed
       });
       return;

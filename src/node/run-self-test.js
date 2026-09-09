@@ -82,7 +82,8 @@ const {
   singleCoinBaitReturnPlan,
   snapshotObservedKillEvidence,
   snapshotSelfKillEvidence,
-  summarizeKillMessageAuthorship
+  summarizeKillMessageAuthorship,
+  summarizeEnemyOpportunityTarget
 } = require('./browserless/decision-adapter');
 const {
   createBrowserlessDecisionState,
@@ -7076,6 +7077,30 @@ async function runSelfTest() {
       want: 'true|true|true|true|true|true'
     },
     {
+      name: 'browserless runner preserves snapshot results and shortcut budgets across state transitions',
+      got: () => (async () => {
+        const { runBrowserlessRunnerStateTransitionSelfTest } = require('./browserless/runner-state-transition-self-test');
+        return (await runBrowserlessRunnerStateTransitionSelfTest()).ok;
+      })(),
+      want: true
+    },
+    {
+      name: 'browserless status Worker owns offline reads and preserves live source authority',
+      got: () => (async () => {
+        const { runBrowserlessStatusRenderSelfTest } = require('./browserless/status-render-self-test');
+        return (await runBrowserlessStatusRenderSelfTest()).ok;
+      })(),
+      want: true
+    },
+    {
+      name: 'browserless HTTP deadlines cover response bodies and release recovery owners',
+      got: () => (async () => {
+        const { runSessionClientSelfTest } = require('./browserless/session-client-self-test');
+        return (await runSessionClientSelfTest()).ok;
+      })(),
+      want: true
+    },
+    {
       name: 'browserless fetch timeout aborts stalled requests',
       got: () => (async () => {
         try {
@@ -12066,6 +12091,60 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: '8|9|8|2|2000|true|5000|8|true|9|lock-expired|8|1|8001|false|safety|avoid-invulnerable-target|combat|combat-live-realtime'
+    },
+    {
+      name: 'browserless profit lock keeps a complete current target after its paired coin disappears',
+      got: (() => {
+        const self = fullStamina5s({ entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100 });
+        const stateAt = (tick, x) => ({
+          userId: 7,
+          realtime: {
+            tick, frameAgeMs: 0, self,
+            entities: [self, {
+              entity_id: 2, user_id: 8, name: 'known-player', x, y: 0, vx: 20,
+              hp: 30, max_hp: 100, current_join_mode: 'Active', drop: 30
+            }],
+            bullets: [], coinDrops: []
+          },
+          fallback: { tick, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
+        });
+        const options = {
+          controlMode: 'profit-live', combatEnabled: true, dynamicProfitThresholdEnabled: false,
+          finalActionArbitrationHoldMs: 0, singleCoinBaitEnabled: false,
+          easyKillPlayers: [{ userId: 8, name: 'known-player' }]
+        };
+        const decisionAdapter = createBrowserlessDecisionAdapter(options);
+        const previous = decisionAdapter.decide(stateAt(100, 30000), { nowMs: 1000 });
+        decisionAdapter.patchState({
+          opportunityChoice: {
+            ...decisionAdapter.getState().opportunityChoice,
+            targetActive: previous.action.target.active
+          },
+          opportunitySwitchLock: {
+            pairKey: 'coin:picked|enemy:8', lockedKey: 'enemy:8', blockedKey: 'coin:picked',
+            lastKey: 'enemy:8', switchCount: 2, windowStartedAt: 900, lockUntil: 31000
+          }
+        });
+        const snapshot = stateAt(120, 29000);
+        const decision = decisionAdapter.decide(snapshot, { nowMs: 2000 });
+        const commands = [];
+        const actionAdapter = createBrowserlessActionAdapter({
+          now: () => 2000,
+          transport: {
+            sendVelocity: (dx, dy) => commands.push({ kind: 'velocity', dx, dy }),
+            sendShoot: () => commands.push({ kind: 'shoot' })
+          }
+        });
+        const applied = actionAdapter.applyDecision(snapshot, decision);
+        return decision.action.target?.type === 'enemy'
+          && decision.action.target?.userId === 8
+          && decision.action.target?.x === 29000
+          && decision.action.target?.authority === 'realtime'
+          && decision.action.opportunityChoice?.oscillationLocked === true
+          && applied.reason === 'profit-easy-kill-seek'
+          && commands.length === 1 && commands[0].kind === 'velocity' && commands[0].dx > 0;
+      })(),
+      want: true
     },
     {
       name: 'browserless realtime safety preemption does not impose a center-coordinate filter afterward',
@@ -25923,6 +26002,54 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'unsupported-action|unsupported-action|stop|target-reached|vel 0 0,vel 0 0'
+    },
+    {
+      name: 'browserless compact enemy opportunity target keeps navigation continuity',
+      got: (() => {
+        const compact = {
+          type: 'enemy',
+          id: '31361',
+          x: 1200,
+          y: -300,
+          targetActive: true,
+          heldCandidateSource: 'realtime-visible',
+          reward: 7
+        };
+        const target = summarizeEnemyOpportunityTarget(compact);
+        const commands = [];
+        const adapter = createBrowserlessActionAdapter({
+          commandIntervalMs: 1,
+          now: () => 1000,
+          transport: {
+            sendVelocity: (dx, dy) => commands.push({ dx, dy })
+          }
+        });
+        const applied = adapter.applyDecision({
+          realtime: { self: { x: 0, y: 0 }, tick: 1, entities: [] }
+        }, {
+          kind: 'profit-candidate',
+          band: 'profit',
+          action: {
+            kind: 'seek-enemy',
+            band: 'profit',
+            reason: 'easy-kill-active-profit',
+            target
+          }
+        });
+        return [
+          target.type,
+          target.userId,
+          target.x,
+          target.y,
+          target.authority,
+          target.cachedNavigationOnly,
+          applied.kind,
+          applied.reason,
+          commands[0]?.dx,
+          commands[0]?.dy
+        ].join('|');
+      })(),
+      want: 'enemy|31361|1200|-300|last-realtime-position|true|velocity|missing-realtime-enemy-hold|1|0'
     },
     {
       name: 'browserless action adapter maps wait leave and post-attack control actions explicitly',

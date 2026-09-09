@@ -75,6 +75,9 @@ function createBrowserlessBackgroundIo(options = {}) {
           text: String(message.text || ''),
           bytes: Number(message.bytes || 0),
           computeMs: Number(message.computeMs || 0),
+          stateSource: message.stateSource || 'memory',
+          stateReadMs: Number(message.stateReadMs || 0),
+          compactProjectionMs: Number(message.compactProjectionMs || 0),
           postMs: pending.postMs,
           roundTripMs: performance.now() - pending.started
         });
@@ -170,7 +173,8 @@ function createBrowserlessBackgroundIo(options = {}) {
         pending.timer.unref?.();
       }
       const postStarted = performance.now();
-      if (!post({ kind: 'status-render', id, state, config, compact: Boolean(compact) })) {
+      const stateFile = optionsForRequest.stateFile ? path.resolve(optionsForRequest.stateFile) : '';
+      if (!post({ kind: 'status-render', id, state, stateFile, config, compact: Boolean(compact) })) {
         requests.delete(id);
         if (pending.timer) clearTimeout(pending.timer);
         reject(new Error(lastError || 'background status render queue unavailable'));

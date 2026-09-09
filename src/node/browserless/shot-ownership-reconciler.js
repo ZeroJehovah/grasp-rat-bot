@@ -61,7 +61,9 @@ function requestKey(event = {}) {
   const requestSequence = numberOrNull(event.requestSequence ?? event.detail?.requestSequence);
   if (requestSequence === null) return '';
   const controlGeneration = text(event.controlGeneration ?? event.detail?.controlGeneration);
-  return `sequence:${controlGeneration}:${requestSequence}`;
+  // Sequence numbers restart with each transport lifetime. Missing generation
+  // is missing identity, never a shared global sequence namespace.
+  return controlGeneration ? `sequence:${controlGeneration}:${requestSequence}` : '';
 }
 
 function bulletIdentity(event = {}) {
@@ -533,6 +535,29 @@ function runShotOwnershipReconcilerSelfTest() {
   ];
   const result = reconcileShotOwnership({ segments, physicalSegments, amendments });
   const byId = new Map(result.rows.map(row => [row.segmentId, row]));
+  const identityBoundary = reconcileShotOwnership({
+    segments: [
+      { segmentId: 'unscoped-A', targetId: 'A', segmentStartedAt: 1000, segmentEndedAt: 2000 },
+      { segmentId: 'unscoped-B', targetId: 'B', segmentStartedAt: 5000, segmentEndedAt: 6000 },
+      { segmentId: 'scoped-A', targetId: 'A', controlGeneration: 'c1', segmentStartedAt: 1000, segmentEndedAt: 2000 },
+      { segmentId: 'scoped-B', targetId: 'B', controlGeneration: 'c2', segmentStartedAt: 5000, segmentEndedAt: 6000 },
+      { segmentId: 'explicit-id', targetId: 'C', segmentStartedAt: 7000, segmentEndedAt: 8000 }
+    ],
+    physicalSegments: [
+      { segmentId: 'unscoped-A', events: [{ type: 'shoot-dispatch', requestSequence: 1, sequence: 1, atMs: 1100, targetId: 'A' }] },
+      { segmentId: 'scoped-A', events: [{ type: 'shoot-dispatch', requestSequence: 1, controlGeneration: 'c1', sequence: 1, atMs: 1200, targetId: 'A' }] },
+      { segmentId: 'scoped-B', events: [{ type: 'shoot-dispatch', requestSequence: 1, controlGeneration: 'c2', sequence: 1, atMs: 5200, targetId: 'B' }] },
+      { segmentId: 'explicit-id', events: [{ type: 'shoot-dispatch', requestId: 'unique-request', sequence: 1, atMs: 7100, targetId: 'C' }] }
+    ],
+    amendments: [
+      { type: 'shoot-ack-accepted', requestSequence: 1, sequence: 2, atMs: 5000, targetId: 'B' },
+      { type: 'shoot-dispatch', requestSequence: 1, sequence: 3, atMs: 5100, targetId: 'B', currentSegmentId: 'unscoped-B' },
+      { type: 'shoot-ack-accepted', requestSequence: 1, controlGeneration: 'c1', sequence: 2, atMs: 1300, targetId: 'A' },
+      { type: 'shoot-ack-accepted', requestSequence: 1, controlGeneration: 'c2', sequence: 2, atMs: 5300, targetId: 'B' },
+      { type: 'shoot-ack-accepted', requestId: 'unique-request', sequence: 2, atMs: 7200, targetId: 'C' }
+    ]
+  });
+  const identityRows = new Map(identityBoundary.rows.map(row => [row.segmentId, row]));
   const checks = {
     conservation: result.conservation.ok && result.conservation.rawAmendmentCount === amendments.length,
     rolloverAck: byId.get('A#1').corrected.accepted === 1,
@@ -547,7 +572,19 @@ function runShotOwnershipReconcilerSelfTest() {
     explicitProfitOutsideBattle: result.conservation.outsideBattleCount === 1
       && result.conservation.outsideByType['shoot-dispatch'] === 1,
     unknownClassRemainsUnresolved: result.assignments.some(item => item.event.requestId === 'unknown-context'
-      && item.status === 'unresolved')
+      && item.status === 'unresolved'),
+    unscopedSequenceHasNoRequestIdentity: requestKey({ requestSequence: 1 }) === ''
+      && requestKey({ requestSequence: 1, controlGeneration: '' }) === '',
+    unscopedAckCannotCrossTarget: identityRows.get('unscoped-A').corrected.accepted === 0
+      && identityBoundary.assignments.some(item => item.event.atMs === 5000
+        && item.status === 'unresolved' && item.reason === 'missing-request-identity-no-unique-owner'),
+    unscopedDispatchIsNotFalseDuplicate: identityRows.get('unscoped-B').corrected.dispatch === 1
+      && identityBoundary.conservation.duplicateCount === 0,
+    scopedSequenceReuseRemainsIndependent: identityRows.get('scoped-A').corrected.accepted === 1
+      && identityRows.get('scoped-B').corrected.accepted === 1,
+    explicitRequestWithoutGenerationStillResolves: identityRows.get('explicit-id').corrected.accepted === 1,
+    identityBoundaryConservation: identityBoundary.conservation.ok
+      && identityBoundary.conservation.rawAmendmentCount === 5
   };
   return {
     ok: Object.values(checks).every(Boolean),

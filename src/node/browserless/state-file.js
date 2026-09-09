@@ -3994,6 +3994,18 @@ function compactDecisionSource(decision, nowMs = Date.now()) {
   };
 }
 
+// Runtime tracker/scheduler overlays replace top-level presentation fields,
+// while the persisted/live runner and network retain their unrelated fields.
+// This is a status-only composition, never a strategy-state merge.
+function mergeBrowserlessStatusSource(state = {}, overlays = {}) {
+  return {
+    ...state,
+    ...overlays,
+    network: { ...state.network, ...overlays.network },
+    runner: { ...state.runner, ...overlays.runner }
+  };
+}
+
 function browserlessCompactStatusSource(state = {}, config = {}) {
   const nowMs = Number.isFinite(Number(config.nowMs)) ? Number(config.nowMs) : Date.now();
   const runner = state.runner && typeof state.runner === 'object' ? state.runner : {};
@@ -4238,6 +4250,9 @@ function buildCompactBrowserlessStatus(state, config = {}) {
             compactProjectionMs: compactNumber(normalized.statusRender.compactProjectionMs),
             postMessageMs: compactNumber(normalized.statusRender.postMessageMs),
             workerComputeMs: compactNumber(normalized.statusRender.workerComputeMs),
+            stateSource: compactString(normalized.statusRender.stateSource, 16),
+            workerStateReadMs: compactNumber(normalized.statusRender.workerStateReadMs),
+            workerCompactProjectionMs: compactNumber(normalized.statusRender.workerCompactProjectionMs),
             roundTripMs: compactNumber(normalized.statusRender.roundTripMs),
             responseSendMs: compactNumber(normalized.statusRender.responseSendMs),
             bytes: compactNumber(normalized.statusRender.bytes),
@@ -4277,6 +4292,7 @@ module.exports = {
   compactSourceIpPreflight,
   defaultBrowserlessState,
   loginPointFromAnyState,
+  mergeBrowserlessStatusSource,
   mergeLiveActionState,
   mergeLiveState,
   mergeState,

@@ -17,6 +17,7 @@ const {
   buildCompactBrowserlessStatus,
   buildPublicBrowserlessStatus,
   loginPointFromAnyState,
+  mergeBrowserlessStatusSource,
   mergeLiveActionState,
   mergeLiveState,
   mergeState,
@@ -2449,27 +2450,9 @@ async function runBrowserlessRunner(config, deps = {}) {
       return { ok: false, error: errorMessage(err), summary: null, observations: [] };
     }
   };
-  const observeSnapshotPayload = (payload, detail = {}) => {
+  const publishRemoteProfitSnapshot = (payload, detail = {}) => {
     const observedAtMs = Number(detail.observedAtMs ?? now());
     const snapshotSource = String(detail.source || 'snapshot');
-    if (detail.auditRecorded !== true) recordSnapshotAudit(payload, {
-      ...detail,
-      observedAtMs,
-      receivedAtMs: detail.receivedAtMs ?? observedAtMs,
-      snapshotKind: detail.snapshotKind || (snapshotSource === 'ws' ? 'ws' : 'http'),
-      snapshotPurpose: detail.snapshotPurpose
-        || (snapshotSource === 'ws' ? 'gameplay' : (snapshotSource === 'prelogin-http' ? 'login-point-safety' : 'gameplay'))
-    });
-    snapshotGapPoller?.noteSnapshot(observedAtMs, {
-      global: detail.global === true || snapshotSource !== 'ws',
-      scheduleAtMs: detail.scheduleAtMs
-    });
-    let chatResult = null;
-    let dynamicWhitelistDeathResult = null;
-    let dynamicWhitelistNameResult = null;
-    let easyKillNameResult = null;
-    let easyKillEvidenceResult = null;
-    let damageNameResult = null;
     const sessionOnline = onlineSnapshotSession?.active === true
       || liveState?.stats?.currentSession?.online === true;
     const remoteSelf = remoteProfitRealtimeSelf() || onlineSnapshotSession?.self || null;
@@ -2513,6 +2496,29 @@ async function runBrowserlessRunner(config, deps = {}) {
         }
       }).catch?.(() => {});
     }
+  };
+  const observeSnapshotPayload = (payload, detail = {}) => {
+    const observedAtMs = Number(detail.observedAtMs ?? now());
+    const snapshotSource = String(detail.source || 'snapshot');
+    if (detail.auditRecorded !== true) recordSnapshotAudit(payload, {
+      ...detail,
+      observedAtMs,
+      receivedAtMs: detail.receivedAtMs ?? observedAtMs,
+      snapshotKind: detail.snapshotKind || (snapshotSource === 'ws' ? 'ws' : 'http'),
+      snapshotPurpose: detail.snapshotPurpose
+        || (snapshotSource === 'ws' ? 'gameplay' : (snapshotSource === 'prelogin-http' ? 'login-point-safety' : 'gameplay'))
+    });
+    snapshotGapPoller?.noteSnapshot(observedAtMs, {
+      global: detail.global === true || snapshotSource !== 'ws',
+      scheduleAtMs: detail.scheduleAtMs
+    });
+    publishRemoteProfitSnapshot(payload, { ...detail, observedAtMs });
+    let chatResult = null;
+    let dynamicWhitelistDeathResult = null;
+    let dynamicWhitelistNameResult = null;
+    let easyKillNameResult = null;
+    let easyKillEvidenceResult = null;
+    let damageNameResult = null;
     try {
       chatResult = chatService.observeSnapshot?.(payload, {
         ...detail,
@@ -3284,7 +3290,9 @@ async function runBrowserlessRunner(config, deps = {}) {
       && carriedAtMs > 0
     );
     if (carryEligible) {
-      observeSnapshotPayload(carriedSnapshot.payload, {
+      // Pre-login observers already consumed this exact payload offline.
+      // Entry only transfers it to the navigation worker with the new self.
+      publishRemoteProfitSnapshot(carriedSnapshot.payload, {
         source: 'prelogin-http',
         observedAtMs: carriedAtMs,
         global: true,
@@ -3909,19 +3917,15 @@ async function runBrowserlessRunner(config, deps = {}) {
           currentState?.runner?.snapshotStatus,
           snapshotSafety,
           now()
-        )
+        ),
+        ...(clearsConfirmedLeave ? { confirmedLeave: null } : {}),
+        ...(pendingResolution.cleared ? { pendingExit: null } : {}),
+        ...(outcome ? { exitRecoveryOutcomes } : {}),
+        ...(loginRecoveryAssociation ? { pendingLoginRecovery: loginRecoveryAssociation } : {})
       },
       ...(recoverySnapshot ? {} : {
         loginPointSafety: loginPointSafetyPatchFromSnapshot(snapshotSafety)
-      }),
-      ...((clearsConfirmedLeave || pendingResolution.cleared) ? {
-        runner: {
-          ...(clearsConfirmedLeave ? { confirmedLeave: null } : {}),
-          ...(pendingResolution.cleared ? { pendingExit: null } : {}),
-          ...(outcome ? { exitRecoveryOutcomes } : {}),
-          ...(loginRecoveryAssociation ? { pendingLoginRecovery: loginRecoveryAssociation } : {})
-        }
-      } : {})
+      })
     });
     const updatedAt = new Date(now()).toISOString();
     updateState(patch, { updatedAt });
@@ -4031,16 +4035,17 @@ async function runBrowserlessRunner(config, deps = {}) {
   const buildStatusSource = compact => {
     const sourceStarted = performance.now();
     const remoteProfitStatus = remoteProfitWorker?.status?.(now()) || null;
-    const baseState = liveState || readBrowserlessStateFile(stateFile);
+    // Offline state can contain megabytes of retained diagnostics. Read and
+    // normalize it in the existing status Worker, not in the HTTP callback.
+    // The live path still captures the current in-memory state at dispatch.
+    const workerStateFile = !liveState && statusRenderIo?.renderStatus ? stateFile : '';
+    const baseState = workerStateFile ? null : liveState || readBrowserlessStateFile(stateFile);
     const sourceIpProbeStatus = deps.sourceIpProbe?.status?.() || null;
-    const source = {
-      ...baseState,
+    const overlays = {
       network: {
-        ...(baseState.network || {}),
         sourceIpProbe: sourceIpProbeStatus
       },
       runner: {
-        ...(baseState.runner || {}),
         remoteProfit: remoteProfitStatus,
         snapshotScheduler: snapshotRequestScheduler.status?.() || null,
         snapshotPoller: snapshotGapPoller?.status?.() || null
@@ -4059,6 +4064,13 @@ async function runBrowserlessRunner(config, deps = {}) {
         renderQueue: backgroundIoStatus(statusRenderIo)
       }
     };
+    if (workerStateFile) return {
+      source: overlays,
+      stateFile: workerStateFile,
+      sourceBuildMs: performance.now() - sourceStarted,
+      compactProjectionMs: 0
+    };
+    const source = mergeBrowserlessStatusSource(baseState, overlays);
     const sourceBuildMs = performance.now() - sourceStarted;
     if (!compact) return { source, sourceBuildMs, compactProjectionMs: 0 };
     const projectionStarted = performance.now();
@@ -4085,7 +4097,8 @@ async function runBrowserlessRunner(config, deps = {}) {
     const source = built.source;
     if (statusRenderIo?.renderStatus) {
       const rendered = await statusRenderIo.renderStatus(source, statusRenderConfig, compact, {
-        timeoutMs: STATUS_RENDER_TIMEOUT_MS
+        timeoutMs: STATUS_RENDER_TIMEOUT_MS,
+        stateFile: built.stateFile || ''
       });
       if (compact) {
         statusRenderDiagnostics = {
@@ -4093,6 +4106,9 @@ async function runBrowserlessRunner(config, deps = {}) {
           compactProjectionMs: Math.round(built.compactProjectionMs * 1000) / 1000,
           postMessageMs: Math.round(Number(rendered.postMs || 0) * 1000) / 1000,
           workerComputeMs: Math.round(Number(rendered.computeMs || 0) * 1000) / 1000,
+          stateSource: rendered.stateSource || 'memory',
+          workerStateReadMs: Math.round(Number(rendered.stateReadMs || 0) * 1000) / 1000,
+          workerCompactProjectionMs: Math.round(Number(rendered.compactProjectionMs || 0) * 1000) / 1000,
           roundTripMs: Math.round(Number(rendered.roundTripMs || 0) * 1000) / 1000,
           responseSendMs: numberOrNull(statusRenderDiagnostics?.responseSendMs),
           bytes: Number(rendered.bytes || 0),
@@ -5202,6 +5218,17 @@ async function runBrowserlessRunner(config, deps = {}) {
       && canary.snapshotSafety.snapshotPurpose !== 'exit-recovery-confirmation'
       ? loginPointSafetyPatchFromSnapshot(canary.snapshotSafety)
       : null;
+    const shortcutEvent = canary?.safety?.event;
+    const shortcutTriggered = shortcutEvent?.reason === 'login-point-relogin-shortcut-leave'
+      && shortcutEvent.detail?.exitRecovery !== true
+      && shortcutEvent.detail?.continuePendingExit !== true
+      && !shortcutEvent.detail?.pendingExit;
+    const shortcutTriggeredAtMs = shortcutTriggered
+      ? (parseIsoTimeMs(shortcutEvent.at) || now())
+      : 0;
+    const shortcutCounters = shortcutTriggered
+      ? browserlessLoginPointReloginShortcutCounters(finalStateBase, shortcutTriggeredAtMs)
+      : null;
     const finalState = mergeState(finalStateBase, {
       ...finalDecisionPatch,
       ...(safetyEvents.length ? {
@@ -5218,6 +5245,17 @@ async function runBrowserlessRunner(config, deps = {}) {
         connectionFailure: canary?.connectionFailure || null,
         exitRecoveryOutcomes,
         pendingLoginRecovery: finalPendingLoginRecovery,
+        // Commit the budget in the same durable end-of-run write. A live-only
+        // patch here would be discarded when the next canary reads state.json.
+        // Recovery retries continue that exit; they do not spend another use.
+        ...(shortcutCounters ? {
+          loginPointReloginShortcut: {
+            dayKey: shortcutCounters.dayKey,
+            dayCount: shortcutCounters.dayCount + 1,
+            lastTriggeredAt: shortcutTriggeredAtMs,
+            lastSummary: shortcutEvent.detail?.decision?.loginPointShortcut || null
+          }
+        } : {}),
         lastRun: result,
         lastError: result.ok ? '' : (canary?.error || 'read-only-canary-failed')
       },
@@ -5325,24 +5363,6 @@ async function runBrowserlessRunner(config, deps = {}) {
         elapsedMs: Math.max(0, now() - activeTransportRecovery.startedAtMs),
         exitAttemptId: canary?.safety?.leavePending?.exitAttemptId || nextPendingExit?.exitAttemptId || ''
       });
-    }
-
-    if (canary?.safety?.event?.reason === 'login-point-relogin-shortcut-leave') {
-      const triggeredAtMs = now();
-      const counters = browserlessLoginPointReloginShortcutCounters(
-        liveState || stateBeforeCanary,
-        triggeredAtMs
-      );
-      patchLiveState({
-        runner: {
-          loginPointReloginShortcut: {
-            dayKey: counters.dayKey,
-            dayCount: counters.dayCount + 1,
-            lastTriggeredAt: triggeredAtMs,
-            lastSummary: canary.safety.event.detail?.decision?.loginPointShortcut || null
-          }
-        }
-      }, { updatedAt: new Date(triggeredAtMs).toISOString() });
     }
 
     const loopPlan = browserlessLoopPlan(result, config);
@@ -5874,6 +5894,10 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
       }
     });
     const publication = remotePublications[0] || null;
+    const auditFile = path.join(config.logDir, browserlessDayKey(nowMs), 'snapshot-audit.jsonl');
+    const snapshotAuditRows = fs.readFileSync(auditFile, 'utf8').trim().split('\n')
+      .filter(Boolean).map(line => JSON.parse(line))
+      .filter(row => row.type === 'snapshot-summary');
     return {
       ok: Boolean(
         result.ok
@@ -5887,11 +5911,15 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
           && publication.source === 'prelogin-http'
           && publication.observedAtMs === snapshotObservedAtMs
           && publication.self?.authority === 'realtime'
+          && publication.entities.length === 1
+          && publication.entities[0].user_id === 99
+          && snapshotAuditRows.length === 1
           && remoteResets.join(',') === 'gameplay-session-start,gameplay-session-end'
       ),
       bypassReason,
       snapshotSessionEvents,
       remotePublicationCount: remotePublications.length,
+      snapshotAuditCount: snapshotAuditRows.length,
       remoteSource: publication?.source || '',
       remoteResets
     };
@@ -7066,6 +7094,9 @@ function runSnapshotAuditPersistenceSelfTest(tmp) {
 async function runBrowserlessRunnerSelfTest() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-browserless-runner-'));
   try {
+    const runnerStateTransitions = await require('./runner-state-transition-self-test')
+      .runBrowserlessRunnerStateTransitionSelfTest();
+    const statusRender = await require('./status-render-self-test').runBrowserlessStatusRenderSelfTest();
     const snapshotAudit = runSnapshotAuditSelfTest();
     const remoteProfitWorker = await runRemoteProfitWorkerSelfTest();
     const remoteProfitAction = runRemoteProfitActionSelfTest();
@@ -10068,6 +10099,8 @@ async function runBrowserlessRunnerSelfTest() {
         && dryRun.ok
         && sourceIpPreflight.ok
         && sourceIpPreflightRunner.ok
+        && runnerStateTransitions.ok
+        && statusRender.ok
         && loginSuccessStatePatch.ok
         && criticalLatencyExitRegression.ok
         && establishedCombatLootPriorityTest.ok
@@ -10180,6 +10213,8 @@ async function runBrowserlessRunnerSelfTest() {
       loginPointHighHpExemption,
       sourceIpPreflight,
       sourceIpPreflightRunner,
+      runnerStateTransitions,
+      statusRender,
       loginSuccessStatePatch,
       criticalLatencyExitRegression,
       transportHealth,

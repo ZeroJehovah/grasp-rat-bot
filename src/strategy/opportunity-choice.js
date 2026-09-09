@@ -374,13 +374,19 @@ function lockedOpportunityChoiceCore(sorted, switchLock, options = {}) {
     const current = options.current || null;
     const currentKey = opportunityKey(current);
     if (currentKey === lockedKey && opportunitySupportsMissingContinuityCore(current)) {
+      // The paired item may have disappeared while the locked target is still
+      // eligible. Keep its full current payload, not the compact history row.
+      const available = opportunityByKey(sorted, lockedKey);
+      const retained = available || current;
       return {
         choice: opportunityOscillationMetadataCore({
-          ...current,
+          ...retained,
           held: true,
-          missingHold: true,
-          missingHoldReason: 'oscillation-lock-missing-target',
-          competingScore: current.competingScore
+          ...(!available ? {
+            missingHold: true,
+            missingHoldReason: 'oscillation-lock-missing-target'
+          } : {}),
+          competingScore: retained.competingScore
         }, lock),
         switchLock: lock
       };

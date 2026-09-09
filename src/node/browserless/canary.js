@@ -2734,10 +2734,10 @@ async function runReadOnlyCanary(config, options = {}) {
           allowExpired: true
         })
       : null;
-    const selfHp = Number(currentState?.realtime?.self?.hp);
+    const selfHp = Number(currentState?.realtime?.self?.hp ?? Number.NaN);
     const currentHp = Number.isFinite(selfHp) ? selfHp : null;
-    const previousMinHp = Number(continuedPendingExit?.minHp);
-    const previousLastHp = Number(continuedPendingExit?.lastHp);
+    const previousMinHp = continuedPendingExit?.minHp ?? null;
+    const previousLastHp = continuedPendingExit?.lastHp ?? null;
     const eventAtMs = Date.parse(String(event.at || ''));
     leavePending = {
       exitAttemptId: continuedPendingExit?.exitAttemptId
@@ -2869,7 +2869,7 @@ async function runReadOnlyCanary(config, options = {}) {
           && attempt?.response
           && typeof attempt.response === 'object'
       )) || null;
-      const responseHp = Number(confirmedAttempt?.response?.hp);
+      const responseHp = Number(confirmedAttempt?.response?.hp ?? Number.NaN);
       if (exit?.ok && Number.isFinite(responseHp)) {
         leavePending.lastHp = responseHp;
         leavePending.minHp = leavePending.minHp === null
@@ -2918,6 +2918,16 @@ async function runReadOnlyCanary(config, options = {}) {
   const recordSafetyEvent = (event, context = {}) => {
     if (!event || event.ok || result.safety.event) return false;
     const atMs = Number(context.atMs || now());
+    if ((transport || pendingWsConnect) && !terminalBeforeWsActive
+      && !canaryHasAuthoritativeInGameEvidence(result)) {
+      // An opened socket without self is still an uncertain server entry.
+      // Only an established session can use no-self's ordinary recovery path.
+      event = createSafetyEvent(event.shouldLeave ? event.reason : 'ws-connect-unconfirmed-leave', {
+        ...event.detail,
+        entryUnconfirmed: true,
+        triggerReason: event.reason
+      }, { nowMs: atMs, stopMotion: false, selfAuthorityMissing: true });
+    }
     const currentState = context.state || stateStore.getDecisionState?.(atMs) || stateStore.getState(atMs);
     const currentDecision = context.decision || result.decisions.last;
     const shootStop = event.shouldLeave && actionAdapter?.sealShooting
@@ -4808,18 +4818,16 @@ async function runReadOnlyCanary(config, options = {}) {
   const rejectedBeforeEntry = authOpenFailure
     || result.connectionFailure?.type === 'cloudflare-challenge'
     || /^websocket unexpected response 4\d\d\b/i.test(result.error || '');
-  if (openFailedBeforeTransport && pendingWsConnect
+  if ((transport || (openFailedBeforeTransport && pendingWsConnect))
     && !terminalBeforeWsActive && !recoveryConfirmedAbsent
     && !authoritativeInGameEvidence && !protectedExitEvidence
     && !rejectedBeforeEntry && config.userId && config.sessionToken) {
-    // A lost upgrade response is not evidence that the server did not join
-    // the role. Close the attempt and use the protected leave lifecycle even
-    // with zero frames (including the healthy-HP snapshot exemption path).
-    // This marker is uncertainty, never fabricated realtime/self authority.
+    // A lost upgrade response or a short open window without self cannot
+    // prove absence. Keep the protected leave lifecycle even with zero frames.
     const connectError = result.error;
     const pendingConnectCancel = cancelPendingWsConnect('unconfirmed-entry');
     recordSafetyEvent(createSafetyEvent('ws-connect-unconfirmed-leave', {
-      source: 'ws-connect-failure',
+      source: transport ? 'ws-entry-unconfirmed' : 'ws-connect-failure',
       entryUnconfirmed: true,
       connectError,
       pendingConnectCancel
@@ -4894,6 +4902,7 @@ async function runReadOnlyCanary(config, options = {}) {
   if (postLeaveWsOpenViolation) {
     const reassertStartedAtMs = now();
     const reassertPending = {
+      entryUnconfirmed: true,
       exitAttemptId: createExitAttemptId(runId, reassertStartedAtMs, exitAttemptSequence++),
       recoveredFromExitAttemptId: leavePending?.exitAttemptId || '',
       originalReason: 'post-leave-ws-open',

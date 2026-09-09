@@ -6944,6 +6944,34 @@ function runStrategyModuleSelfTests() {
       && activeOscillationExpired.chosen?.oscillationReleaseReason === 'lock-expired'
   });
 
+  const compactActiveCurrent = {
+    key: 'enemy:active-primary', type: 'enemy', id: 'active-primary',
+    targetActive: true, heldCandidateSource: 'realtime-visible', score: 100,
+    x: 1000, y: 0, reward: 5, staminaCost: 2000
+  };
+  for (const cached of [false, true]) {
+    const available = {
+      ...compactActiveCurrent, score: 120, reward: 7, staminaCost: 1500,
+      missingHold: cached,
+      sourceTarget: {
+        ...activeOscillationCurrent.sourceTarget, x: 900, y: 100,
+        cachedNavigationOnly: cached,
+        authority: cached ? 'last-realtime-position' : 'realtime'
+      }
+    };
+    const retained = chooseStableOpportunityCore([available], compactActiveCurrent, activeOscillationLock, { nowMs: 1200 });
+    results.push({
+      name: `opportunity-choice-lock-keeps-${cached ? 'validated-cached' : 'current-realtime'}-target-when-other-member-disappears`,
+      passed: retained.chosen?.sourceTarget === available.sourceTarget
+        && retained.chosen?.score === 120
+        && retained.chosen?.reward === 7
+        && retained.chosen?.staminaCost === 1500
+        && Boolean(retained.chosen?.missingHold) === cached
+        && retained.chosen?.oscillationLocked === true
+        && retained.switchLock?.lockUntil === activeOscillationLock.lockUntil
+    });
+  }
+
   const rememberedChoice = rememberOpportunityChoiceCore(
     {
       type: 'coin',

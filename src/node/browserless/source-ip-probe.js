@@ -31,13 +31,14 @@ function cloneJson(value) {
 }
 
 function numberOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
 
 function roundedMetricOrNull(value) {
-  const number = Number(value);
-  return Number.isFinite(number) ? Math.round(number * 10) / 10 : null;
+  const number = numberOrNull(value);
+  return number === null ? null : Math.round(number * 10) / 10;
 }
 
 function isProbeSuccessStatus(status) {
@@ -256,8 +257,8 @@ function weightedLatencyMetrics(samples, nowMs, halfLifeMs, valueOf) {
   let valueWeightTotal = 0;
   for (const sample of samples) {
     if (!isProbeSuccessStatus(sample.status)) continue;
-    const value = Number(valueOf(sample));
-    if (!Number.isFinite(value)) continue;
+    const value = numberOrNull(valueOf(sample));
+    if (value === null) continue;
     const observedAtMs = Date.parse(sample.observedAt);
     const ageMs = Math.max(0, nowMs - observedAtMs);
     const weight = Math.exp(-ageMs / halfLifeMs);
@@ -545,6 +546,7 @@ function createSourceIpProbeScheduler(options = {}) {
         try {
           store.commitRound([], summary, new Date(nextAtMs).toISOString());
           lastRound = summary;
+          nextRoundAtMs = nextAtMs;
           safeCallback(options.onRound, summary);
         } catch (storeError) {
           safeCallback(options.onError, storeError, { operation: 'source-ip-probe-persist-round' });
@@ -637,6 +639,7 @@ function createSourceIpProbeScheduler(options = {}) {
           new Date(nextAtMs).toISOString()
         );
         lastRound = summary;
+        nextRoundAtMs = nextAtMs;
         safeCallback(options.onRound, summary);
       } catch (storeError) {
         safeCallback(options.onError, storeError, { operation: 'source-ip-probe-persist-round' });
@@ -741,6 +744,7 @@ async function runSourceIpProbeSelfTest() {
     const waits = [];
     let activeRequests = 0;
     let maxActiveRequests = 0;
+    let roundCallbackNextAt = '';
     const schedulerFile = path.join(tmp, 'scheduler.json');
     const schedulerStore = createSourceIpProbeStore({ file: schedulerFile, now: () => nowMs });
     schedulerStore.initializeSchedule(new Date(nowMs - 1).toISOString());
@@ -769,7 +773,8 @@ async function runSourceIpProbeSelfTest() {
         };
       },
       sleep: async delayMs => { waits.push(delayMs); },
-      onResult: result => { if (result.sequence !== requestOrder.length) throw new Error('unexpected probe sequence'); }
+      onResult: result => { if (result.sequence !== requestOrder.length) throw new Error('unexpected probe sequence'); },
+      onRound: () => { roundCallbackNextAt = scheduler.status().nextRoundAt; }
     });
     const round = await scheduler.start();
     const scheduledDelay = Date.parse(scheduler.status().nextRoundAt) - nowMs;
@@ -870,8 +875,59 @@ async function runSourceIpProbeSelfTest() {
         && phaseAware21?.latencySource === 'ttfb'
         && phaseAware21?.latencyMetricMs < phaseAware23?.latencyMetricMs
     );
+    const missingMetricsSelection = selectSourceIpsFromProbeHistory({
+      samples: [
+        { ip: '10.0.0.101', observedAt: phaseAwareAt, status: 200, elapsedMs: 1000, ttfbMs: null },
+        { ip: '10.0.0.102', observedAt: phaseAwareAt, status: 200, elapsedMs: 100, ttfbMs: 80 },
+        { ip: '10.0.0.103', observedAt: phaseAwareAt, status: 200, elapsedMs: 200, ttfbMs: 90 },
+        { ip: '10.0.0.104', observedAt: phaseAwareAt, status: 200 }
+      ]
+    }, ['10.0.0.101', '10.0.0.102', '10.0.0.103', '10.0.0.104'], { nowMs, requiredCount: 2 });
+    const noMetrics = missingMetricsSelection.diagnostics.candidates.find(item => item.ip === '10.0.0.104');
+    const totalOnly = missingMetricsSelection.diagnostics.candidates.find(item => item.ip === '10.0.0.101');
+    const missingOnce = normalizeProbeSample({ ip: '10.0.0.101', observedAt: phaseAwareAt, status: 200, elapsedMs: 1000 });
+    const missingTwice = normalizeProbeSample(JSON.parse(JSON.stringify(missingOnce)));
+    const measuredZero = sourceIpProbeMetrics([
+      { ip: '10.0.0.105', observedAt: phaseAwareAt, status: 200, elapsedMs: 5, ttfbMs: 0 }
+    ], nowMs);
+    const missingMetricsOk = Boolean(
+      JSON.stringify(missingMetricsSelection.availableIps) === JSON.stringify(['10.0.0.102', '10.0.0.103'])
+        && totalOnly?.latencySource === 'total'
+        && totalOnly?.latencyMetricMs === 1000
+        && totalOnly?.ttfbSampleCount === 0
+        && noMetrics?.eligible === false
+        && noMetrics?.latencyMetricMs === null
+        && noMetrics?.ttfbLatencyMetricMs === null
+        && JSON.stringify(missingOnce) === JSON.stringify(missingTwice)
+        && missingTwice.ttfbMs === null
+        && measuredZero.ttfbSampleCount === 1
+        && measuredZero.ttfbLatencyMetricMs === 0
+    );
+    const callbackDeadlineOk = roundCallbackNextAt === completedHistory.nextRoundAt
+      && Date.parse(roundCallbackNextAt) - nowMs === SOURCE_IP_PROBE_BETWEEN_ROUND_MIN_MS;
+    const discoveryStore = createSourceIpProbeStore({ file: path.join(tmp, 'discovery-failed.json'), now: () => nowMs });
+    discoveryStore.initializeSchedule(new Date(nowMs - 1).toISOString());
+    let discoveryCallbackNextAt = '';
+    const discoveryScheduler = createSourceIpProbeScheduler({
+      store: discoveryStore,
+      now: () => nowMs,
+      random: () => 0,
+      discoverIps: () => { throw new Error('test discovery failure'); },
+      onRound: () => { discoveryCallbackNextAt = discoveryScheduler.status().nextRoundAt; }
+    });
+    await discoveryScheduler.start();
+    discoveryScheduler.stop();
+    const discoveryCallbackOk = discoveryCallbackNextAt === discoveryStore.snapshot().nextRoundAt
+      && Date.parse(discoveryCallbackNextAt) - nowMs === SOURCE_IP_PROBE_BETWEEN_ROUND_MIN_MS;
     return {
-      ok: selectionOk && schedulerOk && phaseAwareOk,
+      ok: selectionOk && schedulerOk && phaseAwareOk && missingMetricsOk && callbackDeadlineOk && discoveryCallbackOk,
+      missingMetrics: {
+        ok: missingMetricsOk,
+        selected: missingMetricsSelection.availableIps,
+        missingTimingEligible: noMetrics?.eligible,
+        fallbackSource: totalOnly?.latencySource,
+        measuredZeroSampleCount: measuredZero.ttfbSampleCount
+      },
       selection: {
         ok: selectionOk,
         selected: selection.availableIps,
@@ -887,7 +943,9 @@ async function runSourceIpProbeSelfTest() {
         restartRequestCount,
         initialRequestCount,
         interruptedSampleCount: interruptedHistory.samples.length,
-        phaseAwareOk
+        phaseAwareOk,
+        callbackDeadlineOk,
+        discoveryCallbackOk
       }
     };
   } finally {

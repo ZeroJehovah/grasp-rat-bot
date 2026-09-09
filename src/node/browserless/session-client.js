@@ -136,7 +136,13 @@ async function fetchWithTimeout(url, options = {}) {
     return fetchWithLocalAddress(url, options);
   }
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(controller.signal.reason);
+    }, timeoutMs);
+  });
   const {
     timeoutMs: _timeoutMs,
     fetchImpl: _fetchImpl,
@@ -145,19 +151,35 @@ async function fetchWithTimeout(url, options = {}) {
     challengePolicy: _challengePolicy,
     ...fetchOptions
   } = options;
-  if (localAddress) {
-    fetchOptions.dispatcher = fetchOptions.dispatcher || dispatcherForLocalAddress(localAddress);
-    fetchOptions.localAddress = localAddress;
-  }
   try {
-    return await fetchImpl(url, {
-      ...fetchOptions,
-      signal: controller.signal,
-      headers: {
-        accept: DEFAULT_ACCEPT_HEADER,
-        ...(fetchOptions.headers || {})
-      }
-    });
+    if (localAddress) {
+      fetchOptions.dispatcher = fetchOptions.dispatcher || dispatcherForLocalAddress(localAddress);
+      fetchOptions.localAddress = localAddress;
+    }
+    const completedResponse = (async () => {
+      const response = await fetchImpl(url, {
+        ...fetchOptions,
+        signal: controller.signal,
+        headers: {
+          accept: DEFAULT_ACCEPT_HEADER,
+          ...(fetchOptions.headers || {})
+        }
+      });
+      // Both transports return a buffered text response. Headers alone cannot
+      // release the deadline or the shared snapshot/verified-leave request.
+      const text = await response.text();
+      return {
+        ok: response.ok,
+        status: response.status,
+        statusText: response.statusText || '',
+        url: response.url || String(url),
+        headers: response.headers,
+        connectionReused: Boolean(response.connectionReused),
+        socketLocalAddress: response.socketLocalAddress || '',
+        text: async () => text
+      };
+    })();
+    return await Promise.race([completedResponse, deadline]);
   } finally {
     clearTimeout(timer);
   }
@@ -177,45 +199,81 @@ function fetchWithLocalAddress(url, options = {}) {
   const agent = agentForLocalAddress(parsed.protocol, localAddress);
   const agentEntry = localAddressAgents.get(`${parsed.protocol === 'http:' ? 'http:' : 'https:'}|${localAddress}`) || null;
   return new Promise((resolve, reject) => {
-    const request = client.request(parsed, {
-      method,
-      headers,
-      localAddress,
-      family: localAddress.includes(':') ? 6 : 4,
-      timeout: timeoutMs,
-      agent
-    }, response => {
-      const connectionReused = Boolean(request.reusedSocket);
-      if (agentEntry) {
-        agentEntry.requestCount += 1;
-        if (connectionReused) agentEntry.reusedCount += 1;
+    let request = null;
+    let activeResponse = null;
+    let settled = false;
+    const chunks = [];
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      chunks.length = 0;
+      if (error) {
+        request?.destroy(error);
+        activeResponse?.destroy(error);
+        reject(error);
+      } else {
+        resolve(value);
       }
-      const chunks = [];
-      response.on('data', chunk => chunks.push(Buffer.from(chunk)));
-      response.on('end', () => {
-        const buffer = Buffer.concat(chunks);
-        const responseHeaders = response.headers || {};
-        resolve({
-          ok: Number(response.statusCode || 0) >= 200 && Number(response.statusCode || 0) < 300,
-          status: Number(response.statusCode || 0),
-          statusText: response.statusMessage || '',
-          url: String(url),
-          connectionReused,
-          socketLocalAddress: response.socket?.localAddress || localAddress,
-          headers: {
-            get(name) {
-              const value = responseHeaders[String(name || '').toLowerCase()];
-              return Array.isArray(value) ? value.join(', ') : (value || '');
-            }
-          },
-          text: async () => buffer.toString('utf8')
+    };
+    // Socket timeouts measure inactivity; a trickling body or queued socket
+    // still needs one deadline spanning connection, headers, and body.
+    const timer = setTimeout(() => finish(new Error('request timeout')), timeoutMs);
+    try {
+      request = client.request(parsed, {
+        method,
+        headers,
+        localAddress,
+        family: localAddress.includes(':') ? 6 : 4,
+        timeout: timeoutMs,
+        agent
+      }, response => {
+        activeResponse = response;
+        response.on('error', finish);
+        response.on('aborted', () => finish(new Error('response aborted before completion')));
+        response.on('close', () => {
+          if (!response.complete) finish(new Error('response closed before completion'));
+        });
+        if (settled) {
+          response.destroy();
+          return;
+        }
+        const connectionReused = Boolean(request.reusedSocket);
+        if (agentEntry) {
+          agentEntry.requestCount += 1;
+          if (connectionReused) agentEntry.reusedCount += 1;
+        }
+        response.on('data', chunk => {
+          if (!settled) chunks.push(Buffer.from(chunk));
+        });
+        response.on('end', () => {
+          if (settled) return;
+          const buffer = Buffer.concat(chunks);
+          const responseHeaders = response.headers || {};
+          finish(null, {
+            ok: Number(response.statusCode || 0) >= 200 && Number(response.statusCode || 0) < 300,
+            status: Number(response.statusCode || 0),
+            statusText: response.statusMessage || '',
+            url: String(url),
+            connectionReused,
+            socketLocalAddress: response.socket?.localAddress || localAddress,
+            headers: {
+              get(name) {
+                const value = responseHeaders[String(name || '').toLowerCase()];
+                return Array.isArray(value) ? value.join(', ') : (value || '');
+              }
+            },
+            text: async () => buffer.toString('utf8')
+          });
         });
       });
-    });
-    request.on('timeout', () => request.destroy(new Error('request timeout')));
-    request.on('error', reject);
-    if (body !== null) request.write(body);
-    request.end();
+      request.on('timeout', () => finish(new Error('request timeout')));
+      request.on('error', finish);
+      if (body !== null) request.write(body);
+      request.end();
+    } catch (error) {
+      finish(error);
+    }
   });
 }
 

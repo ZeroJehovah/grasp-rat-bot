@@ -3051,6 +3051,52 @@ function summarizeTarget(target) {
   };
 }
 
+// A held opportunity can outlive its full source entity for one bounded
+// oscillation-lock window. Keep that navigation continuity usable when the
+// compact opportunity still has a stable player id and coordinates, but mark
+// the reconstructed target as cached so the action adapter cannot fire from it.
+function summarizeEnemyOpportunityTarget(item) {
+  const source = item?.sourceTarget || item?.target || null;
+  const sourceId = source?.user_id ?? source?.userId ?? source?.id;
+  const id = sourceId ?? item?.user_id ?? item?.userId ?? item?.id;
+  const x = source?.x ?? item?.x;
+  const y = source?.y ?? item?.y;
+  const hasPosition = Number.isFinite(Number(x)) && Number.isFinite(Number(y));
+  const hasId = id !== null && id !== undefined && id !== '';
+  if (source && hasPosition) {
+    return {
+      ...summarizeTarget({
+        ...source,
+        user_id: sourceId ?? id,
+        x,
+        y
+      }),
+      cachedNavigationOnly: Boolean(source.cachedNavigationOnly)
+    };
+  }
+  if (!hasId || !hasPosition) {
+    return source ? {
+      ...summarizeTarget(source),
+      cachedNavigationOnly: Boolean(source.cachedNavigationOnly)
+    } : { cachedNavigationOnly: false };
+  }
+  return {
+    ...summarizeTarget({
+      ...item,
+      user_id: id,
+      x,
+      y,
+      authority: 'last-realtime-position',
+      // `active` is a combat admission signal. The source object is gone, so
+      // a reconstructed row must remain navigation-only even when the last
+      // compact record said the player had been Active.
+      active: false,
+      alive: item.alive !== false
+    }),
+    cachedNavigationOnly: true
+  };
+}
+
 function summarizeCoin(coin) {
   if (!coin) return null;
   const routeMeta = coinRouteActionMetaCore(coin.coinRoute || null, coin.distance);
@@ -9255,7 +9301,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
           ? summarizeCoin(rawChosen.sourceCoin)
           : rawChosen.type === 'remote-player-navigation'
             ? remoteProfitActionTarget(rawChosen)
-            : { ...summarizeTarget(rawChosen.sourceTarget), cachedNavigationOnly: Boolean(rawChosen.sourceTarget?.cachedNavigationOnly) },
+            : summarizeEnemyOpportunityTarget(rawChosen),
         reward: rawChosen.reward,
         expectedReward: rawChosen.expectedReward ?? rawChosen.reward,
         effectiveProfitReward: rawChosen.effectiveProfitReward || null,
@@ -9303,7 +9349,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
           ? summarizeCoin(chosen.sourceCoin)
           : chosen.type === 'remote-player-navigation'
             ? remoteProfitActionTarget(chosen)
-            : { ...summarizeTarget(chosen.sourceTarget), cachedNavigationOnly: Boolean(chosen.sourceTarget?.cachedNavigationOnly) },
+            : summarizeEnemyOpportunityTarget(chosen),
         reward: chosen.reward,
         expectedReward: chosen.expectedReward ?? chosen.reward,
         effectiveProfitReward: chosen.effectiveProfitReward || null,
@@ -16340,6 +16386,7 @@ module.exports = {
   normalizeCoinForDecision,
   normalizeEntityForDecision,
   observeBrowserlessCoinPickups,
+  summarizeEnemyOpportunityTarget,
   recentCombatResidualThreatContinuityCore,
   recordAttackHistoryFromActionResult,
   singleCoinBaitReturnPlan,

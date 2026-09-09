@@ -6,6 +6,7 @@ const { runReadOnlyCanary } = require('./canary');
 const { createSourceIpController } = require('./source-ip-controller');
 const { openBrowserlessWs, createWebSocketConnectAbortError } = require('./ws-transport');
 const { browserlessLoopPlan } = require('./runner');
+const { createBrowserlessSafetyController } = require('./safety-controller');
 const { normalizePendingExit, pendingExitFromCanary, pendingExitSnapshotResolution } = require('./pending-exit-recovery');
 
 async function runWsConnectRecoverySelfTest() {
@@ -60,6 +61,7 @@ async function runWsConnectRecoverySelfTest() {
     const events = [];
     const result = await runReadOnlyCanary(config, {
       now: () => atMs,
+      safetyController: options.safetyController,
       persistedState: options.state || healthyState,
       ...(options.snapshot ? { precheckedSnapshotSafety: options.snapshot } : {}),
       fetchImpl: async () => { fetchCalls += 1; throw new Error('unexpected HTTP in offline test'); },
@@ -129,6 +131,8 @@ async function runWsConnectRecoverySelfTest() {
     check(`retry ${index + 1} cannot open WS and retains protected exit`, next.openCalls === 0
       && next.leaveCalls === 1 && pending?.entryUnconfirmed === true
       && browserlessLoopPlan({ canary: next.result }, config).reason === 'exit-recovery');
+    check(`retry ${index + 1} preserves unknown HP`, pending.startHp === null
+      && pending.lastHp === null && pending.minHp === null);
   }
   check('presence/expiry renews rather than discards protected chain', pending.exitAttemptId !== originalId);
   const terminal = await attempt({ state: { ...healthyState, runner: { pendingExit: pending } }, snapshot: absentSnapshot });
@@ -154,6 +158,89 @@ async function runWsConnectRecoverySelfTest() {
     && !lateOpen.events.some(e => e.type === 'canary-ws-open'));
   const cancelled = await attempt({ error: createWebSocketConnectAbortError('leave-confirmed') });
   check('abort error alone is not terminal absence authority', cancelled.leaveCalls === 1);
+
+  async function openedAttempt(options = {}) {
+    let wsOptions, leaveCalls = 0, closed = false, waits = 0;
+    const events = [];
+    const result = await runReadOnlyCanary({
+      ...config, readOnlyProbeMs: 2000, noSelfGraceMs: 500, ...options.config
+    }, {
+      now: () => atMs,
+      sleep: async ms => {
+        atMs += ms;
+        waits += 1;
+        if (options.onWait) options.onWait(wsOptions, waits);
+      },
+      persistedState: healthyState,
+      fetchImpl: async () => { throw new Error('unexpected HTTP in opened-transport test'); },
+      logStore: { append: (stream, type, detail) => events.push({ stream, type, detail }) },
+      openBrowserlessWs: async value => {
+        wsOptions = value;
+        value.onOpen?.({ runtime: 'offline-test' });
+        return { readyState: 1, isOpen: () => !closed, close: () => { closed = true; } };
+      },
+      leaveWithVerification: async () => {
+        leaveCalls += 1;
+        return options.failLeave ? failedLeave() : confirmedLeave();
+      }
+    });
+    return { result, leaveCalls, closed, events };
+  }
+
+  for (const scenario of [
+    { name: 'silent opened socket' },
+    { name: 'probe ends before first-self grace', config: { noSelfGraceMs: 10000 } },
+    { name: 'frames without self', onWait: ws => ws.onMessage(JSON.stringify({ type: 'pos', tick: 100, entities: [], bullets: [] })) },
+    { name: 'early socket close', onWait: (ws, n) => { if (n === 1) ws.onClose({ code: 1006 }); } },
+    { name: 'early socket error', onWait: (ws, n) => { if (n === 1) ws.onError({ message: 'connection lost' }); } }
+  ]) {
+    const opened = await openedAttempt(scenario);
+    check(`${scenario.name} verifies exit before releasing transport`, opened.leaveCalls === 1
+      && opened.result.leave?.ok === true && opened.closed);
+    check(`${scenario.name} retains uncertainty without inventing self`, !opened.result.entry.firstSelf
+      && opened.result.safety.leavePending?.entryUnconfirmed === true
+      && opened.result.actions.sentCount === 0);
+    check(`${scenario.name} permits recovery after HTTP confirmation`, pendingExitFromCanary(null, opened.result, atMs) === null);
+  }
+  const unobservedOpen = await openedAttempt({ failLeave: true });
+  const unobservedPending = pendingExitFromCanary(null, unobservedOpen.result, atMs);
+  check('opened-socket failed exit remains persisted despite zero frames', unobservedPending?.entryUnconfirmed === true
+    && pendingExitSnapshotResolution(unobservedPending, absentSnapshot).active === true);
+
+  const knownSession = await openedAttempt({
+    onWait: (ws, n) => ws.onMessage(JSON.stringify({
+      type: 'pos', tick: 100 + n,
+      entities: n === 1 ? [{ entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100 }] : [], bullets: []
+    }))
+  });
+  check('established-session disappearance retains no-self recovery', knownSession.result.entry.firstSelf
+    && knownSession.result.safety.event?.reason === 'no-self'
+    && knownSession.result.safety.event?.shouldLeave === false && knownSession.leaveCalls === 0);
+
+  const stopController = createBrowserlessSafetyController({ now: () => atMs });
+  let knownPendingWs;
+  const reassertFailed = await attempt({
+    safetyController: stopController,
+    snapshot: { ...absentSnapshot, response: { summary: { selfPresent: true, freshness: { ok: true } } } },
+    onOpenAttempt: ws => {
+      knownPendingWs = ws;
+      stopController.requestStop('explicit-stop');
+      ws.onMessage(JSON.stringify({ type: 'pos', tick: 100,
+        entities: [{ entity_id: 1, user_id: 7, x: 0, y: 0, hp: 85 }], bullets: [] }), { coalescedDispatch: true });
+    },
+    onLeave: ({ leaveCalls }) => {
+      if (leaveCalls === 1) {
+        knownPendingWs.onAbortedOpen({ runtime: 'offline-test' });
+        return confirmedLeave();
+      }
+      return failedLeave();
+    }
+  });
+  const reassertPending = pendingExitFromCanary(null, reassertFailed.result, atMs);
+  check('failed reassertion after a known session creates a new uncertain chain', reassertFailed.leaveCalls === 2
+    && reassertFailed.result.entry.firstSelf && reassertPending?.entryUnconfirmed === true
+    && reassertPending.originalReason === 'post-leave-ws-open');
+  check('prior-session absence cannot clear failed late-open reassertion', pendingExitSnapshotResolution(reassertPending, absentSnapshot).active === true);
 
   return { ok: true, cases: results.length, results };
 }
