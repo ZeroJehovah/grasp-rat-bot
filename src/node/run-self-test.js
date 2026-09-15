@@ -8530,7 +8530,7 @@ async function runSelfTest() {
           successful.probability > failed.probability,
           failed.escapeRate > successful.escapeRate,
           successful.damageExchangeRatio > failed.damageExchangeRatio,
-          successfulEstimate.probability > failedEstimate.probability,
+          successfulEstimate.probability === failedEstimate.probability,
           afterNeutralOutcome.failures === beforeRepeatedSample.failures,
           afterNeutralOutcome.successes === beforeRepeatedSample.successes,
           afterRepeatedSample.targetDamage === beforeRepeatedSample.targetDamage,
@@ -8558,7 +8558,7 @@ async function runSelfTest() {
       want: 'true|12|git-metadata|'
     },
     {
-      name: 'browserless active completion applies escape and exchange-stop-loss risk',
+      name: 'browserless active completion probability is neutral for profit scoring',
       got: (() => {
         const tracker = { probability: () => ({ probability: 0.6, source: 'test-history' }) };
         const target = { active: true, user_id: 8, hp: 50, drop: 100, distance: 6000 };
@@ -8587,14 +8587,17 @@ async function runSelfTest() {
           exchangeStopLoss: { triggered: true, disengage: true }
         });
         return [
-          favorable.probability > risky.probability,
-          favorable.escapeFactor > risky.escapeFactor,
-          favorable.exchangeFactor,
+          favorable.probability === 1,
+          risky.probability === 1,
+          favorable.probability === risky.probability,
+          favorable.escapeFactor,
           risky.exchangeFactor,
-          risky.acceptedHitRate
+          risky.acceptedHitRate === null,
+          favorable.source,
+          risky.source
         ].join('|');
       })(),
-      want: 'true|true|1|0.2|0.05'
+      want: 'true|true|true|1|1|true|active-target-raw-drop|active-target-raw-drop'
     },
     {
       name: 'browserless state store keeps realtime coin drops out of combat selector',
@@ -9573,7 +9576,7 @@ async function runSelfTest() {
             === nonFullActive.action.effectiveProfitReward?.expectedReward
         ].join('|');
       })(),
-      want: 'profit-candidate|8|false||profit-candidate|profit|8|false|conservative-prior|conservative-prior|true'
+      want: 'profit-candidate|8|false||profit-candidate|profit|8|false|active-target-raw-drop|active-target-raw-drop|true'
     },
     {
       name: 'browserless profit live skips whitelisted AFK targets',
@@ -21362,7 +21365,7 @@ async function runSelfTest() {
       want: '|1|0|defensive-risk-evidence|recent-attributed-injury|recent-firing-while-closing||true'
     },
     {
-      name: 'browserless effective active reward shares completion cost and confidence model',
+      name: 'browserless effective active reward ignores completion probability',
       got: (() => {
         const target = { active: true, user_id: 8, hp: 60, drop: 100, distance: 6000 };
         const low = effectiveProfitReward(target, {
@@ -21371,20 +21374,22 @@ async function runSelfTest() {
         });
         const high = effectiveProfitReward(target, {
           combatCompletionByUserId: { 8: { probability: 0.8, source: 'test-high' } },
-          recentCombatMetrics: { targetId: '8', acceptedShots: 12, confirmedHits: 6 }
+          recentCombatMetrics: { targetId: '8', acceptedShots: 12, confirmedHits: 0 }
         });
         return [
           low.rawDrop,
           low.collectionProbability,
-          low.expectedReward < high.expectedReward,
-          low.netROI < high.netROI,
+          low.expectedReward === high.expectedReward,
+          low.netROI === high.netROI,
           low.modelSource,
+          high.modelSource,
+          low.completionProbability === 1 && high.completionProbability === 1,
           low.confidence.lowerExpectedReward < low.expectedReward,
-          low.confidence.upperExpectedReward > low.expectedReward,
+          low.confidence.upperExpectedReward >= low.expectedReward,
           low.staminaCost > 0
         ].join('|');
       })(),
-      want: '100|0.9|true|true|test-low|true|true|true'
+      want: '100|0.9|true|true|active-target-raw-drop|active-target-raw-drop|true|true|true|true'
     },
     {
       name: 'browserless coin competition holds through missing frames and releases after fresh confirmations',
@@ -47352,7 +47357,7 @@ async function runSelfTest() {
 	            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000, stamina_1h_remaining_milli: 3000000, stamina_1d_remaining_milli: 20000000 },
 	            entities: [
 	              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000, stamina_1h_remaining_milli: 3000000, stamina_1d_remaining_milli: 20000000 },
-	              { entity_id: 2, user_id: 8, name: 'unknown-return', x: 18000, y: 0, vx: 20, vy: 0, hp: 30, max_hp: 100, current_join_mode: 'Active', drop: 5 }
+	              { entity_id: 2, user_id: 8, name: 'unknown-return', x: 18000, y: 0, vx: 20, vy: 0, hp: 30, max_hp: 100, current_join_mode: 'Active', drop: 2 }
 	            ],
 	            bullets: [],
 	            coinDrops: coins
@@ -47410,7 +47415,7 @@ async function runSelfTest() {
 	          capped.profit.threshold.explorationAdmission === null
 	        ].join('|');
 	      })(),
-	      want: 'easy-kill-active-profit|false|true|5|true|10|better|true|dynamic-profit-threshold-wait|true'
+	      want: 'easy-kill-active-profit|false|true|2|true|10|better|true|dynamic-profit-threshold-wait|true'
 	    },
 	    {
 	      name: 'browserless controlled exploration persists approach budget across wait and missing frames and cleans terminal sessions',
@@ -47452,7 +47457,9 @@ async function runSelfTest() {
 	                  hp: 30,
 	                  max_hp: 100,
 	                  current_join_mode: 'Active',
-	                  drop: 5
+	                  // Keep the target below the neutral Active-profit threshold
+	                  // so this case still exercises controlled exploration.
+	                  drop: 2
 	                }] : [])
 	              ],
 	              bullets: [],
@@ -47758,7 +47765,7 @@ async function runSelfTest() {
 	          decision.combat.activeCombatOpportunity?.blocked
 	        ].join('|');
 	      })(),
-	      want: 'combat-live|34711|34711|99|stable-choice|true|false'
+	      want: 'combat-live|34711|34711|34711|stable-choice|true|false'
 	    },
 	    {
 	      name: 'browserless engaged easy-kill target survives a stationary realtime frame',

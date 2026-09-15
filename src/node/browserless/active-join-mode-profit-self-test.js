@@ -119,7 +119,7 @@ function runPassiveJoinModeAfkAdmissionCheck() {
 
 // Refusing the AFK reward model must not orphan the player: an in-range Active
 // player with a real drop still has to be reachable as an ordinary active profit
-// target, priced by the active completion model rather than skipped entirely.
+// target, with completion history unable to discount its Drop.
 function runInRangeActivePlayerStaysReachableCheck() {
   const store = createBrowserlessStateStore({ userId: 7 });
   store.ingestFrame({
@@ -139,11 +139,12 @@ function runInRangeActivePlayerStaysReachableCheck() {
   });
   const effective = decision.action?.effectiveProfitReward || null;
   return {
-    name: 'in-range-active-player-stays-a-profit-target-under-the-active-reward-model',
+    name: 'in-range-active-player-stays-a-profit-target-at-raw-drop-value',
     passed: decision.action?.target?.userId === 8
       && effective !== null
-      && effective.modelSource !== 'deterministic-afk-target'
-      && Number(effective.expectedReward) < 20,
+      && effective.modelSource === 'active-target-raw-drop'
+      && Number(effective.expectedReward) === 18
+      && Number(effective.completionProbability) === 1,
     detail: {
       kind: decision.kind ?? null,
       targetUserId: decision.action?.target?.userId ?? null,
@@ -358,20 +359,21 @@ function runHeldMission(inputOverrides = {}, statefulOverrides = {}) {
   return { decision, held, stateful };
 }
 
-// The frozen selection-time reward model must not survive a live activity
-// change: the same subject observed Active is worth the active completion model,
-// so the held candidate has to lose to a better live AFK candidate immediately.
+// Live Active state still revalidates the collection model, but completion
+// history cannot reduce the held target's Drop or force it below a cheaper
+// alternative solely because of a predicted kill probability.
 function runHeldMissionActiveDowngradeCheck() {
   const { decision, held } = runHeldMission();
   return {
-    name: 'held-mission-reward-is-revalidated-against-live-active-state',
+    name: 'held-mission-active-state-keeps-neutral-completion-probability',
     passed: held !== null
       && held.missionHoldRewardRevalidated === true
       && held.missionHoldFrozenExpectedReward === 30
-      && Number(held.expectedReward) < 30
+      && Number(held.expectedReward) === 27
       && Number(held.score) < 245817
-      && held.effectiveProfitReward?.modelSource === 'conservative-prior'
-      && String(decision.choice?.id ?? '') === '9',
+      && held.effectiveProfitReward?.modelSource === 'active-target-raw-drop'
+      && Number(held.effectiveProfitReward?.completionProbability) === 1
+      && String(decision.choice?.id ?? '') === '8',
     detail: {
       heldScore: held ? Math.round(Number(held.score)) : null,
       heldExpectedReward: held?.expectedReward ?? null,

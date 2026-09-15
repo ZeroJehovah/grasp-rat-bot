@@ -4834,91 +4834,21 @@ function activeTargetCompletionEstimate(target, options = {}) {
       source: 'non-active-target'
     };
   }
-  const targetId = target?.user_id ?? target?.userId;
-  let completion = { probability: 1 / 3 };
-  const completionByUserId = options.combatCompletionByUserId && typeof options.combatCompletionByUserId === 'object'
-    ? options.combatCompletionByUserId
-    : null;
-  if (completionByUserId && targetId !== null && targetId !== undefined && completionByUserId[String(targetId)]) {
-    completion = completionByUserId[String(targetId)];
-  } else if (options.combatCompletionTracker?.probability && targetId !== null && targetId !== undefined) {
-    try {
-      completion = options.combatCompletionTracker.probability(targetId, options.nowMs);
-    } catch (_) {}
-  }
-  const baseProbability = Math.max(0.05, Math.min(0.95, Number(completion.probability || 1 / 3)));
-  const historicalEscapeRate = numberOrNull(completion.escapeRate);
-  const historicalDamageExchange = numberOrNull(completion.damageExchangeRatio);
-  const historyEscapeFactor = historicalEscapeRate === null
-    ? 1
-    : Math.max(0.45, Math.min(1, 1 - historicalEscapeRate * 0.55));
-  const historyExchangeFactor = historicalDamageExchange === null
-    ? 1
-    : Math.max(0.55, Math.min(1.1, 0.55 + Math.min(1.25, historicalDamageExchange) * 0.4));
-  const hpFactor = Math.max(0.35, Math.min(1.35, 100 / Math.max(25, Number(target.hp || 100))));
-  const metrics = options.recentCombatMetrics || {};
-  const metricsMatch = targetId !== null && targetId !== undefined
-    && String(metrics.targetId ?? '') === String(targetId);
-  const acceptedShots = metricsMatch ? Math.max(0, Number(metrics.acceptedShots || 0)) : 0;
-  const confirmedHits = metricsMatch ? Math.max(0, Number(metrics.confirmedHits || 0)) : 0;
-  const acceptedHitRate = acceptedShots >= 4
-    ? Math.max(0, Math.min(1, confirmedHits / Math.max(1, acceptedShots)))
-    : numberOrNull(options.behaviorHitRate);
-  const hitFactor = acceptedHitRate === null
-    ? 0.85
-    : Math.max(0.5, Math.min(1.2, 0.55 + acceptedHitRate * 2.6));
-  const behavior = options.opponentBehaviorState || null;
-  const movementIntent = String(behavior?.dimensions?.movementIntent?.state || behavior?.mode || '');
-  const controlStyle = String(behavior?.dimensions?.controlStyle?.state || 'unknown');
-  const controlConfidence = Number(behavior?.dimensions?.controlStyle?.confidence || 0);
-  let escapeFactor = 1;
-  if (movementIntent === 'retreat' || movementIntent === 'retreat-kite') escapeFactor *= 0.68;
-  else if (movementIntent === 'zigzag' || movementIntent === 'erratic' || movementIntent === 'zigzag-strafe') escapeFactor *= 0.82;
-  else if (movementIntent === 'stationary') escapeFactor *= 1.08;
-  if (controlStyle === 'human-like' && controlConfidence >= 0.35) escapeFactor *= 0.86;
-  const distance = Number(target.distance);
-  if (Number.isFinite(distance) && distance > 10500) escapeFactor *= 0.65;
-  else if (Number.isFinite(distance) && distance > 7500) escapeFactor *= 0.85;
-  if (Number(behavior?.noProgressMs || 0) >= 10000) escapeFactor *= 0.72;
-  escapeFactor = Math.max(0.3, Math.min(1.1, escapeFactor));
-
-  let exchangeFactor = 1;
-  const exchangeStopLoss = options.exchangeStopLoss || null;
-  if (exchangeStopLoss?.triggered || exchangeStopLoss?.disengage) {
-    exchangeFactor = 0.2;
-  } else if (metricsMatch && acceptedShots >= 10) {
-    const selfDamage = Math.max(0, Number(metrics.selfDamage || 0));
-    const targetDamage = Math.max(0, Number(metrics.targetDamage || 0));
-    const damageDeficit = selfDamage - targetDamage;
-    if (Number(options.combatTargetState?.exchangeDegradationSinceAt || 0) > 0 || damageDeficit >= 12) {
-      exchangeFactor = 0.45;
-    } else if (damageDeficit > 0) {
-      exchangeFactor = Math.max(0.58, 1 - damageDeficit / 30);
-    } else if (targetDamage < 6) {
-      exchangeFactor = 0.72;
-    }
-  }
-  const probability = Math.max(0.03, Math.min(0.95,
-    baseProbability
-      * hpFactor
-      * hitFactor
-      * escapeFactor
-      * exchangeFactor
-      * historyEscapeFactor
-      * historyExchangeFactor));
+  // Completion history remains available for diagnostics and learning, but it
+  // must never discount an active player's Drop or alter profit ordering.
   return {
-    probability,
-    baseProbability,
-    hpFactor,
-    hitFactor,
-    acceptedHitRate,
-    escapeFactor,
-    exchangeFactor,
-    historicalEscapeRate,
-    historicalDamageExchange,
-    historyEscapeFactor,
-    historyExchangeFactor,
-    source: completion.source || 'conservative-prior'
+    probability: 1,
+    baseProbability: 1,
+    hpFactor: 1,
+    hitFactor: 1,
+    acceptedHitRate: null,
+    escapeFactor: 1,
+    exchangeFactor: 1,
+    historicalEscapeRate: null,
+    historicalDamageExchange: null,
+    historyEscapeFactor: 1,
+    historyExchangeFactor: 1,
+    source: 'active-target-raw-drop'
   };
 }
 
@@ -4928,14 +4858,13 @@ function activeTargetExpectedReward(target, options = {}) {
 
 function effectiveProfitReward(target, options = {}) {
   const rawDrop = Math.max(0, entityDropValue(target));
-  // The deterministic AFK reward model assumes the kill always completes and the
-  // drop is always collected, which only holds for a player the game itself does
-  // not report as Active.
+  // Active targets retain the same raw Drop economic value. Completion history,
+  // hit rates, escape estimates, and exchange diagnostics never discount it.
   const active = profitActiveTargetEvidence(target);
   const completion = active
     ? activeTargetCompletionEstimate(target, options)
     : { probability: 1, source: 'deterministic-afk-target' };
-  const completionProbability = Math.max(0, Math.min(1, Number(completion.probability ?? (active ? 1 / 3 : 1))));
+  const completionProbability = Math.max(0, Math.min(1, Number(completion.probability ?? 1)));
   const collectionProbability = active
     ? Math.max(0, Math.min(1, Number(options.activeTargetCollectionProbability ?? 0.9)))
     : 1;
@@ -4953,7 +4882,7 @@ function effectiveProfitReward(target, options = {}) {
     expectedReward,
     staminaCost: Number.isFinite(staminaCost) ? staminaCost : null,
     netROI: Number.isFinite(staminaCost) ? rewardPerTenStamina(expectedReward, staminaCost) : null,
-    modelSource: active ? String(completion.source || 'conservative-prior') : 'deterministic-afk-target',
+    modelSource: active ? 'active-target-raw-drop' : 'deterministic-afk-target',
     confidence: {
       lowerProbability,
       upperProbability,
