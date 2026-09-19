@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.08.26.2';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.09.20.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -357,6 +357,26 @@ function panelTargetRolesCore(status = {}) {
     primary,
     secondary
   };
+}
+
+// The map target line follows the panel target (status.targets), so the player
+// label must classify that same object. Coin pickup and kill settlement briefly
+// leave action.target on a coin while the line already points at the next
+// player, which used to drop the name/Drop label until the next refresh.
+function mapPlayerTargetRoleCore(input = {}) {
+  if (input.combatTargetMatches) return 'combat';
+  if (input.snapshotNavigationMatches) return 'remote-snapshot';
+  const actionKind = String(input.actionKind || '');
+  if (['flee', 'safety-exit', 'leave'].includes(actionKind)) return '';
+  if (input.actionTargetMatches) {
+    // A coin action can never point at a player, so a matching row there is an
+    // id collision rather than a real player action.
+    return actionKind === 'coin' || actionKind === 'seek-coin' ? '' : (input.afk ? 'afk' : 'combat');
+  }
+  if (!input.panelTargetMatches) return '';
+  const panelRole = String(input.panelRole || '');
+  if (!panelRole || panelRole === 'coin') return '';
+  return panelRole === 'remote-snapshot' ? 'remote-snapshot' : (input.afk ? 'afk' : 'combat');
 }
 
 function lastExitPanelVisibleCore(status = {}) {
@@ -972,6 +992,7 @@ function renderBrowserlessWebPanel() {
     const restartDrainBlockedReasonText = ${restartDrainBlockedReasonTextCore.toString()};
     const mapMarkerKey = ${mapMarkerKeyCore.toString()};
     const mapRemoteTargetPosition = ${mapRemoteTargetPositionCore.toString()};
+    const classifyPlayerTargetRole = ${mapPlayerTargetRoleCore.toString()};
     const mapAnimationProgress = ${mapAnimationProgressCore.toString()};
     const interpolateMapPoint = ${interpolateMapPointCore.toString()};
     const mapTrailCamera = ${mapTrailCameraCore.toString()};
@@ -2535,13 +2556,21 @@ function renderBrowserlessWebPanel() {
       const target = snapshotNavigationTarget(status);
       return Boolean(target && mapTargetMatchesPlayer(target, item));
     }
-    function mapPlayerTargetRole(status, item, afk) {
-      if (mapTargetMatchesPlayer(status.combat?.target, item)) return 'combat';
-      if (snapshotNavigationTargetMatches(status, item)) return 'remote-snapshot';
-      const actionKind = String(status.action?.kind || status.decision?.actionKind || status.decision?.kind || '');
-      if (actionKind === 'coin' || actionKind === 'seek-coin' || !mapTargetMatchesPlayer(status.action?.target, item)) return '';
-      if (['flee', 'safety-exit', 'leave'].includes(actionKind)) return '';
-      return afk ? 'afk' : 'combat';
+    function mapPlayerTargetRole(status, item, afk, targetRoles = panelTargetRoles(status)) {
+      // 拾取金币、击杀结算这类非玩家动作期间 action.target 不是玩家, 但地图连线
+      // 已经按面板目标(status.targets)画过去了。标签必须用同一份目标判定,
+      // 否则会出现"有线无名字无 Drop"的裸点, 直到下一次状态刷新才补齐。
+      const panelTarget = [targetRoles?.primary, targetRoles?.secondary]
+        .find(target => mapTargetMatchesPlayer(target, item));
+      return classifyPlayerTargetRole({
+        combatTargetMatches: mapTargetMatchesPlayer(status.combat?.target, item),
+        snapshotNavigationMatches: snapshotNavigationTargetMatches(status, item),
+        actionKind: String(status.action?.kind || status.decision?.actionKind || status.decision?.kind || ''),
+        actionTargetMatches: mapTargetMatchesPlayer(status.action?.target, item),
+        panelTargetMatches: Boolean(panelTarget),
+        panelRole: panelTarget ? mapTargetDescriptorRole(panelTarget) : '',
+        afk
+      });
     }
     function mapVelocity(vxValue, vyValue) {
       const vx = number(vxValue);
@@ -3150,7 +3179,7 @@ function renderBrowserlessWebPanel() {
         const dy = y - selfY;
         const afk = isAfkNearbyPlayer(item);
         const invulnerable = isInvulnerableNearbyPlayer(item?.[4]);
-        const targetRole = mapPlayerTargetRole(status, item, afk);
+        const targetRole = mapPlayerTargetRole(status, item, afk, targetRoles);
         const rawDistance = Math.hypot(dx, dy);
         const remoteSnapshot = targetRole === 'remote-snapshot';
         if (!Number.isFinite(rawDistance)
@@ -4699,6 +4728,7 @@ module.exports = {
   mapAnimationProgressCore,
   mapMarkerKeyCore,
   mapRemoteTargetPositionCore,
+  mapPlayerTargetRoleCore,
   projectMapTrailPathsCore,
   pruneMapTrailHistoryCore,
   mapTrailCameraCore,

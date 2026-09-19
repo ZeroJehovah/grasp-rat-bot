@@ -233,6 +233,7 @@ const {
   interpolateMapMarkerCore,
   mapAnimationProgressCore,
   mapMarkerKeyCore,
+  mapPlayerTargetRoleCore,
   mapTrailCameraCore,
   mapTrailReferenceNowMsCore,
   mapTrailRetractPathsCore,
@@ -38137,6 +38138,96 @@ async function runSelfTest() {
         1, 1, 3, '25.0', 1, 2, '70.0', 0, 0, 1, 2, '10.0',
         ...Array(50).fill(true)
       ].join('|')
+    },
+    {
+      name: 'browserless web panel keeps the target line marker labelled during coin pickup',
+      got: (() => {
+        const panelScript = renderBrowserlessWebPanel().match(/<script>([\s\S]*?)<\/script>/)?.[1] || '';
+        // 击杀后拾取金币: action.target 还是金币, 面板目标已经是下一个玩家,
+        // 地图连线照旧画到该玩家, 标签必须跟着同一份面板目标判定。
+        const pickupToNextAfk = mapPlayerTargetRoleCore({
+          actionKind: 'coin',
+          actionTargetMatches: false,
+          panelTargetMatches: true,
+          panelRole: 'afk',
+          afk: true
+        });
+        const pickupToSnapshotTarget = mapPlayerTargetRoleCore({
+          actionKind: 'seek-coin',
+          actionTargetMatches: false,
+          panelTargetMatches: true,
+          panelRole: 'remote-snapshot',
+          afk: false
+        });
+        const pickupWithoutPanelTarget = mapPlayerTargetRoleCore({
+          actionKind: 'coin',
+          actionTargetMatches: false,
+          panelTargetMatches: false
+        });
+        // 金币动作的 id 与某个玩家行撞车时仍然是普通拾取, 不能标成玩家目标。
+        const pickupWithIdCollision = mapPlayerTargetRoleCore({
+          actionKind: 'coin',
+          actionTargetMatches: true,
+          panelTargetMatches: true,
+          panelRole: 'afk',
+          afk: true
+        });
+        const combatTargetWins = mapPlayerTargetRoleCore({
+          combatTargetMatches: true,
+          actionKind: 'coin',
+          panelTargetMatches: true,
+          panelRole: 'afk',
+          afk: true
+        });
+        const fleeSuppressed = mapPlayerTargetRoleCore({
+          actionKind: 'flee',
+          panelTargetMatches: true,
+          panelRole: 'afk',
+          afk: true
+        });
+        const playerActionActive = mapPlayerTargetRoleCore({
+          actionKind: 'seek-enemy',
+          actionTargetMatches: true,
+          panelTargetMatches: true,
+          panelRole: 'afk',
+          afk: false
+        });
+        const playerActionAfk = mapPlayerTargetRoleCore({
+          actionKind: 'seek-enemy',
+          actionTargetMatches: true,
+          panelTargetMatches: true,
+          panelRole: 'afk',
+          afk: true
+        });
+        const panelCoinTarget = mapPlayerTargetRoleCore({
+          actionKind: 'coin',
+          panelTargetMatches: true,
+          panelRole: 'coin',
+          afk: true
+        });
+        const panelAfkTargetOnActiveRow = mapPlayerTargetRoleCore({
+          actionKind: 'coin',
+          panelTargetMatches: true,
+          panelRole: 'afk',
+          afk: false
+        });
+        return [
+          pickupToNextAfk,
+          pickupToSnapshotTarget,
+          pickupWithoutPanelTarget,
+          pickupWithIdCollision,
+          combatTargetWins,
+          fleeSuppressed,
+          playerActionActive,
+          playerActionAfk,
+          panelCoinTarget,
+          panelAfkTargetOnActiveRow,
+          panelScript.includes('const classifyPlayerTargetRole = function mapPlayerTargetRoleCore'),
+          panelScript.includes('function mapPlayerTargetRole(status, item, afk, targetRoles = panelTargetRoles(status))'),
+          panelScript.includes('const targetRole = mapPlayerTargetRole(status, item, afk, targetRoles);')
+        ].join('|');
+      })(),
+      want: 'afk|remote-snapshot|||combat||combat|afk||combat|true|true|true'
     },
     {
       name: 'browserless status server adds dynamic whitelist players by name',
