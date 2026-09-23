@@ -641,7 +641,10 @@ function dualTargetFireArbitration(input = {}) {
       reason: 'primary-finish-race-authorized'
     };
   }
-  if (primaryNormalAuthorized && pressureEvidence.active && rewardRace.shouldFocusSecondary) {
+  // General incoming pressure still owns Dodge and safety, but only sustained
+  // close pressure may divert an authorized primary shot to the secondary.
+  if (primaryNormalAuthorized && closePressure.active === true
+    && pressureEvidence.active && rewardRace.shouldFocusSecondary) {
     return {
       mode: 'secondary-focus',
       fireTargetRole: 'secondary',

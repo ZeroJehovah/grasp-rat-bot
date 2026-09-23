@@ -1294,8 +1294,8 @@ function assertDualTargetRuntimeRules() {
     created_tick: tick,
     expire_tick: tick + 30
   });
-  const pressureDecision = (adapter, primaryTarget, tick, nowMs, bullets, selfHp = 70) => {
-    const pressureSecondary = { ...secondary, x: 1000, y: 0 };
+  const pressureDecision = (adapter, primaryTarget, tick, nowMs, bullets, selfHp = 70, secondaryX = 1000) => {
+    const pressureSecondary = { ...secondary, x: secondaryX, y: 0 };
     const current = state(fullStaminaSelf({ hp: selfHp }), [primaryTarget, pressureSecondary]);
     current.realtime.tick = tick;
     current.realtime.receivedAtMs = nowMs;
@@ -1323,6 +1323,20 @@ function assertDualTargetRuntimeRules() {
   assert.strictEqual(unsafePressure.combat?.fireTarget?.userId, 8);
   assert.strictEqual(unsafePressure.combat?.shooting?.secondaryPolicy?.throttleExempt, true);
   assert.strictEqual(unsafePressure.combat?.movement?.secondaryTarget?.direction?.dx, -1);
+
+  const distantPressureAdapter = createBrowserlessDecisionAdapter(common);
+  pressureDecision(distantPressureAdapter, { ...primary, x: -5000, hp: 100 },
+    10, 2000, [pressureBullet('distant-1', 10)], 70, 4000);
+  const distantPressure = pressureDecision(distantPressureAdapter,
+    { ...primary, x: -5000, hp: 100 }, 11, 2100,
+    [pressureBullet('distant-1', 10), pressureBullet('distant-2', 11)], 70, 4000);
+  assert.strictEqual(distantPressure.combat?.shooting?.secondaryPolicy?.closePressure?.active, false);
+  assert.strictEqual(distantPressure.combat?.shooting?.primaryRewardSurvivalRace?.shouldFocusSecondary, true);
+  assert.strictEqual(distantPressure.combat?.shooting?.primaryNormalAuthorized, true);
+  assert.strictEqual(distantPressure.combat?.shooting?.mode, 'primary-profit');
+  assert.strictEqual(distantPressure.combat?.shooting?.secondaryFocusActive, false);
+  assert.strictEqual(distantPressure.combat?.fireTarget?.userId, 42);
+  assert.strictEqual(distantPressure.combat?.movement?.secondaryTarget?.direction?.dx, -1);
 
   const safePressureAdapter = createBrowserlessDecisionAdapter(common);
   pressureDecision(
@@ -3657,7 +3671,7 @@ function runRemoteProfitDecisionSelfTest() {
   assert.strictEqual(lowDropDecision.profit?.postKillCoinSuppression?.removedCount, 1);
   assert.strictEqual(lowDropDecision.stateful.profitMission?.targetId, '99');
 
-  return { ok: true, cases: 92 };
+  return { ok: true, cases: 93 };
 }
 
 if (require.main === module) {

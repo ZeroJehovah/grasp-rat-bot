@@ -639,6 +639,27 @@ function runStrategyModuleSelfTests() {
     closePressure: { active: true },
     rewardRace: unsafePrimaryRace
   });
+  const distantPressureArbitration = dualTargetFireArbitration({
+    secondaryActive: true,
+    primaryAuthorized: true,
+    closePressure: { active: false, close: false, sustainedAttack: true },
+    pressureEvidence: { active: true },
+    rewardRace: unsafePrimaryRace
+  });
+  const unsustainedCloseArbitration = dualTargetFireArbitration({
+    secondaryActive: true,
+    primaryAuthorized: true,
+    closePressure: { active: false, close: true, sustainedAttack: false },
+    pressureEvidence: { active: true },
+    rewardRace: unsafePrimaryRace
+  });
+  const blockedPrimaryUnderPressure = dualTargetFireArbitration({
+    secondaryActive: true,
+    primaryAuthorized: false,
+    closePressure: { active: false },
+    pressureEvidence: { active: true },
+    rewardRace: unsafePrimaryRace
+  });
   results.push({
     name: 'dual-target-primary-reward-survival-race-and-fire-arbitration',
     passed: unsafePrimaryRace.evaluated === true
@@ -649,6 +670,9 @@ function runStrategyModuleSelfTests() {
       && primaryArbitration.mode === 'primary-profit'
       && defensiveArbitration.mode === 'secondary-defensive'
       && focusArbitration.mode === 'secondary-focus'
+      && distantPressureArbitration.primarySelected === true
+      && unsustainedCloseArbitration.primarySelected === true
+      && blockedPrimaryUnderPressure.mode === 'secondary-defensive'
   });
 
   const outsideClosePressureEvidence = incomingPressureEvidencePolicy({
