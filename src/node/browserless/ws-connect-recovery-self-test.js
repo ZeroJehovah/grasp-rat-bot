@@ -22,10 +22,25 @@ async function runWsConnectRecoverySelfTest() {
     targetWhitelistUrl: '', targetWhitelistFile: '', loopDelayMs: 30000
   };
   const healthyState = { loginPointSafety: { point: { x: 100, y: 200, hp: 100, source: 'test' } } };
-  const absentSnapshot = {
+  // A complete, current global HTTP observation: the only shape that may stand
+  // in for the departure fact. It is rebuilt per use because absence evidence
+  // also has to be recent relative to the pending exit it would release.
+  const absentSnapshot = () => ({
     ok: true, reason: 'safe', satisfied: true,
-    response: { summary: { valid: true, selfPresent: false, freshness: { ok: true } } }
-  };
+    checkedAt: new Date(atMs).toISOString(),
+    observedAtMs: atMs,
+    response: {
+      httpOk: true,
+      status: 200,
+      summary: {
+        valid: true,
+        entityCount: 18,
+        tick: 4242,
+        selfPresent: false,
+        freshness: { ok: true }
+      }
+    }
+  });
   const confirmedLeave = () => ({
     ok: true, attempts: [{ ok: true, status: 200, response: { ok: true, event: 'left', hp: 100 } }]
   });
@@ -97,7 +112,7 @@ async function runWsConnectRecoverySelfTest() {
   check('confirmed recovery clears pending and uses fast loop', pendingExitFromCanary(null, recovered.result, atMs) === null
     && browserlessLoopPlan({ canary: recovered.result }, config).delayMs === 1000);
 
-  const priorAbsent = await attempt({ snapshot: absentSnapshot });
+  const priorAbsent = await attempt({ snapshot: absentSnapshot() });
   check('pre-upgrade snapshot absence cannot waive post-upgrade cleanup', priorAbsent.leaveCalls === 1);
   const earlyClose = await attempt({ error: new Error('WebSocket was closed before the connection was established') });
   check('legacy early-close error also enters protected leave', earlyClose.leaveCalls === 1);
@@ -107,7 +122,7 @@ async function runWsConnectRecoverySelfTest() {
   const challenge = new Error('Cloudflare challenge detected');
   challenge.connectionFailure = { type: 'cloudflare-challenge', source: 'ws-response', status: 403 };
   for (const error of [challenge, new Error('websocket unexpected response 403 Forbidden')]) {
-    const rejected = await attempt({ snapshot: absentSnapshot, error });
+    const rejected = await attempt({ snapshot: absentSnapshot(), error });
     check(`${error.message}: explicit rejection without self avoids leave`, rejected.leaveCalls === 0
       && pendingExitFromCanary(null, rejected.result, atMs) === null);
   }
@@ -118,13 +133,13 @@ async function runWsConnectRecoverySelfTest() {
   let pending = pendingExitFromCanary(null, stranded.result, atMs);
   check('zero-frame unconfirmed leave persists', pending?.entryUnconfirmed === true && pending.httpStatuses.join(',') === '502');
   check('persistence preserves unknown HP, not zero/death', pending.startHp === null && pending.minHp === null && pending.lastHp === null);
-  check('fresh-looking cached absence cannot clear unconfirmed entry', pendingExitSnapshotResolution(pending, absentSnapshot).active === true);
+  check('fresh-looking cached absence cannot clear unconfirmed entry', pendingExitSnapshotResolution(pending, absentSnapshot()).active === true);
   const originalId = pending.exitAttemptId;
   for (let index = 0; index < 12; index += 1) {
     atMs += index === 11 ? 3600001 : 41000;
     const snapshot = index === 5
-      ? { ...absentSnapshot, response: { summary: { selfPresent: true, self: { hp: 100 }, freshness: { ok: true } } } }
-      : (index % 3 === 0 ? { ok: false, reason: 'snapshot-error', error: 'request timeout' } : absentSnapshot);
+      ? { ...absentSnapshot(), response: { summary: { selfPresent: true, self: { hp: 100 }, freshness: { ok: true } } } }
+      : (index % 3 === 0 ? { ok: false, reason: 'snapshot-error', error: 'request timeout' } : absentSnapshot());
     const next = await attempt({ state: { ...healthyState, runner: { pendingExit: pending } }, snapshot, failLeave: true });
     pending = pendingExitFromCanary(pending, next.result, atMs);
     next.result.pendingExit = pending;
@@ -135,12 +150,12 @@ async function runWsConnectRecoverySelfTest() {
       && pending.lastHp === null && pending.minHp === null);
   }
   check('presence/expiry renews rather than discards protected chain', pending.exitAttemptId !== originalId);
-  const terminal = await attempt({ state: { ...healthyState, runner: { pendingExit: pending } }, snapshot: absentSnapshot });
+  const terminal = await attempt({ state: { ...healthyState, runner: { pendingExit: pending } }, snapshot: absentSnapshot() });
   check('only confirmed leave releases the recovered zero-frame chain', terminal.openCalls === 0
     && terminal.leaveCalls === 1 && terminal.result.leave.ok
     && pendingExitFromCanary(pending, terminal.result, atMs) === null);
   const ordinaryPending = normalizePendingExit({ ...pending, entryUnconfirmed: false }, atMs);
-  check('ordinary exit retains fresh-snapshot absence behavior', pendingExitSnapshotResolution(ordinaryPending, absentSnapshot).cleared === true);
+  check('ordinary exit retains fresh-snapshot absence behavior', pendingExitSnapshotResolution(ordinaryPending, absentSnapshot()).cleared === true);
 
   let pendingWs;
   const lateOpen = await attempt({
@@ -205,7 +220,7 @@ async function runWsConnectRecoverySelfTest() {
   const unobservedOpen = await openedAttempt({ failLeave: true });
   const unobservedPending = pendingExitFromCanary(null, unobservedOpen.result, atMs);
   check('opened-socket failed exit remains persisted despite zero frames', unobservedPending?.entryUnconfirmed === true
-    && pendingExitSnapshotResolution(unobservedPending, absentSnapshot).active === true);
+    && pendingExitSnapshotResolution(unobservedPending, absentSnapshot()).active === true);
 
   const knownSession = await openedAttempt({
     onWait: (ws, n) => ws.onMessage(JSON.stringify({
@@ -221,7 +236,7 @@ async function runWsConnectRecoverySelfTest() {
   let knownPendingWs;
   const reassertFailed = await attempt({
     safetyController: stopController,
-    snapshot: { ...absentSnapshot, response: { summary: { selfPresent: true, freshness: { ok: true } } } },
+    snapshot: { ...absentSnapshot(), response: { summary: { selfPresent: true, freshness: { ok: true } } } },
     onOpenAttempt: ws => {
       knownPendingWs = ws;
       stopController.requestStop('explicit-stop');
@@ -240,7 +255,7 @@ async function runWsConnectRecoverySelfTest() {
   check('failed reassertion after a known session creates a new uncertain chain', reassertFailed.leaveCalls === 2
     && reassertFailed.result.entry.firstSelf && reassertPending?.entryUnconfirmed === true
     && reassertPending.originalReason === 'post-leave-ws-open');
-  check('prior-session absence cannot clear failed late-open reassertion', pendingExitSnapshotResolution(reassertPending, absentSnapshot).active === true);
+  check('prior-session absence cannot clear failed late-open reassertion', pendingExitSnapshotResolution(reassertPending, absentSnapshot()).active === true);
 
   return { ok: true, cases: results.length, results };
 }

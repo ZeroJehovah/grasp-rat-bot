@@ -61,6 +61,137 @@ function normalizedHttpStatuses(value) {
     .slice(-16);
 }
 
+const RECOVERY_OBSERVATION_MAX_AGE_MS = 60000;
+const RECOVERY_EPOCH_MIN_SAMPLES = 2;
+
+// A recovery observation is only absence authority when it came back from a
+// real authenticated HTTP snapshot that carried one complete global entity
+// list. Login bypasses, error pages, partial payloads, and reused local state
+// never qualify, and every rejection keeps its own reason so operators can see
+// why the exit lock is still held.
+const RECOVERY_EVIDENCE_REASONS = Object.freeze({
+  usable: 'usable',
+  noHttpResponse: 'no-http-response',
+  httpError: 'snapshot-http-error',
+  invalidPayload: 'invalid-snapshot-payload',
+  incompleteGlobal: 'incomplete-global-snapshot',
+  missingTick: 'missing-snapshot-tick',
+  missingSelfAuthority: 'missing-self-authority',
+  staleObservation: 'stale-observation',
+  noLineageAdvance: 'no-http-lineage-advance',
+  epochUnconfirmed: 'epoch-rollover-unconfirmed'
+});
+
+function recoveryDayKey(ms) {
+  const value = finiteNumber(ms);
+  if (value === null || value <= 0) return '';
+  return new Date(value + (8 * 60 * 60 * 1000)).toISOString().slice(0, 10);
+}
+
+function normalizeRecoverySnapshotEvidence(snapshotSafety, options = {}) {
+  const response = snapshotSafety?.response && typeof snapshotSafety.response === 'object'
+    ? snapshotSafety.response
+    : null;
+  const summary = response?.summary && typeof response.summary === 'object' ? response.summary : null;
+  const status = finiteNumber(response?.status);
+  const httpOk = Boolean(response) && (
+    response.httpOk === true || (status !== null && status >= 200 && status < 300)
+  );
+  const checkedAt = String(snapshotSafety?.checkedAt || '');
+  const observedAtMs = timestampMs(checkedAt) || timestampMs(snapshotSafety?.observedAtMs);
+  const tick = finiteNumber(summary?.tick);
+  const selfPresent = typeof summary?.selfPresent === 'boolean' ? summary.selfPresent : null;
+  const valid = summary?.valid === true;
+  // The maintained HTTP snapshot path answers with one global entity list, so
+  // completeness follows from a real 2xx response plus a JSON entity array, the
+  // same rule the snapshot audit uses (`completeHttpSnapshot`). A caller that
+  // knows it holds a partial list, and a payload without an entity array, both
+  // stay disqualified: absence must never be inferred from a partial view.
+  const completeGlobal = Boolean(
+    valid
+      && httpOk
+      && options.global !== false
+      && summary?.completeEntityList !== false
+      && finiteNumber(summary?.entityCount) !== null
+  );
+  const freshnessOk = summary?.freshness?.ok === true;
+  let reason = RECOVERY_EVIDENCE_REASONS.usable;
+  if (!response) reason = RECOVERY_EVIDENCE_REASONS.noHttpResponse;
+  else if (!httpOk) reason = RECOVERY_EVIDENCE_REASONS.httpError;
+  else if (!valid) reason = RECOVERY_EVIDENCE_REASONS.invalidPayload;
+  else if (!completeGlobal) reason = RECOVERY_EVIDENCE_REASONS.incompleteGlobal;
+  else if (tick === null) reason = RECOVERY_EVIDENCE_REASONS.missingTick;
+  else if (selfPresent === null) reason = RECOVERY_EVIDENCE_REASONS.missingSelfAuthority;
+  else if (!observedAtMs) reason = RECOVERY_EVIDENCE_REASONS.staleObservation;
+  return {
+    usable: reason === RECOVERY_EVIDENCE_REASONS.usable,
+    reason,
+    checkedAt,
+    observedAtMs,
+    dayKey: recoveryDayKey(observedAtMs),
+    httpOk,
+    status,
+    valid,
+    completeGlobal,
+    selfPresent,
+    tick,
+    freshnessOk,
+    source: String(options.evidenceSource || snapshotSafety?.snapshotPurpose || '')
+  };
+}
+
+// The HTTP snapshot endpoint counts ticks in its own per-day lineage. A
+// midnight roll moves that counter backwards while the crashed session's
+// realtime watermark still holds the previous day's value, so absence is only
+// trustworthy after the reset has been seen and the new lineage has advanced
+// monotonically with self absent in every sample.
+function updateSnapshotTickLineage(previous, evidence, options = {}) {
+  const minimumSamples = Math.max(
+    1,
+    Math.round(Number(options.minimumSamples || RECOVERY_EPOCH_MIN_SAMPLES) || RECOVERY_EPOCH_MIN_SAMPLES)
+  );
+  const dayKey = String(evidence?.dayKey || '');
+  const tick = finiteNumber(evidence?.tick);
+  const absent = evidence?.selfPresent === false;
+  const priorDay = String(previous?.dayKey || '');
+  const priorTick = finiteNumber(previous?.lastTick);
+  const hasPrior = Boolean(previous) && priorTick !== null;
+  const dayChanged = hasPrior && priorDay !== dayKey;
+  // Re-establishing a rolled epoch needs genuinely increasing global
+  // observations, so a repeated tick neither counts as progress nor loses the
+  // fact that a reset was already seen.
+  const advanced = hasPrior && !dayChanged && tick !== null && priorTick < tick;
+  const repeated = hasPrior && !dayChanged && tick !== null && priorTick === tick;
+  const resetObserved = hasPrior && (dayChanged || priorTick > tick)
+    ? true
+    : Boolean((advanced || repeated) && previous.resetObserved === true);
+  const samples = advanced ? Math.max(1, Math.round(Number(previous.samples || 0))) + 1 : 1;
+  const selfAbsentSamples = advanced
+    ? (absent ? Math.max(0, Math.round(Number(previous.selfAbsentSamples || 0))) + 1 : 0)
+    : (absent ? 1 : 0);
+  const lineage = {
+    dayKey,
+    lastTick: tick,
+    samples,
+    selfAbsentSamples,
+    resetObserved,
+    previousLastTick: hasPrior ? priorTick : null,
+    previousDayKey: hasPrior ? priorDay : '',
+    firstObservedAt: advanced ? String(previous.firstObservedAt || '') : String(evidence?.checkedAt || ''),
+    lastObservedAt: String(evidence?.checkedAt || ''),
+    lastSelfPresent: evidence?.selfPresent === null ? null : Boolean(evidence?.selfPresent)
+  };
+  return {
+    lineage,
+    epochReestablished: Boolean(
+      tick !== null
+        && lineage.resetObserved
+        && samples >= minimumSamples
+        && selfAbsentSamples === samples
+    )
+  };
+}
+
 function pendingExitIsExpired(value, nowMs = Date.now(), options = {}) {
   const firstAtMs = timestampMs(value?.firstAtMs ?? value?.firstAt);
   if (!firstAtMs) return false;
@@ -280,24 +411,89 @@ function pendingExitSnapshotResolution(pendingExit, snapshotSafety, options = {}
     maximumAgeMs: options.maximumAgeMs,
     allowExpired: options.allowExpired === true
   });
-  if (!pending) return { active: false, cleared: false, reason: 'inactive', pendingExit: null };
+  if (!pending) return { active: false, cleared: false, reason: 'inactive', pendingExit: null, evidence: null };
   const summary = snapshotSafety?.response?.summary || {};
-  const freshnessOk = summary?.freshness?.ok === true
-    || (summary?.freshness?.ok === undefined && snapshotSafety?.ok === true);
-  // Without a first realtime frame there is no post-upgrade tick watermark.
-  // A cached HTTP snapshot can predate the hidden join and still pass the
-  // ordinary freshness test. This chain therefore needs verified HTTP leave;
-  // snapshot absence alone must not re-enable another login.
-  if (freshnessOk && summary.selfPresent === false && !pending.entryUnconfirmed) {
+  const evidence = normalizeRecoverySnapshotEvidence(snapshotSafety, options);
+  const nowMs = finiteNumber(options.nowMs) ?? referenceNowMs;
+  const maximumObservationAgeMs = Math.max(
+    0,
+    Number(options.maximumObservationAgeMs || RECOVERY_OBSERVATION_MAX_AGE_MS)
+  );
+  const observationAgeMs = evidence.observedAtMs ? nowMs - evidence.observedAtMs : null;
+  const observationFresh = evidence.usable
+    && evidence.observedAtMs > 0
+    && observationAgeMs !== null
+    && observationAgeMs <= maximumObservationAgeMs;
+  const lineageState = options.lineageState && typeof options.lineageState === 'object'
+    ? options.lineageState
+    : {};
+  const lineage = lineageState.lineage && typeof lineageState.lineage === 'object'
+    ? lineageState.lineage
+    : null;
+  const lineageTick = finiteNumber(lineage?.lastTick);
+  const lineageAdvance = Boolean(
+    lineage
+      && lineageTick !== null
+      && evidence.tick !== null
+      && String(lineage.dayKey || '') === evidence.dayKey
+      && lineageTick < evidence.tick
+  );
+  const epochReestablished = Boolean(lineageState.epochReestablished);
+  // Realtime frame ticks belong to the session's own clock. The HTTP snapshot
+  // lineage is the only comparable watermark for snapshot evidence, so a
+  // snapshot that neither advances that lineage nor re-establishes it after a
+  // day rollover cannot clear the lock. Without a first realtime frame there is
+  // no post-upgrade watermark at all, so an ordinary pending exit still accepts
+  // a fresh complete snapshot; a hidden join needs verified HTTP leave.
+  const freshnessAuthority = observationFresh && (
+    lineageAdvance
+      || (options.requireLineageAuthority !== true && evidence.freshnessOk)
+      || epochReestablished
+  );
+  const evidenceReason = !evidence.usable
+    ? evidence.reason
+    : (!observationFresh
+        ? RECOVERY_EVIDENCE_REASONS.staleObservation
+        : (freshnessAuthority
+            ? RECOVERY_EVIDENCE_REASONS.usable
+            : (evidence.freshnessOk
+                ? RECOVERY_EVIDENCE_REASONS.noLineageAdvance
+                : RECOVERY_EVIDENCE_REASONS.epochUnconfirmed)));
+  const authority = {
+    source: evidence.source,
+    httpOk: evidence.httpOk,
+    status: evidence.status,
+    completeGlobal: evidence.completeGlobal,
+    selfPresent: evidence.selfPresent,
+    tick: evidence.tick,
+    dayKey: evidence.dayKey,
+    freshnessOk: evidence.freshnessOk,
+    lineageAdvance,
+    epochReestablished,
+    observationAgeMs,
+    reason: evidenceReason
+  };
+  if (evidence.usable && observationFresh && evidence.selfPresent === true) {
+    return {
+      active: true,
+      cleared: false,
+      reason: 'snapshot-self-present',
+      pendingExit: pending,
+      outcome: null,
+      evidence: authority
+    };
+  }
+  if (freshnessAuthority && evidence.selfPresent === false && !pending.entryUnconfirmed) {
     return {
       active: false,
       cleared: true,
       reason: 'fresh-snapshot-self-absent',
       pendingExit: null,
+      evidence: authority,
       outcome: buildExitRecoveryOutcome(pending, {
         outcome: 'confirmed-absent',
         authority: 'snapshot',
-        completedAtMs: timestampMs(snapshotSafety?.checkedAt) || referenceNowMs,
+        completedAtMs: evidence.observedAtMs || referenceNowMs,
         lastHp: summary?.self?.hp ?? pending.lastHp
       })
     };
@@ -305,11 +501,12 @@ function pendingExitSnapshotResolution(pendingExit, snapshotSafety, options = {}
   return {
     active: true,
     cleared: false,
-    reason: freshnessOk && summary.selfPresent === true
-      ? 'snapshot-self-present'
-      : 'self-absence-unconfirmed',
+    reason: evidenceReason === RECOVERY_EVIDENCE_REASONS.usable
+      ? 'self-absence-unconfirmed'
+      : evidenceReason,
     pendingExit: pending,
-    outcome: null
+    outcome: null,
+    evidence: authority
   };
 }
 
@@ -343,6 +540,34 @@ function runPendingExitRecoverySelfTest() {
     cases.push({ name, ok: Boolean(condition) });
     if (!condition) throw new Error(`pending exit recovery self-test failed: ${name}`);
   };
+  // Complete global HTTP snapshot fixtures: absence authority in this module
+  // now requires a real 200 response, a valid global entity list, an explicit
+  // selfPresent flag, and a tick that advances the HTTP lineage.
+  const recoveryDay = '2026-07-29';
+  const recoveryObservation = (overrides = {}) => ({
+    checkedAt: new Date(nowMs).toISOString(),
+    observedAtMs: nowMs,
+    ok: true,
+    response: {
+      httpOk: true,
+      status: 200,
+      summary: {
+        valid: true,
+        tick: 900000,
+        totalEntities: 1200,
+        inGameCount: 1100,
+        visibleCount: 1100,
+        entityCount: 1100,
+        selfPresent: false,
+        freshness: { ok: true },
+        ...overrides
+      }
+    }
+  });
+  const lineage = (overrides = {}, epochReestablished = false) => ({
+    lineage: { dayKey: recoveryDay, lastTick: 899000, samples: 2, selfAbsentSamples: 2, ...overrides },
+    epochReestablished
+  });
   try {
     const attemptId = createExitAttemptId('p3-self-test', nowMs - 1000, 2);
     const pending = normalizePendingExit({
@@ -476,20 +701,108 @@ function runPendingExitRecoverySelfTest() {
       && freshChain.requestAttemptCount === 1
       && freshChain.startHp === 84
       && freshChain.httpStatuses.join(',') === '502');
-    const absent = pendingExitSnapshotResolution(pending, {
-      checkedAt: new Date(nowMs).toISOString(),
-      ok: true,
-      response: { summary: { selfPresent: false, freshness: { ok: true } } }
+    const absent = pendingExitSnapshotResolution(pending, recoveryObservation(), {
+      nowMs,
+      lineageState: lineage()
     });
     assert('fresh snapshot absence produces the only relogin-permitting outcome', absent.cleared
       && absent.outcome?.outcome === 'confirmed-absent'
       && absent.outcome?.authority === 'snapshot'
-      && absent.outcome?.reloginAllowed === true);
-    const present = pendingExitSnapshotResolution(pending, {
-      checkedAt: new Date(nowMs).toISOString(),
-      ok: true,
-      response: { summary: { selfPresent: true, freshness: { ok: true } } }
+      && absent.outcome?.reloginAllowed === true
+      && absent.evidence?.lineageAdvance === true);
+    const present = pendingExitSnapshotResolution(pending, recoveryObservation({ selfPresent: true }), {
+      nowMs,
+      lineageState: lineage()
     });
+    const bypassOnly = pendingExitSnapshotResolution(pending, {
+      ok: true,
+      reason: 'daily-first-login-invulnerability',
+      bypassedPreLoginSafety: true,
+      bypassKind: 'daily-first-login',
+      required: 1,
+      streak: 1,
+      satisfied: true,
+      checkedAt: new Date(nowMs).toISOString()
+    }, { nowMs, lineageState: lineage() });
+    assert('a login bypass object is never absence authority', bypassOnly.active
+      && bypassOnly.cleared === false
+      && bypassOnly.reason === RECOVERY_EVIDENCE_REASONS.noHttpResponse
+      && bypassOnly.evidence?.selfPresent === null);
+    const partialList = pendingExitSnapshotResolution(pending, recoveryObservation({
+      completeEntityList: false
+    }), { nowMs, lineageState: lineage() });
+    assert('a declared partial entity list cannot clear the lock', partialList.active
+      && partialList.cleared === false
+      && partialList.reason === RECOVERY_EVIDENCE_REASONS.incompleteGlobal);
+    const nonArrayList = pendingExitSnapshotResolution(pending, recoveryObservation({
+      valid: false,
+      entityCount: undefined
+    }), { nowMs, lineageState: lineage() });
+    assert('a payload without a global entity array cannot clear the lock', nonArrayList.active
+      && nonArrayList.cleared === false
+      && nonArrayList.reason === RECOVERY_EVIDENCE_REASONS.invalidPayload);
+    const noSelfFlag = pendingExitSnapshotResolution(pending, recoveryObservation({ selfPresent: undefined }), {
+      nowMs,
+      lineageState: lineage()
+    });
+    assert('missing self authority stays unknown instead of absent', noSelfFlag.active
+      && noSelfFlag.cleared === false
+      && noSelfFlag.reason === RECOVERY_EVIDENCE_REASONS.missingSelfAuthority);
+    const staleObservation = pendingExitSnapshotResolution(pending, {
+      ...recoveryObservation(),
+      checkedAt: new Date(nowMs - 120000).toISOString(),
+      observedAtMs: nowMs - 120000
+    }, { nowMs, lineageState: lineage() });
+    assert('an old observation cannot clear the lock', staleObservation.active
+      && staleObservation.cleared === false
+      && staleObservation.reason === RECOVERY_EVIDENCE_REASONS.staleObservation);
+    const noLineage = pendingExitSnapshotResolution(pending, recoveryObservation(), {
+      nowMs,
+      lineageState: { lineage: null, epochReestablished: false },
+      requireLineageAuthority: true
+    });
+    assert('periodic reuse needs HTTP lineage advance', noLineage.active
+      && noLineage.cleared === false
+      && noLineage.reason === RECOVERY_EVIDENCE_REASONS.noLineageAdvance);
+    const staleLineage = pendingExitSnapshotResolution(pending, recoveryObservation({
+      tick: 12,
+      freshness: { ok: false, reason: 'stale-snapshot-tick' }
+    }), {
+      nowMs,
+      lineageState: lineage({ dayKey: '2026-07-28', lastTick: 1700000 }),
+      requireLineageAuthority: true
+    });
+    assert('a midnight tick reset alone is not absence authority', staleLineage.active
+      && staleLineage.cleared === false
+      && staleLineage.reason === RECOVERY_EVIDENCE_REASONS.epochUnconfirmed);
+    const priorDayLineage = lineage({ dayKey: '2026-07-28', lastTick: 1700000 });
+    const firstRollSample = updateSnapshotTickLineage(priorDayLineage.lineage, normalizeRecoverySnapshotEvidence(recoveryObservation({ tick: 12 }), {}), {});
+    const secondRollSample = updateSnapshotTickLineage(firstRollSample.lineage, normalizeRecoverySnapshotEvidence(recoveryObservation({ tick: 640 }), {}), {});
+    assert('one post-midnight sample cannot re-establish the epoch', firstRollSample.epochReestablished === false
+      && secondRollSample.epochReestablished === true
+      && secondRollSample.lineage.samples === 2
+      && secondRollSample.lineage.resetObserved === true);
+    const restoredAfterRollover = pendingExitSnapshotResolution(pending, recoveryObservation({
+      tick: 640,
+      freshness: { ok: false, reason: 'stale-snapshot-tick' }
+    }), {
+      nowMs,
+      lineageState: {
+        lineage: { ...secondRollSample.lineage, lastTick: 1700000 },
+        epochReestablished: true
+      },
+      requireLineageAuthority: true
+    });
+    assert('a re-established daily epoch restores absence authority', restoredAfterRollover.cleared === true
+      && restoredAfterRollover.evidence?.epochReestablished === true);
+    const rolledPresent = updateSnapshotTickLineage(firstRollSample.lineage, normalizeRecoverySnapshotEvidence(recoveryObservation({ tick: 641, selfPresent: true }), {}), {});
+    const hiddenEntry = normalizePendingExit({ ...pending, entryUnconfirmed: true }, nowMs);
+    assert('self presence inside a rolled epoch never clears the lock', rolledPresent.epochReestablished === false
+      && pendingExitSnapshotResolution(hiddenEntry, recoveryObservation({ tick: 640 }), {
+        nowMs,
+        lineageState: secondRollSample,
+        requireLineageAuthority: true
+      }).active === true);
     const wsRecovery = pendingExitRecoveryEvent(pending, nowMs);
     assert('self presence remains exit-only until a new protected leave', present.active
       && present.reason === 'snapshot-self-present'
@@ -559,18 +872,16 @@ function runPendingExitRecoverySelfTest() {
         lastHp: 88,
         httpStatuses: fixture.statuses
       }, nowMs);
-      const selfPresent = pendingExitSnapshotResolution(reportPending, {
-        checkedAt: new Date(nowMs).toISOString(),
-        ok: true,
-        response: { summary: { selfPresent: true, freshness: { ok: true } } }
+      const selfPresent = pendingExitSnapshotResolution(reportPending, recoveryObservation({ selfPresent: true }), {
+        nowMs,
+        lineageState: lineage()
       });
       const recovery = pendingExitRecoveryEvent(reportPending, nowMs);
       let outcome;
       if (fixture.terminal === 'confirmed-absent') {
-        outcome = pendingExitSnapshotResolution(reportPending, {
-          checkedAt: new Date(nowMs).toISOString(),
-          ok: true,
-          response: { summary: { selfPresent: false, freshness: { ok: true } } }
+        outcome = pendingExitSnapshotResolution(reportPending, recoveryObservation(), {
+          nowMs,
+          lineageState: lineage()
         }).outcome;
       } else {
         const expired = normalizePendingExit({
@@ -608,14 +919,19 @@ module.exports = {
   DEFAULT_PERSIST_MAX_MS,
   DEFAULT_RETRY_BASE_MS,
   DEFAULT_RETRY_MAX_MS,
+  RECOVERY_EPOCH_MIN_SAMPLES,
+  RECOVERY_EVIDENCE_REASONS,
+  RECOVERY_OBSERVATION_MAX_AGE_MS,
   EXIT_RECOVERY_OUTCOMES,
   buildExitRecoveryOutcome,
   createExitAttemptId,
   normalizePendingExit,
+  normalizeRecoverySnapshotEvidence,
   pendingExitFromCanary,
   pendingExitRecoveryEvent,
   pendingExitRetryDelayMs,
   pendingExitIsExpired,
   pendingExitSnapshotResolution,
-  runPendingExitRecoverySelfTest
+  runPendingExitRecoverySelfTest,
+  updateSnapshotTickLineage
 };

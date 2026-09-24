@@ -1268,7 +1268,13 @@ async function runSinglePreLoginSnapshotSafetyProbe(config, state, deps = {}, de
     };
   }
   const checkedAtMs = typeof deps.now === 'function' ? deps.now() : Date.now();
-  const singleBlocker = applySingleBlockerLoginBypass(summary, state, config, checkedAtMs);
+  // The single-blocker login exemption also advances the persisted blocker
+  // hold. A recovery observation must neither borrow it nor disturb that hold,
+  // so it only runs for the login gate itself.
+  const loginGateProbe = String(deps.snapshotPurpose || 'login-point-safety') === 'login-point-safety';
+  const singleBlocker = loginGateProbe
+    ? applySingleBlockerLoginBypass(summary, state, config, checkedAtMs)
+    : { summary, bypassed: false, bypassKind: '', originalReason: '' };
   summary = singleBlocker.summary;
   const checkedAt = new Date(checkedAtMs).toISOString();
   const progress = {
@@ -1362,7 +1368,13 @@ async function runPreLoginSnapshotSafety(config, state, deps = {}) {
     return decorated;
   };
   const checkedAtMs = typeof deps.now === 'function' ? deps.now() : Date.now();
-  const highHpExemption = highHpLoginPointSafetyExemption(state, checkedAtMs);
+  // Login-point exemptions answer "may this new login skip the point check".
+  // An exit-recovery observation asks whether the character is still in the
+  // game, so no exemption may replace it.
+  const loginPointSafetyPurpose = snapshotPurpose === 'login-point-safety';
+  const highHpExemption = loginPointSafetyPurpose
+    ? highHpLoginPointSafetyExemption(state, checkedAtMs)
+    : null;
   if (highHpExemption) {
     return publishSnapshotSafety(highHpExemption);
   }
@@ -3814,7 +3826,43 @@ async function runReadOnlyCanary(config, options = {}) {
       atMs: now()
     });
   } else try {
-    if (options.bypassPreLoginSafetyReason) {
+    // Pending-exit recovery asks a different question than a login gate. A
+    // daily-first-login or high-HP exemption only waives the login-point check;
+    // it cannot replace the observation that proves the character left, so the
+    // recovery snapshot always runs first and ignores login bypasses.
+    if (persistedPendingExit || expiredPendingExit) {
+      const recoveryExitAttemptId = String(
+        persistedPendingExit?.exitAttemptId || expiredPendingExit?.exitAttemptId || ''
+      );
+      result.snapshotSafety = await (options.runPreLoginSnapshotSafety || runPreLoginSnapshotSafety)(
+        {
+          ...config,
+          snapshotEdgeEnabled: false,
+          loginPointSafetySuccessRequired: 1,
+          loginPointSafetyProbeIntervalMs: 0
+        },
+        options.persistedState || {},
+        { ...options, snapshotPurpose: 'exit-recovery-confirmation' }
+      );
+      const recoverySummary = result.snapshotSafety?.response?.summary || {};
+      log('canary-exit-recovery-snapshot-request', {
+        runId: result.runId,
+        exitAttemptId: recoveryExitAttemptId,
+        ok: Boolean(result.snapshotSafety?.ok),
+        reason: result.snapshotSafety?.reason || '',
+        httpOk: result.snapshotSafety?.response?.httpOk === true,
+        httpStatus: Number.isFinite(Number(result.snapshotSafety?.response?.status))
+          ? Number(result.snapshotSafety.response.status)
+          : null,
+        valid: recoverySummary.valid === undefined ? null : Boolean(recoverySummary.valid),
+        tick: Number.isFinite(Number(recoverySummary.tick)) ? Number(recoverySummary.tick) : null,
+        selfPresent: typeof recoverySummary.selfPresent === 'boolean' ? recoverySummary.selfPresent : null,
+        freshness: {
+          ok: recoverySummary.freshness?.ok === undefined ? null : Boolean(recoverySummary.freshness.ok),
+          reason: recoverySummary.freshness?.reason || ''
+        }
+      });
+    } else if (options.bypassPreLoginSafetyReason) {
       const required = config.snapshotEdgeEnabled === true
         ? 1
         : Math.max(1, Math.round(Number(
@@ -3835,23 +3883,10 @@ async function runReadOnlyCanary(config, options = {}) {
     } else if (options.precheckedSnapshotSafety && typeof options.precheckedSnapshotSafety === 'object') {
       result.snapshotSafety = options.precheckedSnapshotSafety;
     } else {
-      const recoverySnapshotConfig = persistedPendingExit
-        ? {
-            ...config,
-            snapshotEdgeEnabled: false,
-            loginPointSafetySuccessRequired: 1,
-            loginPointSafetyProbeIntervalMs: 0
-          }
-        : config;
       result.snapshotSafety = await (options.runPreLoginSnapshotSafety || runPreLoginSnapshotSafety)(
-        recoverySnapshotConfig,
+        config,
         options.persistedState || {},
-        {
-          ...options,
-          snapshotPurpose: persistedPendingExit || expiredPendingExit
-            ? 'exit-recovery-confirmation'
-            : 'login-point-safety'
-        }
+        { ...options, snapshotPurpose: 'login-point-safety' }
       );
     }
   } catch (err) {
@@ -3882,9 +3917,13 @@ async function runReadOnlyCanary(config, options = {}) {
   const pendingExitResolution = recoveryPendingExit
     ? pendingExitSnapshotResolution(recoveryPendingExit, result.snapshotSafety, {
         maximumAgeMs: Number.MAX_SAFE_INTEGER,
-        allowExpired: true
+        allowExpired: true,
+        nowMs: now(),
+        lineageState: typeof options.getRecoveryLineageState === 'function'
+          ? options.getRecoveryLineageState()
+          : null
       })
-    : { active: false, cleared: false, reason: 'inactive', pendingExit: null, outcome: null };
+    : { active: false, cleared: false, reason: 'inactive', pendingExit: null, outcome: null, evidence: null };
   exitRecoveryActive = pendingExitResolution.active;
   result.recovery.exitRecovery = pendingExitResolution.active;
   result.recovery.pendingExit = pendingExitResolution.pendingExit;
@@ -3925,21 +3964,29 @@ async function runReadOnlyCanary(config, options = {}) {
       exitAttemptId: recoveryPendingExit?.exitAttemptId || ''
     });
   } else if (pendingExitResolution.active) {
-    const snapshotSummary = result.snapshotSafety?.response?.summary || {};
-    const snapshotFresh = snapshotSummary?.freshness?.ok === true
-      || (snapshotSummary?.freshness?.ok === undefined && result.snapshotSafety?.ok === true);
-    const snapshotSelfPresent = snapshotFresh && snapshotSummary.selfPresent === true;
+    const snapshotSelfPresent = pendingExitResolution.reason === 'snapshot-self-present';
     result.recovery.recoveryOutcome = snapshotSelfPresent
       ? 'self-present'
       : (expiredPendingExit ? 'timeout-unconfirmed' : 'unknown');
+    result.recovery.snapshotEvidence = pendingExitResolution.evidence || null;
     result.recovery.loginGateApplied = false;
     result.recovery.carriedIntoSession = false;
     result.snapshotSafety = {
       ...result.snapshotSafety,
       recoveryOutcome: result.recovery.recoveryOutcome,
+      recoveryEvidenceReason: pendingExitResolution.reason,
+      recoveryEvidence: pendingExitResolution.evidence || null,
       loginGateApplied: false,
       carriedIntoSession: false
     };
+    if (!snapshotSelfPresent) {
+      log('canary-exit-recovery-snapshot-unverified', {
+        runId: result.runId,
+        reason: pendingExitResolution.reason,
+        exitAttemptId: recoveryPendingExit?.exitAttemptId || '',
+        evidence: pendingExitResolution.evidence || null
+      });
+    }
     if (snapshotSelfPresent) {
       result.snapshotSafety = {
         ...result.snapshotSafety,

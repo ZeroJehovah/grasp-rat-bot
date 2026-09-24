@@ -75,6 +75,8 @@ function defaultBrowserlessState() {
       connectionFailure: null,
       remoteProfit: null,
       snapshotStatus: null,
+      snapshotTickLineage: null,
+      exitRecoveryEvidence: null,
       exitRecoveryOutcomes: [],
       lastError: ''
     },
@@ -337,6 +339,61 @@ function normalizeLoginPointReloginShortcut(value) {
   };
 }
 
+// The HTTP snapshot tick watermark decides whether a post-midnight absence
+// observation is trusted, so it is persisted with an explicit shape instead of
+// being re-derived from whatever the last payload happened to contain.
+function normalizeSnapshotTickLineage(value) {
+  if (!isPlainObject(value)) return null;
+  const tick = Number(value.lastTick);
+  if (!Number.isFinite(tick)) return null;
+  return {
+    dayKey: String(value.dayKey || ''),
+    lastTick: tick,
+    samples: Math.max(0, Math.round(Number(value.samples || 0)) || 0),
+    selfAbsentSamples: Math.max(0, Math.round(Number(value.selfAbsentSamples || 0)) || 0),
+    resetObserved: value.resetObserved === true,
+    previousLastTick: Number.isFinite(Number(value.previousLastTick))
+      ? Number(value.previousLastTick)
+      : null,
+    previousDayKey: String(value.previousDayKey || ''),
+    firstObservedAt: String(value.firstObservedAt || ''),
+    lastObservedAt: String(value.lastObservedAt || ''),
+    lastSelfPresent: value.lastSelfPresent === null || value.lastSelfPresent === undefined
+      ? null
+      : Boolean(value.lastSelfPresent)
+  };
+}
+
+function normalizeExitRecoveryEvidence(value) {
+  if (!isPlainObject(value)) return null;
+  const httpStatus = Number(value.httpStatus);
+  return {
+    observedAt: String(value.observedAt || ''),
+    purpose: String(value.purpose || ''),
+    source: String(value.source || ''),
+    requestedNow: value.requestedNow === true,
+    httpOk: value.httpOk === true,
+    httpStatus: Number.isFinite(httpStatus) ? httpStatus : null,
+    completeGlobal: value.completeGlobal === true,
+    tick: Number.isFinite(Number(value.tick)) ? Number(value.tick) : null,
+    selfPresent: value.selfPresent === null || value.selfPresent === undefined
+      ? null
+      : Boolean(value.selfPresent),
+    freshnessOk: value.freshnessOk === null || value.freshnessOk === undefined
+      ? null
+      : Boolean(value.freshnessOk),
+    lineageAdvance: value.lineageAdvance === true,
+    epochReestablished: value.epochReestablished === true,
+    observationAgeMs: Number.isFinite(Number(value.observationAgeMs))
+      ? Number(value.observationAgeMs)
+      : null,
+    evidenceReason: String(value.evidenceReason || ''),
+    exitAttemptId: String(value.exitAttemptId || ''),
+    outcome: String(value.outcome || ''),
+    nextAction: String(value.nextAction || '')
+  };
+}
+
 function normalizeBrowserlessState(state, file = '') {
   const normalized = mergeState(defaultBrowserlessState(), state || {});
   normalized.schemaVersion = SCHEMA_VERSION;
@@ -353,6 +410,12 @@ function normalizeBrowserlessState(state, file = '') {
     && typeof normalized.runner.snapshotStatus === 'object'
     ? cloneJson(normalized.runner.snapshotStatus)
     : null;
+  normalized.runner.snapshotTickLineage = normalizeSnapshotTickLineage(
+    normalized.runner.snapshotTickLineage
+  );
+  normalized.runner.exitRecoveryEvidence = normalizeExitRecoveryEvidence(
+    normalized.runner.exitRecoveryEvidence
+  );
   normalized.runner.exitRecoveryOutcomes = Array.isArray(normalized.runner.exitRecoveryOutcomes)
     ? normalized.runner.exitRecoveryOutcomes.slice(-64).map(cloneJson)
     : [];
@@ -2273,6 +2336,33 @@ function compactExitRecoveryOutcome(value) {
   };
 }
 
+function compactSnapshotTickLineage(value) {
+  const lineage = normalizeSnapshotTickLineage(value);
+  if (!lineage) return null;
+  return {
+    dayKey: lineage.dayKey,
+    lastTick: lineage.lastTick,
+    samples: lineage.samples,
+    selfAbsentSamples: lineage.selfAbsentSamples,
+    resetObserved: lineage.resetObserved,
+    lastObservedAt: lineage.lastObservedAt
+  };
+}
+
+function compactExitRecoveryEvidence(value) {
+  const evidence = normalizeExitRecoveryEvidence(value);
+  if (!evidence) return null;
+  return {
+    ...evidence,
+    purpose: compactString(evidence.purpose, 48),
+    source: compactString(evidence.source, 48),
+    evidenceReason: compactString(evidence.evidenceReason, 64),
+    exitAttemptId: compactString(evidence.exitAttemptId, 128),
+    outcome: compactString(evidence.outcome, 32),
+    nextAction: compactString(evidence.nextAction, 48)
+  };
+}
+
 function compactExitRecoveryStatus(normalized, recentExit, action, nowMs = Date.now()) {
   const runner = normalized?.runner || {};
   const pending = compactPendingExit(
@@ -2302,10 +2392,17 @@ function compactExitRecoveryStatus(normalized, recentExit, action, nowMs = Date.
     : (pending?.httpStatuses?.length
         ? pending.httpStatuses
         : (recoveryExit?.httpStatuses || [])));
+  const evidence = compactExitRecoveryEvidence(runner.exitRecoveryEvidence);
   return {
     active: Boolean(pending),
     state: pending ? 'unconfirmed' : (confirmed ? 'confirmed-absent' : 'none'),
     pending,
+    evidence,
+    // The current blocker and the next scheduled attempt are the two questions
+    // an operator asks first: why is the lock still held, and what happens next.
+    blockingReason: pending ? (evidence?.evidenceReason || pending?.reason || '') : '',
+    nextAction: pending ? (evidence?.nextAction || '') : '',
+    snapshotTickLineage: compactSnapshotTickLineage(runner.snapshotTickLineage),
     lastOutcome,
     lastRecoveryEvent: recoveryExit,
     triggerReason: compactString(

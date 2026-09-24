@@ -70,7 +70,20 @@ async function runBrowserlessRunnerStateTransitionSelfTest() {
         checkedAt: new Date(atMs).toISOString(), startedAtMs: atMs - 40,
         snapshotPurpose: shape.pending ? 'exit-recovery-confirmation' : 'login-point-safety',
         bypassedPreLoginSafety: shape.present,
-        response: { ok: true, status: 200, summary: { selfPresent: shape.present, freshness: { ok: shape.fresh }, tick: 11 } }
+        // A real HTTP snapshot answers with one global entity list, and absence
+        // authority requires that complete shape rather than a bare flag.
+        response: {
+          ok: true,
+          httpOk: true,
+          status: 200,
+          summary: {
+            valid: true,
+            entityCount: 24,
+            selfPresent: shape.present,
+            freshness: { ok: shape.fresh },
+            tick: 11
+          }
+        }
       };
       let observed = null;
       let getLiveState = null;

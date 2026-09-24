@@ -146,9 +146,11 @@ const {
 } = require('./request-rate-policy');
 const {
   normalizePendingExit,
+  normalizeRecoverySnapshotEvidence,
   pendingExitFromCanary,
   pendingExitSnapshotResolution,
-  runPendingExitRecoverySelfTest
+  runPendingExitRecoverySelfTest,
+  updateSnapshotTickLineage
 } = require('./pending-exit-recovery');
 const {
   armLoginRecoveryAssociation,
@@ -2667,6 +2669,20 @@ async function runBrowserlessRunner(config, deps = {}) {
         error: errorMessage(err)
       });
     }
+    // Second recovery channel: an already-scheduled gameplay snapshot can prove
+    // the exit before the canary's own dedicated request does. Consuming it here
+    // reuses that observation without issuing another request, and it is gated
+    // on a held exit lock and on the HTTP gameplay channel so ordinary frames
+    // never pay for it.
+    const snapshotKind = detail.snapshotKind || (snapshotSource === 'ws' ? 'ws' : 'http');
+    if (recoveryLineageState.lockHeld
+      && snapshotKind === 'http'
+      && String(detail.snapshotPurpose || '') === 'gameplay') {
+      recordSnapshotSafetyProgress(
+        recoveryObservationFromSnapshotPayload(payload, { observedAtMs }),
+        { evidenceSource: 'periodic-poll', requireLineageAuthority: true, requestedNow: false }
+      );
+    }
     try {
       const result = highDropPlayerTracker.observeSnapshot(payload, {
         ...detail,
@@ -2916,17 +2932,20 @@ async function runBrowserlessRunner(config, deps = {}) {
       return fetched.payload;
     },
     onSnapshot: (payload, detail = {}) => {
+      const observedAtMs = Number(detail.observedAtMs || now());
       logStore.append('runner', 'gameplay-snapshot-poll', {
-        observedAt: new Date(Number(detail.observedAtMs || now())).toISOString(),
+        observedAt: new Date(observedAtMs).toISOString(),
         tick: payload?.tick ?? null,
         entityCount: Array.isArray(payload?.entities) ? payload.entities.length : 0,
         intervalMs: snapshotIntervalForMode()
       });
-      return observeSnapshotPayload(payload, {
+      const observed = observeSnapshotPayload(payload, {
         ...detail,
         snapshotKind: 'http',
-        snapshotPurpose: 'gameplay'
+        snapshotPurpose: 'gameplay',
+        global: true
       });
+      return observed;
     },
     onError: err => {
       recordSupervisorError(err, { operation: 'shared-gap-snapshot' });
@@ -3884,7 +3903,120 @@ async function runBrowserlessRunner(config, deps = {}) {
     };
   };
 
-  const recordSnapshotSafetyProgress = snapshotSafety => {
+  // Absence authority for a pending exit is tracked on the HTTP snapshot
+  // lineage, because the crashed session's realtime tick watermark belongs to
+  // a different clock. A midnight roll and any cached or partial payload are
+  // therefore rejected until the new lineage advances with self absent.
+  let recoveryLineageState = { lineage: null, epochReestablished: false };
+  const refreshRecoveryLineage = (stateOverride = null) => {
+    const persisted = stateOverride || readBrowserlessStateFile(stateFile);
+    const persistedLineage = persisted?.runner?.snapshotTickLineage;
+    const persistedPendingExit = persisted?.runner?.pendingExit || null;
+    recoveryLineageState = {
+      lineage: persistedLineage && typeof persistedLineage === 'object' ? persistedLineage : null,
+      epochReestablished: false
+    };
+    recoveryLineageState.lockHeld = Boolean(persistedPendingExit);
+    recoveryLineageState.exitAttemptId = String(persistedPendingExit?.exitAttemptId || '');
+    recoveryLineageState.previousLineage = recoveryLineageState.lineage;
+    return recoveryLineageState;
+  };
+  // A snapshot can only clear the lock when it *advances* an existing HTTP
+  // lineage; the observation must not be allowed to establish its own baseline.
+  // Callers therefore see the lineage captured before the current observation.
+  const getRecoveryLineageState = () => ({
+    lineage: recoveryLineageState.previousLineage || recoveryLineageState.lineage || null,
+    epochReestablished: recoveryLineageState.epochReestablished === true
+  });
+  const noteRecoverySnapshotEvidence = (snapshotSafety, options = {}) => {
+    const evidence = normalizeRecoverySnapshotEvidence(snapshotSafety, options);
+    const previousLineage = recoveryLineageState.lineage || null;
+    const updated = evidence.usable
+      ? updateSnapshotTickLineage(previousLineage, evidence, options)
+      : { lineage: previousLineage, epochReestablished: false };
+    recoveryLineageState = {
+      ...recoveryLineageState,
+      lineage: updated.lineage,
+      epochReestablished: updated.epochReestablished,
+      previousLineage,
+      lastEvidence: evidence
+    };
+    return {
+      evidence,
+      lineage: updated.lineage,
+      previousLineage,
+      epochReestablished: updated.epochReestablished
+    };
+  };
+  // The panel and status payload must answer why the exit lock is still held
+  // without the operator replaying raw logs.
+  const recoveryEvidencePatch = (snapshotSafety, resolution, options = {}) => {
+    if (!resolution || (!resolution.active && !resolution.cleared)) return null;
+    const authority = resolution.evidence || null;
+    const requestedNow = options.requestedNow === true;
+    const outcome = resolution.cleared
+      ? 'confirmed-absent'
+      : (resolution.reason === 'snapshot-self-present' ? 'self-present' : 'unknown');
+    return {
+      observedAt: new Date(authority?.checkedAt || options.nowMs || now()).toISOString(),
+      purpose: String(snapshotSafety?.snapshotPurpose || ''),
+      source: String(options.evidenceSource || ''),
+      requestedNow,
+      httpOk: authority?.httpOk === true,
+      httpStatus: Number.isFinite(Number(authority?.status)) ? Number(authority.status) : null,
+      completeGlobal: authority?.completeGlobal === true,
+      tick: Number.isFinite(Number(authority?.tick)) ? Number(authority.tick) : null,
+      selfPresent: typeof authority?.selfPresent === 'boolean' ? authority.selfPresent : null,
+      freshnessOk: authority?.freshnessOk === undefined ? null : Boolean(authority.freshnessOk),
+      lineageAdvance: authority?.lineageAdvance === true,
+      epochReestablished: authority?.epochReestablished === true,
+      observationAgeMs: Number.isFinite(Number(authority?.observationAgeMs))
+        ? Number(authority.observationAgeMs)
+        : null,
+      evidenceReason: String(resolution.reason || ''),
+      exitAttemptId: String(
+        resolution.pendingExit?.exitAttemptId || resolution.outcome?.exitAttemptId || ''
+      ),
+      outcome,
+      nextAction: resolution.cleared
+        ? 'relogin-after-login-interval'
+        : (outcome === 'self-present' ? 'continue-protected-exit' : 'retry-recovery-snapshot')
+    };
+  };
+  const recoveryObservationFromSnapshotPayload = (payload, detail = {}) => {
+    const observedAtMs = Number(detail.observedAtMs || now());
+    return {
+      ok: true,
+      reason: 'snapshot-http-ok',
+      checkedAt: new Date(observedAtMs).toISOString(),
+      observedAtMs,
+      snapshotPurpose: 'exit-recovery-confirmation',
+      loginGateApplied: false,
+      carriedIntoSession: false,
+      reusedObservation: true,
+      response: {
+        httpOk: true,
+        status: 200,
+        statusText: '',
+        summary: summarizeSnapshotPayload(payload, { userId: config.userId })
+      }
+    };
+  };
+
+  // One HTTP observation can reach this runner twice: once as the raw payload
+  // and once as the evaluated safety result. Both describe a single fact, so the
+  // same observation is settled once and its verdict reused.
+  let lastRecoveryObservationKey = '';
+  let lastRecoveryObservation = null;
+  const recoveryObservationKey = (snapshotSafety, evidenceSource) => [
+    String(evidenceSource || ''),
+    String(snapshotSafety?.snapshotPurpose || ''),
+    String(snapshotSafety?.checkedAt || ''),
+    String(snapshotSafety?.observedAtMs ?? ''),
+    String(snapshotSafety?.response?.status ?? ''),
+    String(snapshotSafety?.response?.summary?.tick ?? '')
+  ].join('|');
+  const recordSnapshotSafetyProgress = (snapshotSafety, detail = {}) => {
     if (!snapshotSafety || typeof snapshotSafety !== 'object') return;
     const summary = snapshotSafety?.response?.summary || {};
     const freshness = summary?.freshness || {};
@@ -3892,8 +4024,44 @@ async function runBrowserlessRunner(config, deps = {}) {
       freshness.ok
         && (summary.selfPresent === false || snapshotSafetyAllowsImmediateResume(snapshotSafety))
     );
+    const evidenceSource = String(detail.evidenceSource || snapshotSafety.snapshotPurpose || '');
+    // A reused gameplay observation is only recovery authority when it also
+    // advanced the HTTP lineage, so cached or repeated payloads cannot clear the
+    // lock just because they look fresh.
+    const requireLineageAuthority = detail.requireLineageAuthority === true;
+    const observationKey = recoveryObservationKey(snapshotSafety, evidenceSource);
+    const settled = observationKey && observationKey === lastRecoveryObservationKey
+      ? lastRecoveryObservation
+      : null;
+    const lineageObservation = settled?.lineageObservation || noteRecoverySnapshotEvidence(snapshotSafety, {
+      nowMs: now(),
+      evidenceSource
+    });
     const currentState = readBrowserlessStateFile(stateFile);
-    const pendingResolution = pendingExitSnapshotResolution(currentState?.runner?.pendingExit, snapshotSafety);
+    const pendingResolution = settled?.resolution
+      || pendingExitSnapshotResolution(currentState?.runner?.pendingExit, snapshotSafety, {
+        nowMs: now(),
+        lineageState: {
+          lineage: lineageObservation.previousLineage || null,
+          epochReestablished: lineageObservation.epochReestablished === true
+        },
+        requireLineageAuthority,
+        evidenceSource
+      });
+    if (!settled && observationKey) {
+      lastRecoveryObservationKey = observationKey;
+      lastRecoveryObservation = { lineageObservation, resolution: pendingResolution };
+    }
+    const recoveryObservation = recoveryEvidencePatch(snapshotSafety, pendingResolution, {
+      nowMs: now(),
+      evidenceSource,
+      requestedNow: detail.requestedNow === true
+    });
+    recoveryLineageState = {
+      ...recoveryLineageState,
+      lockHeld: Boolean(pendingResolution.active && pendingResolution.pendingExit),
+      exitAttemptId: String(pendingResolution.pendingExit?.exitAttemptId || '')
+    };
     const priorExitRecoveryOutcomes = Array.isArray(currentState?.runner?.exitRecoveryOutcomes)
       ? currentState.runner.exitRecoveryOutcomes
       : [];
@@ -3918,6 +4086,8 @@ async function runBrowserlessRunner(config, deps = {}) {
           snapshotSafety,
           now()
         ),
+        ...(lineageObservation.lineage ? { snapshotTickLineage: lineageObservation.lineage } : {}),
+        ...(recoveryObservation ? { exitRecoveryEvidence: recoveryObservation } : {}),
         ...(clearsConfirmedLeave ? { confirmedLeave: null } : {}),
         ...(pendingResolution.cleared ? { pendingExit: null } : {}),
         ...(outcome ? { exitRecoveryOutcomes } : {}),
@@ -3933,6 +4103,12 @@ async function runBrowserlessRunner(config, deps = {}) {
     logStore.append('runner', 'snapshot-safety-observation', {
       checkedAt: snapshotSafety?.checkedAt || '',
       snapshotPurpose: snapshotSafety?.snapshotPurpose || '',
+      evidenceSource,
+      evidenceReason: pendingResolution.reason || '',
+      resolutionActive: pendingResolution.active === true,
+      resolutionCleared: pendingResolution.cleared === true,
+      lineageAdvance: pendingResolution.evidence?.lineageAdvance === true,
+      epochReestablished: pendingResolution.evidence?.epochReestablished === true,
       loginGateApplied: snapshotSafety?.loginGateApplied === true,
       carriedIntoSession: snapshotSafety?.carriedIntoSession === true,
       ok: Boolean(snapshotSafety?.ok),
@@ -3980,7 +4156,13 @@ async function runBrowserlessRunner(config, deps = {}) {
       logStore.append('runner', 'pending-exit-cleared-by-snapshot', {
         reason: pendingResolution.reason,
         checkedAt: snapshotSafety?.checkedAt || '',
-        tick: summary.tick ?? null
+        evidenceSource,
+        evidenceReason: pendingResolution.reason,
+        selfPresent: false,
+        tick: summary.tick ?? null,
+        exitAttemptId: pendingResolution.outcome?.exitAttemptId || '',
+        lineageAdvance: pendingResolution.evidence?.lineageAdvance === true,
+        epochReestablished: pendingResolution.evidence?.epochReestablished === true
       });
     }
   };
@@ -4666,6 +4848,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       continue;
     }
     const loopState = readBrowserlessStateFile(stateFile);
+    refreshRecoveryLineage(loopState);
     const activePendingExit = normalizePendingExit(loopState?.runner?.pendingExit, now(), {
       maximumAgeMs: config.pendingExitPersistMaxMs
     });
@@ -4911,6 +5094,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           dynamicWhitelist,
           allowMissingLoginPointBootstrap: true,
           onSnapshotSafety: recordSnapshotSafetyProgress,
+          getRecoveryLineageState,
           onSnapshotPayload: observeBootstrapSnapshotPayload,
           onSnapshotAuditPayload: recordSnapshotAudit,
           getRemoteProfitContext: remoteProfitContext,
@@ -5003,9 +5187,28 @@ async function runBrowserlessRunner(config, deps = {}) {
       stateBeforeCanary = updateState(preLoginPatch, { updatedAt: preLoginUpdatedAt });
       liveState = mergeLiveState(stateBeforeCanary, { ...preLoginPatch, updatedAt: preLoginUpdatedAt });
       activeRunKillConfirmations = [];
-      const bypassPreLoginSafetyReason = isFirstBrowserlessLoginOfDay(stateBeforeCanary, now())
+      // A pending exit or transport recovery has to observe the character, so
+      // the daily first-login exemption may not consume the login gate this
+      // round: it only waives the login-point check and would suppress the
+      // snapshot that proves the exit completed.
+      const pendingExitBeforeLogin = normalizePendingExit(
+        stateBeforeCanary?.runner?.pendingExit,
+        now(),
+        { maximumAgeMs: config.pendingExitPersistMaxMs }
+      );
+      const dailyFirstLoginBypassAllowed = !pendingExitBeforeLogin && !activeTransportRecovery;
+      const dailyFirstLoginToday = isFirstBrowserlessLoginOfDay(stateBeforeCanary, now());
+      const bypassPreLoginSafetyReason = dailyFirstLoginBypassAllowed && dailyFirstLoginToday
         ? 'daily-first-login-invulnerability'
         : '';
+      if (dailyFirstLoginToday && !dailyFirstLoginBypassAllowed) {
+        logStore.append('runner', 'login-point-safety-bypass-suppressed', {
+          bypassKind: 'daily-first-login',
+          suppressedBy: pendingExitBeforeLogin ? 'pending-exit' : 'transport-recovery',
+          exitAttemptId: pendingExitBeforeLogin?.exitAttemptId || '',
+          recoveryAttemptId: activeTransportRecovery?.recoveryId || ''
+        });
+      }
       const precheckedSnapshotSafety = bypassPreLoginSafetyReason ? null : preparedSnapshotSafety;
       let loginSnapshotPayload = bypassPreLoginSafetyReason ? null : preparedSnapshotPayload;
       preparedSnapshotSafety = null;
@@ -5059,6 +5262,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           now()
         ),
         onSnapshotSafety: recordSnapshotSafetyProgress,
+        getRecoveryLineageState,
         onSnapshotPayload: observeLoginSnapshotPayload,
         onSnapshotAuditPayload: recordSnapshotAudit,
         getRemoteProfitContext: remoteProfitContext,
@@ -5125,11 +5329,41 @@ async function runBrowserlessRunner(config, deps = {}) {
     const { finalSelf, loginPoint: learnedLoginPoint } = learnedLoginPointFromCanary(canary);
     const previousPendingExit = stateBeforeCanary?.runner?.pendingExit || null;
     const snapshotClearedPendingExit = canary?.recovery?.pendingExitResolution === 'fresh-snapshot-self-absent';
-    const nextPendingExit = snapshotClearedPendingExit
+    const derivedPendingExit = snapshotClearedPendingExit
       ? null
       : pendingExitFromCanary(previousPendingExit, canary, now(), {
           maximumAgeMs: config.pendingExitPersistMaxMs
         });
+    const stateAfterCanary = readBrowserlessStateFile(stateFile);
+    // A gameplay snapshot can clear the same chain while this canary is still
+    // running. Re-deriving that lock from the pre-canary state would resurrect
+    // it, so a continuation of a chain that no longer exists is dropped. A
+    // chain the canary renewed around fresh self presence is not a continuation
+    // and is always kept.
+    const previousExitAttemptId = String(previousPendingExit?.exitAttemptId || '');
+    const derivedExitAttemptId = String(derivedPendingExit?.exitAttemptId || '');
+    const canaryHasPresenceEvidence = Boolean(
+      canary?.entry?.firstSelf
+        || canary?.recovery?.inGameEvidence
+        || canary?.snapshotSafety?.response?.summary?.selfPresent === true
+    );
+    const staleRecoveryWriteBack = Boolean(
+      derivedPendingExit
+        && previousExitAttemptId
+        && !canaryHasPresenceEvidence
+        && (derivedExitAttemptId === previousExitAttemptId
+          || String(derivedPendingExit.recoveredFromExitAttemptId || '') === previousExitAttemptId)
+        && String(stateAfterCanary?.runner?.pendingExit?.exitAttemptId || '') !== previousExitAttemptId
+    );
+    const nextPendingExit = staleRecoveryWriteBack ? null : derivedPendingExit;
+    if (staleRecoveryWriteBack) {
+      logStore.append('runner', 'pending-exit-write-back-skipped', {
+        exitAttemptId: previousExitAttemptId,
+        derivedExitAttemptId,
+        derivedReason: derivedPendingExit.reason || '',
+        persistedExitAttemptId: String(stateAfterCanary?.runner?.pendingExit?.exitAttemptId || '')
+      });
+    }
     if (canary && typeof canary === 'object') canary.pendingExit = nextPendingExit;
     const result = {
       ok: Boolean(canary?.ok),
@@ -5137,7 +5371,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       canary: canary || null
     };
     if (runnerResultConfirmedLeave(result)) mapTrailTracker.clear();
-    const sourceIpPreflightStateAfterCanary = readBrowserlessStateFile(stateFile);
+    const sourceIpPreflightStateAfterCanary = stateAfterCanary;
     const sourceIpPreflightAfterCanary = normalizeSourceIpPreflight(
       sourceIpPreflightStateAfterCanary.network?.sourceIpPreflight,
       Object.keys(sourceIpPreflightStateAfterCanary.network?.sourceIpRisk || {}).length
@@ -5332,7 +5566,12 @@ async function runBrowserlessRunner(config, deps = {}) {
           recoveredFromExitAttemptId: patch.recoveredFromExitAttemptId,
           patchBytes: patch.patchBytes,
           persistence: patch.persistence,
-          queueDelayMs: Math.max(0, ackAtMs - patch.queuedAtMs),
+          // Time from the login-success patch being queued to this end-of-run
+          // confirmation. It spans the whole session, so it is a confirmation
+          // delay, not a queue wait or disk latency.
+          confirmationDelayMs: Math.max(0, ackAtMs - patch.queuedAtMs),
+          queuedAt: new Date(Number(patch.queuedAtMs) || 0).toISOString(),
+          confirmedAt: new Date(ackAtMs).toISOString(),
           persisted: true
         });
       } else {
@@ -6831,9 +7070,13 @@ async function runCriticalLatencyExitRegressionSelfTest() {
       reason: 'active-session-present',
       checkedAt: new Date(nowMs + 1000).toISOString(),
       response: {
+        httpOk: true,
+        status: 200,
         summary: {
           valid: true,
           selfPresent: true,
+          tick: 1717000,
+          entityCount: 12,
           self: { user_id: 7, hp: 3 },
           freshness: { ok: true }
         }
@@ -6927,9 +7170,26 @@ async function runPendingExitCanaryGateSelfTest() {
         pendingExit,
         lastLoginAt: new Date(nowMs - 30000).toISOString()
       },
-      stats: { currentSession: { online: false } }
+      stats: {
+        currentSession: { online: false },
+        today: { day: browserlessDayKey(nowMs), sessionCount: 0 }
+      }
     },
     useLeaveSupervisor: false,
+    // Incident input: the runner offers the daily first-login exemption and a
+    // bypass-shaped cached safety object, yet the exit lock must still be
+    // decided by a real recovery observation.
+    bypassPreLoginSafetyReason: 'daily-first-login-invulnerability',
+    precheckedSnapshotSafety: {
+      ok: true,
+      reason: 'daily-first-login-invulnerability',
+      required: 1,
+      streak: 1,
+      satisfied: true,
+      bypassedPreLoginSafety: true,
+      bypassKind: 'daily-first-login',
+      checkedAt: new Date(nowMs).toISOString()
+    },
     runPreLoginSnapshotSafety: async (_config, _state, deps) => {
       snapshotPurposes.push(String(deps.snapshotPurpose || ''));
       return {
@@ -6938,9 +7198,13 @@ async function runPendingExitCanaryGateSelfTest() {
         satisfied: true,
         checkedAt: new Date(nowMs).toISOString(),
         response: {
+          httpOk: true,
+          status: 200,
           summary: {
             valid: true,
             selfPresent: false,
+            tick: 1700000,
+            entityCount: 41,
             freshness: { ok: true }
           }
         }
@@ -6967,9 +7231,13 @@ async function runPendingExitCanaryGateSelfTest() {
         satisfied: true,
         checkedAt: new Date(nowMs).toISOString(),
         response: {
+          httpOk: true,
+          status: 200,
           summary: {
             valid: true,
             selfPresent: false,
+            tick: 1700000,
+            entityCount: 41,
             freshness: { ok: true }
           }
         }
@@ -6992,6 +7260,8 @@ async function runPendingExitCanaryGateSelfTest() {
         && recovery.recovery?.reloginDeferredThisCanary === true
         && recovery.snapshotSafety?.snapshotPurpose === 'exit-recovery-confirmation'
         && recovery.snapshotSafety?.loginGateApplied === false
+        && recovery.snapshotSafety?.bypassedPreLoginSafety !== true
+        && recovery.snapshotSafety?.bypassKind !== 'daily-first-login'
         && recovery.safety?.transportLifecycle?.phase === 'suppressed-for-exit-recovery'
         && wsOpenAttempts === 0
         && snapshotPurposes[0] === 'exit-recovery-confirmation'
@@ -7005,6 +7275,7 @@ async function runPendingExitCanaryGateSelfTest() {
       outcome: recovery.recovery?.recoveryOutcome || '',
       snapshotPurpose: recovery.snapshotSafety?.snapshotPurpose || '',
       loginGateApplied: recovery.snapshotSafety?.loginGateApplied === true,
+      bypassedPreLoginSafety: recovery.snapshotSafety?.bypassedPreLoginSafety === true,
       reloginDeferredThisCanary: recovery.recovery?.reloginDeferredThisCanary === true,
       transportPhase: recovery.safety?.transportLifecycle?.phase || '',
       wsOpenAttempts
@@ -7015,6 +7286,492 @@ async function runPendingExitCanaryGateSelfTest() {
       wsOpenAttempts: normalWsOpenAttempts
     },
     cooldown
+  };
+}
+
+// Incident regression at the canary boundary: a midnight exit lock must be
+// decided by real HTTP observations. A daily first-login exemption and a cached
+// bypass object may not stand in for them, and after a rolled HTTP tick lineage
+// the lock only releases once that lineage advances with self absent.
+async function runExitRecoveryMidnightCanarySelfTest() {
+  const atMs = Date.parse('2026-09-25T16:05:00.000Z');
+  const previousDay = browserlessDayKey(Date.parse('2026-09-25T15:30:00.000Z'));
+  const exitDay = browserlessDayKey(atMs);
+  const exitAttemptId = 'exit:profit-live-midnight:1790269200000:0';
+  const pendingExit = {
+    active: true,
+    exitAttemptId,
+    originalReason: 'ws-closed',
+    reason: 'ws-closed',
+    sourceRunId: 'profit-live-midnight',
+    firstAtMs: atMs - 40000,
+    startedAtMs: atMs - 40000,
+    lastAttemptAtMs: atMs - 30000,
+    attemptCount: 1,
+    requestAttemptCount: 3,
+    startHp: 100,
+    minHp: 100,
+    lastHp: 100,
+    httpStatuses: [404]
+  };
+  const config = {
+    controlMode: 'read-only',
+    gameOrigin: 'https://example.invalid',
+    userId: '7',
+    sessionToken: 'exit-recovery-midnight-self-test-token',
+    readOnlyProbeMs: 1000,
+    targetWhitelistUrl: '',
+    targetWhitelistFile: ''
+  };
+  const recoveryCalls = [];
+  let wsOpenAttempts = 0;
+  let leaveCalls = 0;
+  const runCase = async ({ tick, lineage, freshnessOk, prechecked = null }) => runReadOnlyCanary(config, {
+    now: () => atMs,
+    sleep: async () => {},
+    persistedState: {
+      runner: {
+        pendingExit,
+        lastLoginAt: new Date(atMs - 90000).toISOString(),
+        snapshotTickLineage: lineage
+      },
+      stats: {
+        currentSession: { online: false },
+        today: { day: exitDay, sessionCount: 0 }
+      }
+    },
+    useLeaveSupervisor: false,
+    bypassPreLoginSafetyReason: 'daily-first-login-invulnerability',
+    ...(prechecked ? { precheckedSnapshotSafety: prechecked } : {}),
+    getRecoveryLineageState: () => ({ lineage, epochReestablished: false }),
+    runPreLoginSnapshotSafety: async (probeConfig, _state, deps) => {
+      recoveryCalls.push({
+        purpose: String(deps.snapshotPurpose || ''),
+        required: Number(probeConfig.loginPointSafetySuccessRequired),
+        edge: probeConfig.snapshotEdgeEnabled === true,
+        probeIntervalMs: Number(probeConfig.loginPointSafetyProbeIntervalMs)
+      });
+      return {
+        ok: false,
+        reason: 'snapshot-safety-not-confirmed',
+        required: 1,
+        streak: 0,
+        satisfied: false,
+        checkedAt: new Date(atMs).toISOString(),
+        response: {
+          httpOk: true,
+          status: 200,
+          summary: {
+            valid: true,
+            tick,
+            entityCount: 0,
+            selfPresent: false,
+            freshness: { ok: freshnessOk, reason: freshnessOk ? 'fresh' : 'stale-snapshot-tick' }
+          }
+        }
+      };
+    },
+    openBrowserlessWs: async () => {
+      wsOpenAttempts += 1;
+      throw new Error('exit-recovery canary opened a websocket');
+    },
+    leaveWithVerification: async options => {
+      leaveCalls += 1;
+      options.onResult?.({ stage: 'initial', status: 404, ok: false });
+      return { ok: false, error: 'HTTP 404', attempts: [{ stage: 'initial', status: 404, ok: false }] };
+    }
+  });
+  const rolledEpoch = await runCase({
+    tick: 6,
+    freshnessOk: false,
+    lineage: {
+      dayKey: previousDay,
+      lastTick: 1717023,
+      samples: 1,
+      selfAbsentSamples: 1,
+      resetObserved: false,
+      lastSelfPresent: true
+    }
+  });
+  const advancedEpoch = await runCase({
+    tick: 12,
+    freshnessOk: true,
+    lineage: { dayKey: exitDay, lastTick: 6, samples: 1, selfAbsentSamples: 1, resetObserved: true }
+  });
+  const bypassOnly = await runCase({
+    tick: 6,
+    freshnessOk: false,
+    prechecked: {
+      ok: true,
+      reason: 'daily-first-login-invulnerability',
+      required: 1,
+      streak: 1,
+      satisfied: true,
+      bypassedPreLoginSafety: true,
+      bypassKind: 'daily-first-login',
+      checkedAt: new Date(atMs).toISOString()
+    },
+    lineage: {
+      dayKey: previousDay,
+      lastTick: 1717023,
+      samples: 1,
+      selfAbsentSamples: 1,
+      resetObserved: false,
+      lastSelfPresent: true
+    }
+  });
+  return {
+    ok: Boolean(
+      recoveryCalls.length === 3
+        && recoveryCalls.every(call => call.purpose === 'exit-recovery-confirmation')
+        && recoveryCalls.every(call => call.required === 1 && call.edge === false && call.probeIntervalMs === 0)
+        && rolledEpoch.recovery?.exitRecovery === true
+        && rolledEpoch.snapshotSafety?.recoveryEvidenceReason === 'epoch-rollover-unconfirmed'
+        && rolledEpoch.recovery?.recoveryOutcome === 'unknown'
+        && advancedEpoch.recovery?.recoveryOutcome === 'confirmed-absent'
+        && advancedEpoch.recovery?.pendingExitResolution === 'fresh-snapshot-self-absent'
+        && advancedEpoch.recovery?.reloginDeferredThisCanary === true
+        && advancedEpoch.snapshotSafety?.carriedIntoSession === false
+        && bypassOnly.recovery?.exitRecovery === true
+        && bypassOnly.snapshotSafety?.recoveryEvidenceReason === 'epoch-rollover-unconfirmed'
+        && bypassOnly.snapshotSafety?.bypassedPreLoginSafety !== true
+        && wsOpenAttempts === 0
+        && leaveCalls >= 1
+    ),
+    recoveryCalls,
+    wsOpenAttempts,
+    leaveCalls,
+    rolledEpoch: {
+      exitRecovery: rolledEpoch.recovery?.exitRecovery === true,
+      reason: rolledEpoch.snapshotSafety?.recoveryEvidenceReason || '',
+      recoveryOutcome: rolledEpoch.recovery?.recoveryOutcome || ''
+    },
+    advancedEpoch: {
+      recoveryOutcome: advancedEpoch.recovery?.recoveryOutcome || '',
+      resolution: advancedEpoch.recovery?.pendingExitResolution || '',
+      reloginDeferredThisCanary: advancedEpoch.recovery?.reloginDeferredThisCanary === true
+    },
+    bypassOnly: {
+      reason: bypassOnly.snapshotSafety?.recoveryEvidenceReason || '',
+      bypassedPreLoginSafety: bypassOnly.snapshotSafety?.bypassedPreLoginSafety === true
+    }
+  };
+}
+
+// Runner-loop integration for the second recovery channel: an already
+// scheduled gameplay snapshot settles the exit, and a canary that still held
+// the pre-snapshot lock may not write it back or start a login.
+async function runExitRecoverySecondChannelSelfTest(tmp) {
+  const dir = path.join(tmp, 'exit-recovery-second-channel');
+  const config = parseBrowserlessRunnerArgs([
+    '--once',
+    '--live',
+    '--data-dir', dir,
+    '--loop-delay-ms', '1000',
+    '--user-id', '7',
+    '--session-token', 'exit-recovery-second-channel-token',
+    '--login-point-x', '1',
+    '--login-point-y', '2',
+    '--login-point-hp', '100'
+  ], {});
+  const atMs = Date.parse('2026-09-25T16:10:00.000Z');
+  const previousDay = browserlessDayKey(Date.parse('2026-09-25T15:30:00.000Z'));
+  const exitDay = browserlessDayKey(atMs);
+  const exitAttemptId = 'exit:profit-live-midnight:1790269200000:0';
+  const pendingExit = {
+    active: true,
+    exitAttemptId,
+    originalReason: 'ws-closed',
+    reason: 'ws-closed',
+    sourceRunId: 'profit-live-midnight',
+    firstAtMs: atMs - 40000,
+    startedAtMs: atMs - 40000,
+    lastAttemptAtMs: atMs - 30000,
+    attemptCount: 1,
+    requestAttemptCount: 3,
+    startHp: 100,
+    minHp: 100,
+    lastHp: 100,
+    httpStatuses: [404],
+    nextRetryAtMs: atMs - 1000
+  };
+  updateBrowserlessStateFile(stateFilePath(config), {
+    runner: {
+      pendingExit,
+      lastLoginAt: new Date(atMs - 30000).toISOString(),
+      snapshotTickLineage: {
+        dayKey: previousDay,
+        lastTick: 1717023,
+        samples: 1,
+        selfAbsentSamples: 1,
+        resetObserved: false,
+        lastSelfPresent: true
+      }
+    },
+    stats: {
+      today: { day: exitDay, sessionCount: 0 },
+      currentSession: { online: false }
+    }
+  }, { updatedAt: new Date(atMs - 40000).toISOString() });
+  const bypassReasons = [];
+  const observedTicks = [];
+  const runResult = await runBrowserlessRunner(config, {
+    now: () => atMs,
+    startStatusServer: false,
+    disableBackgroundIo: true,
+    disableSourceIpPreflight: true,
+    snapshotGapPoller: {
+      noteSnapshot() {},
+      refreshSchedule() {},
+      start() {},
+      stop() {},
+      status() { return { intervalMs: DEFAULT_SNAPSHOT_GAP_MS, stopped: true }; }
+    },
+    runReadOnlyOnce: async (_runtimeConfig, options) => {
+      bypassReasons.push(options.bypassPreLoginSafetyReason || '');
+      for (const tick of [6, 12]) {
+        options.onSnapshotPayload({ tick, entities: [], bullets: [] }, {
+          source: 'periodic-poll',
+          snapshotKind: 'http',
+          snapshotPurpose: 'gameplay',
+          observedAtMs: atMs,
+          global: true
+        });
+        observedTicks.push(tick);
+      }
+      return {
+        ok: false,
+        runId: 'exit-recovery-second-channel',
+        startedAt: new Date(atMs - 1000).toISOString(),
+        completedAt: new Date(atMs).toISOString(),
+        error: 'read-only probe did not confirm exit',
+        recovery: { exitRecovery: true, pendingExitResolution: 'epoch-rollover-unconfirmed', inGameEvidence: false },
+        snapshotSafety: { ok: false, reason: 'snapshot-safety-not-confirmed', snapshotPurpose: 'exit-recovery-confirmation' },
+        safety: {
+          event: {
+            reason: 'ws-closed',
+            shouldLeave: true,
+            at: new Date(atMs).toISOString(),
+            detail: { exitRecovery: true, pendingExit: { exitAttemptId, entryUnconfirmed: false } }
+          },
+          leavePending: {
+            exitAttemptId,
+            originalReason: 'ws-closed',
+            sourceRunId: 'profit-live-midnight',
+            startedAtMs: atMs - 40000,
+            httpStatuses: [404]
+          }
+        },
+        leave: { ok: false, error: 'HTTP 404', attempts: [{ status: 404 }] }
+      };
+    }
+  });
+  const state = readBrowserlessStateFile(stateFilePath(config));
+  const outcomes = Array.isArray(state.runner.exitRecoveryOutcomes)
+    ? state.runner.exitRecoveryOutcomes
+    : [];
+  const loginGate = browserlessLoginIntervalDelayPlan(state, config, atMs);
+  const runnerLog = path.join(config.logDir, browserlessDayKey(atMs), 'runner.jsonl');
+  const logRows = fs.existsSync(runnerLog)
+    ? fs.readFileSync(runnerLog, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))
+    : [];
+  return {
+    ok: Boolean(
+      bypassReasons.length === 1
+        && bypassReasons[0] === ''
+        && observedTicks.join(',') === '6,12'
+        && state.runner.pendingExit === null
+        && outcomes.length === 1
+        && outcomes[0].exitAttemptId === exitAttemptId
+        && outcomes[0].outcome === 'confirmed-absent'
+        && state.runner.exitRecoveryEvidence?.source === 'periodic-poll'
+        && state.runner.exitRecoveryEvidence?.nextAction === 'relogin-after-login-interval'
+        && state.runner.exitRecoveryEvidence?.tick === 12
+        && state.runner.snapshotTickLineage?.samples === 2
+        && logRows.some(row => row.type === 'pending-exit-cleared-by-snapshot')
+        && logRows.some(row => row.type === 'pending-exit-write-back-skipped')
+        && logRows.some(row => row.type === 'login-point-safety-bypass-suppressed')
+        && loginGate?.reason === 'login-interval'
+        && loginGate?.delayMs === 30000
+        && runResult.mode !== 'exit-recovery'
+    ),
+    bypassReasons,
+    observedTicks,
+    pendingExit: state.runner.pendingExit,
+    outcomes: outcomes.length,
+    evidence: state.runner.exitRecoveryEvidence,
+    lineage: state.runner.snapshotTickLineage,
+    writeBackSkipped: logRows.filter(row => row.type === 'pending-exit-write-back-skipped').length,
+    clearedLogs: logRows.filter(row => row.type === 'pending-exit-cleared-by-snapshot').length,
+    suppressedBypassLogs: logRows.filter(row => row.type === 'login-point-safety-bypass-suppressed').length,
+    loginGate,
+    resultMode: runResult.mode || ''
+  };
+}
+
+// A rejected handshake can deliver the very first realtime self frame and then
+// drop within a few seconds. Daily-first-login accounting must stay consistent
+// and idempotent across that short disconnect: the successful entry is counted
+// once, a repeated login callback is not counted twice, and a login whose only
+// self evidence is an old epoch frame never clears the day exemption.
+async function runExitRecoveryDailyFirstLoginAccountingSelfTest(tmp) {
+  const dir = path.join(tmp, 'exit-recovery-first-login-accounting');
+  const baseConfig = (name) => parseBrowserlessRunnerArgs([
+    '--once',
+    '--live',
+    '--data-dir', path.join(dir, name),
+    '--loop-delay-ms', '1000',
+    '--user-id', '7',
+    '--session-token', 'exit-recovery-first-login-accounting-token',
+    '--login-point-x', '1',
+    '--login-point-y', '2',
+    '--login-point-hp', '100'
+  ], {});
+  const deps = (atMs) => ({
+    now: () => atMs,
+    startStatusServer: false,
+    disableBackgroundIo: true,
+    disableSourceIpPreflight: true,
+    snapshotGapPoller: {
+      noteSnapshot() {},
+      refreshSchedule() {},
+      start() {},
+      stop() {},
+      status() { return { intervalMs: DEFAULT_SNAPSHOT_GAP_MS, stopped: true }; }
+    }
+  });
+  const shortDisconnect = await (async () => {
+    const atMs = Date.parse('2026-09-25T16:05:00.000Z');
+    const day = browserlessDayKey(atMs);
+    const loginAt = new Date(atMs).toISOString();
+    const config = baseConfig('short-disconnect');
+    updateBrowserlessStateFile(stateFilePath(config), {
+      stats: { today: { day, sessionCount: 0 }, currentSession: { online: false } },
+      runner: { lastLoginAt: new Date(atMs - 300000).toISOString() }
+    }, { updatedAt: new Date(atMs - 1000).toISOString() });
+    const exemptBeforeLogin = isFirstBrowserlessLoginOfDay(
+      readBrowserlessStateFile(stateFilePath(config)),
+      atMs
+    );
+    let loginCallbacks = 0;
+    const result = await runBrowserlessRunner(config, {
+      ...deps(atMs),
+      runReadOnlyOnce: async (_config, options) => {
+        const self = { userId: 7, name: 'self', x: 1, y: 2, hp: 100, drop: 20 };
+        options.onLoginTransportAttempt?.();
+        // A duplicate success callback for the same entry must not be counted
+        // as a second session.
+        loginCallbacks += 1;
+        options.onLoginSuccess?.({ runId: 'first-login-short-disconnect', firstSelf: self, firstSelfAt: loginAt, firstSelfTick: 1717023 });
+        loginCallbacks += 1;
+        options.onLoginSuccess?.({ runId: 'first-login-short-disconnect', firstSelf: self, firstSelfAt: loginAt, firstSelfTick: 1717023 });
+        options.onDecision?.({
+          at: loginAt,
+          input: { self, stamina: { stamina1dRemainingMilli: 20000000, stamina1dLimitMilli: 20000000 }, selfKillEvidence: [] }
+        });
+        return {
+          ok: false,
+          runId: 'first-login-short-disconnect',
+          startedAt: new Date(atMs - 6000).toISOString(),
+          completedAt: loginAt,
+          error: 'ws-closed',
+          snapshotSafety: { ok: false, reason: 'snapshot-safety-not-confirmed', snapshotPurpose: 'login-point-safety' },
+          safety: { event: { reason: 'ws-closed', shouldLeave: true, at: loginAt, detail: { entryUnconfirmed: false } } },
+          leave: { ok: false, error: 'HTTP 404', attempts: [{ status: 404 }] }
+        };
+      }
+    });
+    const state = readBrowserlessStateFile(stateFilePath(config));
+    const runnerLog = path.join(config.logDir, browserlessDayKey(atMs), 'runner.jsonl');
+    const logText = fs.existsSync(runnerLog) ? fs.readFileSync(runnerLog, 'utf8') : '';
+    return {
+      ok: Boolean(
+        exemptBeforeLogin === true
+          && loginCallbacks === 2
+          && (logText.match(/"type":"source-ip-login-success"/g) || []).length === 1
+          && (logText.match(/"type":"login-success-state-patch-ack"/g) || []).length === 1
+          && state.runner.lastLoginAt === loginAt
+          && state.stats.currentSession.online === true
+          && state.stats.currentSession.enteredAt === loginAt
+          && state.stats.today.sessionCount === 0
+          && isFirstBrowserlessLoginOfDay(state, atMs) === false
+          && state.runner.pendingExit?.exitAttemptId
+          && result.mode === 'exit-recovery'
+      ),
+      exemptBeforeLogin,
+      loginCallbacks,
+      loginSuccessLogs: (logText.match(/"type":"source-ip-login-success"/g) || []).length,
+      patchAcks: (logText.match(/"type":"login-success-state-patch-ack"/g) || []).length,
+      lastLoginAt: state.runner.lastLoginAt,
+      sessionOnline: Boolean(state.stats.currentSession.online),
+      enteredAt: state.stats.currentSession.enteredAt || '',
+      sessionCount: state.stats.today.sessionCount,
+      exemptAfterLogin: isFirstBrowserlessLoginOfDay(state, atMs),
+      pendingExit: state.runner.pendingExit?.exitAttemptId || '',
+      mode: result.mode || ''
+    };
+  })();
+  const staleEpochFrame = await (async () => {
+    // The handshake succeeds on a frame that still carries the previous epoch's
+    // tick, and the connection drops before any decision frame arrives. No
+    // current-day session may be credited from that frame, and the day
+    // exemption stays held for the next real login gate.
+    const atMs = Date.parse('2026-09-25T16:20:00.000Z');
+    const priorDay = browserlessDayKey(Date.parse('2026-09-25T15:59:30.000Z'));
+    const entryAt = new Date(atMs).toISOString();
+    const config = baseConfig('stale-epoch-frame');
+    updateBrowserlessStateFile(stateFilePath(config), {
+      stats: { today: { day: priorDay, sessionCount: 3 }, currentSession: { online: false } },
+      runner: { lastLoginAt: new Date(atMs - 300000).toISOString() }
+    }, { updatedAt: new Date(atMs - 1000).toISOString() });
+    const result = await runBrowserlessRunner(config, {
+      ...deps(atMs),
+      runReadOnlyOnce: async (_config, options) => {
+        const self = { userId: 7, name: 'self', x: 1, y: 2, hp: 100, drop: 20 };
+        options.onLoginTransportAttempt?.();
+        options.onLoginSuccess?.({
+          runId: 'first-login-stale-epoch',
+          firstSelf: self,
+          firstSelfAt: entryAt,
+          firstSelfTick: 1717023
+        });
+        return {
+          ok: false,
+          runId: 'first-login-stale-epoch',
+          startedAt: new Date(atMs - 6000).toISOString(),
+          completedAt: new Date(atMs).toISOString(),
+          error: 'ws-closed',
+          snapshotSafety: { ok: false, reason: 'snapshot-safety-not-confirmed', snapshotPurpose: 'login-point-safety' },
+          safety: { event: { reason: 'ws-closed', shouldLeave: true, at: new Date(atMs).toISOString(), detail: { entryUnconfirmed: false } } },
+          leave: { ok: false, error: 'HTTP 404', attempts: [{ status: 404 }] }
+        };
+      }
+    });
+    const state = readBrowserlessStateFile(stateFilePath(config));
+    return {
+      ok: Boolean(
+        isFirstBrowserlessLoginOfDay(state, atMs) === true
+          && state.stats.today.day === priorDay
+          && Number(state.stats.today.sessionCount || 0) === 3
+          && state.runner.lastLoginAt === entryAt
+          && !state.stats.currentSession.online
+          && state.stats.currentSession.enteredAt !== entryAt
+          && result.mode === 'exit-recovery'
+      ),
+      day: state.stats.today.day,
+      priorDay,
+      sessionCount: state.stats.today.sessionCount,
+      exemptAfterStaleFrame: isFirstBrowserlessLoginOfDay(state, atMs),
+      lastLoginAt: state.runner.lastLoginAt,
+      sessionOnline: Boolean(state.stats.currentSession.online),
+      sessionEnteredAt: state.stats.currentSession.enteredAt || '',
+      mode: result.mode || ''
+    };
+  })();
+  return {
+    ok: Boolean(shortDisconnect.ok && staleEpochFrame.ok),
+    shortDisconnect,
+    staleEpochFrame
   };
 }
 
@@ -7473,11 +8230,21 @@ async function runBrowserlessRunnerSelfTest() {
     }, { pendingExitPersistMaxMs: 3600000 }, pendingDeadlineNowMs);
     const pendingStaleResolution = pendingExitSnapshotResolution(pendingDeadline, {
       ok: false,
-      response: { summary: { selfPresent: false, freshness: { ok: false } } }
+      checkedAt: new Date(pendingDeadlineNowMs - 1900).toISOString(),
+      response: {
+        httpOk: false,
+        status: 502,
+        summary: { valid: true, entityCount: 12, tick: 900, selfPresent: false, freshness: { ok: false } }
+      }
     });
     const pendingAbsentResolution = pendingExitSnapshotResolution(pendingDeadline, {
       ok: true,
-      response: { summary: { selfPresent: false, freshness: { ok: true } } }
+      checkedAt: new Date(pendingDeadlineNowMs - 1900).toISOString(),
+      response: {
+        httpOk: true,
+        status: 200,
+        summary: { valid: true, entityCount: 12, tick: 900, selfPresent: false, freshness: { ok: true } }
+      }
     });
     const pendingDeadlineSelfTest = {
       ok: Boolean(
@@ -10066,6 +10833,9 @@ async function runBrowserlessRunnerSelfTest() {
     })();
     const pendingExitRecovery = runPendingExitRecoverySelfTest();
     const pendingExitCanaryGate = await runPendingExitCanaryGateSelfTest();
+    const exitRecoveryMidnightCanary = await runExitRecoveryMidnightCanarySelfTest();
+    const exitRecoverySecondChannel = await runExitRecoverySecondChannelSelfTest(tmp);
+    const exitRecoveryDailyFirstLoginAccounting = await runExitRecoveryDailyFirstLoginAccountingSelfTest(tmp);
     const loginRecoveryAssociation = runLoginRecoveryAssociationSelfTest();
     const snapshotAuditPersistence = runSnapshotAuditPersistenceSelfTest(tmp);
     const combatBattleLog = runCombatBattleLogSelfTest();
@@ -10177,6 +10947,9 @@ async function runBrowserlessRunnerSelfTest() {
         && transportRecoveryCloudflare.ok
         && pendingExitRecovery.ok
         && pendingExitCanaryGate.ok
+        && exitRecoveryMidnightCanary.ok
+        && exitRecoverySecondChannel.ok
+        && exitRecoveryDailyFirstLoginAccounting.ok
         && loginRecoveryAssociation.ok
         && snapshotAuditPersistence.ok
         && combatBattleLog.ok
@@ -10278,6 +11051,9 @@ async function runBrowserlessRunnerSelfTest() {
       transportRecoveryCloudflare,
       pendingExitRecovery,
       pendingExitCanaryGate,
+      exitRecoveryMidnightCanary,
+      exitRecoverySecondChannel,
+      exitRecoveryDailyFirstLoginAccounting,
       loginRecoveryAssociation,
       snapshotAuditPersistence,
       combatBattleLog,

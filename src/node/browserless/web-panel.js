@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.09.20.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.09.25.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -3909,6 +3909,75 @@ function renderBrowserlessWebPanel() {
         : [];
       return statuses.length ? statuses.map(item => 'HTTP ' + item).join('、') : '--';
     }
+    // Operator-facing wording for the machine reasons that hold the exit lock.
+    // An unknown self state must never read as "not present".
+    function exitRecoveryReasonText(reason) {
+      const value = String(reason || '');
+      const labels = {
+        'usable': '离场事实已确认',
+        'fresh-snapshot-self-absent': '离场事实已确认',
+        'self-absence-unconfirmed': '快照未证明离场',
+        'snapshot-self-present': '快照显示角色在场',
+        'no-http-response': '尚无真实快照响应（豁免不能作为离场证据）',
+        'snapshot-http-error': '快照请求未成功',
+        'invalid-snapshot-payload': '快照内容无效',
+        'incomplete-global-snapshot': '快照不是完整全局列表',
+        'missing-snapshot-tick': '快照缺少 Tick',
+        'missing-self-authority': '快照无法判定角色在场',
+        'stale-observation': '离场观测已过旧',
+        'no-http-lineage-advance': '快照水位未前进',
+        'epoch-rollover-unconfirmed': '跨天 Tick 重置，等待确认新代次'
+      };
+      return labels[value] || (value || '--');
+    }
+    function exitRecoveryEvidenceText(status) {
+      const evidence = status.exitRecovery?.evidence;
+      if (!evidence) return '--';
+      const purposeLabels = {
+        'exit-recovery-confirmation': '退场确认快照',
+        'login-point-safety': '登录点快照'
+      };
+      const purposeText = evidence.source === 'periodic-poll'
+        ? '周期游戏快照'
+        : (purposeLabels[evidence.purpose] || evidence.purpose || '快照');
+      const httpText = evidence.httpStatus === null || evidence.httpStatus === undefined
+        ? (evidence.httpOk ? 'HTTP 200' : '无 HTTP 响应')
+        : ('HTTP ' + evidence.httpStatus);
+      const selfText = evidence.selfPresent === true
+        ? '角色在场'
+        : (evidence.selfPresent === false ? '角色不在场' : '无法判定角色在场');
+      const at = evidence.observedAt ? fullStamp(evidence.observedAt) : '';
+      const parts = [purposeText + (at ? '（' + at + '）' : ''), httpText, selfText];
+      if (evidence.tick !== null && evidence.tick !== undefined) parts.push('Tick ' + evidence.tick);
+      if (evidence.requestedNow === false) parts.push('复用已排期快照');
+      return parts.join('，');
+    }
+    function exitRecoveryBlockedText(status) {
+      const recovery = status.exitRecovery || {};
+      if (!recovery.active) return '--';
+      const evidence = recovery.evidence || {};
+      const base = exitRecoveryReasonText(evidence.evidenceReason || recovery.blockingReason);
+      if (evidence.epochReestablished === true) return base + '（已确认跨天新代次）';
+      if (evidence.lineageAdvance !== true) return base + '（等待快照水位前进）';
+      return base;
+    }
+    function exitRecoveryNextActionText(status) {
+      const recovery = status.exitRecovery || {};
+      const action = recovery.active ? (recovery.evidence?.nextAction || '') : '';
+      const labels = {
+        'relogin-after-login-interval': '已确认离场，等待登录间隔后重登',
+        'continue-protected-exit': '继续受保护退出',
+        'retry-recovery-snapshot': '按调度重试退场确认'
+      };
+      return labels[action] || '--';
+    }
+    function exitRecoveryTickText(status) {
+      const lineage = status.exitRecovery?.snapshotTickLineage;
+      if (!lineage) return '--';
+      const parts = ['Tick ' + lineage.lastTick, '当日 ' + lineage.samples + ' 次观测'];
+      if (lineage.resetObserved === true) parts.push('已观察到 Tick 重置');
+      return parts.join('，');
+    }
     function actionDetailRows(status) {
       const action = status.action || {};
       const decision = status.decision || {};
@@ -3992,6 +4061,11 @@ function renderBrowserlessWebPanel() {
       if (!online && (recovery.active || action.kind === 'exit-recovery')) {
         addRow(rowsOut, '退出确认', exitRecoveryDisplay(status), true,
           recovery.active ? classAttrs('warn') : classAttrs(recovery.state === 'confirmed-absent' ? 'ok' : 'bad'));
+        if (recovery.active) {
+          addRow(rowsOut, '阻塞原因', exitRecoveryBlockedText(status), true, classAttrs('warn'));
+          addRow(rowsOut, '离场证据', exitRecoveryEvidenceText(status));
+          addRow(rowsOut, '下一步', exitRecoveryNextActionText(status));
+        }
         if (recovery.lastError) {
           addRow(rowsOut, '退出确认失败', reasonText(recovery.lastError), true, classAttrs('bad'));
         }
@@ -4077,6 +4151,13 @@ function renderBrowserlessWebPanel() {
         }
         if (recovery.reloginAllowed !== true) {
           addRow(rowsOut, '重登许可', '否', true, classAttrs('warn'));
+        }
+        if (recovery.active) {
+          addRow(rowsOut, '阻塞原因', exitRecoveryBlockedText(status), true, classAttrs('warn'));
+        }
+        if (recovery.evidence) {
+          addRow(rowsOut, '最近离场快照', exitRecoveryEvidenceText(status));
+          addRow(rowsOut, '快照水位', exitRecoveryTickText(status));
         }
       }
       const exitThreat = recentExitThreat(status);

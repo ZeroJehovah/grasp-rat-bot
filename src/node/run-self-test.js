@@ -5875,18 +5875,31 @@ async function runSelfTest() {
           },
           leave: { ok: false, error: 'HTTP 502', attempts: [{ status: 502 }] }
         }, nowMs);
-        const present = pendingExitSnapshotResolution(pending, {
-          ok: true,
-          response: { summary: { selfPresent: true, freshness: { ok: true } } }
+        // Absence and presence authority both require one complete global HTTP
+        // observation, so the fixtures carry the response fields a real
+        // snapshot summarises instead of a bare self-present flag.
+        const recoveryObservation = (summary, status = 200) => ({
+          ok: status === 200,
+          checkedAt: new Date(nowMs).toISOString(),
+          observedAtMs: nowMs,
+          response: {
+            httpOk: status === 200,
+            status,
+            summary: { valid: true, entityCount: 12, tick: 4711, ...summary }
+          }
         });
-        const absent = pendingExitSnapshotResolution(pending, {
-          ok: true,
-          response: { summary: { selfPresent: false, freshness: { ok: true } } }
-        });
-        const staleAbsent = pendingExitSnapshotResolution(pending, {
-          ok: false,
-          response: { summary: { selfPresent: false, freshness: { ok: false } } }
-        });
+        const present = pendingExitSnapshotResolution(pending, recoveryObservation({
+          selfPresent: true,
+          freshness: { ok: true }
+        }));
+        const absent = pendingExitSnapshotResolution(pending, recoveryObservation({
+          selfPresent: false,
+          freshness: { ok: true }
+        }));
+        const staleAbsent = pendingExitSnapshotResolution(pending, recoveryObservation({
+          selfPresent: false,
+          freshness: { ok: false }
+        }, 502));
         const nearDeadlineMs = nowMs + 1900;
         const deadlinePlan = browserlessLoopPlan({
           canary: {
@@ -5971,7 +5984,13 @@ async function runSelfTest() {
             recoverySnapshotConfig = config;
             return {
               ok: true, reason: 'self-present-reentry', satisfied: true, bypassedPreLoginSafety: true,
-              response: { summary: { selfPresent: true, freshness: { ok: true } } }
+              checkedAt: new Date(t).toISOString(),
+              observedAtMs: t,
+              response: {
+                httpOk: true,
+                status: 200,
+                summary: { valid: true, entityCount: 9, tick: 120, selfPresent: true, freshness: { ok: true } }
+              }
             };
           },
           openBrowserlessWs: async options => {
