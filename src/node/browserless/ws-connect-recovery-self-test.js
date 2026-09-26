@@ -74,6 +74,7 @@ async function runWsConnectRecoverySelfTest() {
   async function attempt(options = {}) {
     let leaveCalls = 0, openCalls = 0, fetchCalls = 0, signal = null;
     const events = [];
+    const loginAttempts = [];
     const result = await runReadOnlyCanary(config, {
       now: () => atMs,
       safetyController: options.safetyController,
@@ -81,6 +82,7 @@ async function runWsConnectRecoverySelfTest() {
       ...(options.snapshot ? { precheckedSnapshotSafety: options.snapshot } : {}),
       fetchImpl: async () => { fetchCalls += 1; throw new Error('unexpected HTTP in offline test'); },
       logStore: { append: (stream, type, detail) => events.push({ stream, type, detail }) },
+      onLoginTransportAttempt: detail => loginAttempts.push(detail),
       openBrowserlessWs: async wsOptions => {
         openCalls += 1;
         signal = wsOptions.signal;
@@ -93,7 +95,7 @@ async function runWsConnectRecoverySelfTest() {
         return options.failLeave ? failedLeave() : confirmedLeave();
       }
     });
-    return { result, leaveCalls, openCalls, fetchCalls, signal, events };
+    return { result, leaveCalls, openCalls, fetchCalls, signal, events, loginAttempts };
   }
 
   const recovered = await attempt();
@@ -103,13 +105,16 @@ async function runWsConnectRecoverySelfTest() {
     && recovered.result.stats.frameCount === 0 && !recovered.result.entry.firstSelf
     && recovered.leaveCalls === 1 && recovered.result.leave.ok);
   check('failed attempt is cancelled before completion', recovered.signal?.aborted === true);
+  check('zero-frame attempt carries a real pre-connect time boundary', recovered.loginAttempts.length === 1
+    && recovered.loginAttempts[0].attemptedAt === recovered.result.entry.attemptedAt
+    && recovered.result.entry.attemptedAt === new Date(atMs).toISOString());
   check('uncertainty is explicit, not invented self authority', recovered.result.safety.event?.reason === 'ws-connect-unconfirmed-leave'
     && recovered.result.safety.event.selfAuthorityMissing === true
     && recovered.result.safety.leavePending.entryUnconfirmed === true
     && recovered.result.actions.sentCount === 0);
   check('HTTP confirmation emits a terminal recovery outcome', recovered.events.some(e =>
     e.type === 'exit-recovery-outcome' && e.detail.outcome === 'confirmed-absent' && e.detail.authority === 'HTTP'));
-  check('confirmed recovery clears pending and uses fast loop', pendingExitFromCanary(null, recovered.result, atMs) === null
+  check('confirmed recovery clears pending before the runner applies persisted admission deadlines', pendingExitFromCanary(null, recovered.result, atMs) === null
     && browserlessLoopPlan({ canary: recovered.result }, config).delayMs === 1000);
 
   const priorAbsent = await attempt({ snapshot: absentSnapshot() });

@@ -12,6 +12,7 @@ const {
 } = require('./session-client');
 const { createFrameStats, updateFrameStats } = require('./frame-stats');
 const { createBrowserlessStateStore } = require('./state-store');
+const { nullableNumber } = require('./login-admission');
 const {
   isWebSocketConnectAbortError,
   isWsOpen,
@@ -975,11 +976,16 @@ function frameDataToBuffer(data) {
 
 function loginPointFromState(state) {
   const point = state?.loginPointSafety?.point || state?.current?.self || state?.lastSelfSummary || null;
-  if (!point || !Number.isFinite(Number(point.x)) || !Number.isFinite(Number(point.y))) return null;
+  if (!point || nullableNumber(point.x) === null || nullableNumber(point.y) === null) return null;
   return {
     x: Number(point.x),
     y: Number(point.y),
-    hp: Number.isFinite(Number(point.hp)) ? Number(point.hp) : null,
+    hp: nullableNumber(point.hp),
+    ...(point.hpObservedAt ? {
+      hpObservedAt: String(point.hpObservedAt),
+      hpSource: String(point.hpSource || ''),
+      hpUserId: nullableNumber(point.hpUserId)
+    } : {}),
     maxHp: Number.isFinite(Number(point.maxHp ?? point.max_hp)) ? Number(point.maxHp ?? point.max_hp) : null,
     source: point.source || 'state'
   };
@@ -1997,6 +2003,7 @@ async function runReadOnlyCanary(config, options = {}) {
       lastShootAck: null
     },
     entry: {
+      attemptedAt: '',
       firstSelf: null,
       firstSelfAt: '',
       firstSelfTick: null
@@ -4199,6 +4206,7 @@ async function runReadOnlyCanary(config, options = {}) {
         controller: new AbortController(),
         cancelReason: ''
       };
+      result.entry.attemptedAt = new Date(pendingWsConnect.startedAtMs).toISOString();
       updateTransportLifecycle({
         generation: connectGeneration,
         phase: 'connecting',
@@ -4213,7 +4221,8 @@ async function runReadOnlyCanary(config, options = {}) {
           options.onLoginTransportAttempt({
             sourceIp: config.sourceIp || '',
             connectGeneration,
-            runId
+            runId,
+            attemptedAt: result.entry.attemptedAt
           });
         } catch (err) {
           log('canary-source-ip-login-attempt-state-error', { error: errorMessage(err) });

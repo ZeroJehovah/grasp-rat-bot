@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.09.25.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.09.26.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -1669,6 +1669,8 @@ function renderBrowserlessWebPanel() {
       'source-ip-preflight-error': '出口预检异常，禁止登录',
       'source-ip-risk-403': '主页返回 403，已加入风控列表',
       'source-ip-login-websocket-attempt': '正在使用主出口登录',
+      'login-transport-backoff': '连接异常，等待恢复后重试',
+      'server-entry-interval': '服务器已确认入场，等待登录间隔',
       'snapshot-safety-retry': '重新检查登录点安全',
       'snapshot-confirmed-offline': '快照确认角色已离线',
       'in-game-snapshot-safety-retry': '可能仍在游戏中，快速重连',
@@ -2320,11 +2322,13 @@ function renderBrowserlessWebPanel() {
         || action.deadlineType === 'exit-recovery-retry') {
         return '等待退出确认重试';
       }
+      const reason = String(action.reason || status.decision?.reason || '');
+      if (reason === 'login-transport-backoff') return '连接异常，等待恢复后重试';
+      if (reason === 'server-entry-interval') return '等待登录间隔';
       const reconnectRemainingMs = number(offline.reconnectRemainingMs);
       if (reconnectRemainingMs !== null
         && reconnectRemainingMs > 1000
         && offlineCooldownAt(status)) return '等待重登冷却时间';
-      const reason = String(action.reason || status.decision?.reason || '');
       const preflightPhase = String(status.network?.sourceIpPreflight?.phase || '');
       if (action.kind === 'source-ip-preflight' || action.kind === 'source-ip-preflight-cooldown'
         || ['testing', 'retry-wait', 'deferred', 'insufficient'].includes(preflightPhase)) {

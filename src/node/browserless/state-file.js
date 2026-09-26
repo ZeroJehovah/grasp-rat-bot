@@ -18,6 +18,7 @@ const {
   boundedRecoveryAttemptId,
   normalizePendingLoginRecovery
 } = require('./login-recovery-association');
+const { normalizeLoginAdmission, nullableNumber } = require('./login-admission');
 
 const SCHEMA_VERSION = 1;
 const KILL_ACCOUNTING_VERSION = 3;
@@ -63,6 +64,7 @@ function defaultBrowserlessState() {
       pendingLoginRecovery: null,
       recoveredFromExitAttemptId: '',
       lastLoginAt: '',
+      loginAdmission: normalizeLoginAdmission(),
       loginPointReloginShortcut: {
         dayKey: '',
         dayCount: 0,
@@ -422,6 +424,7 @@ function normalizeBrowserlessState(state, file = '') {
   normalized.runner.pendingLoginRecovery = normalizePendingLoginRecovery(
     normalized.runner.pendingLoginRecovery
   );
+  normalized.runner.loginAdmission = normalizeLoginAdmission(normalized.runner.loginAdmission);
   normalized.runner.recoveredFromExitAttemptId = boundedRecoveryAttemptId(
     normalized.runner.recoveredFromExitAttemptId
   );
@@ -471,11 +474,16 @@ function loginPointFromAnyState(state) {
     || state?.current?.self
     || state?.lastSelfSummary
     || null;
-  if (!point || !Number.isFinite(Number(point.x)) || !Number.isFinite(Number(point.y))) return null;
+  if (!point || nullableNumber(point.x) === null || nullableNumber(point.y) === null) return null;
   return {
     x: Number(point.x),
     y: Number(point.y),
-    hp: Number.isFinite(Number(point.hp)) ? Number(point.hp) : null,
+    hp: nullableNumber(point.hp),
+    ...(point.hpObservedAt ? {
+      hpObservedAt: String(point.hpObservedAt),
+      hpSource: String(point.hpSource || ''),
+      hpUserId: nullableNumber(point.hpUserId)
+    } : {}),
     source: point.source || 'state'
   };
 }
@@ -4127,6 +4135,8 @@ function browserlessCompactStatusSource(state = {}, config = {}) {
       canaryProfile: runner.canaryProfile || '',
       dryRun: runner.dryRun !== false,
       combatEnabled: Boolean(runner.combatEnabled),
+      lastLoginAt: runner.lastLoginAt || '',
+      loginAdmission: normalizeLoginAdmission(runner.loginAdmission),
       pendingExit: compactPendingExit(runner.pendingExit, nowMs),
       lastError: runner.lastError || '',
       snapshotStatus: compactSnapshotStatus(runner.snapshotStatus),
@@ -4277,6 +4287,8 @@ function buildCompactBrowserlessStatus(state, config = {}) {
       canaryProfile: normalized.runner.canaryProfile || '',
       dryRun: normalized.runner.dryRun,
       combatEnabled: Boolean(normalized.runner.combatEnabled),
+      lastLoginAt: normalized.runner.lastLoginAt || '',
+      loginAdmission: normalizeLoginAdmission(normalized.runner.loginAdmission),
       pendingExit: compactPendingExit(normalized.runner.pendingExit, nowMs),
       snapshotStatus,
       snapshotScheduler,

@@ -4,6 +4,7 @@ const http = require('http');
 const https = require('https');
 const { summarizeGrzEntity } = require('../../shared/grz-frame');
 const { summarizeStaminaWindow } = require('./stamina-metadata');
+const { nullableNumber } = require('./login-admission');
 const {
   createCloudflareChallengeError,
   detectCloudflareChallenge
@@ -807,12 +808,12 @@ function summarizeSnapshotSafety(payload, loginPoint, options = {}) {
   const damageActorUserIds = userIdSet(options.damageActorUserIds ?? options.dangerousUserIds);
   const easyKillUserIds = userIdSet(options.easyKillUserIds ?? options.recentKillUserIds);
   const point = loginPoint
-    && Number.isFinite(Number(loginPoint.x))
-    && Number.isFinite(Number(loginPoint.y))
+    && nullableNumber(loginPoint.x) !== null
+    && nullableNumber(loginPoint.y) !== null
     ? {
         x: Number(loginPoint.x),
         y: Number(loginPoint.y),
-        hp: Number.isFinite(Number(loginPoint.hp)) ? Number(loginPoint.hp) : null,
+        hp: nullableNumber(loginPoint.hp),
         maxHp: Number.isFinite(Number(loginPoint.maxHp ?? loginPoint.max_hp))
           ? Number(loginPoint.maxHp ?? loginPoint.max_hp)
           : null,
@@ -837,7 +838,7 @@ function summarizeSnapshotSafety(payload, loginPoint, options = {}) {
   const lowRadius = Math.max(0, Number(options.lowRadius ?? 30000));
   const healthy = Number.isFinite(point.hp) && point.hp >= healthyHpThreshold;
   const lowHp = Number.isFinite(point.hp) && point.hp < lowHpThreshold;
-  const radius = healthy
+  const radius = point.hp === null ? lowRadius : healthy
     ? healthyRadius
     : (lowHp
         ? Math.min(lowRadius, lowHpBaseRadius + (lowHpThreshold - point.hp) * lowHpRadiusIncrement)

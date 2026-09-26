@@ -6,6 +6,15 @@ const path = require('path');
 const zlib = require('zlib');
 const { performance } = require('perf_hooks');
 const { parseBrowserlessRunnerArgs } = require('./config');
+const {
+  loginAdmissionDeadline,
+  loginAttemptControlled,
+  loginAttemptStarted,
+  normalizeLoginAdmission,
+  nullableNumber,
+  reconcileLoginAdmission,
+  serverEntryObservedToday
+} = require('./login-admission');
 const { cleanupOldLogDays } = require('./log-retention');
 const { createLocalLogStore } = require('./local-log-store');
 const { createBrowserlessBackgroundIo } = require('./background-io');
@@ -921,22 +930,22 @@ function browserlessDailyFirstLoginDelayPlan(state, config = {}, nowMs = Date.no
 
 function browserlessLoginIntervalDelayPlan(state, config = {}, nowMs = Date.now()) {
   if (state?.stats?.currentSession?.online) return null;
+  if (state?.runner?.pendingExit || state?.runner?.transportRecovery?.expectedSelfPresent === true) return null;
   const nowValue = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
-  const lastLoginAtMs = parseIsoTimeMs(state?.runner?.lastLoginAt);
-  if (!lastLoginAtMs) return null;
-  const intervalMs = Math.max(60000, Number(config.loginIntervalMs ?? 60000));
-  const notBeforeMs = lastLoginAtMs + intervalMs;
+  const deadline = loginAdmissionDeadline(state, config);
+  const notBeforeMs = deadline.atMs;
   const delayMs = Math.max(0, notBeforeMs - nowValue);
   if (delayMs <= 0) return null;
   return {
     continue: true,
-    reason: 'login-interval',
+    reason: deadline.reason,
     delayMs,
     previousRunId: '',
-    error: 'login-interval',
+    error: deadline.reason,
     safetyReason: '',
     explicitDelay: true,
     explicitCooldown: true,
+    deadlineType: deadline.reason,
     notBeforeAt: new Date(notBeforeMs).toISOString()
   };
 }
@@ -1172,13 +1181,17 @@ function buildRunnerErrorCanary(error, config = {}, options = {}) {
 function hydrateConfigFromState(config, state) {
   const session = sessionFromAnyState(state);
   const loginPoint = loginPointFromAnyState(state);
+  const observedHealth = loginPoint?.hpObservedAt
+    && (!loginPoint.hpUserId || loginPoint.hpUserId === Number(config.userId || session.userId));
   return {
     ...config,
     userId: Number(config.userId || 0) || session.userId,
     sessionToken: config.sessionToken || session.sessionToken,
     loginPointX: hasConfigNumber(config.loginPointX) ? Number(config.loginPointX) : loginPoint?.x ?? config.loginPointX,
     loginPointY: hasConfigNumber(config.loginPointY) ? Number(config.loginPointY) : loginPoint?.y ?? config.loginPointY,
-    loginPointHp: hasConfigNumber(config.loginPointHp) ? Number(config.loginPointHp) : loginPoint?.hp ?? config.loginPointHp
+    loginPointHp: observedHealth
+      ? loginPoint.hp
+      : (hasConfigNumber(config.loginPointHp) ? Number(config.loginPointHp) : loginPoint?.hp ?? config.loginPointHp)
   };
 }
 
@@ -1491,38 +1504,54 @@ function persistedSingleBlockerHoldForPoint(state = {}, point = null) {
   return { ...hold };
 }
 
-function learnedLoginPointFromCanary(canary) {
+function learnedLoginPointFromCanary(canary, options = {}) {
   const confirmedLeaveSelf = runnerResultConfirmedLeave({ canary })
     ? lastLeaveResponseFromCanary(canary)
     : null;
-  const finalSelf = confirmedLeaveSelf
+  let finalSelf = confirmedLeaveSelf
     || canary?.state?.realtime?.self
     || canary?.decisions?.last?.input?.self
+    || canary?.entry?.firstSelf
     || null;
   const entrySelf = canary?.entry?.firstSelf || null;
-  if (!finalSelf || !Number.isFinite(Number(finalSelf.x)) || !Number.isFinite(Number(finalSelf.y))) {
-    return { finalSelf: null, loginPoint: null };
+  const selfUserId = nullableNumber(finalSelf?.user_id ?? finalSelf?.userId);
+  if (options.userId && selfUserId && selfUserId !== Number(options.userId)) {
+    finalSelf = null;
   }
   const snapshotSelfPresent = Boolean(canary?.snapshotSafety?.response?.summary?.selfPresent);
   const hasEntrySummary = canary && Object.prototype.hasOwnProperty.call(canary, 'entry');
   let pointSelf = null;
   if (!snapshotSelfPresent) {
-    if (entrySelf && Number.isFinite(Number(entrySelf.x)) && Number.isFinite(Number(entrySelf.y))) {
+    if (entrySelf && nullableNumber(entrySelf.x) !== null && nullableNumber(entrySelf.y) !== null) {
       pointSelf = entrySelf;
-    } else if (!hasEntrySummary) {
+    } else if (!hasEntrySummary && finalSelf
+      && nullableNumber(finalSelf.x) !== null && nullableNumber(finalSelf.y) !== null) {
       pointSelf = finalSelf;
     }
   }
-  const pointSource = pointSelf === entrySelf ? 'browserless-entry-self' : 'canary-self';
+  const previousPoint = options.point || null;
+  const freshPoint = pointSelf;
+  pointSelf = pointSelf || previousPoint;
+  const entryUncertain = Boolean(canary?.entry?.attemptedAt
+    || canary?.safety?.event?.entryUnconfirmed || canary?.safety?.leavePending?.entryUnconfirmed
+    || canary?.safety?.event?.reason === 'ws-connect-unconfirmed-leave');
+  const hasHealthObservation = Boolean(finalSelf || entrySelf || entryUncertain);
+  const pointSource = freshPoint
+    ? (freshPoint === entrySelf ? 'browserless-entry-self' : 'canary-self')
+    : (previousPoint?.source || 'state');
   return {
     finalSelf,
-    loginPoint: pointSelf
+    loginPoint: pointSelf && hasHealthObservation
       ? {
+          ...(!freshPoint ? previousPoint : {}),
           x: Number(pointSelf.x),
           y: Number(pointSelf.y),
-          hp: Number.isFinite(Number(finalSelf.hp))
-            ? Number(finalSelf.hp)
-            : (Number.isFinite(Number(pointSelf.hp)) ? Number(pointSelf.hp) : null),
+          // A confirmed leave's missing HP is unknown, not the earlier healthy
+          // entry value. Login coordinates do not own health freshness.
+          hp: nullableNumber(finalSelf?.hp),
+          hpObservedAt: canary?.completedAt || new Date(options.nowMs || Date.now()).toISOString(),
+          hpSource: confirmedLeaveSelf && finalSelf ? 'confirmed-leave' : (finalSelf ? 'realtime-self' : 'unconfirmed-entry-unknown'),
+          hpUserId: Number(options.userId || selfUserId || 0) || null,
           source: pointSource
         }
       : null
@@ -2747,6 +2776,11 @@ async function runBrowserlessRunner(config, deps = {}) {
   let loginPointProvided = hasConfigNumber(config.loginPointX) && hasConfigNumber(config.loginPointY);
   const startupLoginPoint = loginPointProvided
     ? {
+        ...(persistedLoginPoint?.hpObservedAt ? {
+          hpObservedAt: persistedLoginPoint.hpObservedAt,
+          hpSource: persistedLoginPoint.hpSource,
+          hpUserId: persistedLoginPoint.hpUserId
+        } : {}),
         x: Number(config.loginPointX),
         y: Number(config.loginPointY),
         hp: hasConfigNumber(config.loginPointHp) ? Number(config.loginPointHp) : null,
@@ -3132,8 +3166,15 @@ async function runBrowserlessRunner(config, deps = {}) {
     return result;
   };
 
-  const markSourceIpLoginAttempt = () => {
+  const markSourceIpLoginAttempt = (event = {}) => {
     const current = liveState || persisted;
+    if (event.runId && event.attemptedAt) {
+      const patch = { runner: { loginAdmission: loginAttemptStarted(current.runner?.loginAdmission, event) } };
+      // This runs before opening the socket, outside realtime callbacks. Keep
+      // the attempt boundary through pending-exit retries and process restarts.
+      updateState(patch, { updatedAt: event.attemptedAt });
+      patchLiveState(patch, { updatedAt: event.attemptedAt, baseState: current });
+    }
     const preflight = normalizeSourceIpPreflight(
       current.network?.sourceIpPreflight,
       Object.keys(current.network?.sourceIpRisk || {}).length
@@ -3212,6 +3253,10 @@ async function runBrowserlessRunner(config, deps = {}) {
     const loginPatch = {
       runner: {
         lastLoginAt: loginAt,
+        loginAdmission: loginAttemptControlled(current.runner?.loginAdmission, {
+          runId, firstSelfAt: loginAt,
+          firstSelfTick: canary?.firstSelfTick ?? canary?.entry?.firstSelfTick
+        }),
         recoveredFromExitAttemptId: loginRecoveryAssociation.recoveredFromExitAttemptId,
         pendingLoginRecovery: loginRecoveryAssociation.pendingLoginRecovery,
         ...(sourceIpPreflight ? { currentAction: sourceIpPreflightAction(sourceIpPreflight) } : {})
@@ -3470,6 +3515,30 @@ async function runBrowserlessRunner(config, deps = {}) {
     const pendingExitDeadlineMs = pendingExit
       ? Math.max(schedulingNowMs, Number(pendingExit.nextRetryAtMs || schedulingNowMs))
       : 0;
+    // A verified departure permits a NEW login. It does not make a failed
+    // transport healthy. Apply persisted admission deadlines only after the
+    // rescue/takeover priorities have been resolved.
+    const admissionPlan = !pendingExit && !transportRecovery && !preserveOnlineSession
+      && (newConfirmedLeave || currentBeforeWait.stats?.currentSession?.online !== true)
+      ? browserlessLoginIntervalDelayPlan({
+          ...currentBeforeWait,
+          runner: { ...currentBeforeWait.runner, pendingExit: null, transportRecovery: null },
+          stats: {
+            ...currentBeforeWait.stats,
+            currentSession: { ...currentBeforeWait.stats?.currentSession, online: false }
+          }
+        }, config, schedulingNowMs)
+      : null;
+    if (admissionPlan && parseIsoTimeMs(admissionPlan.notBeforeAt) > Math.max(
+      parseIsoTimeMs(loopPlan.notBeforeAt), schedulingNowMs + Math.max(0, Number(loopPlan.delayMs || 0))
+    )) {
+      loopPlan = {
+        ...loopPlan, ...admissionPlan,
+        originalReason: loopPlan.reason,
+        previousRunId: loopPlan.previousRunId || '',
+        safetyReason: loopPlan.safetyReason || ''
+      };
+    }
     const explicitNotBeforeMs = parseIsoTimeMs(loopPlan.notBeforeAt);
     const initialPlannedNextRunAtMs = pendingExit
       ? pendingExitDeadlineMs
@@ -3532,7 +3601,8 @@ async function runBrowserlessRunner(config, deps = {}) {
       supervisorErrors: supervisorErrors.slice(-5)
     };
     const exitRecoveryWait = loopPlan.reason === 'exit-recovery';
-    const currentActionReason = resetLoginPointForNextEntry
+    const admissionWait = ['login-transport-backoff', 'server-entry-interval', 'login-interval'].includes(loopPlan.reason);
+    const currentActionReason = resetLoginPointForNextEntry && !admissionWait
       ? 'next-login-point-pending-snapshot-safety'
       : loopPlan.reason;
     updateState({
@@ -4852,7 +4922,13 @@ async function runBrowserlessRunner(config, deps = {}) {
     const activePendingExit = normalizePendingExit(loopState?.runner?.pendingExit, now(), {
       maximumAgeMs: config.pendingExitPersistMaxMs
     });
-    const dailyFirstLoginPlan = activePendingExit ? null : browserlessDailyFirstLoginDelayPlan(
+    const sessionOnline = Boolean(loopState?.stats?.currentSession?.online);
+    const transportRecoveryState = normalizeTransportRecovery(
+      loopState?.runner?.transportRecovery,
+      now(),
+      config
+    );
+    const dailyFirstLoginPlan = activePendingExit || transportRecoveryState ? null : browserlessDailyFirstLoginDelayPlan(
       loopState,
       config,
       now()
@@ -4862,12 +4938,6 @@ async function runBrowserlessRunner(config, deps = {}) {
       if (stopped) return stopped;
       continue;
     }
-    const sessionOnline = Boolean(loopState?.stats?.currentSession?.online);
-    const transportRecoveryState = normalizeTransportRecovery(
-      loopState?.runner?.transportRecovery,
-      now(),
-      config
-    );
     const loginIntervalPlan = !activePendingExit && !transportRecoveryState
       ? browserlessLoginIntervalDelayPlan(loopState, config, now())
       : null;
@@ -5074,7 +5144,8 @@ async function runBrowserlessRunner(config, deps = {}) {
     if (!loginPointProvided && config.controlMode === 'read-only') {
       let bootstrap;
       let bootstrapSnapshotPayload = null;
-      const bootstrapDailyFirstLogin = isFirstBrowserlessLoginOfDay(readBrowserlessStateFile(stateFile), now());
+      const stateBeforeBootstrap = readBrowserlessStateFile(stateFile);
+      const bootstrapDailyFirstLogin = isFirstBrowserlessLoginOfDay(stateBeforeBootstrap, now());
       const observeBootstrapSnapshotPayload = (payload, detail = {}) => {
         const result = observeSnapshotPayload(payload, detail);
         const carried = snapshotCarryRecord(payload, detail);
@@ -5127,7 +5198,17 @@ async function runBrowserlessRunner(config, deps = {}) {
       }
       endGameplaySnapshotSession(bootstrap?.reason || bootstrap?.error || 'login-point-bootstrap-finish');
       if (runnerResultConfirmedLeave({ canary: bootstrap })) mapTrailTracker.clear();
-      const learned = learnedLoginPointFromCanary(bootstrap);
+      const bootstrapAdmission = reconcileLoginAdmission((liveState || persisted).runner?.loginAdmission, {
+        canary: bootstrap, previousState: stateBeforeBootstrap, config, nowMs: now(),
+        confirmedLeave: runnerResultConfirmedLeave({ canary: bootstrap }),
+        confirmedLeaveSelf: lastLeaveResponseFromCanary(bootstrap)
+      });
+      const bootstrapAdmissionPatch = { runner: { loginAdmission: bootstrapAdmission } };
+      updateState(bootstrapAdmissionPatch);
+      patchLiveState(bootstrapAdmissionPatch);
+      const learned = learnedLoginPointFromCanary(bootstrap, {
+        point: loginPointFromAnyState(stateBeforeBootstrap), userId: config.userId, nowMs: now()
+      });
       if (learned.loginPoint) {
         updateState({
           loginPointSafety: {
@@ -5196,7 +5277,8 @@ async function runBrowserlessRunner(config, deps = {}) {
         now(),
         { maximumAgeMs: config.pendingExitPersistMaxMs }
       );
-      const dailyFirstLoginBypassAllowed = !pendingExitBeforeLogin && !activeTransportRecovery;
+      const serverEntryAlreadyObserved = serverEntryObservedToday(stateBeforeCanary, now());
+      const dailyFirstLoginBypassAllowed = !pendingExitBeforeLogin && !activeTransportRecovery && !serverEntryAlreadyObserved;
       const dailyFirstLoginToday = isFirstBrowserlessLoginOfDay(stateBeforeCanary, now());
       const bypassPreLoginSafetyReason = dailyFirstLoginBypassAllowed && dailyFirstLoginToday
         ? 'daily-first-login-invulnerability'
@@ -5204,7 +5286,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       if (dailyFirstLoginToday && !dailyFirstLoginBypassAllowed) {
         logStore.append('runner', 'login-point-safety-bypass-suppressed', {
           bypassKind: 'daily-first-login',
-          suppressedBy: pendingExitBeforeLogin ? 'pending-exit' : 'transport-recovery',
+          suppressedBy: pendingExitBeforeLogin ? 'pending-exit' : (activeTransportRecovery ? 'transport-recovery' : 'server-entry-already-observed'),
           exitAttemptId: pendingExitBeforeLogin?.exitAttemptId || '',
           recoveryAttemptId: activeTransportRecovery?.recoveryId || ''
         });
@@ -5326,7 +5408,9 @@ async function runBrowserlessRunner(config, deps = {}) {
     } catch (err) {
       recordSupervisorError(err, { operation: 'combat-battle-log-flush' });
     }
-    const { finalSelf, loginPoint: learnedLoginPoint } = learnedLoginPointFromCanary(canary);
+    const { finalSelf, loginPoint: learnedLoginPoint } = learnedLoginPointFromCanary(canary, {
+      point: loginPointFromAnyState(stateBeforeCanary), userId: config.userId, nowMs: now()
+    });
     const previousPendingExit = stateBeforeCanary?.runner?.pendingExit || null;
     const snapshotClearedPendingExit = canary?.recovery?.pendingExitResolution === 'fresh-snapshot-self-absent';
     const derivedPendingExit = snapshotClearedPendingExit
@@ -5381,7 +5465,10 @@ async function runBrowserlessRunner(config, deps = {}) {
     if (sourceIpLoginSucceeded) {
       markSourceIpLoginSuccess(canary);
     }
-    if (runnerResultConfirmedLeave(result)) {
+    if (runnerResultConfirmedLeave(result) && !sourceIpLoginSucceeded
+      && (sourceIpLoginAttempted || canary?.entry?.attemptedAt)) {
+      markSourceIpLoginFailure(canary?.error || 'unconfirmed-entry-after-leave', canary);
+    } else if (runnerResultConfirmedLeave(result)) {
       clearSourceIpLifecycle({
         sourceIpPreflight: {
           ...sourceIpPreflightAfterCanary,
@@ -5463,6 +5550,11 @@ async function runBrowserlessRunner(config, deps = {}) {
     const shortcutCounters = shortcutTriggered
       ? browserlessLoginPointReloginShortcutCounters(finalStateBase, shortcutTriggeredAtMs)
       : null;
+    const loginAdmission = reconcileLoginAdmission(finalStateBase.runner?.loginAdmission, {
+      canary, previousState: stateBeforeCanary, config, nowMs: now(),
+      confirmedLeave: runnerResultConfirmedLeave(result),
+      confirmedLeaveSelf: lastLeaveResponseFromCanary(canary)
+    });
     const finalState = mergeState(finalStateBase, {
       ...finalDecisionPatch,
       ...(safetyEvents.length ? {
@@ -5473,6 +5565,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         running: !config.once,
         mode: nextPendingExit ? 'exit-recovery' : (config.controlMode || 'read-only'),
         pendingExit: nextPendingExit,
+        loginAdmission,
         transportRecovery: (transportRecoveryRecovered || canary?.safety?.event?.reason === 'transport-recovery-deadline-leave')
           ? null
           : activeTransportRecovery,
@@ -5555,6 +5648,15 @@ async function runBrowserlessRunner(config, deps = {}) {
       liveStatePersistencePending = false;
     }
     const writtenFinalState = writeState(finalState);
+    if (JSON.stringify(loginAdmission) !== JSON.stringify(normalizeLoginAdmission(finalStateBase.runner?.loginAdmission))) {
+      logStore.append('runner', 'login-admission-reconciled', {
+        runId: canary?.runId || '',
+        confirmedLeave: runnerResultConfirmedLeave(result),
+        loginPointHp: learnedLoginPoint?.hp ?? null,
+        hpSource: learnedLoginPoint?.hpSource || '',
+        ...loginAdmission
+      });
+    }
     const finalLastLoginAt = String(writtenFinalState?.runner?.lastLoginAt || '');
     const ackAtMs = now();
     for (const patch of pendingLoginSuccessStatePatches.splice(0)) {
@@ -7853,6 +7955,8 @@ async function runBrowserlessRunnerSelfTest() {
   try {
     const runnerStateTransitions = await require('./runner-state-transition-self-test')
       .runBrowserlessRunnerStateTransitionSelfTest();
+    const loginAdmission = await require('./login-admission-self-test').runLoginAdmissionSelfTest();
+    const wsConnectRecovery = await require('./ws-connect-recovery-self-test').runWsConnectRecoverySelfTest();
     const statusRender = await require('./status-render-self-test').runBrowserlessStatusRenderSelfTest();
     const snapshotAudit = runSnapshotAuditSelfTest();
     const remoteProfitWorker = await runRemoteProfitWorkerSelfTest();
@@ -10870,6 +10974,8 @@ async function runBrowserlessRunnerSelfTest() {
         && sourceIpPreflight.ok
         && sourceIpPreflightRunner.ok
         && runnerStateTransitions.ok
+        && loginAdmission.ok
+        && wsConnectRecovery.ok
         && statusRender.ok
         && loginSuccessStatePatch.ok
         && criticalLatencyExitRegression.ok
@@ -10987,6 +11093,8 @@ async function runBrowserlessRunnerSelfTest() {
       sourceIpPreflight,
       sourceIpPreflightRunner,
       runnerStateTransitions,
+      loginAdmission,
+      wsConnectRecovery,
       statusRender,
       loginSuccessStatePatch,
       criticalLatencyExitRegression,
