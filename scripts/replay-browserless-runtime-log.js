@@ -15,6 +15,7 @@ const {
 } = require('../src/node/browserless/decision-adapter');
 const { evaluateBrowserlessSafety } = require('../src/node/browserless/safety-controller');
 const { actionPriorityBand } = require('../src/strategy/action-priority');
+const { ownedMovementDirectionCore, selectDodgeThreatDirectionCore } = require('../src/strategy/combat-movement-ownership');
 const { applyFinalActionArbitrationCore } = require('../src/strategy/action-arbitration');
 const {
   evaluateConfirmedCombatHpExitCore,
@@ -3751,6 +3752,129 @@ function replayMovementCommandLatency(options = {}) {
     accepted: replayDataAvailable && safetyAccepted
   };
   return result;
+}
+
+// One-command counterfactual, reset to the recorded self position each frame.
+// Later attribution supplies an offline projectile oracle, never decision input.
+function dodgeOwnershipProjectileMiss(self, tick, bullet, direction, delayTicks) {
+  let integer = Infinity;
+  let swept = Infinity;
+  let previous = null;
+  const speed = direction.dx && direction.dy ? 35 : 50;
+  const remaining = Math.min(30, Number(bullet.expireTick) - tick);
+  for (let dt = 0; dt <= remaining; dt += 1) {
+    const held = Math.min(dt, delayTicks);
+    const moving = Math.max(0, dt - delayTicks);
+    const bulletAge = tick + dt - Number(bullet.currentTick);
+    const x = self.x + self.vx * held + direction.dx * speed * moving
+      - (bullet.x + bulletAge * bullet.speed * bullet.direction.dx);
+    const y = self.y + self.vy * held + direction.dy * speed * moving
+      - (bullet.y + bulletAge * bullet.speed * bullet.direction.dy);
+    integer = Math.min(integer, Math.hypot(x, y));
+    swept = Math.min(swept, integer);
+    if (previous) {
+      const dx = x - previous.x;
+      const dy = y - previous.y;
+      const length2 = dx * dx + dy * dy;
+      const t = length2 ? Math.max(0, Math.min(1, -(previous.x * dx + previous.y * dy) / length2)) : 0;
+      swept = Math.min(swept, Math.hypot(previous.x + t * dx, previous.y + t * dy));
+    }
+    previous = { x, y };
+  }
+  return { integer, swept };
+}
+
+function replayDodgeOwnership(options) {
+  const rows = (options.rows || selectedEntries(options)).filter(row => row.entry.type === 'combat-live'
+    && row.detail.self && row.detail.target
+    && (!options.targetId || String(row.detail.target.userId) === options.targetId));
+  const bullets = new Map();
+  for (const { detail } of rows) {
+    for (const bullet of detail.metrics?.combatHpLossAttribution?.candidateBullets || []) {
+      if (bullet.trajectoryEvidence && bullet.expireTick !== null && bullet.direction
+        && [bullet.x, bullet.y, bullet.speed, bullet.currentTick, bullet.createdTick, bullet.expireTick,
+          bullet.direction.dx, bullet.direction.dy].every(value => typeof value === 'number' && Number.isFinite(value))) {
+        bullets.set(String(bullet.bulletId), bullet);
+      }
+    }
+  }
+  let ownedFrames = 0;
+  let correctedFrames = 0;
+  let oldRiskSum = 0;
+  let newRiskSum = 0;
+  let improvedRiskFrames = 0;
+  let worsenedRiskFrames = 0;
+  const physical = new Map();
+  const riskSamples = [];
+  for (const row of rows) {
+    const { detail } = row;
+    const movement = detail.movement || {};
+    const owner = movement.dodgeOwnership;
+    if (!owner?.active || movement.ownership?.owner !== 'emergency-dodge') continue;
+    ownedFrames += 1;
+    const field = movement.dodge?.threatField || [];
+    const residualOverride = owner.currentShotAvoidability === 'residual-threat'
+      && movement.residualThreatLease?.active && field.some(item => Number(item.directHits || 0) > 0);
+    let evaluatedDodge = field[0];
+    if (residualOverride && evaluatedDodge.directHits === 0) {
+      const sign = detail.target.vx || detail.target.vy ? 1 : -1;
+      const tangent = { dx: Math.sign(-(detail.target.y - detail.self.y) * sign),
+        dy: Math.sign((detail.target.x - detail.self.x) * sign) };
+      const candidate = distanceAwareReplaySelectedThreat(field, tangent);
+      if (candidate?.directHits === 0 && candidate.minCPA >= evaluatedDodge.minCPA * 0.92) evaluatedDodge = candidate;
+    }
+    const direction = residualOverride ? selectDodgeThreatDirectionCore({
+      // With risk present, the sorted recorded threat field supplies the same
+      // minimum-risk candidate. No future attribution enters this selection.
+      dodge: { ...evaluatedDodge, threatField: field }, residualDirection: owner.direction, hasCollisionBullet: false
+    }) : owner.direction;
+    const corrected = ownedMovementDirectionCore(direction, movement);
+    if (corrected.dx === movement.dx && corrected.dy === movement.dy) continue;
+    correctedFrames += 1;
+    const oldThreat = distanceAwareReplaySelectedThreat(field, movement);
+    const newThreat = distanceAwareReplaySelectedThreat(field, corrected);
+    if (oldThreat && newThreat) {
+      const before = Number(oldThreat.directHits || 0);
+      const after = Number(newThreat.directHits || 0);
+      oldRiskSum += before;
+      newRiskSum += after;
+      improvedRiskFrames += after < before ? 1 : 0;
+      worsenedRiskFrames += after > before ? 1 : 0;
+      if (before !== after && riskSamples.length < 12) riskSamples.push({
+        line: row.line, tick: detail.tick, before, after, corrected,
+        logged: { dx: movement.dx, dy: movement.dy }
+      });
+    }
+    for (const [id, bullet] of bullets) {
+      if (!(bullet.createdTick <= detail.tick && detail.tick < bullet.expireTick)) continue;
+      const sweep = [1, 2, 3, 4, 5].map(delayTicks => ({
+        delayTicks,
+        before: dodgeOwnershipProjectileMiss(detail.self, detail.tick, bullet, movement, delayTicks),
+        after: dodgeOwnershipProjectileMiss(detail.self, detail.tick, bullet, corrected, delayTicks)
+      }));
+      const improves = value => value.before.integer <= 90 && value.before.swept <= 90
+        && value.after.integer > 90 && value.after.swept > 90;
+      const worsens = value => ['integer', 'swept'].some(model => value.before[model] > 90 && value.after[model] <= 90);
+      if (sweep.some(improves) && !sweep.some(worsens)) {
+        const candidate = {
+          line: row.line, tick: detail.tick, bulletId: id, distanceCm: detail.target.distance,
+          logged: { dx: movement.dx, dy: movement.dy }, corrected,
+          improvedDelays: sweep.filter(improves).map(value => value.delayTicks),
+          sweep: sweep.map(value => ({ delayTicks: value.delayTicks,
+            before: Object.fromEntries(Object.entries(value.before).map(([k, v]) => [k, Number(v.toFixed(1))])),
+            after: Object.fromEntries(Object.entries(value.after).map(([k, v]) => [k, Number(v.toFixed(1))])) }))
+        };
+        if (!physical.has(id) || candidate.improvedDelays.length > physical.get(id).improvedDelays.length) physical.set(id, candidate);
+      }
+    }
+  }
+  return {
+    mode: 'dodge-ownership', lines: `${options.startLine}-${options.endLine}`, targetId: options.targetId,
+    frames: rows.length, ownedFrames, correctedFrames, oldRiskSum, newRiskSum, improvedRiskFrames, worsenedRiskFrames,
+    riskSamples, physicalImprovedBulletCount: physical.size, physicalSamples: [...physical.values()].slice(0, 12),
+    limitations: 'Risk sums count frame predictions, not hits. Physical samples cover attributed hit bullets only, hold one command until expiry, and test both integer-tick and swept CPA at 1-5 ticks delay. They do not simulate other bullets, later commands, opponent reactions, damage output or a whole-fight HP total.',
+    accepted: correctedFrames > 0 && newRiskSum < oldRiskSum && physical.size > 0
+  };
 }
 
 function replayDodge(options) {
@@ -7941,6 +8065,39 @@ function replayDistanceAwareCombat(options = {}) {
 
 function runDistanceAwareReplaySelfTest() {
   const checks = [];
+  const ownershipBullet = {
+    bulletId: 'fixture', createdTick: 100, expireTick: 130, currentTick: 100,
+    x: -2137, y: -3523, speed: 500,
+    direction: { dx: 0.598416265313595, dy: 0.8011853552132173 }, trajectoryEvidence: true
+  };
+  const ownershipRows = [{
+    line: 1, entry: { type: 'combat-live' }, detail: {
+      tick: 100, self: { x: 0, y: 0, vx: 35, vy: -35 }, target: { userId: '2', distance: 4120 },
+      movement: { dx: 1, dy: -1, ownership: { owner: 'emergency-dodge' },
+        dodgeOwnership: { active: true, direction: { dx: 0, dy: -1 } },
+        dodge: { threatField: [{ dx: 1, dy: -1, directHits: 1 }, { dx: 0, dy: -1, directHits: 0 }] } },
+      metrics: { combatHpLossAttribution: { candidateBullets: [ownershipBullet] } }
+    }
+  }];
+  const ownershipReplay = replayDodgeOwnership({ rows: ownershipRows, targetId: '2' });
+  const expiredOwnershipRows = structuredClone(ownershipRows);
+  expiredOwnershipRows[0].detail.metrics.combatHpLossAttribution.candidateBullets[0].expireTick = 100;
+  const residualOwnershipRows = structuredClone(ownershipRows);
+  const residualMovement = residualOwnershipRows[0].detail.movement;
+  residualMovement.dodgeOwnership.direction = { dx: 1, dy: -1 };
+  residualMovement.dodgeOwnership.currentShotAvoidability = 'residual-threat';
+  residualMovement.residualThreatLease = { active: true };
+  residualMovement.dodge.threatField.reverse();
+  checks.push({
+    name: 'dodge-ownership-replay-preserves-zero-axis-and-checks-finite-physical-trajectory',
+    passed: ownershipReplay.accepted && ownershipReplay.correctedFrames === 1
+      && ownershipReplay.oldRiskSum === 1 && ownershipReplay.newRiskSum === 0
+      && ownershipReplay.physicalImprovedBulletCount === 1
+      && ownershipReplay.physicalSamples[0].improvedDelays.join(',') === '1,2,3'
+      && replayDodgeOwnership({ rows: residualOwnershipRows, targetId: '2' }).accepted
+      && !replayDodgeOwnership({ rows: expiredOwnershipRows, targetId: '2' }).accepted
+      && !replayDodgeOwnership({ rows: ownershipRows, targetId: 'other' }).accepted
+  });
   const defensiveIntentRows = [
     { line: 1, detail: { target: { userId: '8', combatIntent: 'defensive' }, metrics: { engagementGeneration: 'engagement:test' } } },
     { line: 2, detail: { target: { userId: '8', combatIntent: 'engaged' }, metrics: { engagementGeneration: 'engagement:test' } } },
@@ -8395,6 +8552,7 @@ function runReplay(options) {
   if (options.mode === 'combat-shot-coverage') return replayCombatShotCoverage(options);
   if (options.mode === 'combat-policy') return replayCombatPolicy(options);
   if (options.mode === 'dodge') return replayDodge(options);
+  if (options.mode === 'dodge-ownership') return replayDodgeOwnership(options);
   return replayCombat(options);
 }
 

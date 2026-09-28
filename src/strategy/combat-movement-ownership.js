@@ -9,6 +9,25 @@ function directionOf(value) {
   };
 }
 
+// A zero axis is an explicit stop on that axis, not a missing direction.
+// Keep the selected vector intact when it supersedes another movement owner.
+function ownedMovementDirectionCore(direction, fallback = {}) {
+  return {
+    dx: Number(direction?.dx ?? fallback?.dx ?? 0),
+    dy: Number(direction?.dy ?? fallback?.dy ?? 0)
+  };
+}
+
+function selectDodgeThreatDirectionCore({ contactEntryDodge, dodge, residualDirection, hasCollisionBullet } = {}) {
+  const currentTrajectoryRisk = dodge?.unavoidableCurrentShot === true
+    || (dodge?.threatField || []).some(item => Number(item?.directHits || 0) > 0);
+  // A retained direction cannot displace a current full-trajectory assessment,
+  // even when static CPA did not classify a bullet as an incoming collision.
+  return contactEntryDodge
+    || (residualDirection && !hasCollisionBullet && !currentTrajectoryRisk ? residualDirection : dodge)
+    || { dx: 0, dy: 0 };
+}
+
 function resolveDodgeOwnershipCore(input = {}, options = {}) {
   const nowMs = Number.isFinite(Number(input.nowMs)) ? Number(input.nowMs) : Date.now();
   const previous = input.previous && typeof input.previous === 'object' ? input.previous : null;
@@ -95,6 +114,8 @@ function selectCombatMovementOwnerCore(input = {}) {
 
 module.exports = {
   DEFAULT_DODGE_OWNERSHIP_HOLD_MS,
+  ownedMovementDirectionCore,
+  selectDodgeThreatDirectionCore,
   resolveDodgeOwnershipCore,
   selectCombatMovementOwnerCore
 };

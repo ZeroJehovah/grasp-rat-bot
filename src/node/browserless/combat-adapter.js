@@ -124,6 +124,8 @@ const {
   evaluateCoverCandidateCore
 } = require('../../strategy/dual-target-cover');
 const {
+  ownedMovementDirectionCore,
+  selectDodgeThreatDirectionCore,
   resolveDodgeOwnershipCore,
   selectCombatMovementOwnerCore
 } = require('../../strategy/combat-movement-ownership');
@@ -3640,11 +3642,12 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     threatGeneration: dodgeThreatGeneration,
     previous: options.previousDodgeOwnership || null,
     currentTick: options.currentTick,
-    direction: contactEntryDodge
-      || (residualThreatActive && !threatGenerationIds.length
-        ? residualThreatLease?.direction || dodge
-        : dodge)
-      || { dx: 0, dy: 0 }
+    direction: selectDodgeThreatDirectionCore({
+      contactEntryDodge,
+      dodge,
+      residualDirection: residualThreatActive ? residualThreatLease?.direction : null,
+      hasCollisionBullet: threatGenerationIds.length > 0
+    })
   }, {
     dodgeOwnershipHoldMs: options.combatDodgeOwnershipHoldMs
   });
@@ -4230,8 +4233,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       const dodgeReason = effectiveDodge?.reason || dodge?.reason || 'direct-threat-dodge';
       movement = {
         ...movement,
-        dx: Number(emergencyDirection.dx || movement.dx || 0),
-        dy: Number(emergencyDirection.dy || movement.dy || 0),
+        ...ownedMovementDirectionCore(emergencyDirection, movement),
         reason: dodgeReason,
         modifiers: Array.from(new Set([...(movement.modifiers || []), 'dodge']))
       };
@@ -6197,9 +6199,10 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     stateful.combatTarget.ballisticClose = movement?.ballisticClose?.state || null;
     stateful.combatTarget.lootRacePositioning = movement?.lootRacePositioning || null;
     if (movement?.dodgeOwnership?.active === true) {
+      const ownedDirection = ownedMovementDirectionCore(movement.dodgeOwnership.direction, movement.dodge);
       stateful.combatTarget.lastDodgeDirection = {
-        dx: Math.sign(Number(movement.dodgeOwnership.direction?.dx || movement.dodge?.dx || 0)),
-        dy: Math.sign(Number(movement.dodgeOwnership.direction?.dy || movement.dodge?.dy || 0))
+        dx: Math.sign(ownedDirection.dx),
+        dy: Math.sign(ownedDirection.dy)
       };
     }
     if (stateful.combatEngagements && stateful.combatTarget.id !== null && stateful.combatTarget.id !== undefined) {
@@ -7082,8 +7085,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     if (emergencyDirection) {
       movement = {
         ...movement,
-        dx: Number(emergencyDirection.dx || movement.dx || 0),
-        dy: Number(emergencyDirection.dy || movement.dy || 0),
+        ...ownedMovementDirectionCore(emergencyDirection, movement),
         reason: movement?.reason || movement?.dodge?.reason || 'direct-threat-dodge',
         modifiers: Array.from(new Set([...(movement.modifiers || []), 'dodge']))
       };

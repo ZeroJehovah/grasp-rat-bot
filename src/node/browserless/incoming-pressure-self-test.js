@@ -6,6 +6,110 @@ const {
   buildBrowserlessCombatDryRun,
   buildCombatMovementPlan
 } = require('./combat-adapter');
+const { ownedMovementDirectionCore, selectDodgeThreatDirectionCore } = require('../../strategy/combat-movement-ownership');
+
+function runOwnedMovementDirectionSelfTest() {
+  const vectors = [
+    { dx: 0, dy: 1 }, { dx: 0, dy: -1 },
+    { dx: 1, dy: 0 }, { dx: -1, dy: 0 },
+    { dx: 0, dy: 0 }, { dx: -1, dy: 1 }
+  ];
+  for (const direction of vectors) {
+    assert.deepStrictEqual(ownedMovementDirectionCore(direction, { dx: 1, dy: -1 }), direction);
+  }
+  assert.deepStrictEqual(ownedMovementDirectionCore({ dx: 0 }, { dx: 1, dy: -1 }), { dx: 0, dy: -1 });
+  assert.deepStrictEqual(ownedMovementDirectionCore(null, null), { dx: 0, dy: 0 });
+  const residualDirection = { dx: 0, dy: -1 };
+  const currentDodge = { dx: -1, dy: -1, threatField: [{ dx: -1, dy: -1, directHits: 1 }] };
+  assert.strictEqual(selectDodgeThreatDirectionCore({ dodge: currentDodge, residualDirection, hasCollisionBullet: false }), currentDodge);
+  assert.strictEqual(selectDodgeThreatDirectionCore({ dodge: { dx: 1, dy: 1 }, residualDirection, hasCollisionBullet: false }), residualDirection);
+  assert.strictEqual(selectDodgeThreatDirectionCore({ dodge: currentDodge, residualDirection, hasCollisionBullet: true }), currentDodge);
+  const contactEntryDodge = { dx: 1, dy: 0 };
+  assert.strictEqual(selectDodgeThreatDirectionCore({ contactEntryDodge, dodge: currentDodge, residualDirection }), contactEntryDodge);
+
+  // Rotate a real incoming projectile scenario through all four quadrants.
+  // The late-shot hold used to leak the old axis into the chosen cardinal Dodge.
+  for (let rotation = 0; rotation < 4; rotation += 1) {
+    const rotate = (x, y) => {
+      for (let i = 0; i < rotation; i += 1) [x, y] = [-y, x];
+      return { x: x || 0, y: y || 0 };
+    };
+    const velocity = rotate(-35, 0);
+    const targetPoint = rotate(-4000, -3000);
+    const self = {
+      user_id: 1, x: 0, y: 0, vx: velocity.x, vy: velocity.y,
+      hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000,
+      current_join_mode: 'Active', moving: true
+    };
+    const target = {
+      user_id: 2, ...targetPoint, vx: 0, vy: 0, hp: 100, drop: 100,
+      current_join_mode: 'Active', active: true
+    };
+    const decisionState = {
+      combatTarget: {
+        id: 2, at: 5000, firstSeenAt: 4000, hp: 100, firstHp: 100, minHp: 100,
+        originIntent: 'profit', intent: 'profit', combatRole: 'primary', self
+      },
+      profitMission: {
+        active: true, type: 'enemy', targetId: '2',
+        navigationTarget: { ...target, authority: 'realtime' }
+      }
+    };
+    const plan = buildCombatMovementPlan(self, { ...target, distance: 5000 }, [{
+      bulletId: 'fixture', ownerId: 2, x: target.x / 5, y: target.y / 5,
+      vx: -target.x / 10, vy: -target.y / 10, speed: 500,
+      direction: { dx: -target.x / 5000, dy: -target.y / 5000 },
+      incoming: true, collisionPath: true, distance: 1000, timeToImpact: 100,
+      currentTick: 100, createdTick: 90, expireTick: 120
+    }], {
+      nowMs: 5000, currentTick: 100, combatDistanceAwareDodgeEnabled: true, combatBulletHitRadiusCm: 90,
+      movementExecutionTiming: { sampleCount: 10, medianTicks: 2, p90Ticks: 3 },
+      combatTargetState: { id: 2, firstSeenAt: 4000, motionSamples: [] }
+    });
+    assert.deepStrictEqual({ dx: plan.dx, dy: plan.dy }, plan.dodgeOwnership.direction,
+      'movement planning must preserve the cardinal Dodge before final arbitration');
+    const retainedPlan = buildCombatMovementPlan(self, { ...target, distance: 5000 }, [{
+      bulletId: 'fixture', ownerId: 2, x: target.x / 5, y: target.y / 5,
+      vx: -target.x / 10, vy: -target.y / 10, speed: 500,
+      direction: { dx: -target.x / 5000, dy: -target.y / 5000 },
+      incoming: true, collisionPath: true, distance: 1000, timeToImpact: 100,
+      currentTick: 100, createdTick: 90, expireTick: 120
+    }], {
+      nowMs: 5000, currentTick: 100, combatDistanceAwareDodgeEnabled: true, combatBulletHitRadiusCm: 90,
+      movementExecutionTiming: { sampleCount: 10, medianTicks: 2, p90Ticks: 3 },
+      combatTargetState: { id: 2, firstSeenAt: 4000, motionSamples: [] },
+      residualThreatLease: { active: true, ageMs: 50, leaseMs: 2500, direction: { dx: 1, dy: 1 } }
+    });
+    assert.deepStrictEqual(retainedPlan.dodgeOwnership.direction, plan.dodgeOwnership.direction,
+      'fresh trajectory risk must displace a retained direction without static collision evidence');
+    const result = buildBrowserlessCombatDryRun({
+      userId: 1,
+      realtime: {
+        tick: 100, receivedAtMs: 5000, frameAgeMs: 0, self,
+        entities: [self, target],
+        bullets: [{
+          bullet_id: 1, owner_id: 2, start_x: target.x, start_y: target.y,
+          target_x: 0, target_y: 0, created_tick: 92, expire_tick: 122, speed: 500
+        }]
+      }
+    }, {
+      nowMs: 5000, controlMode: 'profit-live', combatEnabled: true, liveCombatEnabled: true,
+      combatAttackRange: 14500, combatDistanceAwareDodgeEnabled: true, combatBulletHitRadiusCm: 90,
+      movementExecutionTiming: { sampleCount: 10, medianTicks: 2, p90Ticks: 3 },
+      decisionState, profitMission: decisionState.profitMission
+    });
+    const selected = result.movement.dodgeOwnership.direction;
+    assert.strictEqual(result.movement.ownership.owner, 'emergency-dodge');
+    assert.strictEqual(Math.abs(selected.dx) + Math.abs(selected.dy), 1, 'fixture selects a cardinal Dodge');
+    assert.deepStrictEqual({ dx: result.movement.dx, dy: result.movement.dy }, selected,
+      'final combat movement must preserve both axes of the selected Dodge');
+    assert.deepStrictEqual(decisionState.combatTarget.lastDodgeDirection, selected,
+      'residual continuation must remember the same vector');
+    assert.strictEqual(result.shooting.wouldShoot, true, 'Dodge correction must preserve in-range fire');
+    assert.strictEqual(result.exit, null);
+  }
+  return { ok: true, cases: 16 };
+}
 
 function buildIncomingPressureFixture({ nowMs = 10000, selfHp = 91, stamina = 3200 } = {}) {
   const self = {
@@ -180,6 +284,7 @@ function buildIncomingPressureFixture({ nowMs = 10000, selfHp = 91, stamina = 32
 }
 
 function runIncomingPressureSelfTest() {
+  const ownedMovementDirection = runOwnedMovementDirectionSelfTest();
   const fixture = buildIncomingPressureFixture();
   const result = buildBrowserlessCombatDryRun(fixture.state, fixture.options);
   assert.strictEqual(result.target?.userId, 202, 'secondary must remain the realtime combat target');
@@ -315,7 +420,8 @@ function runIncomingPressureSelfTest() {
 
   return {
     ok: true,
-    cases: 6,
+    cases: 6 + ownedMovementDirection.cases,
+    ownedMovementDirection,
     pressureEvidence: result.incomingPressureEvidence,
     primaryFinishRace: result.shooting.primaryFinishRace,
     residualMovement: {
