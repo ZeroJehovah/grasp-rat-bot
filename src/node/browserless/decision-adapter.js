@@ -12464,6 +12464,8 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
   const previousProfitSelectionKnown = options.profitSelectionKnown;
   const hadRecoveryOwnsCurrentOpportunity = Object.prototype.hasOwnProperty.call(options, 'recoveryOwnsCurrentOpportunity');
   const previousRecoveryOwnsCurrentOpportunity = options.recoveryOwnsCurrentOpportunity;
+  const hadRecoveryNavigationPaused = Object.prototype.hasOwnProperty.call(options, 'recoveryNavigationPaused');
+  const previousRecoveryNavigationPaused = options.recoveryNavigationPaused;
   const plannerOpportunity = stateful.opportunityChoice || stateful.currentOpportunity || null;
   const plannerRecoveryOwnsCurrentOpportunity = Boolean(
     stateful.recoveryOwnsCurrentOpportunity?.active === true
@@ -12477,6 +12479,7 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
   options.selectedProfitCombatTargetId = plannerProfitCombatTargetId;
   options.profitSelectionKnown = Boolean(plannerOpportunity);
   options.recoveryOwnsCurrentOpportunity = plannerRecoveryOwnsCurrentOpportunity;
+  options.recoveryNavigationPaused = stateful.recoveryOwnsCurrentOpportunity?.navigationPaused === true;
   let combat;
   try {
     combat = buildCombatDecision(input, stateful, options);
@@ -12489,6 +12492,8 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     else delete options.profitSelectionKnown;
     if (hadRecoveryOwnsCurrentOpportunity) options.recoveryOwnsCurrentOpportunity = previousRecoveryOwnsCurrentOpportunity;
     else delete options.recoveryOwnsCurrentOpportunity;
+    if (hadRecoveryNavigationPaused) options.recoveryNavigationPaused = previousRecoveryNavigationPaused;
+    else delete options.recoveryNavigationPaused;
   }
   let realtimeMarginalRoiStopLoss = null;
   let nonThreatEconomicStopLoss = evaluateNonThreatCombatEconomicStopLoss(
@@ -15659,6 +15664,9 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   }
   rememberEasyKillApproach(action, input, stateful, options);
   stateful.lastDecisionAction = cloneJson(action);
+  if (previousActionWasRecoveryCore(action)) {
+    stateful.recoveryOwnsCurrentOpportunity = { active: true, navigationPaused: true, targetId: '', at: input.nowMs };
+  }
   const dropRaceEvents = consumeDropRaceLifecycles(input, stateful, action);
   const easyKillCandidateDiagnostics = summarizeEasyKillCandidateDiagnostics(
     input,
@@ -16098,6 +16106,21 @@ function createBrowserlessDecisionAdapter(options = {}) {
           decisionState.profitEscortContinuityLastRelease = cloneJson(incomingRelease);
         }
       }
+      // Recovery owns navigation independently of the realtime combat target.
+      // The final action can select recovery even when the preliminary profit
+      // comparison retained a mission, so carry that final verdict before the
+      // target-mismatch guard below. Defensive combat keeps its own authority.
+      const plannerAction = plannerState.lastDecisionAction || decision?.action || null;
+      if (previousActionWasRecoveryCore(plannerAction)) {
+        decisionState.recoveryOwnsCurrentOpportunity = {
+          active: true,
+          navigationPaused: true,
+          targetId: '',
+          at: Date.parse(decision?.at || '') || Number(plannerState.recoveryOwnsCurrentOpportunity?.at || 0)
+        };
+      } else if (Object.prototype.hasOwnProperty.call(plannerState, 'recoveryOwnsCurrentOpportunity')) {
+        decisionState.recoveryOwnsCurrentOpportunity = cloneJson(plannerState.recoveryOwnsCurrentOpportunity || null);
+      }
       const proposedChoice = plannerState.opportunityChoice ?? null;
       const currentCombatTargetId = targetIdForAttackHistory(decisionState.combatTarget);
       const proposedTargetId = opportunityChoiceTargetId(proposedChoice);
@@ -16113,9 +16136,6 @@ function createBrowserlessDecisionAdapter(options = {}) {
       decisionState.opportunityChoice = cloneJson(proposedChoice);
       decisionState.opportunitySwitchLock = cloneJson(plannerState.switchLock || null);
       decisionState.lastDecisionAction = cloneJson(plannerState.lastDecisionAction || decision?.action || null);
-      if (Object.prototype.hasOwnProperty.call(plannerState, 'recoveryOwnsCurrentOpportunity')) {
-        decisionState.recoveryOwnsCurrentOpportunity = cloneJson(plannerState.recoveryOwnsCurrentOpportunity || null);
-      }
       const currentGuardAt = Number(decisionState.recoveryContactGuard?.observedAt || 0);
       const plannerGuardAt = Number(plannerState.recoveryContactGuard?.observedAt || 0);
       if (plannerGuardAt >= currentGuardAt) {

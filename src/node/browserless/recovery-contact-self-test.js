@@ -247,6 +247,8 @@ function runRecoveryContactSelfTest() {
       decisionOptions(1000)
     );
     assert.strictEqual(recoveryWins.reason, 'wait-for-full-stamina-and-hp');
+    assert.strictEqual(recoveryWins.stateful.recoveryOwnsCurrentOpportunity.navigationPaused, true);
+    assert.notStrictEqual(profitWins.stateful.recoveryOwnsCurrentOpportunity?.navigationPaused, true);
     assert.strictEqual(recoveryWins.action.recoveryPriority.equivalentDrop, 40);
     assert.strictEqual(recoveryWins.action.recoveryPriority.profitDrop, 39);
     assert.strictEqual(profitWins.action.kind, 'seek-enemy');
@@ -658,6 +660,82 @@ function runRecoveryContactSelfTest() {
       '低血量恢复时确认活动玩家持续接近，主动退出'
     );
     cases.push('panel-recovery-contact-reason-follows-structured-trigger');
+  }
+
+  {
+    const adapter = createBrowserlessDecisionAdapter(decisionOptions(1000));
+    const mission = {
+      type: 'remote-player-navigation', targetId: '99', key: 'remote-player-navigation:99',
+      navigationTarget: { id: 99, x: 60000, y: -60000, authority: 'snapshot-navigation' },
+      createdAt: 1000, updatedAt: 1000, expiresAt: 20000
+    };
+    adapter.patchState({
+      profitMission: mission,
+      combatTarget: { id: '8', combatRole: 'secondary', intent: 'secondary-proximity', startedAt: 1000 },
+      opportunityChoice: { type: 'remote-player-navigation', id: 99 },
+      lastDecisionAction: { kind: 'combat-live' }
+    });
+    const synced = adapter.syncPlannerDecision({
+      action: recoveryAction(),
+      stateful: {
+        lastDecisionAction: recoveryAction(),
+        opportunityChoice: { type: 'remote-player-navigation', id: 99 },
+        profitMission: mission,
+        recoveryOwnsCurrentOpportunity: null
+      }
+    });
+    assert.strictEqual(synced, false, 'different profit choice must not replace the realtime combat target');
+    assert.strictEqual(adapter.getState().combatTarget.id, '8');
+    assert.strictEqual(adapter.getState().recoveryOwnsCurrentOpportunity?.active, true,
+      'final recovery must cross the worker boundary even when profit-choice sync is rejected');
+    for (let tick = 101; tick <= 104; tick += 1) {
+      const nowMs = 1000 + (tick - 100) * 50;
+      const result = adapter.evaluateRealtime(state({ nowMs, tick, hp: 70, targetX: 14000, targetVx: 50, targetDrop: 9 }), { nowMs });
+      assert.strictEqual(Number(result.combat.movement.dx), 0);
+      assert.strictEqual(Number(result.combat.movement.dy), 0);
+      assert.strictEqual(result.combat.shooting.wouldShoot, false);
+    }
+    adapter.syncPlannerDecision({
+      action: { kind: 'coin' },
+      stateful: { opportunityChoice: { type: 'remote-player-navigation', id: 99 }, profitMission: mission, recoveryOwnsCurrentOpportunity: null }
+    });
+    assert.strictEqual(adapter.getState().recoveryOwnsCurrentOpportunity, null,
+      'a later planner release must clear recovery even while the secondary remains');
+    const resumed = adapter.evaluateRealtime(
+      state({ nowMs: 1250, tick: 105, hp: 70, targetX: 14000, targetVx: 50, targetDrop: 9 }), { nowMs: 1250 }
+    );
+    assert.strictEqual(resumed.combat.movement.dx, 1);
+    assert.strictEqual(resumed.combat.movement.dy, -1);
+    cases.push('recovery-crosses-combat-sync-guard-and-stops-retained-profit-navigation');
+  }
+
+  {
+    const mission = {
+      type: 'remote-player-navigation', targetId: '99', key: 'remote-player-navigation:99',
+      navigationTarget: { id: 99, x: 60000, y: -60000, authority: 'snapshot-navigation' },
+      createdAt: 1000, updatedAt: 1000, expiresAt: 20000
+    };
+    const decisionState = {
+      profitMission: mission,
+      recoveryOwnsCurrentOpportunity: { active: true, navigationPaused: true, at: 1000 },
+      lastDecisionAction: recoveryAction()
+    };
+    const result = buildBrowserlessRealtimeControlDecision(
+      state({ hp: 70, targetX: 14000, targetVx: 50, targetDrop: 9 }),
+      decisionState, decisionOptions(1000)
+    );
+    assert.strictEqual(Number(result.combat.movement.dx), 0);
+    assert.strictEqual(Number(result.combat.movement.dy), 0);
+    assert.strictEqual(result.combat.target?.combatRole, 'secondary');
+    assert.strictEqual(result.combat.movement.secondaryTarget?.mainTargetVisible, false);
+    assert.strictEqual(decisionState.profitMission.targetId, '99', 'pause must preserve the retained mission');
+    const firing = buildBrowserlessRealtimeControlDecision(
+      state({ nowMs: 1050, tick: 101, hp: 70, targetX: 5000, targetVx: 0, targetDrop: 9, targetFiring: true, withBullet: true }),
+      decisionState, decisionOptions(1050)
+    );
+    assert.notStrictEqual(firing.action.kind, 'recover', 'incoming safety still preempts recovery');
+    assert.strictEqual(firing.combat.shooting.wouldShoot, true, 'recovery cannot block authorized defensive fire');
+    cases.push('recovery-pauses-mission-movement-without-blocking-defensive-fire');
   }
 
   return { ok: true, cases };

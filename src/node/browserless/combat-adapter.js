@@ -6165,7 +6165,11 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     pendingVelocityCommands: state?.command?.movement?.pendingVelocityCommands || options.pendingVelocityCommands,
     realtimeStateObservedAtMs: realtime.receivedAtMs,
     combatDistanceAwareDodgeEnabled: options.combatDistanceAwareDodgeEnabled === true,
-    profitMission: options.profitMission || stateful?.profitMission || null,
+    // A committed planner recovery pauses navigation, while the preliminary
+    // recovery/profit comparison must not suppress a newly authorized escort.
+    profitMission: options.recoveryNavigationPaused === true
+      ? null
+      : (options.profitMission || stateful?.profitMission || null),
     profitEscortContinuity: stateful?.profitEscortContinuity || null,
     profitEscortContinuityLastRelease: stateful?.profitEscortContinuityLastRelease || null,
     distanceAwareDodgeState: stateful?.distanceAwareDodgeState || null,
