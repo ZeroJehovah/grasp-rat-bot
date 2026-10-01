@@ -1580,6 +1580,8 @@ function renderBrowserlessWebPanel() {
       'combat-no-damage-generation-limit-leave': '普通收益战斗持续无伤害达到全局上限，主动退出止损',
       'defensive-exchange-no-progress-leave': '防守交战持续无进展，撤退后仍无法脱离，主动退出',
       'combat-exit-poor-exchange': '持续交战的伤害交换明显不利，主动退出',
+      'uncommitted-defense-poor-exchange-leave': '无待完成收益的防御交战持续严重亏血，主动退出',
+      'invulnerable-primary-pressure-wait': '持续承伤且主目标仍无敌，暂缓接近并继续防御',
       'injury-leave': '角色受伤后为避免继续掉血，主动退出',
       'pursuit-leave': '被危险玩家持续追击，主动退出',
       'profit-live-snapshot-active-threat': '附近玩家有活动威胁证据，退出',

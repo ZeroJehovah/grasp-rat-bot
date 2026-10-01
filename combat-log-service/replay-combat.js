@@ -17,6 +17,7 @@ const {
 const { recoveryEngagedThreatPolicy } = require('../src/strategy/recovery-contact-guard');
 const { rewardFinishBackAwaySuppressionPolicy } = require('../src/strategy/combat-movement');
 const { COMBAT_CONSTANTS } = require('../src/strategy/combat-constants');
+const { runCombatOpportunityReplay, runCombatOpportunityReplaySelfTest } = require('./combat-opportunity-replay');
 
 const DEFAULTS = {
   hitRadiusCm: 90,
@@ -672,6 +673,14 @@ function normalizeBrowserlessCombatLiveEntry(entry, state = {}) {
       outOfRangeHold: detail.outOfRangeHold || null
     },
     combatMetrics: metrics,
+    combatOpportunityReplay: {
+      self: detail.self, target: detail.target, primary: primarySource, movement,
+      combatPhase: detail.combatPhase, behavior: detail.behavior, acceptedShots: Number(metrics.acceptedShots || 0),
+      engagedMs: Number(detail.combatPhase?.engagedMs || detail.durationMs || 0),
+      pressureActive: detail.incomingPressureEvidence?.active === true,
+      finishOpportunity: shooting.primaryFinishRace?.active === true,
+      latestOpponentShotAt: numberOrNull(shooting.secondaryPolicy?.closePressure?.latestShotAt)
+    },
     control: detail.control || null,
     incomingBullet: detail.incomingBullet || null,
     invulnerableAvoidanceReplay: primaryId === null || primaryId === undefined || primaryId === ''
@@ -3165,6 +3174,9 @@ function replay(options) {
     dualTargetFire,
     invulnerableAvoidance,
     secondaryOwnDamageRetention,
+    combatOpportunity: runCombatOpportunityReplay(frames, shots, loaded.sourceEvents, options, {
+      samplesFromFrames, cloneShotWithSimulatedSelf, runAimScenario, liveInterceptAimForShot
+    }),
     coordinateDivergence: {
       samples: divergences.length,
       over10m: divergences.filter(value => value > 1000).length,
@@ -3198,6 +3210,7 @@ function replay(options) {
 }
 
 function printReport(result) {
+  if (result.combatOpportunity) console.log(`Combat opportunity replay: ${JSON.stringify(result.combatOpportunity)}`);
   console.log(`Replay ${path.relative(process.cwd(), result.file)} lines ${result.lineRange[0]}-${result.lineRange[1]}`);
   console.log(`Target ${result.targetName || '-'} (${result.targetId || '-'}) ${result.timeRange[0]}-${result.timeRange[1]}, frames=${result.frames}, shots=${result.shots}, finishPressureShots=${result.finishPressureShots}`);
   console.log(`HP self ${result.selfHp[0]} -> ${result.selfHp[1]}, target HP values ${result.targetHpValues.join(',') || '-'}`);
@@ -3273,6 +3286,7 @@ function printReport(result) {
 }
 
 function selfTest() {
+  runCombatOpportunityReplaySelfTest();
   const loader = runLoadFramesSelfTest();
   if (!loader.ok) throw new Error(loader.error || 'browserless replay loader self-test failed');
   const cases = [

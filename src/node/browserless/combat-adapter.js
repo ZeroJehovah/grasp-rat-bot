@@ -131,6 +131,12 @@ const {
 } = require('../../strategy/combat-movement-ownership');
 const { invulnerableApproachWindowCore } = require('../../strategy/invulnerable-approach-window');
 const {
+  pursuitApproachDirectionCore,
+  combatPressureWindowCore,
+  invulnerableEscortWaitCore,
+  uncommittedDefenseExitCore
+} = require('../../strategy/combat-opportunity-tactics');
+const {
   observeProfitCompetitorEvidence,
   profitKillRacePolicy
 } = require('../../strategy/profit-kill-race');
@@ -3673,6 +3679,18 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     dx: Math.sign(Number(target.x || 0) - Number(self.x || 0)),
     dy: Math.sign(Number(target.y || 0) - Number(self.y || 0))
   };
+  const pursuitApproach = pursuitApproachDirectionCore({
+    self, target, targetId: currentTargetId, nowMs, fallback: towardTarget,
+    previous: combatTargetState?.pursuitApproachState,
+    allowed: closeIn && target.combatRole === 'primary' && target.whitelisted !== true
+      && !isInvulnerableEntity(target) && !contactEntryDodge && !preDodge
+      && !recentSelfDamage && !recentPersistentThreat && !residualThreatActive
+      && options.incomingPressureEvidence?.active !== true
+      && !bullets.some(bullet => bullet?.incoming === true)
+      && options.realtimeStateFresh !== false
+  }, options);
+  if (combatTargetState) combatTargetState.pursuitApproachState = pursuitApproach.state;
+  const approachDirection = pursuitApproach.direction;
   const awayFromTarget = { dx: -towardTarget.dx, dy: -towardTarget.dy };
   const lootRaceCandidate = closePressureActive
     && !closePressureTooClose
@@ -3807,7 +3825,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
                     && !preDodge
                     && !ballisticCloseActive
                     ? safeRetreatIntercept.direction
-                    : (closeIn ? towardTarget : null)))));
+                    : (closeIn ? approachDirection : null)))));
   const realtimeSecondaryMainTarget = secondaryTarget && missionTargetId
     ? (options.realtimeTargets || []).find(item => String(combatTargetId(item) || '') === missionTargetId) || null
     : null;
@@ -3878,6 +3896,19 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
         Number(secondaryMainTarget.y) - Number(self.y)
       )
     : null;
+  const invulnerableEscortWait = invulnerableEscortWaitCore({
+    nowMs, secondary: secondaryTarget,
+    realtimePrimary: Boolean(realtimeSecondaryMainTarget) && options.realtimeStateFresh !== false,
+    primary: realtimeSecondaryMainTarget,
+    primaryDistanceCm: secondaryMainDistance,
+    selfHp: hpValue(self),
+    pressure: options.combatOpportunityPressure,
+    samples: combatTargetState?.motionSamples || [],
+    previous: combatTargetState?.invulnerableEscortWaitState
+  }, options);
+  if (combatTargetState) combatTargetState.invulnerableEscortWaitState = invulnerableEscortWait.state;
+  const escortWaitDirection = invulnerableEscortWait.active && Number(target.distance) < COMBAT_CONSTANTS.TARGET_SPACING_MAX
+    ? awayFromTarget : { dx: 0, dy: 0 };
   const secondaryNavigationDeadZoneCm = secondarySnapshotCoinNavigation
     ? Math.max(0, Number(profitMissionArrival.releaseRadiusCm || 0))
     : secondarySnapshotNavigation
@@ -3926,7 +3957,9 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     ? coverCandidate.direction
     : (profitKillRace.active
       ? profitKillRace.direction
-      : (secondaryTarget ? secondaryMainDirection : baseStrategicDirection));
+      : (secondaryTarget
+          ? (invulnerableEscortWait.active ? escortWaitDirection : secondaryMainDirection)
+          : baseStrategicDirection));
   const pendingCommands = (options.pendingVelocityCommands || [])
     .filter(command => command && Number.isFinite(Number(command.effectiveAfterTicks)))
     .slice()
@@ -4038,7 +4071,11 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   else if (closePressureTooClose || ballisticCloseTooClose) distanceAwareRadialIntent = awayFromTarget;
   else if (backAway && invulnerableWaitActive) distanceAwareRadialIntent = awayFromTarget;
   else if (lootRaceDirection) distanceAwareRadialIntent = lootRaceDirection;
-  else if (closeIn) distanceAwareRadialIntent = towardTarget;
+  else if (closeIn) distanceAwareRadialIntent = approachDirection;
+  if (invulnerableEscortWait.active) {
+    distanceAwareBaseBand = escortWaitDirection.dx || escortWaitDirection.dy ? 'separate' : 'hold-spacing';
+    distanceAwareRadialIntent = escortWaitDirection;
+  }
   const distanceAwareDodge = distanceAwareDodgeEnabled
     ? resolveDistanceAwareDodgeCore({
         nowMs: options.nowMs,
@@ -4186,9 +4223,10 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   if ((secondaryTarget || profitKillRace.active) && !protectedMovementOverride) {
     const controlledDirection = profitKillRace.active
       ? profitKillRace.direction
+      : (invulnerableEscortWait.active ? escortWaitDirection
       : ((profitMissionArrivalHold || secondaryNavigationDeadZoneHold)
         ? { dx: 0, dy: 0 }
-        : secondaryMainDirection);
+        : secondaryMainDirection));
     movement = {
       ...movement,
       dx: Number(controlledDirection.dx || 0),
@@ -4202,7 +4240,9 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
           'back-away-mixed',
           'profit-escort'
         ].includes(modifier)),
-        profitKillRace.active
+        invulnerableEscortWait.active && !profitKillRace.active
+          ? 'invulnerable-primary-pressure-wait'
+          : profitKillRace.active
           ? 'profit-target-competition'
           : (profitMissionArrivalRetry
             ? 'profit-mission-arrival-retry'
@@ -4269,6 +4309,8 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     && !movement.modifiers.includes('hold-current');
   const reason = movement.modifiers.includes('dodge')
     ? (effectiveDodge?.reason || 'direct-threat-dodge')
+    : movement.modifiers.includes('invulnerable-primary-pressure-wait')
+    ? 'invulnerable-primary-pressure-wait'
     : lootRaceApplied
     ? 'combat-loot-race-approach'
     : movement.modifiers.includes('profit-mission-arrival-retry')
@@ -4332,6 +4374,8 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     dy: Number(movement.dy || 0),
     reason,
     spacing: Math.round(spacing),
+    pursuitApproach,
+    invulnerableEscortWait,
     invulnerableWindow: invulnerableWindow.active ? invulnerableWindow : null,
     dodge: dodge ? {
       dx: effectiveDodge?.dx ?? dodge.dx,
@@ -4983,6 +5027,9 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     exchangeRetreatSinceAt,
     exchangeRetreatSelfDamageBaseline,
     exchangeRetreatTargetDamageBaseline,
+    pursuitApproachState: same ? previous.pursuitApproachState || null : null,
+    invulnerableEscortWaitState: same ? previous.invulnerableEscortWaitState || null : null,
+    uncommittedDefenseState: same ? previous.uncommittedDefenseState || null : null,
     lastDamageAmount: damaged
       ? Math.max(0, previousHp - hp)
       : Number(previous?.lastDamageAmount || engagementCarry?.lastDamageAmount || 0),
@@ -6156,8 +6203,12 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     Number(options.nowMs || Date.now()),
     options
   );
+  const combatOpportunityPressure = combatPressureWindowCore(
+    combatTargetState?.motionSamples || [], Number(options.nowMs || Date.now())
+  );
   let movement = withOptionOverrides(options, {
     combatTargetState,
+    combatOpportunityPressure,
     incomingPressureEvidence: incomingPressureContext.pressureEvidence,
     residualThreatLease: incomingPressureContext.residualThreatLease,
     executionTiming: state?.command?.shooting?.timing || options.executionTiming,
@@ -6240,6 +6291,20 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     combatPhaseTargetId: combatPhase?.targetId
   });
   const secondaryHealthy = secondaryExitPolicy.healthy;
+  const uncommittedDefense = uncommittedDefenseExitCore({
+    nowMs: Number(options.nowMs || Date.now()), targetId: String(combatTargetId(target) || ''),
+    realtime: !contactEntryOnly && Boolean(target) && realtime.frameAgeMs !== null
+      && realtime.frameAgeMs !== undefined && realtime.frameAgeMs <= 500,
+    secondary: secondaryExitPolicy.secondary,
+    selfHp: hpValue(self), targetHp: hpValue(target), invulnerable: isInvulnerableEntity(target),
+    commitment: Boolean(target?.primaryTargetId || options.profitMission || stateful?.profitMission),
+    finishOpportunity: stateful?.combatTarget?.primaryFinishRace?.active === true,
+    engagedMs: combatPhase?.engagedMs ?? (Number(options.nowMs) - Number(combatTargetState?.firstSeenAt)),
+    acceptedShots: stateful?.combatMetrics?.acceptedShots || 0,
+    pressure: combatOpportunityPressure,
+    previous: combatTargetState?.uncommittedDefenseState
+  }, options);
+  if (combatTargetState) combatTargetState.uncommittedDefenseState = uncommittedDefense.state;
   if (!contactEntryOnly && !secondaryHealthy && exitEvaluation.exchangeStopLoss?.disengage) {
     movement = buildCombatExchangeRetreatMovement(
       movement,
@@ -7192,6 +7257,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       incomingOwnerIds: Object.keys(incomingPressureContext.incomingSamplesByOwner),
       residualThreatLease: incomingPressureContext.residualThreatLease
     },
+    uncommittedDefense,
     attackClock: combatTargetState ? {
       state: combatTargetState.attackTimerState || 'not-applicable',
       pauseReason: combatTargetState.attackTimerPauseReason || '',

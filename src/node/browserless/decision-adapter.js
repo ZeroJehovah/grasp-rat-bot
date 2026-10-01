@@ -1,6 +1,7 @@
 'use strict';
 
 const { performance } = require('perf_hooks');
+const { buildUncommittedDefenseExitAction } = require('./uncommitted-defense');
 const { attackWorthTakingCore } = require('../../strategy/attack-worth');
 const {
   incomingBulletHasCollisionRiskCore,
@@ -12713,6 +12714,12 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     ? lootControl.action
     : null;
   const ordinaryLootControlAction = defensiveLootCompositeAction ? null : lootControl.action;
+  const uncommittedDefenseExitAction = attachIncomingCoverToLeaveDecision(
+    buildUncommittedDefenseExitAction(combat, stateful, {
+      evaluated: true, profitChoice: plannerOpportunity,
+      lootAction: lootControl.action, settlementAction: postKillSettlementWaitAction
+    }), incomingThreatAssessment
+  );
   let action = longStaminaExhaustedLeaveAction
     || criticalIncomingExitAction
     || immediateCombatExitAction
@@ -12723,6 +12730,7 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     || deferredInjuryHpExitAction
     || pursuitLeaveAction
     || lowHpRecoveryThreatExitAction
+    || uncommittedDefenseExitAction
     || selectedStandaloneIncomingDodgeAction
     || selectedRecoveryContactGuardAction
     || (healthyLootPriority && safetyActionForArbitration?.reason === 'avoid-invulnerable-target'
@@ -15229,6 +15237,13 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const postAttackDropWaitAction = (profitLive || nonCombatProfit)
     ? buildPostAttackDropWaitDecision(input, stateful, options, combat)
     : null;
+  const uncommittedDefenseExitAction = attachIncomingCoverToLeaveDecision(
+    buildUncommittedDefenseExitAction(combat, stateful, {
+      evaluated: !realtimeStale, profitChoice: opportunity.choice,
+      lootAction: postAttackDropCoinAction || (healthyLootPriority ? opportunity.rawAction : null),
+      settlementAction: postKillSettlementWaitAction, dropWaitAction: postAttackDropWaitAction
+    }), incomingThreatAssessment
+  );
   const recoveryFootCoinAction = (profitLive || nonCombatProfit) && !whitelistSafetyCombat
     ? buildRecoveryFootCoinDecision(profitSelectionInput, options)
     : null;
@@ -15429,6 +15444,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       candidate(deferredInjuryHpExitAction, 48, 'injury-low-hp-exit-after-whitelist-contact', true, { riskScore: 100 }),
       candidate(pursuitLeaveAction, 50, 'pursuit-hard-gate', true, { riskScore: 90 }),
       candidate(lowHpRecoveryThreatExitAction, 52, 'low-hp-recovery-threat-hard-gate', true, { riskScore: 100 }),
+      candidate(uncommittedDefenseExitAction, 53, 'uncommitted-defense-stop-loss', true, { riskScore: 100 }),
       candidate(selectedStandaloneIncomingDodgeAction, 54, 'incoming-bullet-dodge-hard-gate', true, { riskScore: 100 }),
       candidate(selectedRecoveryContactGuardAction, 56, 'recovery-contact-hard-gate', true, { riskScore: 100 }),
       candidate(immediateSafetyAction, 57, 'realtime-safety-hard-gate', true, { riskScore: immediateSafetyAction?.urgent ? 100 : 80 }),

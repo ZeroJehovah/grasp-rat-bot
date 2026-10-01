@@ -124,6 +124,7 @@ const {
 const { runCombatShotExecutionSelfTest } = require('./combat-shot-execution-self-test');
 const { runCombatTargetFrameGapSelfTest } = require('./combat-target-frame-gap-self-test');
 const { runIncomingPressureSelfTest } = require('./incoming-pressure-self-test');
+const { runCombatOpportunitySelfTest } = require('./combat-opportunity-self-test');
 const { runInvulnerableWaitStationSelfTest } = require('./invulnerable-wait-station-self-test');
 const { runLootRacePositioningSelfTest } = require('./loot-race-positioning-self-test');
 const { createSourceIpController } = require('./source-ip-controller');
@@ -1736,6 +1737,7 @@ function browserlessLoopPlan(result, config = {}) {
     'combat-hp-disadvantage-leave',
     'combat-low-hp-disadvantage-leave',
     'combat-low-hp-secondary-leave',
+    'uncommitted-defense-poor-exchange-leave',
     'combat-miss-close-timeout-leave',
     'combat-no-damage-generation-limit-leave',
     'recovery-low-hp-active-threat-leave',
@@ -10947,6 +10949,7 @@ async function runBrowserlessRunnerSelfTest() {
     const combatShotExecution = runCombatShotExecutionSelfTest();
     const combatTargetFrameGap = runCombatTargetFrameGapSelfTest();
     const incomingPressure = runIncomingPressureSelfTest();
+    const combatOpportunity = runCombatOpportunitySelfTest();
     const invulnerableWaitStation = runInvulnerableWaitStationSelfTest();
     const lootRacePositioning = runLootRacePositioningSelfTest();
     const dynamicWhitelist = await require('./dynamic-whitelist-self-test').runDynamicWhitelistSelfTest();
@@ -11063,6 +11066,7 @@ async function runBrowserlessRunnerSelfTest() {
         && combatShotExecution.ok
         && combatTargetFrameGap.ok
         && incomingPressure.ok
+        && combatOpportunity.ok
         && invulnerableWaitStation.ok
         && lootRacePositioning.ok
         && dynamicWhitelist.ok
@@ -11169,6 +11173,7 @@ async function runBrowserlessRunnerSelfTest() {
       combatShotExecution,
       combatTargetFrameGap,
       incomingPressure,
+      combatOpportunity,
       invulnerableWaitStation,
       lootRacePositioning,
       dynamicWhitelist,
