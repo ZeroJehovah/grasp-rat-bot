@@ -10966,6 +10966,7 @@ async function runBrowserlessRunnerSelfTest() {
     const lootRacePositioning = runLootRacePositioningSelfTest();
     const dynamicWhitelist = await require('./dynamic-whitelist-self-test').runDynamicWhitelistSelfTest();
     const rankedPlayerDeath = require('./ranked-player-death-self-test').runRankedPlayerDeathSelfTest();
+    const secondaryDodge = require('./secondary-dodge-self-test').runSecondaryDodgeSelfTest();
     const recoveryContact = require('./recovery-contact-self-test').runRecoveryContactSelfTest();
     const runnerLog = path.join(tmp, 'logs', '2026-07-08', 'runner.jsonl');
     const text = fs.readFileSync(runnerLog, 'utf8');
@@ -11084,6 +11085,7 @@ async function runBrowserlessRunnerSelfTest() {
         && lootRacePositioning.ok
         && dynamicWhitelist.ok
         && rankedPlayerDeath.ok
+        && secondaryDodge.ok
         && recoveryContact.ok
         && snapshotAudit.ok
         && complexCombatMainThreadBudget.battleLogOk
@@ -11192,6 +11194,7 @@ async function runBrowserlessRunnerSelfTest() {
       lootRacePositioning,
       dynamicWhitelist,
       rankedPlayerDeath,
+      secondaryDodge,
       recoveryContact,
       snapshotAudit,
       complexCombatMainThreadBudget,

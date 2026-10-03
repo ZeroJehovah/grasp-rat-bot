@@ -4076,6 +4076,17 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     distanceAwareBaseBand = escortWaitDirection.dx || escortWaitDirection.dy ? 'separate' : 'hold-spacing';
     distanceAwareRadialIntent = escortWaitDirection;
   }
+  // Evaluate the direction the secondary arbiter will actually execute. A safe
+  // ordinary strafe must not make a later primary-navigation stop look safe.
+  const secondaryOrdinaryMovement = secondaryTarget && !profitKillRace.active
+    && !coverCandidate.active
+    && !['dodge', 'hold-current', 'predictive-hold'].some(modifier => movement.modifiers.includes(modifier));
+  const distanceAwareBaseMovement = secondaryOrdinaryMovement
+    ? (invulnerableEscortWait.active ? escortWaitDirection
+      : ((profitMissionArrivalHold || secondaryNavigationDeadZoneHold)
+        ? { dx: 0, dy: 0 } : secondaryMainDirection))
+    : movement;
+  if (secondaryOrdinaryMovement) distanceAwareRadialIntent = distanceAwareBaseMovement;
   const distanceAwareDodge = distanceAwareDodgeEnabled
     ? resolveDistanceAwareDodgeCore({
         nowMs: options.nowMs,
@@ -4085,7 +4096,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
         target,
         bullets,
         dodge,
-        baseMovement: movement,
+        baseMovement: distanceAwareBaseMovement,
         baseDistanceBand: distanceAwareBaseBand,
         currentDirection,
         pendingDirection,
@@ -4268,7 +4279,12 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     finishRaceActive: options.primaryFinishRaceActive === true
   });
   if (movementOwner.owner === 'emergency-dodge') {
-    const emergencyDirection = dodgeOwnership.direction || effectiveDodge || dodge;
+    // An inactive lease still carries a direction (often zero). It must not
+    // overwrite the newly selected prospective Dodge. Current collision
+    // ownership remains authoritative over speculative movement.
+    const emergencyDirection = distanceAwareDodge.applied && !dodgeOwnership.currentThreat
+      ? effectiveDodge
+      : ((dodgeOwnership.active ? dodgeOwnership.direction : null) || effectiveDodge || dodge);
     if (emergencyDirection) {
       const dodgeReason = effectiveDodge?.reason || dodge?.reason || 'direct-threat-dodge';
       movement = {

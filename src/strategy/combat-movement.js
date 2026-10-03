@@ -836,9 +836,9 @@ function calculateDodgeDirection(self, bullets, options = {}) {
         const ttiTicks = Math.max(1, Math.ceil(tti / tickMs));
         const remainingTicks = Number(bullet.remainingTicks);
         const trajectoryTicks = Number.isFinite(remainingTicks) && remainingTicks > 0
-          ? Math.ceil(remainingTicks)
+          ? remainingTicks
           : ttiTicks;
-        const endTick = Math.max(1, Math.min(Math.max(1, Number(options.maxTrajectoryTicks || 60)), trajectoryTicks));
+        const endTick = Math.max(0, Math.min(Math.max(1, Number(options.maxTrajectoryTicks || 60)), trajectoryTicks));
         for (const variant of schedule.variants) {
           let variantCpa = Infinity;
           let selfX = Number(self?.x || 0);
@@ -846,11 +846,21 @@ function calculateDodgeDirection(self, bullets, options = {}) {
           for (let tick = 0; tick <= endTick; tick += 1) {
             const bulletAtX = bulletX + directionX * bulletSpeed * tick;
             const bulletAtY = bulletY + directionY * bulletSpeed * tick;
-            variantCpa = Math.min(variantCpa, Math.hypot(selfX - bulletAtX, selfY - bulletAtY));
-            if (tick >= endTick) break;
+            const rx = selfX - bulletAtX;
+            const ry = selfY - bulletAtY;
             const velocity = scheduledVelocityAt(tick, observedVelocity, variant.events);
-            selfX += velocity.vx;
-            selfY += velocity.vy;
+            const duration = Math.min(1, endTick - tick);
+            const rvx = velocity.vx - directionX * bulletSpeed;
+            const rvy = velocity.vy - directionY * bulletSpeed;
+            const speedSquared = rvx * rvx + rvy * rvy;
+            const closest = speedSquared > 0
+              ? Math.max(0, Math.min(duration, -(rx * rvx + ry * rvy) / speedSquared)) : 0;
+            // A projectile moves several body diameters each tick. Checking
+            // endpoints alone can label a trajectory through self as safe.
+            variantCpa = Math.min(variantCpa, Math.hypot(rx + rvx * closest, ry + rvy * closest));
+            if (duration <= 0) break;
+            selfX += velocity.vx * duration;
+            selfY += velocity.vy * duration;
           }
           cpa = Math.min(cpa, variantCpa);
           if (variant.name === 'current-hold') currentHoldCpa = variantCpa;
@@ -1303,7 +1313,14 @@ function classifyDistanceAwareDodgeModeCore(input = {}, options = {}) {
   const lifecycleMatch = Boolean(previous
     && String(previous.targetId ?? '') === targetId
     && String(previous.engagementId ?? '') === engagementId);
-  const desiredMode = slack.currentShotAvoidability === 'unavoidable'
+  // A positive margin smaller than one observation/control tick cannot safely
+  // be spent waiting for the next incoming-bullet observation. Require native
+  // attack evidence for this early transition.
+  const anticipationMs = Math.max(1, Number(slack.tickMs || options.tickMs || 50));
+  const imminentNextVolley = input.recentDirectedThreat === true
+    && Number.isFinite(slack.prospectiveReactionSlackMs)
+    && slack.prospectiveReactionSlackMs <= anticipationMs;
+  const desiredMode = imminentNextVolley || slack.currentShotAvoidability === 'unavoidable'
     || (slack.prospectiveReactionSlackMs !== null && slack.prospectiveReactionSlackMs <= 0)
     || (slack.reactionSlackMs !== null && slack.reactionSlackMs <= 0 && slack.threateningBulletCount > 0)
     ? 'close-proactive'
@@ -1327,15 +1344,16 @@ function classifyDistanceAwareDodgeModeCore(input = {}, options = {}) {
     : null;
   const held = Boolean(previousMode && previousMode !== desiredMode && modeAgeMs < minimumHoldMs && !hardSafety);
   const mode = held ? previousMode : desiredMode;
+  const modeUnchanged = previousMode === mode;
   const state = lifecycleMatch
     ? {
         ...previous,
         targetId,
         engagementId,
         mode,
-        modeSinceMs: held ? modeSinceMs : nowMs,
+        modeSinceMs: modeUnchanged ? modeSinceMs : nowMs,
         updatedAtMs: nowMs,
-        modeAgeMs: held ? modeAgeMs : 0
+        modeAgeMs: modeUnchanged ? modeAgeMs : 0
       }
     : {
         targetId,
@@ -1353,9 +1371,10 @@ function classifyDistanceAwareDodgeModeCore(input = {}, options = {}) {
     transitionReason: held
       ? 'distance-aware-mode-minimum-hold'
       : (previousMode && previousMode !== mode ? 'distance-aware-mode-transition' : 'distance-aware-mode-stable'),
-    modeAgeMs: held ? modeAgeMs : 0,
+    modeAgeMs: modeUnchanged ? modeAgeMs : 0,
     minimumHoldMs,
     state,
+    anticipationMs,
     reactionSlack: slack
   };
 }
@@ -1778,6 +1797,26 @@ function resolveDistanceAwareDodgeCore(input = {}, options = {}) {
       }
     } else {
       preDodgeReason = 'existing-command-equivalent-safe';
+    }
+  }
+  // Equivalent-safe means retain the actual safe command, not return an unsafe
+  // base stop to the secondary navigation arbiter. A stop is safe only when its
+  // own trajectory passes the same prospective/current threat test.
+  if (mode === 'close-proactive' && !blockedReason && activeOpponent
+    && !currentThreat && currentOrPendingEquivalentSafe && !selectedDirection) {
+    const field = prospectiveThreat?.threatField?.length
+      ? prospectiveThreat.threatField : (actualThreatField || []);
+    const safe = direction => {
+      const threat = direction && directionThreatCore(field, direction);
+      return Boolean(threat && movementThreatSafeCore(threat, options.minimumCpaCm ?? 200));
+    };
+    if (!safe(baseDirection)) {
+      const retain = safe(pendingDirection) ? pendingDirection : (safe(currentDirection) ? currentDirection : null);
+      if (retain && (retain.dx || retain.dy) && candidateWithinBoundaryCore(input.self, retain, options)
+        && sameRadialIntentCore(retain, radialIntent, { minimumDot: 0 })) {
+        selectedDirection = retain;
+        preDodgeReason = 'preserve-safe-current-motion';
+      }
     }
   }
   if (!suppressCurrentShotDodge && selectedDirection && (selectedDirection.dx || selectedDirection.dy)) {

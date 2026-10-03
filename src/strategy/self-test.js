@@ -2613,6 +2613,45 @@ function runStrategyModuleSelfTests() {
       prospectiveReactionSlackMs: 100
     }
   }, { modeMinimumHoldMs: 300 });
+  const stableMode = classifyDistanceAwareDodgeModeCore({
+    nowMs: 1100, targetId: 'target-a', engagementId: 'engagement-a',
+    previousState: distanceAwareModeStart.state,
+    reactionSlack: { ...distanceAwareReaction, reactionSlackMs: null, prospectiveReactionSlackMs: 100 }
+  });
+  const expiredHold = classifyDistanceAwareDodgeModeCore({
+    nowMs: 1201, targetId: 'target-a', engagementId: 'engagement-a',
+    previousState: stableMode.state,
+    reactionSlack: { ...distanceAwareReaction, currentShotAvoidability: 'safe', threateningBulletCount: 1,
+      reactionSlackMs: 100, prospectiveReactionSlackMs: 100 }
+  });
+  const nearMargin = directed => classifyDistanceAwareDodgeModeCore({
+    nowMs: 1100, targetId: 'target-a', engagementId: 'engagement-a', recentDirectedThreat: directed,
+    previousState: stableMode.state,
+    reactionSlack: { ...distanceAwareReaction, reactionSlackMs: null, prospectiveReactionSlackMs: 12 }
+  });
+  results.push({ name: 'distance-aware-stable-mode-clock-and-causal-one-tick-anticipation',
+    passed: stableMode.state.modeSinceMs === 900 && stableMode.modeAgeMs === 200
+      && expiredHold.mode === 'medium-reactive' && !expiredHold.held
+      && nearMargin(true).mode === 'close-proactive' && nearMargin(true).hardSafety
+      && nearMargin(false).mode === 'long-observe' });
+  const motionInput = {
+    ...distanceAwareInput, baseMovement: { dx: 0, dy: 0 }, currentDirection: { dx: 0, dy: 1 },
+    radialIntentVector: { dx: 0, dy: 0 },
+    reactionSlack: { ...distanceAwareReaction, currentDirectionSafe: true },
+    threatField: [
+      { dx: 0, dy: 0, directHits: 1, unavoidableHits: 0, minCPA: 20 },
+      { dx: 0, dy: 1, directHits: 0, unavoidableHits: 0, minCPA: 400, scheduleRobust: true }
+    ]
+  };
+  const retainedSafeMotion = resolveDistanceAwareDodgeCore(motionInput);
+  const staminaBlockedMotion = resolveDistanceAwareDodgeCore({ ...motionInput, lowStamina: true });
+  const exitBlockedMotion = resolveDistanceAwareDodgeCore({ ...motionInput, exitActive: true });
+  const safeStopMotion = resolveDistanceAwareDodgeCore({ ...motionInput,
+    threatField: motionInput.threatField.map(row => ({ ...row, directHits: 0, minCPA: 400 })) });
+  results.push({ name: 'distance-aware-equivalent-safe-motion-cannot-return-unsafe-base-stop',
+    passed: retainedSafeMotion.applied && retainedSafeMotion.direction.dy === 1
+      && retainedSafeMotion.preDodgeReason === 'preserve-safe-current-motion'
+      && !staminaBlockedMotion.applied && !exitBlockedMotion.applied && !safeStopMotion.applied });
   const reactionBudget = deriveCombatReactionBudgetCore({
     nowMs: 1000,
     realtimeStateObservedAtMs: 900,
@@ -2664,8 +2703,9 @@ function runStrategyModuleSelfTests() {
       && noCadenceCloseUnsafe.applied === false
       && noCadenceCloseUnsafe.preDodgeReason === 'no-safe-lateral-candidate'
       && noCadenceCloseUnsafe.predictedThreatSource === 'causal-close-envelope-counterfactual'
-      && lowConfidenceWindowStochastic.applied === true
-      && lowConfidenceWindowStochastic.closeSubmode === 'stochastic'
+      // Continuous collision checks reject the formerly endpoint-safe lane.
+      && lowConfidenceWindowStochastic.applied === false
+      && lowConfidenceWindowStochastic.preDodgeReason === 'no-safe-lateral-candidate'
       && lowConfidenceWindowStochastic.predictedThreatSource === 'causal-low-confidence-fire-window'
       && lowConfidenceWindowStochastic.baseDistanceBand === 'approach'
       && staleDistanceAware.applied === false
