@@ -86,6 +86,7 @@ const {
   createEasyKillPlayerTracker
 } = require('./easy-kill-player-tracker');
 const { createCombatCompletionTracker } = require('./combat-completion-tracker');
+const { promoteRankedPlayerDeaths } = require('./ranked-player-death');
 const { createCombatBattleLog, runCombatBattleLogSelfTest } = require('./combat-battle-log');
 const { createDailyDamagePlayerTracker } = require('./daily-damage-player-tracker');
 const { createDynamicWhitelist } = require('./dynamic-whitelist');
@@ -2686,6 +2687,17 @@ async function runBrowserlessRunner(config, deps = {}) {
         source: detail.source || 'snapshot',
         error: errorMessage(err)
       });
+    }
+    if (chatResult?.killEvents?.length) {
+      try {
+        promoteRankedPlayerDeaths(chatResult.killEvents, {
+          highDropPlayerTracker, easyKillPlayerTracker, selfUserId: config.userId,
+          observedAtMs, source: `${snapshotSource}-ranked-kill-record`
+        });
+      } catch (err) {
+        recordSupervisorError(err, { operation: 'ranked-player-death-promotion', source: snapshotSource });
+        logStore.append('runner', 'ranked-player-death-promotion-error', { source: snapshotSource, error: errorMessage(err) });
+      }
     }
     try {
       damageNameResult = damagePlayerTracker.observePlayerNames?.(payload?.entities || [], {
@@ -10953,6 +10965,7 @@ async function runBrowserlessRunnerSelfTest() {
     const invulnerableWaitStation = runInvulnerableWaitStationSelfTest();
     const lootRacePositioning = runLootRacePositioningSelfTest();
     const dynamicWhitelist = await require('./dynamic-whitelist-self-test').runDynamicWhitelistSelfTest();
+    const rankedPlayerDeath = require('./ranked-player-death-self-test').runRankedPlayerDeathSelfTest();
     const recoveryContact = require('./recovery-contact-self-test').runRecoveryContactSelfTest();
     const runnerLog = path.join(tmp, 'logs', '2026-07-08', 'runner.jsonl');
     const text = fs.readFileSync(runnerLog, 'utf8');
@@ -11070,6 +11083,7 @@ async function runBrowserlessRunnerSelfTest() {
         && invulnerableWaitStation.ok
         && lootRacePositioning.ok
         && dynamicWhitelist.ok
+        && rankedPlayerDeath.ok
         && recoveryContact.ok
         && snapshotAudit.ok
         && complexCombatMainThreadBudget.battleLogOk
@@ -11177,6 +11191,7 @@ async function runBrowserlessRunnerSelfTest() {
       invulnerableWaitStation,
       lootRacePositioning,
       dynamicWhitelist,
+      rankedPlayerDeath,
       recoveryContact,
       snapshotAudit,
       complexCombatMainThreadBudget,

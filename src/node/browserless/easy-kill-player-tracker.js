@@ -15,6 +15,7 @@ const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DEFAULT_OUTCOME_GRACE_MS = 40000;
 const DEFAULT_PERSIST_INTERVAL_MS = 5000;
 const DEFAULT_SELF_MAX_HP = 100;
+const RANKED_DEATH_MAX_AGE_MS = 10 * 60 * 1000;
 
 function cloneJson(value) {
   if (value === null || value === undefined) return value;
@@ -131,6 +132,7 @@ function emptyStore() {
     updatedAt: '',
     lastScoreDecayDay: '',
     players: {},
+    rankedDeathWatermarks: {},
     engagements: {}
   };
 }
@@ -149,7 +151,7 @@ function normalizePlayer(key, player) {
     nameObservedAt: String(player.nameObservedAt || player.nameUpdatedAt || player.lastKilledAt || player.firstKilledAt || ''),
     nameObservedTick: numberOrNull(player.nameObservedTick ?? player.lastKillTick),
     score,
-    killCount: Math.max(1, Math.round(Number(player.killCount || 1))),
+    killCount: Math.max(0, Math.round(Number(player.killCount ?? 1))),
     // Records written before observed-death tracking have no count; fall back to our own
     // kill tally so an upgraded state file reads as at least that many witnessed deaths.
     observedDeathCount: Math.max(
@@ -201,6 +203,11 @@ function normalizeStore(value) {
   if (!value || typeof value !== 'object') return output;
   output.updatedAt = String(value.updatedAt || '');
   output.lastScoreDecayDay = String(value.lastScoreDecayDay || '');
+  for (const [key, entry] of Object.entries(value.rankedDeathWatermarks || {})) {
+    if (Number.isFinite(entry?.occurredAtMs) && typeof entry?.key === 'string') {
+      output.rankedDeathWatermarks[key] = { key: entry.key, occurredAtMs: entry.occurredAtMs };
+    }
+  }
   for (const [key, player] of Object.entries(value.players || {})) {
     const normalized = normalizePlayer(key, player);
     if (normalized) output.players[normalized.key] = normalized;
@@ -364,6 +371,59 @@ function createEasyKillPlayerTracker(options = {}) {
     persist(atMs);
     for (const event of events) emit(event);
     return { ok: true, day: today, previousDay, daysElapsed, decremented, removed };
+  }
+
+  // A ranked player's observed death promotes eligibility only. It does not
+  // manufacture our kill, loot, or engagement evidence. Keep replay protection
+  // outside players so score decay/removal cannot make an old death new again.
+  function promoteRankedDeath(target, detail = {}) {
+    const atMs = numberOrNull(detail.atMs) ?? now();
+    const occurredAtMs = numberOrNull(detail.occurredAtMs);
+    const userId = targetUserId(target);
+    const evidenceKey = String(detail.evidenceKey || '');
+    if (userId === null || occurredAtMs === null || !evidenceKey) return { ok: false, reason: 'missing-death-evidence' };
+    if (occurredAtMs > atMs || atMs - occurredAtMs > RANKED_DEATH_MAX_AGE_MS) return { ok: false, reason: 'stale-or-future-death' };
+    refreshDailyScores(atMs);
+    const key = playerKey(userId);
+    const previous = store.rankedDeathWatermarks[key];
+    if (previous && (previous.key === evidenceKey || previous.occurredAtMs >= occurredAtMs)) {
+      return { ok: true, promoted: false, reason: 'already-observed-death' };
+    }
+    const existing = store.players[key];
+    const previousScore = existing?.score ?? 0;
+    const at = new Date(occurredAtMs).toISOString();
+    if (existing) {
+      existing.score = MAX_SCORE;
+    } else {
+      store.players[key] = {
+        key, userId, name: targetName(target, `#${userId}`),
+        nameUpdatedAt: at, nameObservedAt: new Date(atMs).toISOString(),
+        nameObservedTick: numberOrNull(detail.tick), score: MAX_SCORE,
+        killCount: 0, observedDeathCount: 0,
+        firstKilledAt: at, lastKilledAt: at, lastKillTick: null,
+        lastDrop: targetDrop(target)
+      };
+    }
+    const engagement = store.engagements[key];
+    const tick = numberOrNull(detail.tick);
+    if (engagement && occurredAtMs >= engagement.startedAtMs
+      && (tick === null || engagement.startedTick === null || tick >= engagement.startedTick)) {
+      delete store.engagements[key];
+    }
+    for (const [id, entry] of Object.entries(store.rankedDeathWatermarks)) {
+      if (atMs - entry.occurredAtMs > RANKED_DEATH_MAX_AGE_MS) delete store.rankedDeathWatermarks[id];
+    }
+    store.rankedDeathWatermarks[key] = { key: evidenceKey, occurredAtMs };
+    persist(atMs);
+    const event = {
+      type: 'ranked-player-death-promotion', at: new Date(atMs).toISOString(),
+      userId, name: store.players[key].name, score: MAX_SCORE,
+      previousScore, evidenceKey, occurredAtMs,
+      killerUserId: numberOrNull(detail.killerUserId), source: String(detail.source || 'kill-record'),
+      authority: 'observed-kill-record', participationRequired: false
+    };
+    emit(event);
+    return { ok: true, promoted: true, ...event };
   }
 
   function playerStatus() {
@@ -822,6 +882,7 @@ function createEasyKillPlayerTracker(options = {}) {
     refreshDailyScores,
     recordImmediateFailure,
     upsertManualPlayer,
+    promoteRankedDeath,
     status
   };
 }

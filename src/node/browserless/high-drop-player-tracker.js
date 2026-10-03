@@ -554,9 +554,20 @@ function createHighDropPlayerTracker(options = {}) {
     };
   }
 
+  function rankedPlayerForDeath(userId, occurredAtMs, atMs = now()) {
+    ensureToday(atMs);
+    if (dayKey(occurredAtMs) !== store.day) return null;
+    const player = store.players[`user:${userId}`];
+    if (!player || Math.max(Number(player.initialDrop || 0), Number(player.maxDrop || 0), Number(player.latestDrop || 0)) < 500) return null;
+    const firstObservedAtMs = Date.parse(player.firstObservedAt);
+    if (!Number.isFinite(firstObservedAtMs) || occurredAtMs < firstObservedAtMs) return null;
+    return { userId: player.userId, name: player.name, drop: player.latestDrop };
+  }
+
   return {
     file,
     observeSnapshot,
+    rankedPlayerForDeath,
     status
   };
 }
