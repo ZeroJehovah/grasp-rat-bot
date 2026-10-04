@@ -737,6 +737,16 @@ function simulateScheduledSelfPosition(self, intervalTicks, currentVelocity, eve
   return { x, y };
 }
 
+function compareDodgeThreatCore(a, b) {
+  // A short reaction budget does not make a projectile unavoidable in every
+  // direction. Minimize all collisions first; on a tie, avoid the imminent
+  // ones before threats that still leave time for another control update.
+  return a.directHits - b.directHits
+    || a.unavoidableHits - b.unavoidableHits
+    || b.minCPA - a.minCPA
+    || b.minTTI - a.minTTI;
+}
+
 /**
  * Calculate dodge direction for incoming bullets
  *
@@ -986,11 +996,7 @@ function calculateDodgeDirection(self, bullets, options = {}) {
     };
   });
 
-  // Sort by threat ascending (lowest threat = safest)
-  threatField.sort((a, b) => a.avoidableHits - b.avoidableHits
-    || a.directHits - b.directHits
-    || b.minCPA - a.minCPA
-    || b.minTTI - a.minTTI);
+  threatField.sort(compareDodgeThreatCore);
 
   // Prefer tangent movement if safe
   const safest = threatField[0];
@@ -2356,6 +2362,7 @@ module.exports = {
   shouldBackAwayFromTarget,
   rewardFinishBackAwaySuppressionPolicy,
   calculateDodgeDirection,
+  compareDodgeThreatCore,
   contactEntryRiskCore,
   contactEntrySyntheticBulletCore,
   pickSafeClosingDodgeCore,

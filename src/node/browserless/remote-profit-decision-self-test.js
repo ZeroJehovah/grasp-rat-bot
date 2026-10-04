@@ -2787,6 +2787,64 @@ function assertPostKillSettlementContinuity() {
   assert.strictEqual(execution.kind, 'combat-live');
   assert.ok(Number(velocities.at(-1)?.dx) < 0);
   assert.strictEqual(shots.length, 1, 'authorized secondary fire survives settlement movement');
+
+  // Settlement arrival/approach must reach the wire without cancelling the
+  // combat layer's current movement owner. A retained inactive lease alone
+  // is deliberately not sufficient to keep owning movement.
+  for (const distance of [82, 5000]) {
+    for (const direction of [{ dx: -1, dy: 1 }, { dx: 0, dy: 1 }, { dx: 0, dy: 0 }]) {
+      const protectedMovement = {
+        ...direction,
+        reason: 'safe-dodge',
+        modifiers: ['dodge'],
+        ownership: { owner: 'emergency-dodge' },
+        dodgeOwnership: { active: true, currentThreat: true, direction }
+      };
+      const protectedCombat = { target: secondary, dryRun: {
+        target: secondary, movement: protectedMovement, shooting: combat.dryRun.shooting
+      } };
+      const composite = buildPostKillSettlementWaitDecision(
+        { self: { ...self, x: -5000 + distance }, nowMs: 1300 },
+        { postKillSettlement: settlement }, protectedCombat, options
+      );
+      applyPostKillSettlementMovementToCombat(protectedCombat, composite);
+      assert.strictEqual(protectedCombat.dryRun.movement, protectedMovement,
+        'an arrived or approaching settlement cannot overwrite an emergency Dodge, including a safe stop');
+      assert.strictEqual(protectedCombat.dryRun.shooting, combat.dryRun.shooting);
+      const sent = [];
+      const fired = [];
+      const adapter = createBrowserlessActionAdapter({
+        userId: 7, commandIntervalMs: 0, combatShootMinIntervalMs: 1,
+        transport: {
+          sendVelocity(dx, dy) { sent.push({ dx, dy }); return { ok: true }; },
+          sendShoot(x, y) { fired.push({ x, y }); return { ok: true }; }
+        }
+      });
+      adapter.applyDecision({ realtime: { tick: 2, self, entities: [self, secondary] } }, {
+        action: composite, combat: { target: secondary, ...protectedCombat.dryRun }
+      });
+      assert.deepStrictEqual(sent.at(-1), direction, 'settlement must preserve Dodge on the physical velocity path');
+      assert.strictEqual(fired.length, 1, 'preserving Dodge must not cancel normal secondary fire');
+
+      // After the current Dodge owner releases, ordinary pickup resumes even
+      // when diagnostics still retain an inactive old direction.
+      protectedCombat.dryRun.movement = {
+        dx: 1, dy: 0, ownership: { owner: 'ordinary-escort' },
+        dodgeOwnership: { active: false, currentThreat: false, direction }
+      };
+      applyPostKillSettlementMovementToCombat(protectedCombat, composite);
+      assert.strictEqual(protectedCombat.dryRun.movement.reason,
+        distance <= 150 ? 'post-kill-settlement-arrived' : 'post-kill-settlement-approach');
+      assert.strictEqual(protectedCombat.dryRun.movement.dx, distance <= 150 ? 0 : -1);
+    }
+  }
+
+  const prospective = { dx: 1, dy: -1, ownership: { owner: 'emergency-dodge' },
+    distanceAwareDodge: { applied: true }, dodgeOwnership: { active: false, currentThreat: false } };
+  const prospectiveCombat = { dryRun: { movement: prospective, shooting: combat.dryRun.shooting } };
+  applyPostKillSettlementMovementToCombat(prospectiveCombat, at151);
+  assert.strictEqual(prospectiveCombat.dryRun.movement, prospective,
+    'the final prospective-Dodge owner remains authoritative without a live projectile lease');
 }
 
 function runRemoteProfitDecisionSelfTest() {

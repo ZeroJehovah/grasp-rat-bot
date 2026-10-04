@@ -10364,6 +10364,11 @@ function applyPostKillSettlementMovementToCombat(combat, action) {
     return combat;
   }
   const existing = combat.dryRun.movement || {};
+  // The settlement composite also runs after an established defensive combat
+  // frame, where no standalone incoming-safety action is needed. Respect the
+  // combat layer's final Dodge owner here, including prospective Dodge and a
+  // deliberately selected safe stop; the settlement resumes on owner release.
+  if (existing.ownership?.owner === 'emergency-dodge') return combat;
   combat.dryRun = {
     ...combat.dryRun,
     movement: {
