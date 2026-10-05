@@ -192,6 +192,12 @@ function assertImmediateRemoteRelease(nextBatch, firstNowMs = 2000, nextNowMs = 
 }
 
 function assertRealtimeSupersededMissionContinuity() {
+  let nativeTick = 1;
+  const advancedState = (...args) => {
+    const value = state(...args);
+    value.realtime.tick = nativeTick++;
+    return value;
+  };
   const adapter = createBrowserlessDecisionAdapter({
     userId: 7,
     controlMode: 'profit-live',
@@ -211,7 +217,7 @@ function assertRealtimeSupersededMissionContinuity() {
     expectedReward: 60,
     adjustedScore: 300000
   }));
-  const first = decide(adapter, state(fullStaminaSelf()), 2000, firstBatch, {
+  const first = decide(adapter, advancedState(fullStaminaSelf()), 2000, firstBatch, {
     controlMode: 'profit-live',
     combatEnabled: true
   });
@@ -224,7 +230,7 @@ function assertRealtimeSupersededMissionContinuity() {
   };
   const paused = decide(
     adapter,
-    state(fullStaminaSelf(), [], [{ drop_id: 'detour', amount: 1, x: 100, y: 0 }]),
+    advancedState(fullStaminaSelf(), [], [{ drop_id: 'detour', amount: 1, x: 100, y: 0 }]),
     2100,
     supersededBatch,
     { controlMode: 'profit-live', combatEnabled: true }
@@ -266,7 +272,7 @@ function assertRealtimeSupersededMissionContinuity() {
   };
   const handoff = decide(
     adapter,
-    state(fullStaminaSelf(), [realtimeMango]),
+    advancedState(fullStaminaSelf(), [realtimeMango]),
     2200,
     supersededBatch,
     {
@@ -285,7 +291,7 @@ function assertRealtimeSupersededMissionContinuity() {
 
   const missingWithinHold = decide(
     adapter,
-    state(fullStaminaSelf()),
+    advancedState(fullStaminaSelf()),
     2300,
     supersededBatch,
     { controlMode: 'profit-live', combatEnabled: true }
@@ -296,7 +302,7 @@ function assertRealtimeSupersededMissionContinuity() {
 
   const missingWithinOrdinaryHold = decide(
     adapter,
-    state(fullStaminaSelf()),
+    advancedState(fullStaminaSelf()),
     3501,
     supersededBatch,
     { controlMode: 'profit-live', combatEnabled: true }
@@ -308,22 +314,18 @@ function assertRealtimeSupersededMissionContinuity() {
 
   const missing = decide(
     adapter,
-    state(fullStaminaSelf()),
+    advancedState(fullStaminaSelf()),
     4201,
     supersededBatch,
     { controlMode: 'profit-live', combatEnabled: true }
   );
   assert.notStrictEqual(missing.action?.kind, 'seek-enemy');
   assert.strictEqual(missing.profit?.mission, null);
-  assert.ok([
-    'missing-hold-expired',
-    'held-provenance-expired'
-  ].includes(missing.profit?.missingEnemyHold?.releaseReason));
-  assert.strictEqual(adapter.getState().easyKillTargetSuppressions?.['99'], undefined);
+  assert.strictEqual(adapter.getState().easyKillTargetSuppressions?.['99']?.until, 124201);
 
   const highValueDetour = decide(
     adapter,
-    state(fullStaminaSelf(), [], [{ drop_id: 'high-detour', amount: 100, x: 100, y: 0 }], true),
+    advancedState(fullStaminaSelf(), [], [{ drop_id: 'high-detour', amount: 100, x: 100, y: 0 }], true),
     5100,
     supersededBatch,
     { controlMode: 'profit-live', combatEnabled: true }
@@ -334,8 +336,8 @@ function assertRealtimeSupersededMissionContinuity() {
 
   const resumed = decide(
     adapter,
-    state(fullStaminaSelf(), [{ ...realtimeMango, x: 45000 }], [], true),
-    5200,
+    advancedState(fullStaminaSelf(), [{ ...realtimeMango, x: 45000 }], [], true),
+    125000,
     supersededBatch,
     {
       controlMode: 'profit-live',
@@ -346,7 +348,7 @@ function assertRealtimeSupersededMissionContinuity() {
   );
   assert.strictEqual(resumed.action?.target?.userId, 99);
   assert.strictEqual(resumed.profit?.mission?.targetId, '99');
-  assert.strictEqual(resumed.profit?.mission?.selectedAt, 5200);
+  assert.strictEqual(resumed.profit?.mission?.selectedAt, 125000);
   assert.notStrictEqual(resumed.profit?.mission?.selectedAt, handoff.profit?.mission?.selectedAt);
   assert.strictEqual(resumed.action?.target?.cachedNavigationOnly, false);
 }

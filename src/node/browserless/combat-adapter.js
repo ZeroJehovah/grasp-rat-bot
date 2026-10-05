@@ -2981,7 +2981,11 @@ function buildCombatExitEvaluation(self, target, combatTargetState = {}, options
   const secondaryExitPolicy = secondaryCombatExitPolicy(target, hpValue(self));
   const secondaryTarget = secondaryExitPolicy.secondary;
   const secondaryHealthy = secondaryExitPolicy.healthy;
-  let immediateHpExit = evaluateCombatHpExitCore({ self, target }, options);
+  const metrics = combatMetrics || combatTargetState?.combatMetrics;
+  const exchange = String(metrics?.targetId || '') === String(combatTargetId(target) || '')
+    ? { selfDamage: metrics?.selfDamage, targetDamage: metrics?.targetDamage }
+    : {};
+  let immediateHpExit = evaluateCombatHpExitCore({ self, target, ...exchange }, options);
   if (secondaryHealthy && immediateHpExit?.rule === 'clear-hp-gap') immediateHpExit = null;
   if (target.easyKillThreatExempt && immediateHpExit?.rule !== 'critical-hp') {
     return { exit: null, baselineExit: null, disadvantageObservation: null };
@@ -3002,10 +3006,7 @@ function buildCombatExitEvaluation(self, target, combatTargetState = {}, options
     disadvantageSinceAt: combatTargetState?.disadvantageSinceAt,
     combatStartedAt: combatTargetState?.firstSeenAt ?? combatTargetState?.at,
     sampleCount: combatTargetState?.disadvantageSamples,
-    confirmedSelfDamage: Math.max(
-      Number((combatMetrics || combatTargetState?.combatMetrics)?.selfDamage || 0),
-      target.easyKillDamagedToday ? 1 : 0
-    )
+    ...exchange
   }, options);
   if (secondaryHealthy && evaluation.exit?.rule === 'clear-hp-gap') evaluation.exit = null;
   const nowMs = Number(options.nowMs || Date.now());
@@ -4772,7 +4773,11 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
   stateful.combatHpLossAttributionPending = observedFrame.hpLoss
     ? { hpLoss: observedFrame.hpLoss, observations: observedFrame.state.observations.slice() }
     : null;
-  const baselineExit = evaluateCombatHpExitCore({ self, target }, options);
+  const baselineExit = evaluateCombatHpExitCore({
+    self, target,
+    ...(same ? { selfDamage: stateful.combatMetrics?.selfDamage,
+      targetDamage: stateful.combatMetrics?.targetDamage } : {})
+  }, options);
   const disadvantaged = baselineExit?.rule === 'clear-hp-gap';
   const disadvantageSinceAt = disadvantaged
     ? (same && Number(previous?.disadvantageSinceAt || 0) > 0 ? Number(previous.disadvantageSinceAt) : nowMs)

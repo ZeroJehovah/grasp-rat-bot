@@ -1,5 +1,7 @@
 'use strict';
 
+const { SEARCH_COOLDOWN_MS } = require('./easy-kill-player-tracker');
+
 const { performance } = require('perf_hooks');
 const { buildUncommittedDefenseExitAction } = require('./uncommitted-defense');
 const { attackWorthTakingCore } = require('../../strategy/attack-worth');
@@ -979,6 +981,13 @@ function refreshEasyKillTargetAnnotations(
 ) {
   if (!input || typeof input !== 'object') return null;
   const status = statusOverride || easyKillTrackerStatus(options);
+  const suppressions = ensureEasyKillTargetSuppressionMap(stateful, input.nowMs);
+  for (const cooldown of status.searchCooldowns || []) {
+    const id = String(cooldown.userId);
+    if (Number(cooldown.untilMs) > Math.max(input.nowMs, Number(suppressions[id]?.until || 0))) {
+      suppressions[id] = { until: cooldown.untilMs, reason: 'easy-kill-search-cooldown' };
+    }
+  }
   const damageStatus = damageStatusOverride || dailyDamageTrackerStatus(options, input.nowMs);
   const knownPlayers = new Map((status.players || [])
     .map(player => [easyKillTargetUserId(player), player])
@@ -1005,6 +1014,8 @@ function refreshEasyKillTargetAnnotations(
       || easyKillTargetSuppressed(stateful, target, input.nowMs)
     );
     target.easyKillKnown = known;
+    target.easyKillSearchBlocked = blockedIds.has(String(userId))
+      || easyKillTargetSuppressed(stateful, target, input.nowMs);
     target.easyKillScore = score;
     target.easyKillSeekRangeCm = seekRangeCm || null;
     target.easyKillDamagedToday = damagedToday;
@@ -7438,6 +7449,9 @@ function remoteProfitCandidateInput(input, options = {}, stateful = {}) {
     .filter(id => id !== null)
     .map(String));
   const currentWhitelistIds = remoteProfitCurrentWhitelistIds(options);
+  const easyKillStatus = input?.[EASY_KILL_RECONCILED]?.trackerState || easyKillTrackerStatus(options);
+  const easyKillBlockedIds = new Set((easyKillStatus.blockedUserIds || []).map(String));
+  const currentEasyKillPlayers = new Map((easyKillStatus.players || []).map(player => [String(easyKillTargetUserId(player)), player]));
   const realtimeAuthorityIds = realtimeProfitAuthorityIds(input, options);
   // The worker observes raw realtime entities before the planner has applied
   // Active/whitelist/range/economic admission. A nearby ID is therefore not
@@ -7468,6 +7482,11 @@ function remoteProfitCandidateInput(input, options = {}, stateful = {}) {
       continue;
     }
     const id = String(userId);
+    if (easyKillBlockedIds.has(id) || easyKillTargetSuppressed(stateful, candidate, input.nowMs)) {
+      result.invalidatedIds.push(id);
+      reject('easy-kill-search-cooldown');
+      continue;
+    }
     const completed = completedProfitTargets[id];
     // A completion tombstone suppresses only the same snapshot (or an older
     // one) in the same realtime tick epoch.  It is deliberately independent
@@ -7491,6 +7510,12 @@ function remoteProfitCandidateInput(input, options = {}, stateful = {}) {
       continue;
     }
     const classification = String(candidate.classification || '');
+    const currentEasyKill = currentEasyKillPlayers.get(id);
+    if (classification === 'easy-kill-active' && easyKillPlayerTracker(options) && !currentEasyKill) {
+      result.invalidatedIds.push(id);
+      reject('easy-kill-no-longer-known');
+      continue;
+    }
     const snapshotRemainingMs = numberOrNull(candidate.invulnerableRemainingMs);
     const snapshotInvulnerable = Boolean(candidate.invulnerable || (snapshotRemainingMs !== null && snapshotRemainingMs > 0));
     const remainingNowMs = snapshotRemainingMs === null
@@ -7518,12 +7543,48 @@ function remoteProfitCandidateInput(input, options = {}, stateful = {}) {
       reject('invalid-current-distance');
       continue;
     }
+    if (classification === 'easy-kill-active' && currentEasyKill
+      && easyKillSeekRangeCm(currentEasyKill.score) !== null
+      && distanceNow > easyKillSeekRangeCm(currentEasyKill.score)) {
+      result.invalidatedIds.push(id);
+      reject('easy-kill-current-score-range');
+      continue;
+    }
     // Arrival is a staleness proof about the snapshot's own claim: standing on
     // the claimed position with nothing visible there disproves the snapshot.
     // It therefore stays measured from the snapshot position even when a fresher
     // realtime memory is driving navigation and the economics correction.
     const snapshotDistanceNow = distanceBetween(input.self, { x: candidate.x, y: candidate.y });
     const arrivalDistanceCm = Number.isFinite(snapshotDistanceNow) ? snapshotDistanceNow : distanceNow;
+    const searching = classification === 'easy-kill-active'
+      && profitMissionTargetId(stateful.profitMission) === id
+      && !visibleIds.has(id)
+      && arrivalDistanceCm <= Math.max(0, opportunityVisibleDistance(options) - 1000)
+      && Number(input.realtime?.frameAgeMs ?? Infinity) <= 500;
+    if (searching) {
+      const previousSearch = stateful.remoteEasyKillSearch;
+      const tick = Number(input.realtime?.tick);
+      const continuous = previousSearch?.targetId === id
+        && input.nowMs - previousSearch.lastAt <= 1500
+        && tick >= previousSearch.lastTick;
+      const search = continuous ? previousSearch : {
+        targetId: id, startedAt: input.nowMs, startedTick: tick
+      };
+      search.lastAt = input.nowMs;
+      search.lastTick = tick;
+      stateful.remoteEasyKillSearch = search;
+      if (input.nowMs - search.startedAt >= 2500 && tick > search.startedTick) {
+        // This disproves the navigation hypothesis, not the player's existence.
+        // Score only the selected search; never every absent batch candidate.
+        recordEasyKillApproachFailure(input, stateful, candidate, options, 'easy-kill-remote-search-missing');
+        stateful.remoteEasyKillSearch = null;
+        missSuppressed.add(id);
+        reject('easy-kill-remote-search-missing');
+        continue;
+      }
+    } else if (stateful.remoteEasyKillSearch?.targetId === id) {
+      stateful.remoteEasyKillSearch = null;
+    }
     // Keep an invulnerable target selected through its configured approach
     // band so the action layer can stop there and retain the mission until
     // native state clears protection.  A normal remote target uses the
@@ -7607,6 +7668,7 @@ function remoteProfitCandidateInput(input, options = {}, stateful = {}) {
     }
     result.candidates.push({
       ...candidate,
+      ...(classification === 'easy-kill-active' && currentEasyKill ? { easyKillScore: currentEasyKill.score } : {}),
       ...(freshestPosition.source === 'realtime'
         ? { x: freshestPosition.position.x, y: freshestPosition.position.y }
         : {}),
@@ -8806,6 +8868,7 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     .filter(target => ordinaryActiveProfitEligible(target, options));
   const enemyOpportunityTargets = Array.from(new Map(
     [...afkOpportunityTargets, ...easyKillOpportunityTargets, ...ordinaryActiveProfitTargets]
+      .filter(target => !target.easyKillSearchBlocked && !easyKillTargetSuppressed(stateful, target, input.nowMs))
       .map(target => [String(target.user_id ?? target.userId ?? target.entity_id ?? target.entityId ?? ''), target])
       .filter(([id]) => id)
   ).values());
@@ -11372,9 +11435,16 @@ function buildBrowserlessInjuryHpExitDecision(input, stateful, combat, options =
   const pressureTargetSource = currentPressureMatches
     ? currentPressure.targetSource
     : (injury.targetSource || 'unknown');
+  const exchangeMetrics = stateful.combatMetrics;
+  const matchingExchange = String(exchangeMetrics?.targetId || '') === String(easyKillTargetUserId(target) ?? '')
+    && nowMs >= Number(exchangeMetrics?.lastObservedAt)
+    && nowMs - Number(exchangeMetrics?.lastObservedAt) <= 2000
+    && (targetHpEvidence.targetCount === undefined || targetHpEvidence.targetCount <= 1);
   const combatExit = evaluateCombatHpExitCore({
     selfHp: hpValue(input.self),
-    targetHp: targetHpEvidence.targetHp
+    targetHp: targetHpEvidence.targetHp,
+    ...(matchingExchange ? { selfDamage: exchangeMetrics?.selfDamage,
+      targetDamage: exchangeMetrics?.targetDamage } : {})
   }, options);
   if (!combatExit) return null;
   return {
@@ -14329,7 +14399,7 @@ function suppressEasyKillTarget(stateful = {}, target = null, input = {}, option
   const userId = easyKillTargetUserId(target);
   if (userId === null) return null;
   const nowMs = Number(input?.nowMs || Date.now());
-  const suppressMs = Math.max(0, Number(options.browserlessProfitPursuitSuppressMs
+  const suppressMs = Math.max(SEARCH_COOLDOWN_MS, Number(options.browserlessProfitPursuitSuppressMs
     ?? BROWSER_RUNTIME_DEFAULTS.browserlessProfitPursuitSuppressMs
     ?? 60000));
   const record = {
@@ -14372,6 +14442,18 @@ function recordEasyKillApproachFailure(input, stateful = {}, target = null, opti
 function reconcileEasyKillApproach(input, stateful = {}, options = {}) {
   const approach = stateful.easyKillApproach || null;
   if (!approach) return null;
+  const observationTick = Number(input.realtime?.tick);
+  if (!input.self || Number(input.realtime?.frameAgeMs ?? Infinity) > 500) {
+    approach.missingSince = 0;
+    return null;
+  }
+  if (Number(approach.lastObservationAt) > 0
+    && (input.nowMs - approach.lastObservationAt > 1500 || observationTick < approach.lastObservationTick)) {
+    approach.missingSince = 0;
+  }
+  const tickAdvanced = !Number.isFinite(approach.lastObservationTick) || observationTick > approach.lastObservationTick;
+  approach.lastObservationAt = input.nowMs;
+  approach.lastObservationTick = observationTick;
   const combatTarget = stateful.combatTarget || null;
   const combatTargetId = targetIdentity(combatTarget);
   if ((combatTarget?.combatPhase === 'close-pressure' || combatTarget?.closePressure?.active === true)
@@ -14386,7 +14468,16 @@ function reconcileEasyKillApproach(input, stateful = {}, options = {}) {
     const missingSince = Number(approach.missingSince || 0) || nowMs;
     approach.missingSince = missingSince;
     const missingHoldMs = Math.max(1000, Number(options.enemyMissingHoldMs || 1800));
-    if (nowMs - missingSince >= missingHoldMs) {
+    if (nowMs - missingSince >= missingHoldMs && tickAdvanced) {
+      const status = input?.[EASY_KILL_RECONCILED]?.trackerState || easyKillTrackerStatus(options);
+      const pendingCombat = (status.engagements || []).some(item => String(item.userId) === String(approach.targetId));
+      const observedDeath = [...(input.selfKillEvidence || []), ...(input.observedKillEvidence || [])]
+        .some(item => String(item.targetUserId ?? item.targetId) === String(approach.targetId));
+      if (!pendingCombat && !observedDeath && Number(input.realtime?.frameAgeMs ?? Infinity) <= 500) {
+        return recordEasyKillApproachFailure(input, stateful, {
+          userId: Number(approach.targetId), name: approach.name
+        }, options, 'easy-kill-approach-target-missing');
+      }
       stateful.easyKillApproach = null;
       return {
         reason: 'easy-kill-approach-target-missing',
@@ -16270,6 +16361,7 @@ function createBrowserlessDecisionAdapter(options = {}) {
         recentInvulnerableThreats: decisionState.recentInvulnerableThreats || {},
         realtimeLootIntent: decisionState.realtimeLootIntent || null,
         easyKillApproach: decisionState.easyKillApproach || null,
+        remoteEasyKillSearch: decisionState.remoteEasyKillSearch || null,
         easyKillTargetSuppressions: decisionState.easyKillTargetSuppressions || {},
         fleeLock: decisionState.fleeLock || null,
         returnBlockLock: decisionState.returnBlockLock || null,

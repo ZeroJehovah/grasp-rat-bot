@@ -8,7 +8,8 @@ const {
   storedNameAtMs
 } = require('./player-name-observation');
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
+const SEARCH_COOLDOWN_MS = 120000;
 const INITIAL_SCORE = 1;
 const MAX_SCORE = 10;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
@@ -132,6 +133,7 @@ function emptyStore() {
     updatedAt: '',
     lastScoreDecayDay: '',
     players: {},
+    searchCooldowns: {},
     rankedDeathWatermarks: {},
     engagements: {}
   };
@@ -203,6 +205,12 @@ function normalizeStore(value) {
   if (!value || typeof value !== 'object') return output;
   output.updatedAt = String(value.updatedAt || '');
   output.lastScoreDecayDay = String(value.lastScoreDecayDay || '');
+  for (const [key, entry] of Object.entries(value.searchCooldowns || {})) {
+    const userId = numberOrNull(key.replace(/^user:/, ''));
+    if (userId !== null && Number.isFinite(entry?.untilMs)) {
+      output.searchCooldowns[playerKey(userId)] = { untilMs: entry.untilMs, reason: String(entry.reason || '') };
+    }
+  }
   for (const [key, entry] of Object.entries(value.rankedDeathWatermarks || {})) {
     if (Number.isFinite(entry?.occurredAtMs) && typeof entry?.key === 'string') {
       output.rankedDeathWatermarks[key] = { key: entry.key, occurredAtMs: entry.occurredAtMs };
@@ -268,7 +276,7 @@ function createEasyKillPlayerTracker(options = {}) {
   if (!Number.isFinite(lastWriteAtMs)) lastWriteAtMs = 0;
   if (!fileExists || migrateOnStart) {
     const createdAtMs = now();
-    store.lastScoreDecayDay = dayKey(createdAtMs);
+    if (!store.lastScoreDecayDay) store.lastScoreDecayDay = dayKey(createdAtMs);
     store.updatedAt = new Date(createdAtMs).toISOString();
     writeStore(file, store);
     lastWriteAtMs = createdAtMs;
@@ -283,9 +291,16 @@ function createEasyKillPlayerTracker(options = {}) {
 
   function persist(atMs = now()) {
     const timestamp = Number.isFinite(Number(atMs)) ? Number(atMs) : now();
+    for (const [key, entry] of Object.entries(store.searchCooldowns)) {
+      if (entry.untilMs <= timestamp) delete store.searchCooldowns[key];
+    }
     store.updatedAt = new Date(timestamp).toISOString();
     writeStore(file, store, backgroundIo);
     lastWriteAtMs = timestamp;
+  }
+
+  function setSearchCooldown(key, atMs, reason) {
+    store.searchCooldowns[key] = { untilMs: atMs + SEARCH_COOLDOWN_MS, reason: String(reason || '') };
   }
 
   // 面板手动录入: 分数按 MAX_SCORE 夹紧, 已有记录只抬高分数、不回退击杀统计。
@@ -348,6 +363,7 @@ function createEasyKillPlayerTracker(options = {}) {
     for (const [key, player] of Object.entries(store.players)) {
       const previousScore = normalizedScore(player?.score, INITIAL_SCORE);
       const score = Math.max(0, previousScore - daysElapsed);
+      if (score < previousScore) setSearchCooldown(key, atMs, 'daily-score-decay');
       decremented += Math.min(previousScore, daysElapsed);
       if (score > 0) player.score = score;
       else {
@@ -444,13 +460,20 @@ function createEasyKillPlayerTracker(options = {}) {
     refreshDailyScores(atMs);
     const players = playerStatus();
     const engagements = engagementStatus();
+    const searchCooldowns = Object.entries(store.searchCooldowns)
+      .filter(([, entry]) => entry.untilMs > atMs)
+      .map(([key, entry]) => ({ userId: Number(key.slice(5)), ...entry }));
     return {
       file,
       updatedAt: store.updatedAt,
       lastScoreDecayDay: store.lastScoreDecayDay,
       playerCount: players.length,
       players,
-      blockedUserIds: engagements.filter(item => !item.active).map(item => item.userId),
+      blockedUserIds: [...new Set([
+        ...engagements.filter(item => !item.active).map(item => item.userId),
+        ...searchCooldowns.map(item => item.userId)
+      ])],
+      searchCooldowns,
       engagements
     };
   }
@@ -816,6 +839,7 @@ function createEasyKillPlayerTracker(options = {}) {
       // to decrement. That deletion is the guard; see the observed-death self-tests.
       const shouldDecrement = failureShouldDecrementScore(engagement.endReason);
       const score = shouldDecrement ? Math.max(0, previousScore - 1) : previousScore;
+      if (existing && shouldDecrement) setSearchCooldown(key, atMs, engagement.endReason);
       if (existing && score > 0) existing.score = score;
       if (existing && score <= 0) delete store.players[key];
       delete store.engagements[key];
@@ -828,6 +852,7 @@ function createEasyKillPlayerTracker(options = {}) {
         reason: engagement.endReason || 'outcome-timeout',
         previousScore,
         score,
+        searchCooldownUntilMs: store.searchCooldowns[key]?.untilMs || null,
         decremented: Boolean(existing && shouldDecrement),
         removed: Boolean(existing && shouldDecrement && score <= 0),
         neutral: !shouldDecrement
@@ -845,10 +870,15 @@ function createEasyKillPlayerTracker(options = {}) {
     const atMs = Number.isFinite(Number(detail.atMs)) ? Number(detail.atMs) : now();
     refreshDailyScores(atMs);
     const key = playerKey(userId);
+    // Repeated planner/Worker effects from the same failed search score once.
+    if (Number(store.searchCooldowns[key]?.untilMs || 0) > atMs) {
+      return { ok: true, ignored: true, reason: 'search-cooldown-active' };
+    }
     const existing = store.players[key] || null;
     const engagement = store.engagements[key] || null;
     const previousScore = existing ? normalizedScore(existing.score, INITIAL_SCORE) : 0;
     const score = Math.max(0, previousScore - 1);
+    if (existing) setSearchCooldown(key, atMs, reason);
     if (existing && score > 0) existing.score = score;
     if (existing && score <= 0) delete store.players[key];
     if (engagement) delete store.engagements[key];
@@ -861,6 +891,7 @@ function createEasyKillPlayerTracker(options = {}) {
       reason: String(reason || 'approach-stop-loss'),
       previousScore,
       score,
+      searchCooldownUntilMs: store.searchCooldowns[key]?.untilMs || null,
       decremented: Boolean(existing),
       removed: Boolean(existing && score <= 0),
       immediate: true
@@ -888,6 +919,7 @@ function createEasyKillPlayerTracker(options = {}) {
 }
 
 module.exports = {
+  SEARCH_COOLDOWN_MS,
   DEFAULT_OUTCOME_GRACE_MS,
   INITIAL_SCORE,
   MAX_SCORE,

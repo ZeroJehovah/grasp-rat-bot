@@ -22,7 +22,7 @@ function runRankedPlayerDeathSelfTest() {
     observe(2, 500); observe(3, 499); observe(1, 900); observe(4, 700);
     at += 1000;
     observe(2, 20); // Retained rank membership survives a post-death Drop decrease.
-    assert.strictEqual(promote([death(2, 'death-2')]).promoted, 1);
+    assert.strictEqual(promote([death(2, 'death-2', start + 1000)]).promoted, 1);
     assert.strictEqual(player(2).score, 10);
     assert.strictEqual(player(2).killCount, 0);
     assert.strictEqual(easy.status(at).engagements.length, 0);
@@ -33,12 +33,15 @@ function runRankedPlayerDeathSelfTest() {
     assert.strictEqual(player(2).score, 9);
     easy = createEasyKillPlayerTracker({ file, now: () => at });
     assert.strictEqual(player(2).killCount, 0);
-    assert.strictEqual(promote([death(2, 'death-2')]).promoted, 0);
+    assert.strictEqual(promote([death(2, 'death-2', start + 1000)]).promoted, 0);
     assert.strictEqual(player(2).score, 9);
-    for (let i = 0; i < 9; i += 1) easy.recordImmediateFailure({ userId: 2 }, 'test-failure', { atMs: at });
+    for (let i = 0; i < 9; i += 1) {
+      at += 120000;
+      easy.recordImmediateFailure({ userId: 2 }, 'test-failure', { atMs: at });
+    }
     assert.strictEqual(player(2), undefined);
     easy = createEasyKillPlayerTracker({ file, now: () => at });
-    assert.strictEqual(promote([death(2, 'death-2')]).promoted, 0);
+    assert.strictEqual(promote([death(2, 'death-2', start + 1000)]).promoted, 0);
     at += 1000;
     assert.strictEqual(promote([death(2, 'death-2-next')]).promoted, 1);
     easy.observeCombatEngagement({ userId: 4, active: true }, { atMs: at, tick: 90, selfHp: 100 });

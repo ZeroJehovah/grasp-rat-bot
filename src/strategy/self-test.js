@@ -1232,7 +1232,7 @@ function runStrategyModuleSelfTests() {
   const escortedSecondary = { combatRole: 'secondary', secondaryTarget: true };
   const composedStaticHpExit = (selfHp, targetHp, target = escortedSecondary) => {
     const policy = secondaryCombatExitPolicy(target, selfHp);
-    const raw = evaluateCombatHpExitCore({ selfHp, targetHp }, {});
+    const raw = evaluateCombatHpExitCore({ selfHp, targetHp, selfDamage: 3, targetDamage: 0 }, {});
     const suppressed = Boolean(raw && raw.rule === 'clear-hp-gap' && policy.suppressClearHpGap);
     return { rule: raw?.rule ?? null, suppressed, effective: suppressed ? null : raw };
   };
@@ -8761,7 +8761,7 @@ function runStrategyModuleSelfTests() {
       && evaluateCombatHpExitCore({ selfHp: 31, targetHp: 31 }) === null
       && evaluateCombatHpExitCore({ selfHp: 49, targetHp: 50 })?.rule === 'low-hp-behind'
       && evaluateCombatHpExitCore({ selfHp: 49, targetHp: 49 }) === null
-      && evaluateCombatHpExitCore({ selfHp: 80, targetHp: 100 })?.rule === 'clear-hp-gap'
+      && evaluateCombatHpExitCore({ selfHp: 80, targetHp: 100, selfDamage: 3, targetDamage: 0 })?.rule === 'clear-hp-gap'
       && evaluateCombatHpExitCore({ selfHp: 80, targetHp: 99 }) === null
   });
 
@@ -8939,16 +8939,32 @@ function runStrategyModuleSelfTests() {
     disadvantageSinceAt: 1000,
     combatStartedAt: 1000,
     sampleCount: 1,
-    confirmedSelfDamage: 3
+    selfDamage: 3,
+    targetDamage: 0
   });
   results.push({
-    name: 'combat-clear-hp-gap-confirms-new-target-but-preserves-immediate-damage-exit',
+    name: 'combat-clear-hp-gap-requires-losing-current-exchange-even-after-observation-timeout',
     passed: pendingDisadvantage.exit === null
-      && pendingDisadvantage.disadvantageObservation?.ready === false
-      && confirmedDisadvantage.exit?.reason === 'combat-hp-disadvantage-leave'
-      && confirmedDisadvantage.disadvantageObservation?.ready === true
+      && pendingDisadvantage.disadvantageObservation === null
+      && confirmedDisadvantage.exit === null
+      && confirmedDisadvantage.disadvantageObservation === null
       && damageConfirmedDisadvantage.exit?.reason === 'combat-hp-disadvantage-leave'
-      && damageConfirmedDisadvantage.disadvantageObservation?.kind === 'confirmed-target-damage'
+      && damageConfirmedDisadvantage.disadvantageObservation?.kind === 'confirmed-losing-exchange'
+  });
+
+  results.push({
+    name: 'combat-hp-gap-needs-strict-loss-and-complete-current-engagement-evidence',
+    passed: [
+      {}, { selfDamage: 0, targetDamage: 0 },
+      { selfDamage: 3, targetDamage: 3 }, { selfDamage: 3, targetDamage: 6 },
+      { selfDamage: 3 }, { selfDamage: 3, targetDamage: -1 },
+      { confirmedSelfDamage: 1, easyKillDamagedToday: true }
+    ].every(exchange => evaluateConfirmedCombatHpExitCore({
+      selfHp: 80, targetHp: 100, nowMs: 100000, combatStartedAt: 1,
+      disadvantageSinceAt: 1, sampleCount: 999, ...exchange
+    }).exit === null)
+      && evaluateCombatHpExitCore({ selfHp: 80, targetHp: 100, selfDamage: 6, targetDamage: 3 })?.shouldLeave
+      && evaluateCombatHpExitCore({ selfHp: 81, targetHp: 100, selfDamage: 6, targetDamage: 3 }) === null
   });
 
   const coverageInput = {

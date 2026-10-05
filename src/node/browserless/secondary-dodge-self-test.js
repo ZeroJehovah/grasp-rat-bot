@@ -1,7 +1,7 @@
 'use strict';
 const assert = require('assert');
 const { buildCombatMovementPlan } = require('./combat-adapter');
-const { calculateDodgeDirection } = require('../../strategy/combat-movement');
+const { calculateDodgeDirection, resolveDistanceAwareDodgeCore } = require('../../strategy/combat-movement');
 function runSecondaryDodgeSelfTest() {
   const self = { x: 0, y: 0, vx: 0, vy: 0, hp: 70, stamina_5s_remaining_milli: 5000 };
   const target = { user_id: 2, x: 3200, y: 0, vx: 0, vy: 0, distance: 3200, active: true, combatRole: 'secondary' };
@@ -54,7 +54,32 @@ function runSecondaryDodgeSelfTest() {
   assert.strictEqual(crossingPlan.dy, 1, 'the near-shot-safe direction survives final secondary movement ownership');
   const single = calculateDodgeDirection(crossingSelf, crossing.slice(0, 1), crossingOptions);
   assert.strictEqual(single.threatField[0].directHits, 0, 'fully safe directions retain priority');
-  return { ok: true, cases: 11 };
+  const allHit = [-1, 1].map(dy => ({ dx: 0, dy, directHits: 1, unavoidableHits: 1, minCPA: 0 }));
+  const closeInput = { self, target, targetId: '2', engagementId: 'test', nowMs: 10000,
+    baseMovement: { dx: 0, dy: 0 }, radialIntentVector: { dx: 0, dy: 0 },
+    currentDirection: { dx: 1, dy: 0 }, dodge: { threatField: allHit },
+    activeOpponent: true, reactionSlack: { tickMs: 50, commandBudgetMs: 400,
+      prospectiveReactionSlackMs: -80, currentShotAvoidability: 'unavoidable', threateningBulletCount: 1 } };
+  const left = resolveDistanceAwareDodgeCore(closeInput, { rng: () => 0 });
+  const right = resolveDistanceAwareDodgeCore(closeInput, { rng: () => 0.99 });
+  assert(left.applied && right.applied && left.direction.dy !== right.direction.dy,
+    'random choice explores both equally risky tangents');
+  const held = resolveDistanceAwareDodgeCore({ ...closeInput, nowMs: 10100, previousState: left.state }, { rng: () => 0.99 });
+  assert.strictEqual(held.direction.dy, left.direction.dy, 'latch prevents per-frame random reversal');
+  const changedRisk = resolveDistanceAwareDodgeCore({ ...closeInput, nowMs: 10100, previousState: left.state,
+    dodge: { threatField: [{ ...allHit[0], directHits: 2 }, allHit[1]] } }, { rng: () => 0 });
+  assert.strictEqual(changedRisk.direction.dy, 1, 'new collision risk immediately invalidates latch');
+  for (const extra of [{ lowStamina: true }, { exitActive: true }, { collisionRisk: true },
+    { reactionSlack: { ...closeInput.reactionSlack, prospectiveReactionSlackMs: 900 } }]) {
+    assert(!resolveDistanceAwareDodgeCore({ ...closeInput, ...extra }, { rng: () => 0 }).applied,
+      'budget, safety, and a distant late shot cannot authorize close tangents');
+  }
+  const unavoidablePlan = buildCombatMovementPlan({ ...self, stamina_5s_remaining_milli: 10000 }, target,
+    [{ ...bullet, remainingTicks: 10 }], { ...options, movementExecutionTiming: { sampleCount: 10, medianTicks: 5, p90Ticks: 5 } });
+  assert.strictEqual(unavoidablePlan.distanceAwareDodge.preDodgeReason, 'unavoidable-close-tangent');
+  assert.strictEqual(unavoidablePlan.dy, unavoidablePlan.distanceAwareDodge.direction.dy,
+    'selected tangent survives final movement arbitration');
+  return { ok: true, cases: 19 };
 }
 module.exports = { runSecondaryDodgeSelfTest };
 if (require.main === module) console.log(JSON.stringify(runSecondaryDodgeSelfTest()));

@@ -43,6 +43,10 @@ function evaluateCombatHpExitCore(input = {}, options = {}) {
 
   const thresholds = combatHpExitThresholdsCore(options);
   const hpGap = targetHp === null ? null : targetHp - selfHp;
+  // Only this engagement's observed HP losses qualify the gap rule. Daily
+  // history, elapsed time and missing opponent damage are not exchange proof.
+  const selfDamage = numberOrNull(input.selfDamage);
+  const targetDamage = numberOrNull(input.targetDamage);
 
   if (thresholds.criticalHp > 0 && selfHp <= thresholds.criticalHp) {
     return {
@@ -75,7 +79,9 @@ function evaluateCombatHpExitCore(input = {}, options = {}) {
 
   if (targetHp !== null
     && thresholds.disadvantageHpGap > 0
-    && hpGap >= thresholds.disadvantageHpGap) {
+    && hpGap >= thresholds.disadvantageHpGap
+    && selfDamage !== null && targetDamage !== null
+    && targetDamage >= 0 && selfDamage > targetDamage) {
     return {
       shouldLeave: true,
       policy: 'static-hp',
@@ -84,6 +90,8 @@ function evaluateCombatHpExitCore(input = {}, options = {}) {
       selfHp,
       targetHp,
       hpGap,
+      selfDamage,
+      targetDamage,
       threshold: thresholds.disadvantageHpGap
     };
   }
@@ -191,24 +199,14 @@ function evaluateConfirmedCombatHpExitCore(input = {}, options = {}) {
   if (!baselineExit || baselineExit.rule !== 'clear-hp-gap') {
     return { exit: baselineExit, baselineExit, disadvantageObservation: null };
   }
-  const confirmedSelfDamage = Math.max(0, numberOrNull(input.confirmedSelfDamage ?? input.selfDamage) ?? 0);
-  if (confirmedSelfDamage > 0) {
-    const disadvantageObservation = {
-      kind: 'confirmed-target-damage',
-      ready: true,
-      confirmedSelfDamage
-    };
-    return {
-      exit: { ...baselineExit, disadvantageObservation },
-      baselineExit,
-      disadvantageObservation
-    };
-  }
-  const disadvantageObservation = combatDisadvantageConfirmationCore(input, options);
+  const disadvantageObservation = {
+    kind: 'confirmed-losing-exchange',
+    ready: true,
+    confirmedSelfDamage: baselineExit.selfDamage,
+    confirmedTargetDamage: baselineExit.targetDamage
+  };
   return {
-    exit: disadvantageObservation.ready
-      ? { ...baselineExit, disadvantageObservation }
-      : null,
+    exit: { ...baselineExit, disadvantageObservation },
     baselineExit,
     disadvantageObservation
   };

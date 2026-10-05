@@ -1743,18 +1743,55 @@ function resolveDistanceAwareDodgeCore(input = {}, options = {}) {
   let invalidatePreviousLatch = false;
   if (mode === 'close-proactive' && !blockedReason && activeOpponent) {
     if (reactionSlack.currentShotAvoidability === 'unavoidable' && currentThreat) {
-      // The current shot has no safe command sequence left. Do not reverse
-      // into an unproven direction; preserve the existing movement and wait
-      // for the next volley to become actionable.
-      preDodgeReason = 'unavoidable-current-shot';
-      selectedDirection = normalizedDirection(
-        input.unavoidableHoldDirection
-          || pendingDirection
-          || currentDirection
-      );
-      suppressCurrentShotDodge = true;
-      latch = null;
-      invalidatePreviousLatch = true;
+      // A late bullet can be unavoidable at any range. Only a NEW shot whose
+      // full flight already consumes the reaction budget warrants close-range
+      // stochastic tangents. Equal unavoidable risk must not freeze a straight
+      // path for every following volley.
+      const physicallyClose = Number.isFinite(reactionSlack.prospectiveReactionSlackMs)
+        && reactionSlack.prospectiveReactionSlackMs <= Number(reactionSlack.tickMs || 50);
+      const field = Array.isArray(actualThreatField) ? actualThreatField : [];
+      const minHits = Math.min(...field.map(row => Number(row.directHits || 0)));
+      const minUnavoidable = Math.min(...field.filter(row => Number(row.directHits || 0) === minHits)
+        .map(row => Number(row.unavoidableHits || 0)));
+      const tx = Number(target.x) - Number(input.self?.x);
+      const ty = Number(target.y) - Number(input.self?.y);
+      const distance = Math.hypot(tx, ty);
+      const tangents = physicallyClose && minHits > 0 && distance > 0 ? field.filter(row => {
+        const length = Math.hypot(row.dx, row.dy);
+        return length > 0 && Number(row.directHits || 0) === minHits
+          && Number(row.unavoidableHits || 0) === minUnavoidable
+          && Math.abs((row.dx * tx + row.dy * ty) / (length * distance)) <= Math.SQRT1_2
+          && sameRadialIntentCore(row, radialIntent, { minimumDot: 0 })
+          && candidateWithinBoundaryCore(input.self, row, options);
+      }) : [];
+      const retained = previousLatchMatches && previousLatch?.submode === 'stochastic'
+        && Number(previousLatch.holdUntilMs) > nowMs
+        ? tangents.find(row => row.dx === previousLatchDirection.dx && row.dy === previousLatchDirection.dy)
+        : null;
+      const selection = retained ? { selected: retained, randomChoice: previousLatch.randomChoice }
+        : selectStochasticDodgeCandidateCore(tangents, options);
+      if (selection.selected) {
+        closeSubmode = 'stochastic';
+        selectedDirection = selection.selected;
+        randomChoice = selection.randomChoice;
+        randomHoldUntil = retained ? previousLatch.holdUntilMs
+          : nowMs + Math.max(Number(options.latchMinimumHoldMs ?? 250), Number(reactionSlack.commandBudgetMs || 0));
+        preDodgeReason = retained ? 'latched-close-tangent' : 'unavoidable-close-tangent';
+        preDodgeTrigger = true;
+      } else {
+        // The current shot has no safe command sequence left. Do not reverse
+        // into an unproven direction; preserve the existing movement and wait
+        // for the next volley to become actionable.
+        preDodgeReason = 'unavoidable-current-shot';
+        selectedDirection = normalizedDirection(
+          input.unavoidableHoldDirection
+            || pendingDirection
+            || currentDirection
+        );
+        suppressCurrentShotDodge = true;
+        latch = null;
+        invalidatePreviousLatch = true;
+      }
     } else if (previousLatchActive) {
       closeSubmode = DISTANCE_AWARE_DODGE_SUBMODES.has(String(previousLatch.submode))
         ? String(previousLatch.submode)

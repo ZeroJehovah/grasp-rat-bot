@@ -22156,10 +22156,10 @@ async function runSelfTest() {
           behind.decision.action.combatExit?.engagedTargetCount ?? ''
         ].join('|');
       })(),
-      want: 'combat-live|combat-live-realtime|36046|true|79|2|no-exit|combat-hp-disadvantage-leave|79|2'
+      want: 'combat-live|combat-live-realtime|36046|true|79|2|no-exit|combat-live-realtime||'
     },
     {
-      name: 'browserless third-party invulnerable pressure bypasses unrelated established combat suppression',
+      name: 'browserless third-party invulnerable pressure avoids without borrowing unrelated exchange damage',
       got: (() => {
         const nowMs = 2000;
         const stateful = {
@@ -22233,7 +22233,7 @@ async function runSelfTest() {
           pressure.suppressionReason
         ].join('|');
       })(),
-      want: 'safety-exit|combat-hp-disadvantage-leave|79|100|9|9|8|false|true|pressure-actor-differs-from-combat-target'
+      want: 'flee|avoid-invulnerable-target|||9|||||'
     },
     {
       name: 'browserless same attackable actor established combat suppresses a single old pressure bridge',
@@ -23143,7 +23143,7 @@ async function runSelfTest() {
       want: 'wait-for-full-stamina-and-hp|false|unconfirmed-tail|false|31361'
     },
     {
-      name: 'browserless new high-hp-gap target waits for disadvantage confirmation',
+      name: 'browserless new high-hp-gap target has no losing exchange evidence',
       got: (() => {
         const combat = buildBrowserlessCombatDryRun({
           userId: 7,
@@ -23159,13 +23159,11 @@ async function runSelfTest() {
         }, { nowMs: 1500, decisionState: {}, combatAttackRange: 11000, combatHighHpDisadvantageGap: 20 });
         return [
           combat.exit === null,
-          combat.disadvantageObservation.ready,
-          combat.disadvantageObservation.sampleCount,
-          combat.disadvantageObservation.engagedMs,
+          combat.disadvantageObservation === null,
           combat.shooting.wouldShoot
         ].join('|');
       })(),
-      want: 'true|false|1|0|false'
+      want: 'true|true|false'
     },
     {
       name: 'browserless combat exits after confirmed exact 20 hp disadvantage boundary',
@@ -23175,9 +23173,9 @@ async function runSelfTest() {
           userId: 7,
           realtime: {
             tick: 62 + Math.round(nowMs / 1000),
-            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 70, stamina_5s_remaining_milli: 10000 },
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: nowMs < 4500 ? 73 : 70, stamina_5s_remaining_milli: 10000 },
             entities: [
-              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 70, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: nowMs < 4500 ? 73 : 70, stamina_5s_remaining_milli: 10000 },
               { entity_id: 2, user_id: 8, name: 'active', x: 1000, y: 0, hp: 90, current_join_mode: 'Active', firing: true, drop: 12 }
             ],
             bullets: []
@@ -23201,11 +23199,12 @@ async function runSelfTest() {
           combat.exit.reason,
           combat.exit.hpGap,
           combat.exit.disadvantageObservation.ready,
-          combat.exit.disadvantageObservation.sampleCount,
+          combat.exit.disadvantageObservation.confirmedSelfDamage,
+          combat.exit.disadvantageObservation.confirmedTargetDamage,
           combat.shooting.wouldShoot
         ].join('|');
       })(),
-      want: 'combat-hp-disadvantage-leave|20|true|4|false'
+      want: 'combat-hp-disadvantage-leave|20|true|3|0|false'
     },
     {
       name: 'browserless low hp disadvantage exits on any real deficit',
@@ -29548,7 +29547,7 @@ async function runSelfTest() {
           damageCommit.action?.reason,
           damageCommit.input?.loot?.mode,
           damageCommit.input?.loot?.acceptedDamageRisk,
-          damageCommit.input?.loot?.deferredExitReasons?.includes('combat-hp-disadvantage-leave'),
+          damageCommit.input?.loot?.deferredExitReasons?.includes('combat-hp-disadvantage-leave') === true,
           damageCommit.action?.shouldLeave === true,
           fullPlanner.action?.kind,
           fullPlanner.action?.highValueLootCommitment?.mode,
@@ -29560,7 +29559,7 @@ async function runSelfTest() {
           ['coin', 'seek-coin', 'patrol'].includes(missing.action?.kind)
         ].join('|');
       })(),
-      want: 'combat-live|post-kill-loot-safe-dodge|safe-dodge-toward-coin|true|false|combat-live|post-kill-loot-damage-commit|damage-commit|true|true|false|coin|damage-commit|true|combat-low-hp-secondary-leave|combat-critical-hp-leave|true|true|false'
+      want: 'combat-live|post-kill-loot-safe-dodge|safe-dodge-toward-coin|true|false|combat-live|post-kill-loot-damage-commit|damage-commit|true|false|false|coin|damage-commit|true|combat-low-hp-secondary-leave|combat-critical-hp-leave|true|true|false'
     },
     {
       name: 'browserless healthy post-injury coin priority defers hp-gap exit',
@@ -32362,7 +32361,7 @@ async function runSelfTest() {
         for (let index = 0; index < 25; index += 1) {
           rememberBrowserlessAttackerDamage(capState, 'id' + index, 1, nowMs - index, {});
         }
-        const exitRule = targetHp => evaluateCombatHpExitCore({ selfHp: 52, targetHp }, {})?.rule ?? 'none';
+        const exitRule = targetHp => evaluateCombatHpExitCore({ selfHp: 52, targetHp, selfDamage: 3, targetDamage: 0 }, {})?.rule ?? 'none';
         return [
           weighted.source,
           weighted.targetHp,
@@ -46691,7 +46690,7 @@ async function runSelfTest() {
 	          fs.rmSync(dir, { recursive: true, force: true });
 	        }
 	      })(),
-	      want: '4|2|8|9:8,8:2'
+	      want: '5|2|8|9:8,8:2'
 	    },
 	    {
 	      name: 'browserless easy-kill tracker decays every score at UTC+8 midnight and removes zeroes',
@@ -46732,7 +46731,7 @@ async function runSelfTest() {
 	      want: '10:3,8:1,9:2|2026-07-21|10:2,9:1|true|3|true'
 	    },
 	    {
-	      name: 'browserless easy-kill tracker caps score at ten and decrements failures to removal',
+	      name: 'browserless easy-kill tracker accumulates kills and rejects repeated failure during cooldown',
 	      got: (() => {
 	        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-easy-kill-score-'));
 	        try {
@@ -46769,7 +46768,7 @@ async function runSelfTest() {
 	          fs.rmSync(dir, { recursive: true, force: true });
 	        }
 	      })(),
-	      want: '2,4,6,8|8|4|7|6|1'
+	      want: '2,4,6,8|8|4|7|7|1'
 	    },
 	    {
 	      name: 'browserless easy-kill tracker keeps score for technical and stamina combat interruptions',
@@ -47198,7 +47197,7 @@ async function runSelfTest() {
 	      ].join('|')
 	    },
     {
-      name: 'browserless easy-kill recovery remains recovery-owned and HP-exit exempt until damage',
+      name: 'browserless easy-kill daily damage revokes trust without inventing current exchange loss',
       got: (() => {
 	        const state = {
 	          userId: 7,
@@ -47234,7 +47233,7 @@ async function runSelfTest() {
 	          damaged.combat.target?.easyKillThreatExempt
 	        ].join('|');
 	      })(),
-	      want: 'recover|wait-for-full-stamina-and-hp|true|true|combat-hp-disadvantage-leave|clear-hp-gap|false'
+	      want: 'recover|wait-for-full-stamina-and-hp|true|true|wait-for-full-stamina-and-hp||false'
 	    },
 	    {
 	      name: 'browserless invulnerable easy-kill firing is dodge-only before damage',
@@ -48412,7 +48411,8 @@ async function runSelfTest() {
 	          });
 	          adapter.decide(stateAt(10, true), { nowMs: 1000 });
 	          const firstMissing = adapter.decide(stateAt(11, false), { nowMs: 2000 });
-	          const expiredMissing = adapter.decide(stateAt(12, false), { nowMs: 4000 });
+	          adapter.decide(stateAt(12, false), { nowMs: 3000 });
+	          const expiredMissing = adapter.decide(stateAt(13, false), { nowMs: 4000 });
 	          return [
 	            firstMissing.profit.easyKill.stopLoss === null,
 	            expiredMissing.profit.easyKill.stopLoss?.reason,
