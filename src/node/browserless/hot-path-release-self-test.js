@@ -1,6 +1,8 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const zlib = require('node:zlib');
+const { runReadOnlyCanary } = require('./canary');
 const {
   completeCallbackValidationErrors,
   createBenchmarkFrameClock
@@ -67,11 +69,80 @@ async function runHotPathReleaseSelfTest() {
     assert.deepEqual(completeCallbackValidationErrors({
       ok: false, error: 'realtime-transport-critical-latency',
       realtimeControlCount: 90, measurementWindow: { durationMs: 4999 }
-    }, 5000), ['canary-failed:realtime-transport-critical-latency', 'callback-window-incomplete']);
+    }, 5000), ['canary-failed:realtime-transport-critical-latency', 'callback-window-incomplete', 'realtime-dispatch-cpu-samples-incomplete']);
   });
   check('missing duration and full-duration failure remain failures', () => {
     assert.deepEqual(completeCallbackValidationErrors({ ok: true }, 5000), ['callback-window-incomplete']);
     assert.deepEqual(completeCallbackValidationErrors({ ...valid, ok: false, error: 'test' }, 5000), ['canary-failed:test']);
+  });
+
+  check('deferred dispatch samples cannot disappear from the release CPU gate', () => {
+    assert(completeCallbackValidationErrors({ ...valid, realtimeControlCount: 50 }, 5000)
+      .includes('realtime-dispatch-cpu-samples-incomplete'));
+    assert.deepEqual(completeCallbackValidationErrors({ ...valid, realtimeControlCount: 50,
+      hotPath: { tasks: { 'realtime-control-worker-dispatch': { count: 50, cpuCount: 50 } } }
+    }, 5000), []);
+  });
+  async function dispatchCase(abort) {
+    let at = 1000000, receive = null, close = null, sent = false, insideFrame = false;
+    const calls = [];
+    const worker = {
+      ready: async () => true, flush: async () => true, close: async () => true,
+      requestPersistence: async () => ({}), finalize: async () => ({}),
+      evaluate: async state => {
+        calls.push({ tick: state.realtime.tick, insideFrame });
+        return { control: { kind: 'wait', action: { kind: 'wait' } }, roundTripMs: 1 };
+      }
+    };
+    const result = await runReadOnlyCanary({
+      gameOrigin: 'https://self-test.invalid', userId: 7, sessionToken: 'test',
+      controlMode: 'profit-live', combatEnabled: true, readOnlyProbeMs: 1000,
+      decisionIntervalMs: 1000, combatControlIntervalMs: 50, frameGapAlertMs: 5000
+    }, {
+      now: () => at, realtimeControlWorker: worker, wsFrameCoalescing: false,
+      precheckedSnapshotSafety: { ok: true, reason: 'self-test', satisfied: true },
+      targetWhitelist: { names: [], userIds: [], nameSet: new Set(), userIdSet: new Set(),
+        refresh: async () => ({}), isWhitelistedTarget: () => false },
+      persistedState: { loginPointSafety: { point: { x: 0, y: 0, hp: 100, source: 'test' } } },
+      sleep: async ms => {
+        if (receive && !sent) {
+          sent = true;
+          for (const tick of [100, 101]) {
+            at += 50;
+            const self = { user_id: 7, entity_id: 1, x: 0, y: 0, hp: 100,
+              max_hp: 100, stamina_5s_remaining_milli: 10000 };
+            const frame = { type: 'pos', tick, entities: [self], bullets: [] };
+            insideFrame = true;
+            receive(Buffer.concat([Buffer.from('GRZ1'), Buffer.from([1]), zlib.gzipSync(Buffer.from(JSON.stringify(frame)))]));
+            insideFrame = false;
+          }
+          if (abort) close({ code: 1006, reason: "self-test-close" });
+          await new Promise(resolve => setImmediate(resolve));
+        }
+        at += Number(ms);
+        await new Promise(resolve => setImmediate(resolve));
+      },
+      openBrowserlessWs: async options => {
+        receive = options.onMessage;
+        close = options.onClose;
+        return { isOpen: () => true, close() {}, sendVelocity() {}, sendShoot() {} };
+      },
+      leaveWithVerification: async () => ({ ok: true, attempts: [{ ok: true }] })
+    });
+    return { calls, result };
+  }
+  const dispatched = await dispatchCase(false);
+  check('IPC runs outside the WS callback and consumes the newest queued frame', () => {
+    assert(dispatched.calls.length > 0);
+    assert.equal(dispatched.calls[0].tick, 101);
+    assert(dispatched.calls.every(call => !call.insideFrame));
+    const timing = dispatched.result.hotPath.tasks['realtime-control-worker-dispatch'];
+    assert(timing.count > 0 && timing.cpuCount === timing.count);
+  });
+  const aborted = await dispatchCase(true);
+  check('same-turn transport close preempts scheduled IPC before any worker evaluation', () => {
+    assert(aborted.result.safety.event);
+    assert.equal(aborted.calls.length, 0);
   });
 
   const adapter = createBrowserlessDecisionAdapter({ userId: 7 });

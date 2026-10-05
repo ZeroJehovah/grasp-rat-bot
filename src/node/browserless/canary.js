@@ -3550,30 +3550,66 @@ async function runReadOnlyCanary(config, options = {}) {
       realtimeControlWorkerInFlight = true;
       lastCombatControlAtMs = atMs;
       lastCombatControlTick = inputTick;
-      const includePersistence = !realtimeControlWorkerPersistenceState
-        || atMs - realtimeControlWorkerLastPersistenceAtMs >= realtimeControlWorkerPersistenceIntervalMs;
-      const statePatch = realtimeControlWorkerPersistenceState
-        ? null
-        : decisionAdapter.getRealtimePersistenceState?.() || null;
-      const workerOptions = {
-        nowMs: atMs,
-        controlMode,
-        combatEnabled: config.combatEnabled
-      };
-      realtimeControlWorker.evaluate(
-        currentState,
-        workerOptions,
-        buildRealtimeControlWorkerContext(currentState, atMs),
-        statePatch,
-        includePersistence
-      ).then(workerResult => {
-        realtimeControlWorkerInFlight = false;
-        finishRealtimeControlWorkerRequest(request, workerResult);
-      }).catch(error => {
-        realtimeControlWorkerInFlight = false;
-        finishRealtimeControlWorkerRequest(request, null, error);
+      // Frame decoding, safety and IPC serialization must not form one long
+      // non-preemptible WS callback. Reserve the lane now, then post the newest
+      // queued native frame in its own measured callback. No extra timer or
+      // catch-up work is introduced; exit can preempt before serialization.
+      setImmediate(() => {
+        if (ending || result.safety.event || wsClosed || wsError || realtimeControlWorkerDisabled) {
+          realtimeControlWorkerInFlight = false;
+          realtimeControlWorkerQueued = null;
+          return;
+        }
+        const taskStarted = performance.now();
+        const taskCpuStarted = startMainThreadCpuUsage();
+        const stages = {};
+        try {
+          const queued = realtimeControlWorkerQueued;
+          realtimeControlWorkerQueued = null;
+          if (queued) {
+            request.state = queued.state;
+            request.atMs = queued.atMs;
+            request.force = request.force || queued.force;
+            const tick = Number(queued.state?.realtime?.tick);
+            request.inputTick = Number.isFinite(tick) ? tick : null;
+          }
+          lastCombatControlAtMs = request.atMs;
+          lastCombatControlTick = request.inputTick;
+          const includePersistence = !realtimeControlWorkerPersistenceState
+            || request.atMs - realtimeControlWorkerLastPersistenceAtMs >= realtimeControlWorkerPersistenceIntervalMs;
+          const statePatch = realtimeControlWorkerPersistenceState
+            ? null
+            : decisionAdapter.getRealtimePersistenceState?.() || null;
+          const context = buildRealtimeControlWorkerContext(request.state, request.atMs);
+          stages.context = performance.now() - taskStarted;
+          const postStarted = performance.now();
+          realtimeControlWorker.evaluate(
+            request.state,
+            { nowMs: request.atMs, controlMode, combatEnabled: config.combatEnabled },
+            context,
+            statePatch,
+            includePersistence
+          ).then(workerResult => {
+            realtimeControlWorkerInFlight = false;
+            finishRealtimeControlWorkerRequest(request, workerResult);
+          }).catch(error => {
+            realtimeControlWorkerInFlight = false;
+            finishRealtimeControlWorkerRequest(request, null, error);
+          });
+          stages.post = performance.now() - postStarted;
+        } catch (error) {
+          realtimeControlWorkerInFlight = false;
+          finishRealtimeControlWorkerRequest(request, null, error);
+        } finally {
+          const durationMs = performance.now() - taskStarted;
+          const entry = recordMainThreadTask(result.hotPath, 'realtime-control-worker-dispatch', durationMs, stages, {
+            tick: request.inputTick,
+            workProfile: mainThreadWorkProfile(taskCpuStarted, durationMs)
+          });
+          logMainThreadTiming(entry);
+        }
       });
-      if (outerStages) outerStages['realtime-worker-post'] = 0;
+      if (outerStages) outerStages['realtime-worker-scheduled'] = 0;
       // Posting work only reserves the realtime lane. It must not suppress
       // profit planning unless realtime control already owns an action.
       return realtimeControlActive;

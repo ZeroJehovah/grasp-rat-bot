@@ -28405,7 +28405,9 @@ async function runSelfTest() {
           sleep: async ms => {
             t += ms;
             if (wsOptions && !realtimeEvaluations) wsOptions.onMessage(frame);
-            await Promise.resolve();
+            // Realtime IPC is scheduled outside the receive callback. A fake
+            // sleep must yield an event-loop turn, not only microtasks.
+            await new Promise(resolve => setImmediate(resolve));
           },
           realtimeControlWorker: realtimeWorker,
           persistedState: {
