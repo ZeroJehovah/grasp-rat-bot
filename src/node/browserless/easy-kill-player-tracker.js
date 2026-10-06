@@ -207,7 +207,8 @@ function normalizeStore(value) {
   output.lastScoreDecayDay = String(value.lastScoreDecayDay || '');
   for (const [key, entry] of Object.entries(value.searchCooldowns || {})) {
     const userId = numberOrNull(key.replace(/^user:/, ''));
-    if (userId !== null && Number.isFinite(entry?.untilMs)) {
+    // Migrate cooldowns created by the old daily-decay path, including deleted players.
+    if (userId !== null && Number.isFinite(entry?.untilMs) && entry.reason !== 'daily-score-decay') {
       output.searchCooldowns[playerKey(userId)] = { untilMs: entry.untilMs, reason: String(entry.reason || '') };
     }
   }
@@ -363,7 +364,8 @@ function createEasyKillPlayerTracker(options = {}) {
     for (const [key, player] of Object.entries(store.players)) {
       const previousScore = normalizedScore(player?.score, INITIAL_SCORE);
       const score = Math.max(0, previousScore - daysElapsed);
-      if (score < previousScore) setSearchCooldown(key, atMs, 'daily-score-decay');
+      // Calendar aging is not a failed search. Keep any existing failure cooldown
+      // unchanged, including when decay removes the player's score entirely.
       decremented += Math.min(previousScore, daysElapsed);
       if (score > 0) player.score = score;
       else {

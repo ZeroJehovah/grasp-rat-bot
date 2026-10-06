@@ -87,6 +87,39 @@ function runCombatSearchRegressionSelfTest() {
     tracker.expirePendingOutcomes(now);
     assert(!tracker.status().blockedUserIds.includes(92), 'technical failure does not create a scoring cooldown');
 
+    // Daily aging is separate from failed-search penalties, even across restart
+    // or when score reaches zero. Midnight must not renew an actual failure.
+    now = Date.parse('2026-10-06T15:59:30Z');
+    tracker.refreshDailyScores(now);
+    tracker.upsertManualPlayer({ userId: 94 }, { atMs: now, score: 4 });
+    tracker.upsertManualPlayer({ userId: 95 }, { atMs: now, score: 1 });
+    tracker.upsertManualPlayer({ userId: 96 }, { atMs: now, score: 2 });
+    tracker.recordImmediateFailure({ userId: 96 }, 'search-failed', { atMs: now });
+    const failureUntil = now + SEARCH_COOLDOWN_MS;
+    now += 30000;
+    tracker.refreshDailyScores(now);
+    assert.strictEqual(tracker.status().players.find(p => p.userId === 94)?.score, 3);
+    assert(!tracker.status().players.some(p => p.userId === 95 || p.userId === 96));
+    assert(!tracker.status().blockedUserIds.includes(94));
+    assert(!tracker.status().blockedUserIds.includes(95), 'daily deletion does not block search');
+    assert.strictEqual(JSON.parse(fs.readFileSync(file)).searchCooldowns['user:96'].untilMs, failureUntil);
+    // Simulate an old release persisted at midnight, including a score-zero entry.
+    const persisted = JSON.parse(fs.readFileSync(file));
+    for (const id of [94, 95]) persisted.searchCooldowns[`user:${id}`] = {
+      untilMs: now + SEARCH_COOLDOWN_MS, reason: 'daily-score-decay'
+    };
+    fs.writeFileSync(file, JSON.stringify(persisted));
+    tracker = createEasyKillPlayerTracker({ file, now: () => now });
+    assert(!tracker.status().blockedUserIds.includes(94));
+    assert(!tracker.status().blockedUserIds.includes(95));
+    assert(tracker.status().blockedUserIds.includes(96), 'migration retains failed-search cooldown');
+    now = failureUntil;
+    assert(!tracker.status().blockedUserIds.includes(96), 'midnight did not extend the failure deadline');
+    now += 2 * 86400000;
+    tracker.refreshDailyScores(now);
+    assert.strictEqual(tracker.status().players.find(p => p.userId === 94)?.score, 1);
+    assert(!tracker.status().blockedUserIds.includes(94), 'multi-day aging remains neutral');
+
     // Known historical damage must not make HP80/100 leave on initial contact
     // or after the old confirmation timeout. Only fresh losing exchange does.
     const combatState = {};
@@ -101,7 +134,7 @@ function runCombatSearchRegressionSelfTest() {
     assert.strictEqual(fight(80, 100, 6000).exit, null);
     assert.strictEqual(fight(77, 97, 6050).exit, null, 'equal losses keep fighting');
     assert.strictEqual(fight(74, 97, 6100).exit?.reason, 'combat-hp-disadvantage-leave');
-    return { ok: true, cases: 17 };
+    return { ok: true, cases: 23 };
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
 module.exports = { runCombatSearchRegressionSelfTest };

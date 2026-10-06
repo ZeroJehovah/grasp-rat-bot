@@ -1,5 +1,7 @@
 'use strict';
 
+const { coinMotionCoreOptions } = require('./coin-motion-options');
+const { coinDirectionToCore } = require('../../strategy/coin-motion');
 const { SEARCH_COOLDOWN_MS } = require('./easy-kill-player-tracker');
 
 const { performance } = require('perf_hooks');
@@ -2722,6 +2724,7 @@ function selectRealtimeLootCandidate(input, stateful = {}, options = {}) {
     selfKilledPlayerDrop: Boolean(selected.selfKilledPlayerDrop),
     primaryTargetDropPriority: Boolean(selected.primaryTargetDropPriority),
     killAttribution: String(selected.killAttribution || ''),
+    coinApproachLock: same ? previousIntent.coinApproachLock || null : null,
     startedAt: same ? Number(previousIntent.startedAt || nowMs) : nowMs,
     // A boundary hold may only bridge a short gap after the last strict
     // in-range observation. Do not refresh this timestamp while the coin is
@@ -13044,11 +13047,21 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}, in
     const safeDirection = pressure.active
       ? safeLootDodgeDirection(combat, input.self, coin, incomingAssessment)
       : null;
-    const directDirection = {
-      dx: Math.sign(Number(coin.x) - Number(input.self.x)),
-      dy: Math.sign(Number(coin.y) - Number(input.self.y))
-    };
-    const selectedDirection = safeDirection || directDirection;
+    // Use the same bounded axis/approach policy as ordinary pickup. Under fire
+    // safe positive-progress Dodge still owns the vector; do not arm a timed
+    // precision stop that could interrupt that Dodge or later defensive motion.
+    const navigation = safeDirection ? null : coinDirectionToCore(input.self, coin,
+      coinMotionCoreOptions(options, {
+        nowMs: input.nowMs,
+        lock: stateful.realtimeLootIntent?.coinApproachLock || null
+      }));
+    if (stateful.realtimeLootIntent) {
+      const update = navigation?.lockUpdate;
+      stateful.realtimeLootIntent.coinApproachLock = safeDirection || update?.action === 'clear'
+        ? null
+        : (update?.lock || stateful.realtimeLootIntent.coinApproachLock || null);
+    }
+    const selectedDirection = safeDirection || navigation.direction;
     const mode = pressure.active
       ? (safeDirection ? 'safe-dodge-toward-coin' : 'damage-commit')
       : 'defensive-loot-escort';
@@ -13096,6 +13109,12 @@ function buildRealtimeLootControl(input, combat, stateful = {}, options = {}, in
         dx: Number(selectedDirection.dx || 0),
         dy: Number(selectedDirection.dy || 0),
         reason: movementReason,
+        lootNavigation: navigation ? {
+          policy: 'coin-axis-approach',
+          targetId: String(coin.id ?? coin.drop_id ?? ''),
+          distance: navigation.direction.distance,
+          locked: Boolean(navigation.direction.locked)
+        } : null,
         modifiers: Array.from(new Set([
           ...(combat.dryRun.movement?.modifiers || []).filter(modifier => ![
             'back-away',

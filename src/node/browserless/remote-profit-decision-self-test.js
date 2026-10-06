@@ -3587,6 +3587,55 @@ function runRemoteProfitDecisionSelfTest() {
   assert.strictEqual(compositeShots.length, selfKillComposite.combat?.shooting?.wouldShoot ? 1 : 0,
     'execution preserves the defensive secondary fire decision');
 
+  // Narrow-axis corrections must reach the wire during defensive loot combat.
+  // Rotate/reflect the recorded shape so this is not a player/window exception.
+  for (const horizontal of [false, true]) {
+    for (const sign of [-1, 1]) {
+      const adapter = createBrowserlessDecisionAdapter(selfKillCompositeOptions);
+      adapter.patchState({ postKillSettlements: {
+        '42': { active: true, phase: 'drop-visible', targetId: '42',
+          killAttribution: 'self', startedAt: 4000, updatedAt: 4000 }
+      } });
+      for (const offset of [-81, 59, -11]) {
+        const frame = JSON.parse(JSON.stringify(selfKillCompositeFrame));
+        const point = horizontal ? { x: sign * 2040, y: 0 } : { x: 0, y: sign * 2040 };
+        Object.assign(frame.realtime.self, horizontal ? { x: 0, y: offset } : { x: offset, y: 0 },
+          { stamina_5s_remaining_milli: 3400 });
+        frame.realtime.entities[0] = frame.realtime.self;
+        Object.assign(frame.fallback.coinDrops[0], point);
+        const decision = adapter.evaluateRealtime(frame, { nowMs: 4000 });
+        assert.strictEqual(decision.action?.kind, 'combat-live');
+        const expected = horizontal ? { dx: sign, dy: 0 } : { dx: 0, dy: sign };
+        assert.strictEqual(decision.combat.movement.dx, expected.dx);
+        assert.strictEqual(decision.combat.movement.dy, expected.dy);
+        assert.strictEqual(decision.combat.movement.lootNavigation.policy, 'coin-axis-approach');
+        assert.strictEqual(decision.combat.realtimeLoot.navigationAuthority, 'snapshot-navigation');
+        assert.strictEqual(decision.combat.shooting.defensiveSecondaryTarget, true);
+        compositeActionAdapter.applyDecision(frame, decision);
+        assert.deepStrictEqual(compositeVelocities.at(-1), expected);
+        // Worker persistence carries only this coin's bounded approach lock.
+        const restored = createBrowserlessDecisionAdapter(selfKillCompositeOptions);
+        restored.patchState(adapter.getRealtimePersistenceState());
+        assert.deepStrictEqual(restored.getState().realtimeLootIntent.coinApproachLock,
+          adapter.getState().realtimeLootIntent.coinApproachLock);
+      }
+      const frame = JSON.parse(JSON.stringify(selfKillCompositeFrame));
+      frame.realtime.tick = 41;
+      frame.fallback.tick = 41;
+      frame.fallback.coinDrops[0].drop_id = 'new-loot-point';
+      Object.assign(frame.fallback.coinDrops[0], horizontal ? { x: 0, y: 2040 } : { x: 2040, y: 0 });
+      const switched = adapter.evaluateRealtime(frame, { nowMs: 4050 });
+      assert.strictEqual(switched.combat.movement.lootNavigation.targetId, 'new-loot-point');
+      assert.strictEqual(adapter.getState().realtimeLootIntent.coinApproachLock.id, 'new-loot-point');
+      frame.realtime.tick = 42;
+      frame.realtime.self.hp = 50;
+      frame.realtime.entities[0] = frame.realtime.self;
+      const unsafe = adapter.evaluateRealtime(frame, { nowMs: 4100 });
+      assert.notStrictEqual(unsafe.combat?.realtimeLoot?.navigationActive, true,
+        'HP50 exit cannot be replaced by the pickup movement');
+    }
+  }
+
   const missingCoinAdapter = createBrowserlessDecisionAdapter({
     userId: 7,
     controlMode: 'profit-live',
@@ -3731,7 +3780,7 @@ function runRemoteProfitDecisionSelfTest() {
   assert.strictEqual(lowDropDecision.profit?.postKillCoinSuppression?.removedCount, 1);
   assert.strictEqual(lowDropDecision.stateful.profitMission?.targetId, '99');
 
-  return { ok: true, cases: 93 };
+  return { ok: true, cases: 99 };
 }
 
 if (require.main === module) {
