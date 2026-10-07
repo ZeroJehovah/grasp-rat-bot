@@ -654,6 +654,7 @@ function createInitialActionState() {
     nearCoinContinuationPulseCount: 0,
     nearCoinContinuationCancelCount: 0,
     nearCoinContinuationLastCancelReason: '',
+    afkCompetitionApproach: null,
     invulnerableProfitApproachLock: null,
     // Single retained approach-window state, keyed by the target it belongs to.
     invulnerableApproachWindow: null,
@@ -1680,6 +1681,86 @@ function createBrowserlessActionAdapter(options = {}) {
       remoteNavigationOnly: Boolean(detail.remoteNavigationOnly),
       ...transportFailure(sent)
     };
+  }
+
+  function clearAfkCompetitionApproach() {
+    const approach = state.afkCompetitionApproach;
+    // Cancel our stop even when the next owner keeps the same direction (and
+    // sendVelocity consequently reuses the existing command).
+    if (approach?.pulseToken === state.velocityPulseToken) {
+      clearPrecisionPulseStop();
+      state.velocityPulseToken += 1;
+    }
+    state.afkCompetitionApproach = null;
+  }
+
+  function applyAfkCompetitionApproach(stateSnapshot, self, target, race) {
+    const targetKey = targetRepeatKey(target);
+    let approach = state.afkCompetitionApproach;
+    if (approach?.targetKey !== targetKey) {
+      clearAfkCompetitionApproach();
+      approach = state.afkCompetitionApproach = { targetKey, coinApproachLock: null, feedback: null };
+    }
+    const detail = { targetKey, distanceCm: Math.round(race.distance), pickupRadiusCm: race.pickupRadiusCm };
+    if (race.insidePickupRadius) {
+      approach.coinApproachLock = null;
+      approach.feedback = null;
+      const sent = sendVelocity(0, 0, 'profit-target-competition-hold', target);
+      return { ...sent, approach: { ...detail, phase: 'arrived' } };
+    }
+    const feedback = approach.feedback;
+    if (feedback) {
+      const tick = optionalNumber(stateSnapshot?.realtime?.tick);
+      const receivedAtMs = optionalNumber(stateSnapshot?.realtime?.receivedAtMs);
+      const fresh = tick !== null && tick > feedback.tick
+        && receivedAtMs !== null && receivedAtMs >= feedback.stoppedAtMs;
+      const stopped = Math.abs(Number(self.vx || 0)) <= 1 && Math.abs(Number(self.vy || 0)) <= 1;
+      if (!feedback.stoppedAtMs || !fresh || (!stopped && now() < feedback.expiresAtMs)) {
+        return {
+          ok: true, skipped: true, reason: 'profit-target-competition-position-feedback-wait',
+          approach: { ...detail, phase: 'feedback-wait' }
+        };
+      }
+      approach.feedback = null;
+    }
+    const vector = coinMotionVectorToTarget(self, {
+      ...target, type: 'coin', id: `player:${targetKey}`, drop_id: `player:${targetKey}`
+    }, { ...options, coinPickupJitterEnabled: false }, approach, now());
+    // Player approach never uses coin disappearance/retry or cross-sweep semantics.
+    delete vector.pushThrough;
+    delete vector.jitter;
+    delete vector.crossSweep;
+    if (Number(vector.precisionPulseMs) > 0) {
+      // Coin sweeps intentionally cross both axes. A living player instead
+      // needs the ordinary eight-way heading, so a tiny lateral error cannot
+      // turn every short approach pulse into another diagonal crossing.
+      const heading = movementVectorToTarget(self, target, { ...options, targetDeadZoneCm: 0 });
+      vector.dx = quantizeVelocity(heading.dx);
+      vector.dy = quantizeVelocity(heading.dy);
+    }
+    if (!vector.ok) {
+      const sent = sendVelocity(0, 0, 'profit-target-competition-hold', target);
+      return { ...sent, approach: { ...detail, phase: 'hold', vector } };
+    }
+    const pulse = Number(vector.precisionPulseMs) > 0;
+    const sent = sendVelocity(vector.dx, vector.dy, 'profit-target-competition-approach', target, {
+      suppressRepeat: pulse
+    });
+    if (pulse && sent.ok && !sent.skipped) {
+      const plan = coinFeedbackPlan(stateSnapshot);
+      approach.pulseToken = sent.pulseToken;
+      approach.feedback = {
+        tick: optionalNumber(stateSnapshot?.realtime?.tick),
+        stoppedAtMs: null,
+        expiresAtMs: now() + Number(plan.timeoutMs || 0)
+      };
+      schedulePrecisionPulseStop(sent, vector.precisionPulseMs, 'profit-candidate', stopped => {
+        if (state.afkCompetitionApproach !== approach) return;
+        if (stopped.ok && !stopped.skipped) approach.feedback.stoppedAtMs = now();
+        else clearAfkCompetitionApproach();
+      });
+    }
+    return { ...sent, approach: { ...detail, phase: 'approach', vector } };
   }
 
   function applyActiveInvulnerableProfitApproach(self, target, detail = {}) {
@@ -3715,6 +3796,7 @@ function createBrowserlessActionAdapter(options = {}) {
   }
 
   function stop(reason = 'stop', stopOptions = {}) {
+    clearAfkCompetitionApproach();
     cancelShootRepeat('stop');
     clearNearCoinContinuation(`stop:${reason}`);
     const ownership = stopOptions.ownership || (!activeApplyContext
@@ -3775,6 +3857,7 @@ function createBrowserlessActionAdapter(options = {}) {
   }
 
   function sealTransport(reason = 'transport-sealed') {
+    clearAfkCompetitionApproach();
     state.transportSealed = true;
     state.transportSealReason = String(reason || 'transport-sealed');
     clearPrecisionPulseStop();
@@ -3811,6 +3894,7 @@ function createBrowserlessActionAdapter(options = {}) {
         return applyCombatDecision(stateSnapshot, decision, { combat });
       }
       const profitAction = profitActionFromDecision(decision);
+      if (profitAction?.type !== 'enemy') clearAfkCompetitionApproach();
       if (profitAction?.type !== 'coin') clearNearCoinContinuation('planner-non-coin-action');
       if (profitAction?.type !== 'enemy' && profitAction?.type !== 'remote-player') {
         clearInvulnerableProfitApproach('planner-non-player-action');
@@ -4155,6 +4239,7 @@ function createBrowserlessActionAdapter(options = {}) {
   }
 
   function applySafetyMotionDecision(action) {
+    clearAfkCompetitionApproach();
     clearNearCoinContinuation('safety-motion');
     clearInvulnerableProfitApproach('safety-motion');
     const sent = sendVelocity(
@@ -4201,6 +4286,8 @@ function createBrowserlessActionAdapter(options = {}) {
         active: entityActiveLike(rawRealtimeTarget)
       };
     }
+    if (target?.active || target?.invulnerable || target?.cachedNavigationOnly
+      || target?.alive === false || Number(target?.hp) <= 0) clearAfkCompetitionApproach();
     if (target?.invulnerable !== true) clearInvulnerableProfitApproach('vulnerable-profit-target');
     if (target?.active && target?.easyKillProfitTarget) {
       clearInvulnerableProfitApproach('active-profit-target');
@@ -4341,6 +4428,7 @@ function createBrowserlessActionAdapter(options = {}) {
     clearInvulnerableProfitApproach('target-vulnerable');
     const vector = movementVectorToTarget(self, target, options);
     if (!(Number.isFinite(distance) && distance <= shootRange)) {
+      clearAfkCompetitionApproach();
       if (!vector.ok) {
         const stopped = stop(vector.reason || 'profit-afk-missing-position');
         return {
@@ -4374,13 +4462,14 @@ function createBrowserlessActionAdapter(options = {}) {
     }
 
     const profitKillRace = actionProfitKillRace(stateSnapshot, self, target, true);
+    if (!profitKillRace.active) clearAfkCompetitionApproach();
     const fullAttack = Number.isFinite(distance) && distance <= fullAttackRange;
     const competitionApproach = profitKillRace.active && profitKillRace.approaching;
     const movementReason = competitionApproach
       ? 'profit-target-competition-approach'
       : (fullAttack ? 'profit-afk-attack-hold' : 'profit-afk-attack-approach');
-    const movement = competitionApproach
-      ? sendVelocity(profitKillRace.direction.dx, profitKillRace.direction.dy, movementReason, target)
+    const movement = profitKillRace.active
+      ? applyAfkCompetitionApproach(stateSnapshot, self, target, profitKillRace)
       : (fullAttack
           ? sendVelocity(0, 0, movementReason, target)
           : sendVelocity(vector.dx, vector.dy, movementReason, target));
@@ -4415,6 +4504,7 @@ function createBrowserlessActionAdapter(options = {}) {
         fullAttack,
         fullAttackRangeCm: Math.round(fullAttackRange),
         profitKillRace,
+        competitionApproach: movement.approach || null,
         ...transportFailure(movement)
       },
       shoot: {
@@ -4442,6 +4532,7 @@ function createBrowserlessActionAdapter(options = {}) {
   }
 
   function applyCombatDecision(stateSnapshot, decision, applyOptions = {}) {
+    clearAfkCompetitionApproach();
     const previousApplyContext = activeApplyContext;
     if (!activeApplyContext) activeApplyContext = actionApplyContext(stateSnapshot, decision, applyOptions);
     try {
@@ -4751,6 +4842,9 @@ function createBrowserlessActionAdapter(options = {}) {
       nearCoinContinuationCancelCount: state.nearCoinContinuationCancelCount,
       nearCoinContinuationLastCancelReason: state.nearCoinContinuationLastCancelReason,
       invulnerableProfitApproach: invulnerableProfitApproachSummary(),
+      afkCompetitionApproach: state.afkCompetitionApproach
+        ? { targetKey: state.afkCompetitionApproach.targetKey, feedbackPending: Boolean(state.afkCompetitionApproach.feedback) }
+        : null,
       invulnerableProfitApproachFeedbackGate: state.invulnerableProfitApproachFeedbackGate
         ? { ...state.invulnerableProfitApproachFeedbackGate }
         : null,
