@@ -191,6 +191,36 @@ function createBenchmarkFrameClock(baseTick, now = () => performance.now()) {
   };
 }
 
+function createBenchmarkMotion(self, initialTick) {
+  let lastTick = initialTick;
+  let vx = 0;
+  let vy = 0;
+  const advance = tick => {
+    const nextTick = Math.max(lastTick, tick);
+    const elapsedTicks = nextTick - lastTick;
+    self.x += vx * elapsedTicks;
+    self.y += vy * elapsedTicks;
+    self.vx = vx;
+    self.vy = vy;
+    lastTick = nextTick;
+  };
+  return {
+    advance,
+    setVelocity(dx, dy, tick) {
+      // Settle the old command first, including when no frame arrived during
+      // a timer delay. Stress-frame frequency must not accelerate gameplay.
+      advance(tick);
+      dx = Math.max(-1, Math.min(1, Math.round(Number(dx) || 0)));
+      dy = Math.max(-1, Math.min(1, Math.round(Number(dy) || 0)));
+      const speed = dx && dy ? 35 : 50; // Native cm per 50ms tick.
+      vx = dx * speed;
+      vy = dy * speed;
+      self.vx = vx;
+      self.vy = vy;
+    }
+  };
+}
+
 function completeCallbackValidationErrors(scenario, requestedDurationMs) {
   const errors = [];
   if (scenario?.ok !== true) errors.push(`canary-failed:${scenario?.error || 'unknown'}`);
@@ -612,7 +642,6 @@ async function runCompleteCallbackScenario(options, combatLearning, activeCombat
     coin_drops: fixture.coinDrops,
     messages: []
   };
-  let simulatedVelocity = { dx: 0, dy: 0 };
   let measurementStartedAtMs = null;
   let measurementEndedAtMs = null;
   const finishMeasurement = () => {
@@ -679,14 +708,13 @@ async function runCompleteCallbackScenario(options, combatLearning, activeCombat
       openBrowserlessWs: async wsOptions => {
         measurementStartedAtMs = performance.now();
         const frameTick = createBenchmarkFrameClock(fixture.state.realtime.tick);
+        const motion = createBenchmarkMotion(fixture.self, frameTick());
         const sendPosFrame = () => {
-          fixture.self.vx = simulatedVelocity.dx;
-          fixture.self.vy = simulatedVelocity.dy;
-          fixture.self.x += simulatedVelocity.dx * 120;
-          fixture.self.y += simulatedVelocity.dy * 120;
+          const tick = frameTick();
+          motion.advance(tick);
           const frame = encodeGrzFrame({
             type: 'pos',
-            tick: frameTick(),
+            tick,
             entities: fixture.entities,
             bullets: fixture.bullets
           });
@@ -713,10 +741,7 @@ async function runCompleteCallbackScenario(options, combatLearning, activeCombat
             timer = null;
           },
           sendVelocity(dx, dy) {
-            simulatedVelocity = {
-              dx: Math.max(-1, Math.min(1, Math.round(Number(dx) || 0))),
-              dy: Math.max(-1, Math.min(1, Math.round(Number(dy) || 0)))
-            };
+            motion.setVelocity(dx, dy, frameTick());
           },
           sendShoot() {}
         };
@@ -1237,6 +1262,7 @@ module.exports = {
   completeCallbackValidationErrors,
   createBenchmarkFrameClock,
   createFixture,
+  createBenchmarkMotion,
   evaluateCpuGate,
   parseArgs,
   runBenchmark,

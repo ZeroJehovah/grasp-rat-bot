@@ -5,7 +5,8 @@ const zlib = require('node:zlib');
 const { runReadOnlyCanary } = require('./canary');
 const {
   completeCallbackValidationErrors,
-  createBenchmarkFrameClock
+  createBenchmarkFrameClock,
+  createBenchmarkMotion
 } = require('../../../scripts/benchmark-browserless-hot-path');
 const { createTransportHealthMonitor } = require('./transport-health');
 const { createBrowserlessDecisionAdapter } = require('./decision-adapter');
@@ -32,6 +33,38 @@ async function runHotPathReleaseSelfTest() {
     assert.equal(tick(), 105);
     elapsedMs = 5000;
     assert.equal(tick(), 200);
+  });
+  check('5ms and 50ms frames cover the same native movement distance', () => {
+    const simulate = (interval, dx, dy) => {
+      let at = 0;
+      const frameTick = createBenchmarkFrameClock(100, () => at);
+      const self = { x: 0, y: 0 };
+      const motion = createBenchmarkMotion(self, frameTick());
+      motion.setVelocity(dx, dy, frameTick());
+      for (at = interval; at <= 5000; at += interval) motion.advance(frameTick());
+      return self;
+    };
+    assert.deepEqual(simulate(5, 1, 0), { x: 5000, y: 0, vx: 50, vy: 0 });
+    assert.deepEqual(simulate(5, 1, 0), simulate(50, 1, 0));
+    assert.deepEqual(simulate(5, 1, -1), { x: 3500, y: -3500, vx: 35, vy: -35 });
+    assert.deepEqual(simulate(5, 1, -1), simulate(50, 1, -1));
+  });
+  check('duplicate ticks, delayed frames, stops and reversals preserve command timing', () => {
+    const self = { x: 0, y: 0 };
+    const motion = createBenchmarkMotion(self, 100);
+    motion.setVelocity(1, 0, 100);
+    motion.advance(100);
+    assert.equal(self.x, 0);
+    motion.setVelocity(0, 0, 105);
+    assert.equal(self.x, 250);
+    motion.advance(108);
+    assert.equal(self.x, 250);
+    motion.setVelocity(-1, 0, 108);
+    motion.advance(110);
+    motion.advance(109);
+    assert.equal(self.x, 150);
+    motion.advance(111);
+    assert.equal(self.x, 100);
   });
   const monitor = corrected => {
     let atMs = 1000000;
