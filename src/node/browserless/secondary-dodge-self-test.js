@@ -2,6 +2,7 @@
 const assert = require('assert');
 const { buildCombatMovementPlan } = require('./combat-adapter');
 const { calculateDodgeDirection, resolveDistanceAwareDodgeCore } = require('../../strategy/combat-movement');
+const { resolveDodgeExecutionDirectionCore } = require('../../strategy/combat-movement-ownership');
 function runSecondaryDodgeSelfTest() {
   const self = { x: 0, y: 0, vx: 0, vy: 0, hp: 70, stamina_5s_remaining_milli: 5000 };
   const target = { user_id: 2, x: 3200, y: 0, vx: 0, vy: 0, distance: 3200, active: true, combatRole: 'secondary' };
@@ -79,7 +80,57 @@ function runSecondaryDodgeSelfTest() {
   assert.strictEqual(unavoidablePlan.distanceAwareDodge.preDodgeReason, 'unavoidable-close-tangent');
   assert.strictEqual(unavoidablePlan.dy, unavoidablePlan.distanceAwareDodge.direction.dy,
     'selected tangent survives final movement arbitration');
-  return { ok: true, cases: 19 };
+  const diagonalTangent = buildCombatMovementPlan({ ...self, vy: -50, stamina_5s_remaining_milli: 10000 },
+    { ...target, x: -2500, y: -1500, vx: 35, vy: 35, distance: Math.hypot(2500, 1500) },
+    [{ ...bullet, bullet_id: 1, ownerId: 2, cpa: 10 }], {
+      ...options, distanceAwareDodgeRng: () => 0.5,
+      movementExecutionTiming: { sampleCount: 10, medianTicks: 5, p90Ticks: 5 }
+    });
+  assert.deepStrictEqual([diagonalTangent.distanceAwareDodge.direction.dx, diagonalTangent.distanceAwareDodge.direction.dy],
+    [1, -1], 'fixture selects a new equally risky diagonal instead of the early cardinal direction');
+  assert.deepStrictEqual([diagonalTangent.dx, diagonalTangent.dy], [1, -1],
+    'current verified close tangent must reach the final movement command');
+  assert.deepStrictEqual(diagonalTangent.dodgeOwnership.direction, { dx: 1, dy: -1 },
+    'retained ownership must carry the direction actually selected for execution');
+  assert.strictEqual(diagonalTangent.dodgeOwnership.executionDirection.reason, 'current-risk-verified-dodge');
+  const owned = { active: true, currentThreat: true, direction: { dx: 0, dy: -1 } };
+  const candidate = { dx: 1, dy: -1 };
+  const baselineRisk = { ...owned.direction, directHits: 1, unavoidableHits: 1 };
+  const candidateRisk = { ...candidate, directHits: 1, unavoidableHits: 1 };
+  const execute = extra => resolveDodgeExecutionDirectionCore({
+    ownership: owned, evaluated: true, evaluatedDirection: candidate,
+    threatField: [baselineRisk, candidateRisk], ...extra
+  });
+  assert.deepStrictEqual(execute().direction, candidate);
+  assert(execute().accepted && execute().changed);
+  const originalOwned = JSON.stringify(owned);
+  execute();
+  assert.strictEqual(JSON.stringify(owned), originalOwned, 'the pure gate cannot mutate a previous lease');
+  for (const field of [[], [baselineRisk], [candidateRisk],
+    [baselineRisk, { ...candidateRisk, directHits: 2 }],
+    [{ ...baselineRisk, unavoidableHits: 0 }, candidateRisk],
+    [baselineRisk, { ...candidateRisk, unavoidableHits: undefined }],
+    [baselineRisk, { ...candidateRisk, directHits: null }]]) {
+    const denied = execute({ threatField: field });
+    assert(!denied.accepted);
+    assert.deepStrictEqual(denied.direction, owned.direction,
+      'missing evidence or increased total/imminent risk must preserve emergency ownership');
+  }
+  assert(!execute({ evaluated: false }).accepted, 'a budget-blocked candidate has no execution authority');
+  const safe = execute({ threatField: [baselineRisk, { ...candidateRisk, directHits: 0, unavoidableHits: 0 }] });
+  assert(safe.accepted, 'strictly safer current trajectories remain eligible');
+  const prospective = execute({ ownership: { ...owned, currentThreat: false }, threatField: [] });
+  assert(prospective.accepted, 'a lease without current collision evidence cannot erase an authorized pre-dodge');
+  const axisStop = execute({ evaluatedDirection: { dx: 0, dy: 1 },
+    threatField: [baselineRisk, { dx: 0, dy: 1, directHits: 1, unavoidableHits: 1 }] });
+  assert.deepStrictEqual(axisStop.direction, { dx: 0, dy: 1 }, 'explicit zero axes survive final ownership');
+  const lowBudget = buildCombatMovementPlan({ ...self, vy: -50, stamina_5s_remaining_milli: 2400 },
+    { ...target, x: -2500, y: -1500, vx: 35, vy: 35, distance: Math.hypot(2500, 1500) },
+    [{ ...bullet, bullet_id: 1, ownerId: 2, cpa: 10 }], options);
+  assert(!lowBudget.distanceAwareDodge.applied);
+  assert.strictEqual(lowBudget.distanceAwareDodge.preDodgeReason, 'stamina-insufficient');
+  assert(!lowBudget.dodgeOwnership.executionDirection.accepted, 'execution repair cannot lower Dodge reserves');
+  return { ok: true, cases: 35 };
 }
 module.exports = { runSecondaryDodgeSelfTest };
 if (require.main === module) console.log(JSON.stringify(runSecondaryDodgeSelfTest()));

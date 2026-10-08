@@ -70,6 +70,41 @@ function resolveDodgeOwnershipCore(input = {}, options = {}) {
   };
 }
 
+// The ownership lease is created before the distance-aware planner runs. It
+// owns emergency priority, but its early direction must not erase a later
+// budget-authorized choice checked against the same current projectile field.
+function resolveDodgeExecutionDirectionCore(input = {}) {
+  const ownership = input.ownership || {};
+  const baseline = directionOf((ownership.active ? ownership.direction : null) || input.fallback);
+  const candidate = input.evaluated === true && input.evaluatedDirection
+    ? directionOf(input.evaluatedDirection) : null;
+  let accepted = false;
+  let reason = 'ownership-direction';
+  if (candidate && !ownership.currentThreat) {
+    accepted = true;
+    reason = 'evaluated-prospective-dodge';
+  } else if (candidate) {
+    const field = Array.isArray(input.threatField) ? input.threatField : [];
+    const risk = direction => field.find(row => row.dx === direction.dx && row.dy === direction.dy);
+    const candidateRisk = risk(candidate), baselineRisk = risk(baseline);
+    const complete = [candidateRisk, baselineRisk].every(row => row
+      && Number.isFinite(row.directHits) && row.directHits >= 0
+      && Number.isFinite(row.unavoidableHits) && row.unavoidableHits >= 0);
+    accepted = Boolean(complete
+      && candidateRisk.directHits <= baselineRisk.directHits
+      && candidateRisk.unavoidableHits <= baselineRisk.unavoidableHits);
+    reason = accepted ? 'current-risk-verified-dodge'
+      : (complete ? 'candidate-increases-current-risk' : 'current-risk-evidence-missing');
+  }
+  const direction = accepted ? candidate : baseline;
+  return {
+    direction,
+    accepted,
+    changed: direction.dx !== baseline.dx || direction.dy !== baseline.dy,
+    reason
+  };
+}
+
 function selectCombatMovementOwnerCore(input = {}) {
   const dodge = input.dodgeOwnership || {};
   if (dodge.active === true) {
@@ -117,5 +152,6 @@ module.exports = {
   ownedMovementDirectionCore,
   selectDodgeThreatDirectionCore,
   resolveDodgeOwnershipCore,
+  resolveDodgeExecutionDirectionCore,
   selectCombatMovementOwnerCore
 };

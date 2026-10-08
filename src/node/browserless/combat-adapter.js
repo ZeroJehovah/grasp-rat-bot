@@ -127,6 +127,7 @@ const {
   ownedMovementDirectionCore,
   selectDodgeThreatDirectionCore,
   resolveDodgeOwnershipCore,
+  resolveDodgeExecutionDirectionCore,
   selectCombatMovementOwnerCore
 } = require('../../strategy/combat-movement-ownership');
 const { invulnerableApproachWindowCore } = require('../../strategy/invulnerable-approach-window');
@@ -4280,13 +4281,17 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     coverReason: coverCandidate.coverHypothesis,
     finishRaceActive: options.primaryFinishRaceActive === true
   });
+  let dodgeExecutionDirection = null;
   if (movementOwner.owner === 'emergency-dodge') {
-    // An inactive lease still carries a direction (often zero). It must not
-    // overwrite the newly selected prospective Dodge. Current collision
-    // ownership remains authoritative over speculative movement.
-    const emergencyDirection = distanceAwareDodge.applied && !dodgeOwnership.currentThreat
-      ? effectiveDodge
-      : ((dodgeOwnership.active ? dodgeOwnership.direction : null) || effectiveDodge || dodge);
+    dodgeExecutionDirection = resolveDodgeExecutionDirectionCore({
+      ownership: dodgeOwnership,
+      evaluated: distanceAwareDodge.applied,
+      evaluatedDirection: effectiveDodge,
+      threatField: dodge?.threatField,
+      fallback: effectiveDodge || dodge
+    });
+    const emergencyDirection = dodgeExecutionDirection.direction;
+    if (dodgeExecutionDirection.accepted) dodgeOwnership.direction = emergencyDirection;
     if (emergencyDirection) {
       const dodgeReason = effectiveDodge?.reason || dodge?.reason || 'direct-threat-dodge';
       movement = {
@@ -4462,6 +4467,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     },
     dodgeOwnership: {
       ...dodgeOwnership,
+      executionDirection: dodgeExecutionDirection,
       currentShotAvoidability: residualThreatActive && !threatGenerationIds.length
         ? 'residual-threat'
         : (dodge?.unavoidableCurrentShot === true ? 'unavoidable' : 'evaluated'),
