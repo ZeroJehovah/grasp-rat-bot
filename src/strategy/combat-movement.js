@@ -7,6 +7,7 @@
  */
 
 const { COMBAT_CONSTANTS } = require('./combat-constants');
+const { nearbyActiveProfitCompetitors } = require('./profit-kill-race');
 
 const NORMALIZED_PENDING_VELOCITY_COMMANDS = Symbol('normalized-pending-velocity-commands');
 const NORMALIZED_PENDING_VELOCITY_EVENTS = Symbol('normalized-pending-velocity-events');
@@ -516,10 +517,9 @@ function shouldBackAwayFromTarget(self, target) {
  * Decide whether the generic close-spacing back-away must be suppressed because it would
  * push us away from a primary target we are actively finishing for its reward.
  *
- * The generic back-away exists to hold standoff against sustained point-blank fire. Against a
- * rewarding primary target already inside the finish band it inverts the objective: it trades
- * the reward for standoff we do not need while self HP is healthy, and every centimetre it adds
- * has to be re-closed before the drop can be picked up.
+ * Only a nearby native active competitor justifies giving up ordinary standoff
+ * to protect the reward. Without that evidence, a low-HP target can still return
+ * fire, so normal separation must remain available.
  *
  * This suppresses outward drift only. It commands no movement of its own, so a suppressed frame
  * holds spacing instead of retreating. Collision-path Dodge, close-pressure and ballistic
@@ -529,7 +529,7 @@ function shouldBackAwayFromTarget(self, target) {
  * Every input is observable opponent/self state: no player identity, whitelist membership, or
  * battle window participates.
  *
- * @param {Object} input - { self, target, primaryTarget, distanceCm }
+ * @param {Object} input - { self, target, primaryTarget, distanceCm, competitionTargets }
  * @param {Object} options - runtime options
  * @returns {Object} { suppress, reason, ... diagnostics }
  */
@@ -564,7 +564,9 @@ function rewardFinishBackAwaySuppressionPolicy(input = {}, options = {}) {
     finishHp,
     minSelfHp,
     minDrop,
-    pickupRadiusCm
+    pickupRadiusCm,
+    competitionEvaluated: false,
+    competitorCount: null
   };
   if (base.enabled !== true) return { ...base, reason: 'reward-finish-hold-disabled' };
   if (input.primaryTarget !== true) return { ...base, reason: 'not-primary-target' };
@@ -576,7 +578,18 @@ function rewardFinishBackAwaySuppressionPolicy(input = {}, options = {}) {
   if (!Number.isFinite(selfHp) || selfHp <= minSelfHp) return { ...base, reason: 'self-hp-not-healthy' };
   if (!Number.isFinite(distanceCm)) return { ...base, reason: 'distance-unknown' };
   if (distanceCm <= pickupRadiusCm) return { ...base, reason: 'inside-pickup-radius' };
-  return { ...base, suppress: true, reason: 'reward-finish-no-outward-drift' };
+  const competitors = nearbyActiveProfitCompetitors(input, options);
+  const competition = {
+    competitionEvaluated: true,
+    competitorCount: competitors.length,
+    competitorRadiusCm: Math.max(1, Number(options.profitKillRaceCompetitorRadiusCm ?? 8000)),
+    competitorPositionUncertain: competitors.some(competitor => !competitor.positionFresh),
+    nearestCompetitor: competitors[0] || null
+  };
+  if (!competitors.length) {
+    return { ...base, ...competition, reason: 'no-nearby-active-competitor' };
+  }
+  return { ...base, ...competition, suppress: true, reason: 'reward-finish-no-outward-drift' };
 }
 
 function normalizedPendingVelocityCommands(options = {}) {

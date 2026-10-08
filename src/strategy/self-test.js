@@ -8387,13 +8387,21 @@ function runStrategyModuleSelfTests() {
       && ownDamageAloneKeys.filter(key => key.startsWith('own-damage:')).length === 1
   });
 
-  // Outward drift away from a low-HP high-value primary target loses the kill race
-  // that closing distance would win; only the generic back-away branch is held.
+  // A contested low-HP reward may hold generic back-away; an uncontested target
+  // still needs ordinary separation against return fire.
   const rewardFinishSuppressed = rewardFinishBackAwaySuppressionPolicy({
     primaryTarget: true,
-    self: { hp: 100 },
-    target: { hp: 40, drop: 460, distance: 3183 },
-    distanceCm: 3183
+    self: { user_id: 1, hp: 100, x: 0, y: 0 },
+    target: { user_id: 2, hp: 40, drop: 460, x: 3183, y: 0, distance: 3183 },
+    distanceCm: 3183,
+    competitionTargets: [{ user_id: 3, x: 4000, y: 0, active: true, authority: 'realtime' }]
+  }, {});
+  const rewardFinishUncontested = rewardFinishBackAwaySuppressionPolicy({
+    primaryTarget: true,
+    self: { user_id: 1, hp: 100, x: 0, y: 0 },
+    target: { user_id: 2, hp: 40, drop: 460, x: 3183, y: 0, distance: 3183 },
+    distanceCm: 3183,
+    competitionTargets: []
   }, {});
   const rewardFinishHighHpTarget = rewardFinishBackAwaySuppressionPolicy({
     primaryTarget: true,
@@ -8435,6 +8443,8 @@ function runStrategyModuleSelfTests() {
     name: 'reward-finish-back-away-hold-blocks-only-rewarding-low-hp-primary-drift',
     passed: rewardFinishSuppressed.suppress === true
       && rewardFinishSuppressed.reason === 'reward-finish-no-outward-drift'
+      && rewardFinishUncontested.suppress === false
+      && rewardFinishUncontested.reason === 'no-nearby-active-competitor'
       && rewardFinishHighHpTarget.suppress === false
       && rewardFinishHighHpTarget.reason === 'target-above-finish-hp'
       && rewardFinishLowDrop.suppress === false

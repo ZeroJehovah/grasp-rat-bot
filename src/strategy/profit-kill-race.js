@@ -282,6 +282,35 @@ function activeRealtimePlayer(entity, selfId, targetId) {
   return realtimePlayerActivity(entity) === 'active';
 }
 
+// Competition is target-centered and independent of the primary's HP. The
+// finish-spacing hold and the stricter sub-20-HP fire gate share these inputs.
+// Unknown positions keep the existing bounded native-activity lease semantics.
+function nearbyActiveProfitCompetitors(input = {}, options = {}) {
+  const selfId = idOf(input.self);
+  const targetId = idOf(input.target);
+  const competitorRadius = Math.max(1, Number(options.profitKillRaceCompetitorRadiusCm ?? 8000));
+  return (input.competitionTargets || input.realtimeTargets || [])
+    .filter(entity => !entity?.authority || entity.authority === 'realtime')
+    .filter(entity => activeRealtimePlayer(entity, selfId, targetId))
+    .map(entity => ({
+      id: idOf(entity),
+      distanceCm: distanceBetween(entity, input.target),
+      positionFresh: entity.profitCompetitionPositionFresh !== false,
+      held: entity.profitCompetitionHeld === true,
+      evidenceReasons: Array.isArray(entity.profitCompetitionEvidenceReasons)
+        ? entity.profitCompetitionEvidenceReasons.slice(0, 4)
+        : [],
+      evidenceAgeMs: numberOrNull(entity.profitCompetitionEvidenceAgeMs),
+      lastStrongTick: numberOrNull(entity.profitCompetitionLastStrongTick)
+    }))
+    .filter(row => (
+      Number.isFinite(row.distanceCm) && row.distanceCm <= competitorRadius
+    ) || (
+      !Number.isFinite(row.distanceCm) && row.positionFresh === false
+    ))
+    .sort((left, right) => left.distanceCm - right.distanceCm);
+}
+
 function profitKillRacePolicy(input = {}, options = {}) {
   const self = input.self;
   const target = input.target;
@@ -315,28 +344,8 @@ function profitKillRacePolicy(input = {}, options = {}) {
       competitorRadiusCm: competitorRadius
     };
   }
-  const selfId = idOf(self);
   const targetId = idOf(target);
-  const competitors = (input.competitionTargets || input.realtimeTargets || [])
-    .filter(entity => !entity?.authority || entity.authority === 'realtime')
-    .filter(entity => activeRealtimePlayer(entity, selfId, targetId))
-    .map(entity => ({
-      id: idOf(entity),
-      distanceCm: distanceBetween(entity, target),
-      positionFresh: entity.profitCompetitionPositionFresh !== false,
-      held: entity.profitCompetitionHeld === true,
-      evidenceReasons: Array.isArray(entity.profitCompetitionEvidenceReasons)
-        ? entity.profitCompetitionEvidenceReasons.slice(0, 4)
-        : [],
-      evidenceAgeMs: numberOrNull(entity.profitCompetitionEvidenceAgeMs),
-      lastStrongTick: numberOrNull(entity.profitCompetitionLastStrongTick)
-    }))
-    .filter(row => (
-      Number.isFinite(row.distanceCm) && row.distanceCm <= competitorRadius
-    ) || (
-      !Number.isFinite(row.distanceCm) && row.positionFresh === false
-    ))
-    .sort((left, right) => left.distanceCm - right.distanceCm);
+  const competitors = nearbyActiveProfitCompetitors(input, options);
   const nearestCompetitor = competitors[0] || null;
   if (!nearestCompetitor) {
     return {
@@ -389,6 +398,7 @@ module.exports = {
   activeRealtimePlayer,
   bulletOwnerId,
   distanceBetween,
+  nearbyActiveProfitCompetitors,
   observeProfitCompetitorEvidence,
   profitKillRacePolicy,
   realtimePlayerActivity

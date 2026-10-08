@@ -3570,14 +3570,15 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
         > Number(ballisticClose.targetRangeCm) + Number(ballisticClose.hysteresisCm || 0)
   );
   const genericBackAway = shouldBackAwayFromTarget(self, target);
-  // A rewarding primary target inside the finish band must not be pushed away by the generic
-  // close-spacing back-away: every centimetre added has to be re-closed before its drop can be
-  // picked up. Close-pressure, ballistic, and invulnerable separation keep their own authority.
+  // Preserve a contested reward's finish position using the same native activity
+  // evidence as the kill race. Without competition, ordinary separation remains
+  // available even while the primary is low on HP.
   const rewardFinishBackAwayHold = rewardFinishBackAwaySuppressionPolicy({
     self,
     target,
     primaryTarget: target.combatRole === 'primary',
-    distanceCm: Number(target.distance)
+    distanceCm: Number(target.distance),
+    competitionTargets: options.profitCompetitionTargets || options.realtimeTargets || []
   }, options);
   const backAway = invulnerableWaitActive
     ? invulnerableWindow.separate

@@ -717,6 +717,12 @@ function normalizeBrowserlessCombatLiveEntry(entry, state = {}) {
       residualThreatLeaseActive: movement.residualThreatLease?.active === true,
       residualThreatCurrentCollision: movement.residualThreatLease?.currentCollision === true,
       residualThreatAgeMs: numberOrNull(movement.residualThreatLease?.ageMs),
+      selfId: String(self.user_id ?? self.userId ?? ''),
+      targetId: String(target.user_id ?? target.userId ?? ''),
+      // This older compact stream may omit protected competitors. Preserve
+      // available native evidence only; a later contest cannot authorize an
+      // earlier hold whose frame contains no competitor evidence.
+      competitionTargets: (detail.candidates || []).filter(candidate => candidate?.authority === 'realtime'),
       selfHp: numberOrNull(self.hp),
       targetHp: numberOrNull(target.hp),
       targetDrop: numberOrNull(target.drop),
@@ -1039,6 +1045,27 @@ function runLoadFramesSelfTest() {
       && Number.isFinite(live.frames[0].at) && live.frames[0].at < live.frames[1].at);
     assert('browserless accepted-shot deltas normalize to synthetic replay bullets',
       Array.isArray(live.frames[1].entry.bullets) && live.frames[1].entry.bullets.length === 1);
+    for (const authority of ['realtime', 'snapshot', 'missing']) {
+      const finishFile = path.join(root, `finish-competition-${authority}.jsonl`);
+      const entries = [0, 50].map(offset => ({
+        at: 10000 + offset,
+        type: 'combat-live',
+        detail: {
+          self: { userId: '7', x: 0, y: 0, hp: 100 },
+          target: { userId: '8', x: 3000, y: 0, hp: 40, drop: 100, distance: 3000 },
+          candidates: authority === 'missing' ? [] : [
+            { userId: '8', x: 3000, y: 0, active: true, authority: 'realtime' },
+            { userId: '9', x: 4000, y: 0, active: true, authority }
+          ],
+          movement: { dx: -1, dy: 0, reason: 'back-away' }
+        }
+      }));
+      fs.writeFileSync(finishFile, entries.map(JSON.stringify).join('\n') + '\n');
+      const finishFrames = loadFrames({ file: finishFile, startLine: 1, endLine: 2 }).frames;
+      const simulation = simulateRewardFinishCloseSelfSamples(finishFrames, DEFAULTS);
+      assert(`finish hold replay requires native competition: ${authority}`,
+        simulation.heldLineNos.size === (authority === 'realtime' ? 1 : 0));
+    }
     const dualTarget = runDualTargetFireArbitrationReplay(live.frames, live.sourceEvents);
     assert('browserless dual-target replay preserves pre-unlock defense and corrects post-unlock selection',
       dualTarget?.preservedSecondarySelectionFrames === 1
@@ -2495,8 +2522,8 @@ function runFarNoDamageCloseScenario(frames, shots, targetSamples, options) {
 //   (1) residual-threat Dodge continuation -- past the bullet-flight ceiling with no
 //       current collision path the synthesized residual no longer owns movement, so
 //       the frame's own base radial intent applies instead.
-//   (2) reward-finish outward-drift hold -- a healthy self must not drift away from a
-//       low-HP high-value primary target while it is outside pickup radius.
+//   (2) reward-finish outward-drift hold -- a nearby native competitor is required
+//       before holding a healthy self near a low-HP high-value primary.
 // Collision-path Dodge frames are never touched: `residualThreatCurrentCollision`
 // keeps its own authority, exactly as UC-005 requires.
 function simulateRewardFinishCloseSelfSamples(frames, options) {
@@ -2531,9 +2558,10 @@ function simulateRewardFinishCloseSelfSamples(frames, options) {
       }
       const backAwayHold = rewardFinishBackAwaySuppressionPolicy({
         primaryTarget: /back-away/.test(replay.reason || ''),
-        self: { hp: replay.selfHp },
-        target: { hp: replay.targetHp, drop: replay.targetDrop },
-        distanceCm: distance(simulated, frame.nearbyTarget)
+        self: { ...simulated, user_id: replay.selfId, hp: replay.selfHp },
+        target: { ...frame.nearbyTarget, user_id: replay.targetId, hp: replay.targetHp, drop: replay.targetDrop },
+        distanceCm: distance(simulated, frame.nearbyTarget),
+        competitionTargets: replay.competitionTargets || []
       }, options);
       if (backAwayHold.suppress === true) {
         heldLineNos.add(frame.lineNo);
@@ -3528,7 +3556,12 @@ function selfTest() {
       selfId: '28886',
       targetId: '31361',
       targetName: 'mango',
-      expectRewardFinishCloseImproved: true
+      expectRewardFinishCloseImproved: true,
+      // The early back-away frames contain only the primary candidate. The
+      // later observed competitor is not evidence for those earlier frames.
+      // After the approved competition requirement, only residual-Dodge
+      // release may improve this historical compact fixture.
+      expectUncontestedBackAwayPreserved: true
     }
   ];
   const skipped = [];
@@ -3616,12 +3649,15 @@ function selfTest() {
     if (item.expectSustainedPressureExit && (!sustainedPressureExit || !(sustainedPressureExit.hits > 0) || !sustainedPressureExit.exitFrame)) {
       throw new Error(`${item.id} sustained pressure stop-loss did not trigger`);
     }
-    // Releasing the residual Dodge and holding the outward drift has to buy both more
-    // hits on the finish and a genuinely closer position, or the kill race is still lost.
+    // Residual-Dodge release still needs an observable hit/approach improvement.
+    // An uncontested fixture must now preserve all ordinary back-away frames;
+    // dedicated loader tests retain the positive native-competition control.
     if (item.expectRewardFinishCloseImproved && (!rewardFinishClose
       || !(rewardFinishClose.hits > rewardFinishClose.baselineHits)
       || !(rewardFinishClose.releasedResidualDodgeFrames > 0)
-      || !(rewardFinishClose.heldBackAwayFrames > 0)
+      || (item.expectUncontestedBackAwayPreserved
+        ? rewardFinishClose.heldBackAwayFrames !== 0
+        : !(rewardFinishClose.heldBackAwayFrames > 0))
       || !(rewardFinishClose.simulatedApproachCm > 0)
       || !(rewardFinishClose.simulatedClosestApproachCm < rewardFinishClose.loggedClosestApproachCm))) {
       throw new Error(`${item.id} reward-finish close replay did not improve hits/approach: hits=${rewardFinishClose?.hits || 0} vs baseline=${rewardFinishClose?.baselineHits || 0}, released=${rewardFinishClose?.releasedResidualDodgeFrames || 0}, held=${rewardFinishClose?.heldBackAwayFrames || 0}, approach=${rewardFinishClose?.simulatedApproachCm || 0}, closest=${rewardFinishClose?.simulatedClosestApproachCm} vs ${rewardFinishClose?.loggedClosestApproachCm}`);
