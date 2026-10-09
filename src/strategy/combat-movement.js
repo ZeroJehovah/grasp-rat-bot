@@ -1123,8 +1123,10 @@ function sameRadialIntentCore(candidate = {}, radialIntent = {}, options = {}) {
   // a single normalized command, so preserving each non-zero axis is the
   // conservative representation of the existing radial intent.
   if (options.preserveRadialAxes !== false) {
-    if (radial.dx !== 0 && candidateDirection.dx !== Math.sign(radial.dx)) return false;
-    if (radial.dy !== 0 && candidateDirection.dy !== Math.sign(radial.dy)) return false;
+    if (radial.dx !== 0 && candidateDirection.dx !== Math.sign(radial.dx)
+      && !(options.allowAxisPause === true && candidateDirection.dx === 0)) return false;
+    if (radial.dy !== 0 && candidateDirection.dy !== Math.sign(radial.dy)
+      && !(options.allowAxisPause === true && candidateDirection.dy === 0)) return false;
   }
   const dot = directionDotCore(candidateDirection, radial);
   const minimumDot = Number(options.minimumDot ?? 0);
@@ -1754,6 +1756,7 @@ function resolveDistanceAwareDodgeCore(input = {}, options = {}) {
     : null;
   let directionStabilityHeld = false;
   let invalidatePreviousLatch = false;
+  let escortAxisPause = false;
   if (mode === 'close-proactive' && !blockedReason && activeOpponent) {
     if (reactionSlack.currentShotAvoidability === 'unavoidable' && currentThreat) {
       // A late bullet can be unavoidable at any range. Only a NEW shot whose
@@ -1769,14 +1772,24 @@ function resolveDistanceAwareDodgeCore(input = {}, options = {}) {
       const tx = Number(target.x) - Number(input.self?.x);
       const ty = Number(target.y) - Number(input.self?.y);
       const distance = Math.hypot(tx, ty);
-      const tangents = physicallyClose && minHits > 0 && distance > 0 ? field.filter(row => {
+      const geometricTangents = physicallyClose && minHits > 0 && distance > 0 ? field.filter(row => {
         const length = Math.hypot(row.dx, row.dy);
         return length > 0 && Number(row.directHits || 0) === minHits
           && Number(row.unavoidableHits || 0) === minUnavoidable
           && Math.abs((row.dx * tx + row.dy * ty) / (length * distance)) <= Math.SQRT1_2
-          && sameRadialIntentCore(row, radialIntent, { minimumDot: 0 })
           && candidateWithinBoundaryCore(input.self, row, options);
       }) : [];
+      let tangents = geometricTangents.filter(row => sameRadialIntentCore(row, radialIntent, { minimumDot: 0 }));
+      // Emergency Dodge may temporarily pause one escort axis while the other
+      // still advances toward the primary. Never reverse either axis or relax
+      // normal spacing, prospective Dodge, current risk, or the stamina gate.
+      const heldDirection = normalizedDirection(input.unavoidableHoldDirection || pendingDirection || currentDirection);
+      const cardinalHold = Math.abs(heldDirection.dx) + Math.abs(heldDirection.dy) === 1;
+      if (!tangents.length && cardinalHold && input.defensiveEscort === true && input.baseDistanceBand === 'escort') {
+        tangents = geometricTangents.filter(row => sameRadialIntentCore(row, radialIntent,
+          { minimumDot: 0, allowAxisPause: true }));
+        escortAxisPause = tangents.length > 0;
+      }
       const retained = previousLatchMatches && previousLatch?.submode === 'stochastic'
         && Number(previousLatch.holdUntilMs) > nowMs
         ? tangents.find(row => row.dx === previousLatchDirection.dx && row.dy === previousLatchDirection.dy)
@@ -1932,7 +1945,7 @@ function resolveDistanceAwareDodgeCore(input = {}, options = {}) {
       createdAtMs: previousLatch?.createdAtMs || nowMs
     };
     latch = nextLatch;
-    if (!sameRadialIntentCore(selectedDirection, radialIntent, { minimumDot: 0 })) {
+    if (!sameRadialIntentCore(selectedDirection, radialIntent, { minimumDot: 0, allowAxisPause: escortAxisPause })) {
       applied = false;
       selectedDirection = null;
       preDodgeReason = 'radial-intent-preserved';
@@ -1998,7 +2011,8 @@ function resolveDistanceAwareDodgeCore(input = {}, options = {}) {
       ...radialIntent,
       source: radialIntent.source || 'base-movement'
     },
-    radialOverrideReason: applied ? 'distance-aware-lateral-dodge' : '',
+    radialOverrideReason: applied
+      ? (escortAxisPause ? 'emergency-escort-axis-pause' : 'distance-aware-lateral-dodge') : '',
     latchAgeMs: latch
       ? Math.max(0, nowMs - Number(latch.createdAtMs || nowMs))
       : 0,

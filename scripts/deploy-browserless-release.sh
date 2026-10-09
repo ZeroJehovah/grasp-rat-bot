@@ -107,6 +107,7 @@ RELEASE_TOOLING=(
   scripts/activate-browserless-release.sh
   scripts/build-browserless-release.js
   scripts/browserless-deployment-audit.js
+  scripts/browserless-node-runtime.js
   scripts/deploy-browserless-release.sh
   scripts/install-browserless-release.sh
   scripts/install-browserless-runner-service.sh
@@ -128,6 +129,13 @@ if ! "${SUDO[@]}" test -f "$ENV_PATH"; then
   echo "Environment file is missing or inaccessible through sudo: $ENV_PATH" >&2
   exit 1
 fi
+
+# Pin only this service's interpreter. Do not change the host's /usr/bin/node
+# or depend on sudo's PATH selecting the same ABI as the build process.
+"${SUDO[@]}" "$NODE_BIN" "$APP_DIR/scripts/browserless-node-runtime.js" \
+  --install --source "$NODE_BIN" --release-root "$RELEASE_ROOT"
+NODE_BIN="$RELEASE_ROOT/runtime/node-v22.23.2-linux-arm64/bin/node"
+export NODE_BIN
 
 if [ -z "$BUILD_ROOT" ]; then
   BUILD_ROOT="$(mktemp -d /tmp/grasp-rat-browserless-release.XXXXXX)"
@@ -173,16 +181,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
-node "$APP_DIR/scripts/build-browserless-release.js" \
+"$NODE_BIN" "$APP_DIR/scripts/build-browserless-release.js" \
   --repository "$APP_DIR" \
   --revision "$SOURCE_REVISION" \
   --output-dir "$ARTIFACT_DIR"
-node "$APP_DIR/scripts/verify-browserless-release.js" "$ARTIFACT_DIR" \
+"$NODE_BIN" "$APP_DIR/scripts/verify-browserless-release.js" "$ARTIFACT_DIR" \
   --require-read-only \
   --require-runtime-compatible
 
-RELEASE_ID="$(node -e 'const fs=require("fs"); const path=require("path"); const manifest=JSON.parse(fs.readFileSync(path.join(process.argv[1],"release-manifest.json"),"utf8")); process.stdout.write(manifest.releaseId);' "$ARTIFACT_DIR")"
-ARTIFACT_DIGEST="$(node -e 'const fs=require("fs"); const path=require("path"); const manifest=JSON.parse(fs.readFileSync(path.join(process.argv[1],"release-manifest.json"),"utf8")); process.stdout.write(manifest.artifactDigest);' "$ARTIFACT_DIR")"
+RELEASE_ID="$("$NODE_BIN" -e 'const fs=require("fs"); const path=require("path"); const manifest=JSON.parse(fs.readFileSync(path.join(process.argv[1],"release-manifest.json"),"utf8")); process.stdout.write(manifest.releaseId);' "$ARTIFACT_DIR")"
+ARTIFACT_DIGEST="$("$NODE_BIN" -e 'const fs=require("fs"); const path=require("path"); const manifest=JSON.parse(fs.readFileSync(path.join(process.argv[1],"release-manifest.json"),"utf8")); process.stdout.write(manifest.artifactDigest);' "$ARTIFACT_DIR")"
 
 for file in \
   browserless-runner.cjs \
@@ -194,16 +202,16 @@ for file in \
   remote-profit-worker-thread.js \
   web-panel.js \
   verify-release.cjs; do
-  node --check "$ARTIFACT_DIR/$file"
+  "$NODE_BIN" --check "$ARTIFACT_DIR/$file"
 done
 
-node -e 'const Database=require(process.argv[1]); const db=new Database(":memory:"); db.exec("create table release_smoke(value integer); insert into release_smoke values (1)"); if (db.prepare("select value from release_smoke").get().value !== 1) process.exit(1); db.close();' \
+"$NODE_BIN" -e 'const Database=require(process.argv[1]); const db=new Database(":memory:"); db.exec("create table release_smoke(value integer); insert into release_smoke values (1)"); if (db.prepare("select value from release_smoke").get().value !== 1) process.exit(1); db.close();' \
   "$ARTIFACT_DIR/node_modules/better-sqlite3"
 
-node "$ARTIFACT_DIR/browserless-runner.cjs" --self-test > "$BUILD_ROOT/artifact-self-test.json"
-node -e 'const fs=require("fs"); const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if (!value.ok) throw new Error("artifact self-test did not report ok=true");' "$BUILD_ROOT/artifact-self-test.json"
+"$NODE_BIN" "$ARTIFACT_DIR/browserless-runner.cjs" --self-test > "$BUILD_ROOT/artifact-self-test.json"
+"$NODE_BIN" -e 'const fs=require("fs"); const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if (!value.ok) throw new Error("artifact self-test did not report ok=true");' "$BUILD_ROOT/artifact-self-test.json"
 
-"${SUDO[@]}" nice -n -10 node "$ARTIFACT_DIR/benchmark-browserless-hot-path.cjs" \
+"${SUDO[@]}" nice -n -10 "$NODE_BIN" "$ARTIFACT_DIR/benchmark-browserless-hot-path.cjs" \
   --iterations 500 \
   --warmup 100 \
   --learning-file "$DATA_DIR/combat-learning.json" \
@@ -290,7 +298,7 @@ HEALTH_FILE="$BUILD_ROOT/health.json"
 HEALTH_READY=0
 for _attempt in $(seq 1 30); do
   if curl -fsS "http://127.0.0.1:$STATUS_PORT/api/health" > "$HEALTH_FILE" 2>/dev/null \
-    && node -e 'const fs=require("fs"); const health=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if (health?.ok !== true) process.exit(1);' "$HEALTH_FILE" 2>/dev/null; then
+    && "$NODE_BIN" -e 'const fs=require("fs"); const health=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if (health?.ok !== true) process.exit(1);' "$HEALTH_FILE" 2>/dev/null; then
     HEALTH_READY=1
     break
   fi

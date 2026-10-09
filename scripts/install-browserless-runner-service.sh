@@ -98,6 +98,9 @@ $SUDO "$NODE_BIN" "$VERIFY_SCRIPT" "$(readlink -f "$RELEASE_ROOT/current")" \
   --require-root-owned \
   --require-directory-id \
   --require-runtime-compatible >/dev/null
+$SUDO "$NODE_BIN" "$APP_DIR/scripts/browserless-node-runtime.js" \
+  --verify --release-root "$RELEASE_ROOT" \
+  --manifest "$RELEASE_ROOT/current/release-manifest.json" >/dev/null
 
 $SUDO install -d -m 0755 "$(dirname "$UNIT_DEST")"
 $SUDO install -m 0644 "$UNIT_SOURCE" "$UNIT_DEST"

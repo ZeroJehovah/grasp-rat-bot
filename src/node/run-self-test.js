@@ -283,7 +283,8 @@ const {
   summarizeAudit: summarizeBrowserlessActionParityAudit
 } = require('../../scripts/browserless-action-parity-audit');
 const {
-  auditDeployment: auditBrowserlessDeployment
+  auditDeployment: auditBrowserlessDeployment,
+  runtimeNodePath: browserlessRuntimeNodePath
 } = require('../../scripts/browserless-deployment-audit');
 const {
   calculateArtifactDigest: calculateBrowserlessReleaseDigest,
@@ -31417,7 +31418,7 @@ async function runSelfTest() {
           unit.includes('EnvironmentFile=/etc/grasp-rat/browserless-runner.env'),
           unit.includes('EnvironmentFile=/opt/grasp-rat-browserless/current/release.env'),
           unit.includes('WorkingDirectory=/opt/grasp-rat-browserless/current'),
-          unit.includes('ExecStart=/usr/bin/node browserless-runner.cjs'),
+          unit.includes(`ExecStart=${browserlessRuntimeNodePath()} browserless-runner.cjs`),
           unit.includes('Nice=-10'),
           unit.includes('TimeoutStopSec=infinity'),
           unit.includes('ReadOnlyPaths=/opt/grasp-rat-browserless'),
@@ -31639,6 +31640,7 @@ async function runSelfTest() {
         const releaseId = `${runtimeRevision}-${artifactDigest.slice(0, 12)}`;
         const releaseDir = path.join(releasesDir, releaseId);
         const currentLink = path.join(releaseRoot, 'current');
+        const runtimeNode = browserlessRuntimeNodePath(releaseRoot);
         fs.mkdirSync(path.join(appDir, '.git'), { recursive: true });
         fs.mkdirSync(releaseDir, { recursive: true });
         fs.mkdirSync(dataDir, { recursive: true });
@@ -31672,7 +31674,7 @@ async function runSelfTest() {
           `WorkingDirectory=${currentLink}`,
           `EnvironmentFile=${envPath}`,
           `EnvironmentFile=${path.join(currentLink, 'release.env')}`,
-          'ExecStart=/usr/bin/node browserless-runner.cjs',
+          `ExecStart=${runtimeNode} browserless-runner.cjs`,
           'Nice=-10',
           'Restart=on-failure',
           'TimeoutStopSec=infinity',
@@ -31694,6 +31696,9 @@ async function runSelfTest() {
         const auditDepsFor = (overrides = {}) => ({
           runCommand: (command, args) => {
             if (command === 'readlink') {
+              if (args.at(-1).endsWith('/exe')) {
+                return { status: 0, stdout: `${overrides.processExecutable || runtimeNode}\n`, stderr: '' };
+              }
               return overrides.processCwdResult || {
                 status: 0,
                 stdout: `${overrides.processCwd || releaseDir}\n`,
@@ -31734,7 +31739,7 @@ async function runSelfTest() {
           },
           readProcFile: file => {
             if (file.endsWith('/cmdline')) {
-              return Buffer.from(overrides.commandLine || '/usr/bin/node\0browserless-runner.cjs\0');
+              return Buffer.from(overrides.commandLine || `${runtimeNode}\0browserless-runner.cjs\0`);
             }
             if (file.endsWith('/environ')) {
               return Buffer.from(overrides.processEnv || `GRASP_RAT_BROWSERLESS_REVISION=${runtimeRevision}\0`);
@@ -31749,6 +31754,11 @@ async function runSelfTest() {
             artifactDigest,
             fileCount: 0
           }),
+          verifyNodeRuntime: (executable, expected) => {
+            if (overrides.runtimeMismatch) throw new Error('Node runtime nodeModulesAbi mismatch');
+            if (executable !== runtimeNode || expected.nodeModulesAbi !== process.versions.modules) throw new Error('invalid runtime verification inputs');
+            return { ok: true, ...expected, executableSha256: 'c'.repeat(64) };
+          },
           networkInterfaces: () => ({
             enp0s6: [
               { family: 'IPv4', address: '10.0.0.18' },
@@ -31856,6 +31866,12 @@ async function runSelfTest() {
           ...commonOptions,
           envMode: 'live'
         }, auditDepsFor({ sourceReadable: true }));
+        const wrongExecutable = auditBrowserlessDeployment({ ...commonOptions, envMode: 'live' },
+          auditDepsFor({ processExecutable: '/usr/bin/node' }));
+        const wrongRuntimeCommand = auditBrowserlessDeployment({ ...commonOptions, envMode: 'live' },
+          auditDepsFor({ commandLine: '/usr/bin/node\0browserless-runner.cjs\0' }));
+        const wrongNodeAbi = auditBrowserlessDeployment({ ...commonOptions, envMode: 'live' },
+          auditDepsFor({ runtimeMismatch: true }));
         const missingMainPid = auditBrowserlessDeployment({
           ...commonOptions,
           envMode: 'live',
@@ -31900,10 +31916,16 @@ async function runSelfTest() {
           wrongLoadedWorkingDirectory.ok,
           wrongLoadedWorkingDirectory.failed.some(item => item.key === 'systemctl-loaded-working-directory'),
           linkedWorktree.ok,
-          linkedWorktree.failed.some(item => item.key === 'source-primary-checkout')
+          linkedWorktree.failed.some(item => item.key === 'source-primary-checkout'),
+          wrongExecutable.ok,
+          wrongExecutable.failed.some(item => item.key === 'process-executable'),
+          wrongRuntimeCommand.ok,
+          wrongRuntimeCommand.failed.some(item => item.key === 'process-command-line'),
+          wrongNodeAbi.ok,
+          wrongNodeAbi.failed.some(item => item.key === 'node-runtime-integrity')
         ].join('|');
       }),
-      want: 'true|0|true|0|true|0|false|true|false|true|false|true|false|true|true|false|true|false|true|false|true|false|true|false|true|true|false|true|false|true'
+      want: 'true|0|true|0|true|0|false|true|false|true|false|true|false|true|true|false|true|false|true|false|true|false|true|false|true|true|false|true|false|true|false|true|false|true|false|true'
     },
     {
       name: 'browserless acceptance report aggregates deployment canary and stop audits',

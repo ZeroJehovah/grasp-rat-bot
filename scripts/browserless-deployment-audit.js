@@ -12,6 +12,7 @@ const {
 } = require('../src/node/browserless/state-file');
 const { DEFAULTS: BROWSERLESS_CONFIG_DEFAULTS } = require('../src/node/browserless/config');
 const { verifyRelease } = require('./verify-browserless-release');
+const { runtimeNodePath, verifyNodeRuntime } = require('./browserless-node-runtime');
 
 const DEFAULT_SERVICE_NAME = 'grasp-rat-browserless-runner';
 const DEFAULT_UNIT_PATH = `/etc/systemd/system/${DEFAULT_SERVICE_NAME}.service`;
@@ -257,6 +258,7 @@ function auditDeployment(options = {}, deps = {}) {
   const runCommand = deps.runCommand || commandRunner;
   const networkInterfaces = typeof deps.networkInterfaces === 'function' ? deps.networkInterfaces : os.networkInterfaces;
   const releaseVerifier = deps.verifyRelease || verifyRelease;
+  const nodeRuntimeVerifier = deps.verifyNodeRuntime || verifyNodeRuntime;
   const readProcFile = deps.readProcFile || (file => fs.readFileSync(file));
   const checks = [];
 
@@ -322,13 +324,20 @@ function auditDeployment(options = {}, deps = {}) {
   const workingDirectory = unitValue(unit.text, 'WorkingDirectory');
   const environmentFiles = unitValues(unit.text, 'EnvironmentFile').map(normalizeEnvironmentFile);
   const execStart = unitValue(unit.text, 'ExecStart');
+  const runtimeNode = runtimeNodePath(releaseRoot);
+  try {
+    const runtimeReport = nodeRuntimeVerifier(runtimeNode, manifest.runtime || {});
+    addCheck(checks, 'node-runtime-integrity', true, `${runtimeNode}, node=${runtimeReport.node}, abi=${runtimeReport.nodeModulesAbi}, sha256=${runtimeReport.executableSha256}`);
+  } catch (error) {
+    addCheck(checks, 'node-runtime-integrity', false, error.message);
+  }
   const readWritePaths = unitValue(unit.text, 'ReadWritePaths');
   const readOnlyPaths = unitValue(unit.text, 'ReadOnlyPaths');
   const inaccessiblePaths = unitValue(unit.text, 'InaccessiblePaths');
   addCheck(checks, 'service-name', serviceName === DEFAULT_SERVICE_NAME, `serviceName=${serviceName}`);
   addCheck(checks, 'source-primary-checkout', directoryOk(path.join(sourceDir, '.git')), `sourceDir=${sourceDir}, .git=${directoryOk(path.join(sourceDir, '.git')) ? 'directory' : 'missing-or-nondirectory'}`);
   addCheck(checks, 'working-directory', path.resolve(workingDirectory || '/') === path.join(releaseRoot, 'current'), `WorkingDirectory=${workingDirectory || 'missing'}, expected=${path.join(releaseRoot, 'current')}`);
-  addCheck(checks, 'runner-entrypoint', execStart === '/usr/bin/node browserless-runner.cjs', `ExecStart=${execStart || 'missing'}`);
+  addCheck(checks, 'runner-entrypoint', execStart === `${runtimeNode} browserless-runner.cjs`, `ExecStart=${execStart || 'missing'}`);
   addCheck(checks, 'environment-file-reference', environmentFiles.includes(envPath), `EnvironmentFiles=${environmentFiles.join(',') || 'missing'}`);
   addCheck(checks, 'release-environment-file-reference', environmentFiles.includes(path.join(releaseRoot, 'current', 'release.env')), `EnvironmentFiles=${environmentFiles.join(',') || 'missing'}`);
   addCheck(checks, 'service-nice', unitValue(unit.text, 'Nice') === '-10', `Nice=${unitValue(unit.text, 'Nice') || 'missing'}`);
@@ -368,6 +377,7 @@ function auditDeployment(options = {}, deps = {}) {
       'systemctl-no-restarts',
       'process-working-directory',
       'process-command-line',
+      'process-executable',
       'process-runtime-revision',
       'process-source-inaccessible'
     ]) addCheck(checks, key, true, 'skipped by --skip-systemctl');
@@ -412,10 +422,13 @@ function auditDeployment(options = {}, deps = {}) {
 
       try {
         const commandLine = Buffer.from(readProcFile(`/proc/${mainPid}/cmdline`)).toString('utf8').split('\0').filter(Boolean);
-        addCheck(checks, 'process-command-line', commandLine.length === 2 && commandLine[0] === '/usr/bin/node' && commandLine[1] === 'browserless-runner.cjs', `cmdline=${commandLine.join(' ') || 'missing'}`);
+        addCheck(checks, 'process-command-line', commandLine.length === 2 && commandLine[0] === runtimeNode && commandLine[1] === 'browserless-runner.cjs', `cmdline=${commandLine.join(' ') || 'missing'}`);
       } catch (error) {
         addCheck(checks, 'process-command-line', false, error?.message || String(error));
       }
+      const executable = runCommand('readlink', ['-f', `/proc/${mainPid}/exe`]);
+      addCheck(checks, 'process-executable', executable.status === 0 && executable.stdout.trim() === runtimeNode,
+        `executable=${executable.stdout.trim() || 'missing'}, expected=${runtimeNode}`);
       try {
         const processEnv = parseNullEnv(readProcFile(`/proc/${mainPid}/environ`));
         addCheck(checks, 'process-runtime-revision', processEnv.GRASP_RAT_BROWSERLESS_REVISION === manifest.runtimeRevision, `process=${processEnv.GRASP_RAT_BROWSERLESS_REVISION || 'missing'}, manifest=${manifest.runtimeRevision || 'missing'}`);
@@ -425,7 +438,7 @@ function auditDeployment(options = {}, deps = {}) {
       const sourceProbe = runCommand('nsenter', ['-t', String(mainPid), '-m', '--', 'test', '!', '-r', path.join(sourceDir, 'scripts', 'browserless-runner.js')]);
       addCheck(checks, 'process-source-inaccessible', sourceProbe.status === 0, `status=${sourceProbe.status}, sourceEntry=${path.join(sourceDir, 'scripts', 'browserless-runner.js')}, stderr=${sourceProbe.stderr.trim() || sourceProbe.error || ''}`);
     } else {
-      for (const key of ['process-working-directory', 'process-command-line', 'process-runtime-revision', 'process-source-inaccessible']) {
+      for (const key of ['process-working-directory', 'process-command-line', 'process-executable', 'process-runtime-revision', 'process-source-inaccessible']) {
         addCheck(checks, key, false, `not checked because ExecMainPID=${mainPidText || 'missing'} is not a positive running process ID`);
       }
     }
@@ -518,6 +531,7 @@ module.exports = {
   parseNullEnv,
   parseSystemctlShow,
   resolveCurrentRelease,
+  runtimeNodePath,
   unitValue,
   unitValues
 };

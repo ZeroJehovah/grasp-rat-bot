@@ -317,6 +317,7 @@ async function buildRelease(options) {
       runtime: {
         node: process.version,
         nodeModulesAbi: process.versions.modules,
+        executableSha256: sha256File(process.execPath),
         platform: process.platform,
         arch: process.arch
       },

@@ -4101,6 +4101,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
         dodge,
         baseMovement: distanceAwareBaseMovement,
         baseDistanceBand: distanceAwareBaseBand,
+        defensiveEscort: secondaryTarget && profitEscort?.active === true,
         currentDirection,
         pendingDirection,
         pendingVelocityCommands: options.pendingVelocityCommands,
