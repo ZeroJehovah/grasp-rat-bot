@@ -56,6 +56,7 @@ const {
 } = require('./map-trail-tracker');
 const {
   createRemoteProfitWorker,
+  DEFAULT_REMOTE_PROFIT_WORKER_TTL_MS,
   isRemoteProfitSnapshotEligible,
   remoteProfitRealtimeSelfFromLiveState
 } = require('./remote-profit-worker');
@@ -2485,6 +2486,39 @@ async function runBrowserlessRunner(config, deps = {}) {
       return { ok: false, error: errorMessage(err), summary: null, observations: [] };
     }
   };
+  // The newest global HTTP snapshot this process has observed, whatever task
+  // asked for it: the offline Drop/chat poll, a login-point safety check, an
+  // exit-recovery confirmation, or a snapshot-edge wait. A new gameplay
+  // session seeds its first off-screen profit batch from this record instead of
+  // starting empty, so profit selection never runs without the freshest
+  // available snapshot. It is retained across sessions, but a record only
+  // seeds a session while it is at most `DEFAULT_REMOTE_PROFIT_WORKER_TTL_MS`
+  // old and from the same UTC+8 day; the periodic poller refreshes every 30 s,
+  // so anything older than that cap is no longer a usable basis for selection.
+  let latestGlobalHttpSnapshot = null;
+  const snapshotCarryRecord = (payload, detail = {}) => {
+    if (!payload || typeof payload !== 'object') return null;
+    if (detail.global !== true) return null;
+    const source = String(detail.source || '');
+    if (!source || source === 'ws') return null;
+    const observedAtMs = Number(detail.observedAtMs || now());
+    if (!Number.isFinite(observedAtMs) || observedAtMs <= 0) return null;
+    return {
+      payload,
+      observedAtMs,
+      source,
+      snapshotPurpose: String(detail.snapshotPurpose || '')
+    };
+  };
+  const retainLatestGlobalHttpSnapshot = (payload, detail = {}) => {
+    const carried = snapshotCarryRecord(payload, detail);
+    if (!carried) return latestGlobalHttpSnapshot;
+    if (latestGlobalHttpSnapshot && carried.observedAtMs < latestGlobalHttpSnapshot.observedAtMs) {
+      return latestGlobalHttpSnapshot;
+    }
+    latestGlobalHttpSnapshot = carried;
+    return carried;
+  };
   const publishRemoteProfitSnapshot = (payload, detail = {}) => {
     const observedAtMs = Number(detail.observedAtMs ?? now());
     const snapshotSource = String(detail.source || 'snapshot');
@@ -2547,6 +2581,7 @@ async function runBrowserlessRunner(config, deps = {}) {
       global: detail.global === true || snapshotSource !== 'ws',
       scheduleAtMs: detail.scheduleAtMs
     });
+    retainLatestGlobalHttpSnapshot(payload, { ...detail, observedAtMs });
     publishRemoteProfitSnapshot(payload, { ...detail, observedAtMs });
     let chatResult = null;
     let dynamicWhitelistDeathResult = null;
@@ -3362,17 +3397,21 @@ async function runBrowserlessRunner(config, deps = {}) {
     };
     remoteProfitWorker?.reset?.('gameplay-session-start');
     const carriedAtMs = Number(carriedSnapshot?.observedAtMs || 0);
+    const carriedSource = String(carriedSnapshot?.source || '');
     const carryEligible = Boolean(
       carriedSnapshot?.payload
       && typeof carriedSnapshot.payload === 'object'
       && Number.isFinite(carriedAtMs)
       && carriedAtMs > 0
+      && browserlessDayKey(carriedAtMs) === browserlessDayKey(now())
+      && (now() - carriedAtMs) <= DEFAULT_REMOTE_PROFIT_WORKER_TTL_MS
     );
     if (carryEligible) {
-      // Pre-login observers already consumed this exact payload offline.
-      // Entry only transfers it to the navigation worker with the new self.
+      // This exact payload was already consumed offline or pre-login by another
+      // task. Entry only transfers it to the navigation worker with the new
+      // realtime self. A snapshot from a previous UTC+8 day is never transferred.
       publishRemoteProfitSnapshot(carriedSnapshot.payload, {
-        source: 'prelogin-http',
+        source: carriedSource || 'prelogin-http',
         observedAtMs: carriedAtMs,
         global: true,
         carriedIntoSession: true
@@ -3389,7 +3428,9 @@ async function runBrowserlessRunner(config, deps = {}) {
       runId: String(entry.runId || ''),
       intervalMs: DEFAULT_SNAPSHOT_GAP_MS,
       initialMode: carryEligible ? 'prelogin-snapshot-handoff' : 'post-login-immediate-fetch',
-      carriedSnapshotAt: carryEligible ? new Date(carriedAtMs).toISOString() : ''
+      carriedSnapshotAt: carryEligible ? new Date(carriedAtMs).toISOString() : '',
+      carriedSnapshotSource: carryEligible ? carriedSource : '',
+      carriedSnapshotPurpose: carryEligible ? String(carriedSnapshot?.snapshotPurpose || '') : ''
     });
   };
 
@@ -3431,19 +3472,6 @@ async function runBrowserlessRunner(config, deps = {}) {
   };
 
   let preparedSnapshotSafety = null;
-  let preparedSnapshotPayload = null;
-  const snapshotCarryRecord = (payload, detail = {}) => {
-    if (String(detail.source || '') !== 'prelogin-http' || !payload || typeof payload !== 'object') return null;
-    const observedAtMs = Number(detail.observedAtMs || now());
-    if (!Number.isFinite(observedAtMs) || observedAtMs <= 0) return null;
-    return { payload, observedAtMs };
-  };
-  const observePreparedSnapshotPayload = (payload, detail = {}) => {
-    const result = observeSnapshotPayload(payload, detail);
-    const carried = snapshotCarryRecord(payload, detail);
-    if (carried) preparedSnapshotPayload = carried;
-    return result;
-  };
   const waitForLoopPlan = async (loopPlan, resultForStop = null) => {
     loopPlan = resumeTransportRecoveryAfterCloudflareStop(
       loopPlan,
@@ -3711,7 +3739,6 @@ async function runBrowserlessRunner(config, deps = {}) {
       }
       let probe;
       try {
-        preparedSnapshotPayload = null;
         probe = await (deps.runPreLoginSnapshotSafety || runPreLoginSnapshotSafety)({
           ...config,
           snapshotEdgeEnabled: false,
@@ -3722,7 +3749,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           sleep,
           fetchWithTimeout: sourceIpController.fetchWithTimeout,
           snapshotRequest: snapshotRequestScheduler.request,
-          onSnapshotPayload: observePreparedSnapshotPayload,
+          onSnapshotPayload: observeSnapshotPayload,
           onSnapshotAuditPayload: recordSnapshotAudit,
           snapshotPurpose: 'exit-recovery-confirmation',
           easyKillPlayerTracker,
@@ -3796,7 +3823,6 @@ async function runBrowserlessRunner(config, deps = {}) {
             throw interrupted;
           }
         }
-        preparedSnapshotPayload = null;
         preparedSnapshotSafety = await (deps.runPreLoginSnapshotSafety || runPreLoginSnapshotSafety)(
           config,
           readBrowserlessStateFile(stateFile),
@@ -3805,7 +3831,7 @@ async function runBrowserlessRunner(config, deps = {}) {
             sleep,
             fetchWithTimeout: sourceIpController.fetchWithTimeout,
             snapshotRequest: snapshotRequestScheduler.request,
-            onSnapshotPayload: observePreparedSnapshotPayload,
+            onSnapshotPayload: observeSnapshotPayload,
             onSnapshotAuditPayload: recordSnapshotAudit,
             onSnapshotSafety: recordSnapshotSafetyProgress,
             snapshotPurpose: 'login-point-safety',
@@ -4685,7 +4711,6 @@ async function runBrowserlessRunner(config, deps = {}) {
       });
     } else {
       try {
-        preparedSnapshotPayload = null;
         const probe = await (deps.runPreLoginSnapshotSafety || runPreLoginSnapshotSafety)({
           ...config,
           snapshotEdgeEnabled: false,
@@ -4696,7 +4721,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           sleep,
           fetchWithTimeout: sourceIpController.fetchWithTimeout,
           snapshotRequest: snapshotRequestScheduler.request,
-          onSnapshotPayload: observePreparedSnapshotPayload,
+          onSnapshotPayload: observeSnapshotPayload,
           onSnapshotAuditPayload: recordSnapshotAudit,
           snapshotPurpose: 'login-point-safety',
           easyKillPlayerTracker,
@@ -5158,15 +5183,7 @@ async function runBrowserlessRunner(config, deps = {}) {
     loginPointProvided = hasConfigNumber(config.loginPointX) && hasConfigNumber(config.loginPointY);
     if (!loginPointProvided && config.controlMode === 'read-only') {
       let bootstrap;
-      let bootstrapSnapshotPayload = null;
       const stateBeforeBootstrap = readBrowserlessStateFile(stateFile);
-      const bootstrapDailyFirstLogin = isFirstBrowserlessLoginOfDay(stateBeforeBootstrap, now());
-      const observeBootstrapSnapshotPayload = (payload, detail = {}) => {
-        const result = observeSnapshotPayload(payload, detail);
-        const carried = snapshotCarryRecord(payload, detail);
-        if (carried) bootstrapSnapshotPayload = carried;
-        return result;
-      };
       try {
         markSourceIpSnapshotWait('source-ip-login-point-bootstrap-wait');
         bootstrap = await readOnlyCanary(config, {
@@ -5181,7 +5198,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           allowMissingLoginPointBootstrap: true,
           onSnapshotSafety: recordSnapshotSafetyProgress,
           getRecoveryLineageState,
-          onSnapshotPayload: observeBootstrapSnapshotPayload,
+          onSnapshotPayload: observeSnapshotPayload,
           onSnapshotAuditPayload: recordSnapshotAudit,
           getRemoteProfitContext: remoteProfitContext,
           onRemoteProfitDecision: decision => remoteProfitWorker?.observeDecision?.(decision),
@@ -5194,7 +5211,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           onLoginSuccess: entry => {
             mapTrailTracker.clear();
             markSourceIpLoginSuccess(entry);
-            beginGameplaySnapshotSession(entry, bootstrapDailyFirstLogin ? null : bootstrapSnapshotPayload);
+            beginGameplaySnapshotSession(entry, latestGlobalHttpSnapshot);
           },
           onMapTrailRealtime: observeMapTrailRealtime,
           onTransportOpen,
@@ -5307,18 +5324,10 @@ async function runBrowserlessRunner(config, deps = {}) {
         });
       }
       const precheckedSnapshotSafety = bypassPreLoginSafetyReason ? null : preparedSnapshotSafety;
-      let loginSnapshotPayload = bypassPreLoginSafetyReason ? null : preparedSnapshotPayload;
       preparedSnapshotSafety = null;
-      preparedSnapshotPayload = null;
       if (!bypassPreLoginSafetyReason) {
         markSourceIpSnapshotWait('source-ip-snapshot-safety-wait');
       }
-      const observeLoginSnapshotPayload = (payload, detail = {}) => {
-        const result = observeSnapshotPayload(payload, detail);
-        const carried = snapshotCarryRecord(payload, detail);
-        if (carried) loginSnapshotPayload = carried;
-        return result;
-      };
       const publishDecisionLiveState = decision => {
         const currentBeforeDecision = liveState || stateBeforeCanary;
         const decisionPatch = decisionStatePatch(decision);
@@ -5360,7 +5369,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         ),
         onSnapshotSafety: recordSnapshotSafetyProgress,
         getRecoveryLineageState,
-        onSnapshotPayload: observeLoginSnapshotPayload,
+        onSnapshotPayload: observeSnapshotPayload,
         onSnapshotAuditPayload: recordSnapshotAudit,
         getRemoteProfitContext: remoteProfitContext,
         onRemoteProfitDecision: decision => remoteProfitWorker?.observeDecision?.(decision),
@@ -5374,7 +5383,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         onLoginSuccess: entry => {
           mapTrailTracker.clear();
           markSourceIpLoginSuccess(entry);
-          beginGameplaySnapshotSession(entry, loginSnapshotPayload);
+          beginGameplaySnapshotSession(entry, latestGlobalHttpSnapshot);
         },
         onMapTrailRealtime: observeMapTrailRealtime,
         onTransportOpen,
@@ -6244,6 +6253,9 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
           entities: [{ user_id: 99, x: 1000, y: 0, hp: 50, drop: 500 }]
         }, {
           source: 'prelogin-http',
+          global: true,
+          snapshotKind: 'http',
+          snapshotPurpose: 'login-point-safety',
           observedAtMs: snapshotObservedAtMs
         });
         return successfulCanary(nowMs, options, 'prelogin-snapshot-handoff-success');
@@ -6278,6 +6290,179 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
       snapshotAuditCount: snapshotAuditRows.length,
       remoteSource: publication?.source || '',
       remoteResets
+    };
+  })();
+
+  // A new gameplay session must seed its first remote-profit batch from the
+  // newest same-day global HTTP snapshot this process observed, whatever task
+  // asked for it. These fixtures drive the pre-login window directly through
+  // onSnapshotPayload, the same single funnel every HTTP snapshot uses.
+  const runHandoffFixture = async (name, options = {}) => {
+    const snapshots = Array.isArray(options.snapshots) ? options.snapshots : [];
+    const config = buildConfig(name);
+    const nowMs = Date.UTC(2026, 7, 2, 1, 30, 0);
+    updateBrowserlessStateFile(stateFilePath(config), {
+      stats: {
+        today: { day: browserlessDayKey(nowMs), sessionCount: Number(options.sessionCount || 0) },
+        currentSession: { online: false }
+      }
+    }, { updatedAt: new Date(nowMs - 60000).toISOString() });
+    const snapshotSessionEvents = [];
+    const remotePublications = [];
+    const remoteResets = [];
+    const remoteProfitWorker = {
+      context: () => null,
+      observeDecision() {},
+      observeRealtimeEntities() {},
+      publish(payload) { remotePublications.push(payload); return Promise.resolve(null); },
+      reset(reason) { remoteResets.push(reason); return true; },
+      status: () => ({ enabled: true }),
+      close: async () => ({})
+    };
+    let bypassReason = '';
+    const result = await runBrowserlessRunner(config, {
+      ...baseDeps,
+      now: () => nowMs,
+      snapshotGapPoller: {
+        noteSnapshot() {},
+        refreshSchedule() {},
+        start(detail = {}) { snapshotSessionEvents.push({ type: 'start', detail }); },
+        stop() { snapshotSessionEvents.push({ type: 'stop' }); },
+        status() { return { intervalMs: DEFAULT_SNAPSHOT_GAP_MS, stopped: true }; }
+      },
+      remoteProfitWorker,
+      discoverSourceIps: () => ['10.0.0.21', '10.0.0.22', '10.0.0.23'],
+      sourceIpPreflightRequest: async () => ({ status: 200 }),
+      runReadOnlyOnce: async (_runtimeConfig, canaryOptions) => {
+        bypassReason = canaryOptions.bypassPreLoginSafetyReason || '';
+        for (const snapshot of snapshots) {
+          canaryOptions.onSnapshotPayload?.({
+            tick: Number(snapshot.tick || 123),
+            entities: [{ user_id: 99, x: 1000, y: 0, hp: 50, drop: 500 }]
+          }, {
+            source: snapshot.source,
+            global: true,
+            snapshotKind: 'http',
+            snapshotPurpose: snapshot.snapshotPurpose || 'gameplay',
+            observedAtMs: snapshot.observedAtMs
+          });
+        }
+        return successfulCanary(nowMs, canaryOptions, name + '-success');
+      }
+    });
+    const logFile = path.join(config.logDir, browserlessDayKey(nowMs), 'runner.jsonl');
+    const sessionStartRows = !fs.existsSync(logFile) ? [] : fs.readFileSync(logFile, 'utf8').trim().split('\n')
+      .filter(Boolean).map(line => JSON.parse(line))
+      .filter(row => row.type === 'gameplay-snapshot-session-start');
+    return {
+      result,
+      nowMs,
+      bypassReason,
+      snapshotSessionEvents,
+      remotePublications,
+      remoteResets,
+      sessionStart: sessionStartRows[0] || null
+    };
+  };
+
+  const gapHttpOfflineHandoff = await (async () => {
+    const nowMs = Date.UTC(2026, 7, 2, 1, 30, 0);
+    const freshAtMs = nowMs - 250;
+    // First login of the day, so the login-point safety probe is bypassed and
+    // the only snapshots in flight are the offline Drop/chat polls. The newest
+    // one must still seed the session; an older observation that arrives later
+    // must not displace it.
+    const fixture = await runHandoffFixture('gap-http-handoff', {
+      sessionCount: 0,
+      snapshots: [
+        { source: 'prelogin-http', snapshotPurpose: 'login-point-safety', observedAtMs: nowMs - 4000, tick: 120 },
+        { source: 'gap-http', snapshotPurpose: 'gameplay', observedAtMs: freshAtMs, tick: 123 },
+        { source: 'prelogin-http', snapshotPurpose: 'login-point-safety', observedAtMs: nowMs - 8000, tick: 118 }
+      ]
+    });
+    const publication = fixture.remotePublications[0] || null;
+    return {
+      ok: Boolean(
+        fixture.result.ok
+          && fixture.bypassReason === 'daily-first-login-invulnerability'
+          && fixture.snapshotSessionEvents.length === 2
+          && fixture.snapshotSessionEvents[0].type === 'start'
+          && fixture.snapshotSessionEvents[1].type === 'stop'
+          && fixture.snapshotSessionEvents[0].detail.immediate === false
+          && fixture.snapshotSessionEvents[0].detail.snapshotAtMs === freshAtMs
+          && fixture.remotePublications.length === 1
+          && publication.source === 'gap-http'
+          && publication.observedAtMs === freshAtMs
+          && publication.entities.length === 1
+          && fixture.sessionStart?.detail.initialMode === 'prelogin-snapshot-handoff'
+          && fixture.sessionStart?.detail.carriedSnapshotSource === 'gap-http'
+          && fixture.sessionStart?.detail.carriedSnapshotPurpose === 'gameplay'
+          && fixture.remoteResets.join(',') === 'gameplay-session-start,gameplay-session-end'
+      ),
+      bypassReason: fixture.bypassReason,
+      resultOk: fixture.result.ok,
+      resultError: fixture.result.error || '',
+      remoteResets: fixture.remoteResets,
+      snapshotSessionEvents: fixture.snapshotSessionEvents,
+      remotePublicationCount: fixture.remotePublications.length,
+      remoteSource: publication?.source || '',
+      remoteObservedAtMs: publication?.observedAtMs ?? null,
+      sessionStart: fixture.sessionStart
+    };
+  })();
+
+  const crossDayHandoffRejected = await (async () => {
+    const nowMs = Date.UTC(2026, 7, 2, 1, 30, 0);
+    const previousDayAtMs = nowMs - 86400000;
+    const fixture = await runHandoffFixture('cross-day-handoff', {
+      sessionCount: 1,
+      snapshots: [
+        { source: 'gap-http', snapshotPurpose: 'gameplay', observedAtMs: previousDayAtMs, tick: 90 }
+      ]
+    });
+    return {
+      ok: Boolean(
+        fixture.result.ok
+          && fixture.snapshotSessionEvents[0]?.detail.immediate === true
+          && fixture.snapshotSessionEvents[0]?.detail.snapshotAtMs === 0
+          && fixture.remotePublications.length === 0
+          && fixture.sessionStart?.detail.initialMode === 'post-login-immediate-fetch'
+          && fixture.sessionStart?.detail.carriedSnapshotAt === ''
+          && fixture.sessionStart?.detail.carriedSnapshotSource === ''
+      ),
+      snapshotSessionEvents: fixture.snapshotSessionEvents,
+      remotePublicationCount: fixture.remotePublications.length,
+      resultOk: fixture.result.ok,
+      resultError: fixture.result.error || '',
+      sessionStart: fixture.sessionStart
+    };
+  })();
+
+  const staleHandoffExpiry = await (async () => {
+    const nowMs = Date.UTC(2026, 7, 2, 1, 30, 0);
+    const staleAtMs = nowMs - 95000;
+    const fixture = await runHandoffFixture('stale-handoff', {
+      sessionCount: 1,
+      snapshots: [
+        { source: 'gap-http', snapshotPurpose: 'gameplay', observedAtMs: staleAtMs, tick: 95 }
+      ]
+    });
+    return {
+      ok: Boolean(
+        fixture.result.ok
+          && fixture.snapshotSessionEvents[0]?.detail.immediate === true
+          && fixture.snapshotSessionEvents[0]?.detail.snapshotAtMs === 0
+          && fixture.remotePublications.length === 0
+          && fixture.sessionStart?.detail.initialMode === 'post-login-immediate-fetch'
+          && fixture.sessionStart?.detail.carriedSnapshotAt === ''
+      ),
+      staleAtMs,
+      snapshotSessionEvents: fixture.snapshotSessionEvents,
+      remotePublicationCount: fixture.remotePublications.length,
+      resultOk: fixture.result.ok,
+      resultError: fixture.result.error || '',
+      remoteResets: fixture.remoteResets,
+      sessionStart: fixture.sessionStart
     };
   })();
 
@@ -6754,6 +6939,9 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
     ok: Boolean(
       immediate.ok
         && preloginSnapshotHandoff.ok
+        && gapHttpOfflineHandoff.ok
+        && crossDayHandoffRejected.ok
+        && staleHandoffExpiry.ok
         && healthyNoPrecheck.ok
         && deferredRestartReuse.ok
         && snapshotWaitReuse.ok
@@ -6765,6 +6953,9 @@ async function runSourceIpPreflightRunnerIntegrationSelfTest(tmp) {
     ),
     immediate,
     preloginSnapshotHandoff,
+    gapHttpOfflineHandoff,
+    crossDayHandoffRejected,
+    staleHandoffExpiry,
     healthyNoPrecheck,
     deferredRestartReuse,
     snapshotWaitReuse,

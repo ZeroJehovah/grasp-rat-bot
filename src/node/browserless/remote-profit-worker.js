@@ -8,16 +8,20 @@ const {
 } = require('../../strategy/remote-profit-targets');
 
 const DEFAULT_TIMEOUT_MS = 5000;
-const DEFAULT_TTL_MS = 210000;
+const DEFAULT_TTL_MS = 90000;
 const DEFAULT_PENDING_GRACE_MS = 5000;
 const MAX_CANDIDATES = 64;
 
 function isRemoteProfitSnapshotEligible(source, detail = {}, sessionOnline, realtimeSelf) {
   const normalizedSource = String(source || '');
   const gameplaySnapshot = normalizedSource === 'gap-http';
-  const carriedPreLoginSnapshot = normalizedSource === 'prelogin-http'
-    && detail.carriedIntoSession === true;
-  if ((!gameplaySnapshot && !carriedPreLoginSnapshot)
+  // Session start republishes the newest retained same-day global HTTP
+  // observation, whichever task produced it, so any carried non-WS source is
+  // honored. Ordinary online publications still require the gameplay poll.
+  const carriedGlobalSnapshot = detail.carriedIntoSession === true
+    && normalizedSource !== ''
+    && normalizedSource !== 'ws';
+  if ((!gameplaySnapshot && !carriedGlobalSnapshot)
     || detail.global !== true
     || sessionOnline !== true) return false;
   const authority = String(realtimeSelf?.authority || realtimeSelf?.source || '').toLowerCase();

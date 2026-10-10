@@ -94,6 +94,12 @@ async function runRemoteProfitWorkerSelfTest() {
       'prelogin-http', { global: true, carriedIntoSession: true }, true,
       { authority: 'realtime', x: 0, y: 0 }
     ), true);
+    // A session-start handoff may carry any retained non-WS global HTTP
+    // observation, including an offline gameplay poll.
+    assert.strictEqual(isRemoteProfitSnapshotEligible(
+      'gap-http', { global: true, carriedIntoSession: true }, true,
+      { authority: 'realtime', x: 0, y: 0 }
+    ), true);
     for (const detail of [
       { source: 'ws', detail: { global: true } },
       { source: 'gap-http', detail: { global: false } },
