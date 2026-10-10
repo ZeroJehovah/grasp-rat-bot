@@ -6446,6 +6446,14 @@ async function runSelfTest() {
       want: true
     },
     {
+      name: 'browserless websocket transport real binary frames and source binding self-test passes',
+      got: async () => {
+        const { runWsTransportSelfTest } = require('./browserless/ws-transport-self-test');
+        return (await runWsTransportSelfTest()).ok;
+      },
+      want: true
+    },
+    {
       name: 'browserless drop-race observability self-test passes',
       got: (() => {
         const result = runDropRaceObservabilitySelfTest();

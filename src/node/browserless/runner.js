@@ -7972,6 +7972,7 @@ async function runBrowserlessRunnerSelfTest() {
       .runBrowserlessRunnerStateTransitionSelfTest();
     const loginAdmission = await require('./login-admission-self-test').runLoginAdmissionSelfTest();
     const wsConnectRecovery = await require('./ws-connect-recovery-self-test').runWsConnectRecoverySelfTest();
+    const wsTransport = await require('./ws-transport-self-test').runWsTransportSelfTest();
     const statusRender = await require('./status-render-self-test').runBrowserlessStatusRenderSelfTest();
     const snapshotAudit = runSnapshotAuditSelfTest();
     const remoteProfitWorker = await runRemoteProfitWorkerSelfTest();
@@ -10998,6 +10999,7 @@ async function runBrowserlessRunnerSelfTest() {
         && runnerStateTransitions.ok
         && loginAdmission.ok
         && wsConnectRecovery.ok
+        && wsTransport.ok
         && statusRender.ok
         && loginSuccessStatePatch.ok
         && criticalLatencyExitRegression.ok
@@ -11123,6 +11125,7 @@ async function runBrowserlessRunnerSelfTest() {
       runnerStateTransitions,
       loginAdmission,
       wsConnectRecovery,
+      wsTransport,
       statusRender,
       loginSuccessStatePatch,
       criticalLatencyExitRegression,

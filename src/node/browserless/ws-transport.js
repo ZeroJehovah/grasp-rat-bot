@@ -34,14 +34,9 @@ function getWebSocketRuntime(options = {}) {
     };
   }
   if (cachedWebSocketRuntime) return cachedWebSocketRuntime;
-  if (typeof globalThis.WebSocket === 'function') {
-    cachedWebSocketRuntime = {
-      name: 'global',
-      WebSocket: globalThis.WebSocket,
-      supportsOptions: false
-    };
-    return cachedWebSocketRuntime;
-  }
+  // Production requires localAddress, Origin and HTTP-upgrade error details.
+  // A Node upgrade must not silently replace this dependency with the global
+  // WebSocket, which lacks those options and defaults binary messages to Blob.
   try {
     const wsModule = require('ws');
     const WebSocketImpl = wsModule.WebSocket || wsModule;
@@ -54,9 +49,9 @@ function getWebSocketRuntime(options = {}) {
       return cachedWebSocketRuntime;
     }
   } catch (err) {
-    throw new Error('WebSocket runtime unavailable. Run `npm install` in the repo on Node 18, or use Node 22+ with global WebSocket support. Original error: ' + (err?.message || String(err)));
+    throw new Error('WebSocket runtime unavailable. Install the required `ws` dependency. Original error: ' + (err?.message || String(err)));
   }
-  throw new Error('WebSocket runtime unavailable. Run `npm install` in the repo on Node 18, or use Node 22+ with global WebSocket support.');
+  throw new Error('WebSocket runtime unavailable. Install the required `ws` dependency.');
 }
 
 function wsOpenState(runtime) {
@@ -108,17 +103,20 @@ function isWebSocketConnectAbortError(error) {
 }
 
 function createWebSocket(runtime, wsUrl, options = {}) {
-  if (!runtime.supportsOptions) return new runtime.WebSocket(wsUrl);
   const localAddress = String(options.localAddress || '').trim();
   const family = localAddress
     ? (localAddress.includes(':') ? 6 : 4)
     : undefined;
-  return new runtime.WebSocket(wsUrl, [], {
+  const ws = runtime.supportsOptions ? new runtime.WebSocket(wsUrl, [], {
     headers: { Origin: options.gameOrigin || DEFAULT_GAME_ORIGIN },
     localAddress: localAddress || undefined,
     ...(family ? { family } : {}),
     perMessageDeflate: false
-  });
+  }) : new runtime.WebSocket(wsUrl);
+  // Explicitly supplied WHATWG runtimes must also deliver synchronously
+  // decodable binary data, preserving message order without async Blob reads.
+  if (ws.binaryType === 'blob') ws.binaryType = 'arraybuffer';
+  return ws;
 }
 
 function normalizeChatText(value) {
