@@ -938,28 +938,18 @@ function browserlessDailyFirstLoginDelayPlan(state, config = {}, nowMs = Date.no
 // on 2026-10-10..2026-10-12 the server stopped sending frames 0.1-2.9s after
 // 00:00:00 CST, its leave requests answered HTTP 502/404 while the world rolled
 // over, and the runner's own recovery chain only managed to re-enter 41-53s
-// later (a late pre-boundary login plus the UC-004 interval on 2026-10-12). The
-// runner therefore leaves on purpose dailyResetExitLeadMs before the boundary,
-// so the leave is confirmed while the server is still up, and reserves the first
-// post-boundary login instant dailyResetLoginDelayMs after the boundary. A zero
+// later. The runner therefore leaves on purpose dailyResetExitLeadMs before the
+// boundary, so the leave is confirmed while the server is still up, and reserves
+// the first post-boundary login instant dailyResetLoginDelayMs after it. A zero
 // lead disables the whole reset schedule.
-const DAILY_RESET_RESERVE_MARGIN_MS = 1000;
-
 function browserlessDailyResetSchedule(config = {}, nowMs = Date.now()) {
   const nowValue = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
   const exitLeadMs = Math.max(0, Number(config.dailyResetExitLeadMs ?? 0) || 0);
   const loginDelayMs = Math.max(0, Number(config.dailyResetLoginDelayMs ?? 0) || 0);
-  const loginIntervalMs = Math.max(0, Number(config.loginIntervalMs ?? 0) || 0);
   const dayStartMs = browserlessDayStartMs(nowValue);
   const boundaryMs = dayStartMs + DAY_MS;
   const currentEntryAtMs = dayStartMs + loginDelayMs;
   const nextEntryAtMs = boundaryMs + loginDelayMs;
-  // A login inside the last login interval before the boundary would consume the
-  // UC-004 login slot that the reserved reset entry needs, so the reserve opens a
-  // minute (plus a scheduling margin) ahead of that entry instead.
-  const reserveFromMs = exitLeadMs > 0
-    ? nextEntryAtMs - loginIntervalMs - DAILY_RESET_RESERVE_MARGIN_MS
-    : 0;
   return {
     nowMs: nowValue,
     dayStartMs,
@@ -967,33 +957,34 @@ function browserlessDailyResetSchedule(config = {}, nowMs = Date.now()) {
     currentEntryAtMs,
     nextEntryAtMs,
     exitAtMs: exitLeadMs > 0 ? Math.max(dayStartMs, boundaryMs - exitLeadMs) : 0,
-    reserveFromMs,
     exitLeadMs,
-    loginDelayMs,
-    loginIntervalMs
+    loginDelayMs
   };
 }
 
-// Earliest instant at which a NEW login may start, or zero for no hold. The
-// reserve covers both sides of the boundary: from the last login interval before
-// it (so the reserved entry instant cannot be pushed out by UC-004) through
-// dailyResetLoginDelayMs after it (so the entry never races the server's own day
-// rollover). Pending-exit recovery, transport takeover, and an online session
-// are resolved before this gate in the main loop and keep their own paths.
+// Earliest instant at which a NEW login may start, or zero for no hold. Two
+// instants hold: the current day's reserved entry while it is still ahead (the
+// day's first login waits for the reset to settle), and the next day's reserved
+// entry once this day's scheduled leave instant has passed (a session opened
+// between 23:59:50 and 00:00:10 would only be dropped by the rollover). In
+// between there is no hold, so a late pre-boundary login stays allowed; the hard
+// one-minute login interval no longer spans the UTC+8 day boundary, which is
+// what keeps that late login from delaying the reserved entry. Pending-exit
+// recovery, transport takeover, and an online session are resolved before this
+// gate in the main loop and keep their own paths.
 function browserlessDailyResetLoginNotBeforeMs(config = {}, nowMs = Date.now()) {
   const schedule = browserlessDailyResetSchedule(config, nowMs);
   if (!(schedule.exitLeadMs > 0)) return 0;
   if (schedule.nowMs < schedule.currentEntryAtMs) return schedule.currentEntryAtMs;
-  if (schedule.nowMs >= schedule.reserveFromMs) return schedule.nextEntryAtMs;
+  if (schedule.nowMs >= schedule.exitAtMs) return schedule.nextEntryAtMs;
   return 0;
 }
 
 // The reserved reset entry instant that a scheduled wait must not sleep through,
-// or zero when the reset schedule is disabled. Unlike the login gate above this
-// ignores the reserve window on purpose: a five-minute stamina nap that starts
-// before the reserve and would otherwise wake at 00:01-00:04 still has to be
-// pulled forward to the entry instant, which is what makes the post-reset login
-// land at the reserved time rather than whenever the nap happened to end.
+// or zero when the reset schedule is disabled. A five-minute stamina nap that
+// starts before the exit and would otherwise wake at 00:01-00:04 is pulled
+// forward to the entry instant, which is what makes the post-reset login land at
+// the reserved time rather than whenever the nap happened to end.
 function browserlessDailyResetNextEntryMs(config = {}, nowMs = Date.now()) {
   const schedule = browserlessDailyResetSchedule(config, nowMs);
   if (!(schedule.exitLeadMs > 0)) return 0;
@@ -1022,7 +1013,7 @@ function browserlessLoginIntervalDelayPlan(state, config = {}, nowMs = Date.now(
   if (state?.stats?.currentSession?.online) return null;
   if (state?.runner?.pendingExit || state?.runner?.transportRecovery?.expectedSelfPresent === true) return null;
   const nowValue = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
-  const deadline = loginAdmissionDeadline(state, config);
+  const deadline = loginAdmissionDeadline(state, config, nowValue);
   const notBeforeMs = deadline.atMs;
   const delayMs = Math.max(0, notBeforeMs - nowValue);
   if (delayMs <= 0) return null;
@@ -5101,10 +5092,12 @@ async function runBrowserlessRunner(config, deps = {}) {
       if (stopped) return stopped;
       continue;
     }
-    // The daily reset reserves the first post-boundary login instant. Every
+    // The daily reset reserves the first post-boundary login instant, and again
+    // holds the entry instant once this day's scheduled leave has passed. Every
     // ordinary new-login path (including a pending exit cleared by a fresh
-    // snapshot) waits for it, so the one-minute login interval consumed by a
-    // late pre-boundary login can never delay the reset entry.
+    // snapshot) waits for it, so the entry lands at the reserved time; the hard
+    // one-minute login interval no longer spans the day boundary, so a late
+    // pre-boundary login cannot push that entry out either.
     const dailyResetLoginPlan = !activePendingExit && !transportRecoveryState && !sessionOnline
       ? browserlessDailyResetLoginDelayPlan(config, now())
       : null;

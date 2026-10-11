@@ -22,6 +22,10 @@ function timeMs(value) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
+function utc8DayIndex(ms) {
+  return Math.floor((Number(ms) + UTC8_OFFSET_MS) / DAY_MS);
+}
+
 function iso(value) {
   const parsed = timeMs(value);
   return parsed ? new Date(parsed).toISOString() : '';
@@ -227,12 +231,20 @@ function reconcileLoginAdmission(value, options = {}) {
   return normalizeLoginAdmission(state);
 }
 
-function loginAdmissionDeadline(state = {}, config = {}) {
+// The hard one-minute successful-login interval never spans a UTC+8 day boundary.
+// A login confirmed shortly before midnight therefore does not hold the new day's
+// first login back: the reserved post-boundary entry keeps its own instant
+// instead of being pushed a further minute out by the previous day's login. The
+// server-reported entry interval and the transport backoff stay as they are —
+// they are evidence about this transport, not a rate limit on our own logins.
+function loginAdmissionDeadline(state = {}, config = {}, nowMs = Date.now()) {
   const admission = normalizeLoginAdmission(state.runner?.loginAdmission);
   const lastLoginAtMs = timeMs(state.runner?.lastLoginAt);
+  const nowValue = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
   const intervalMs = Math.max(LOGIN_INTERVAL_MS, Number(config.loginIntervalMs || LOGIN_INTERVAL_MS));
+  const crossDayLogin = lastLoginAtMs > 0 && utc8DayIndex(lastLoginAtMs) !== utc8DayIndex(nowValue);
   const candidates = [
-    { reason: 'login-interval', atMs: lastLoginAtMs ? lastLoginAtMs + intervalMs : 0 },
+    { reason: 'login-interval', atMs: lastLoginAtMs && !crossDayLogin ? lastLoginAtMs + intervalMs : 0 },
     { reason: 'server-entry-interval', atMs: timeMs(admission.entryNotBeforeAt) },
     { reason: 'login-transport-backoff', atMs: timeMs(admission.retryNotBeforeAt) }
   ];

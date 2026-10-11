@@ -182,6 +182,7 @@ const {
   browserlessDailyResetNextEntryMs,
   browserlessDailyResetSchedule,
   isFirstBrowserlessLoginOfDay,
+  browserlessLoginIntervalDelayPlan,
   browserlessLoopPlan,
   preLoginSafetyLeadMs,
   publicConfig,
@@ -33644,7 +33645,8 @@ async function runSelfTest() {
           loginIntervalMs: 60000
         };
         const quiet = browserlessDailyResetLoginNotBeforeMs(config, Date.parse('2026-07-14T15:50:00.000Z'));
-        const lastMinute = browserlessDailyResetLoginNotBeforeMs(config, Date.parse('2026-07-14T15:59:20.000Z'));
+        const beforeExit = browserlessDailyResetLoginNotBeforeMs(config, Date.parse('2026-07-14T15:59:20.000Z'));
+        const atExit = browserlessDailyResetLoginNotBeforeMs(config, Date.parse('2026-07-14T15:59:50.000Z'));
         const lastTen = browserlessDailyResetLoginNotBeforeMs(config, Date.parse('2026-07-14T15:59:55.000Z'));
         const atBoundary = browserlessDailyResetLoginNotBeforeMs(config, Date.parse('2026-07-14T16:00:00.000Z'));
         const atEntry = browserlessDailyResetLoginNotBeforeMs(config, Date.parse('2026-07-14T16:00:10.000Z'));
@@ -33660,13 +33662,13 @@ async function runSelfTest() {
         const nextEntryAfterEntry = browserlessDailyResetNextEntryMs(config, Date.parse('2026-07-14T16:00:11.000Z'));
         return [
           quiet,
-          new Date(lastMinute).toISOString(),
+          beforeExit,
+          new Date(atExit).toISOString(),
           new Date(lastTen).toISOString(),
           new Date(atBoundary).toISOString(),
           atEntry,
           afterEntry,
           new Date(schedule.exitAtMs).toISOString(),
-          new Date(schedule.reserveFromMs).toISOString(),
           plan.reason,
           plan.delayMs,
           plan.notBeforeAt,
@@ -33678,7 +33680,43 @@ async function runSelfTest() {
           browserlessDailyResetNextEntryMs({ ...config, dailyResetExitLeadMs: 0 }, Date.parse('2026-07-14T15:56:00.000Z')) === 0
         ].join('|');
       })(),
-      want: '0|2026-07-14T16:00:10.000Z|2026-07-14T16:00:10.000Z|2026-07-14T16:00:10.000Z|0|0|2026-07-14T15:59:50.000Z|2026-07-14T15:59:09.000Z|daily-reset-login-reserve|15000|2026-07-14T16:00:10.000Z|true|true|2026-07-14T16:00:10.000Z|2026-07-14T16:00:10.000Z|2026-07-15T16:00:10.000Z|true'
+      want: '0|0|2026-07-14T16:00:10.000Z|2026-07-14T16:00:10.000Z|2026-07-14T16:00:10.000Z|0|0|2026-07-14T15:59:50.000Z|daily-reset-login-reserve|15000|2026-07-14T16:00:10.000Z|true|true|2026-07-14T16:00:10.000Z|2026-07-14T16:00:10.000Z|2026-07-15T16:00:10.000Z|true'
+    },
+    {
+      name: 'browserless login interval does not span the UTC+8 day boundary',
+      got: (() => {
+        const config = { loginIntervalMs: 60000 };
+        const state = (lastLoginAt, runner = {}) => ({
+          runner: { lastLoginAt, ...runner },
+          stats: { currentSession: { online: false } }
+        });
+        const withinDay = browserlessLoginIntervalDelayPlan(
+          state('2026-10-11T15:00:00.000Z'), config, Date.parse('2026-10-11T15:00:30.000Z'));
+        const lastInstantOfDay = browserlessLoginIntervalDelayPlan(
+          state('2026-10-11T15:59:52.885Z'), config, Date.parse('2026-10-11T15:59:58.000Z'));
+        const atBoundary = browserlessLoginIntervalDelayPlan(
+          state('2026-10-11T15:59:52.885Z'), config, Date.parse('2026-10-11T16:00:00.000Z'));
+        const atReservedEntry = browserlessLoginIntervalDelayPlan(
+          state('2026-10-11T15:59:52.885Z'), config, Date.parse('2026-10-11T16:00:10.000Z'));
+        const serverEntryInterval = browserlessLoginIntervalDelayPlan(
+          state('2026-10-11T15:59:52.885Z', {
+            loginAdmission: { entryNotBeforeAt: '2026-10-11T16:00:40.000Z' }
+          }),
+          config,
+          Date.parse('2026-10-11T16:00:10.000Z')
+        );
+        return [
+          withinDay.reason,
+          withinDay.delayMs,
+          lastInstantOfDay.reason,
+          lastInstantOfDay.delayMs,
+          atBoundary === null,
+          atReservedEntry === null,
+          serverEntryInterval.reason,
+          serverEntryInterval.delayMs
+        ].join('|');
+      })(),
+      want: 'login-interval|30000|login-interval|54885|true|true|server-entry-interval|30000'
     },
     {
       name: 'browserless runner waits for the reserved reset entry after the daily reset leave',
@@ -34254,7 +34292,9 @@ async function runSelfTest() {
     {
       name: 'browserless restart drain interrupts the reserved daily reset entry wait',
       got: () => withTempDirForTest(async dir => {
-        const initialTime = Date.parse('2026-07-12T15:59:10.000Z');
+        // After the scheduled leave instant (23:59:50 CST), so the reserved entry
+        // hold is what the drain has to interrupt.
+        const initialTime = Date.parse('2026-07-12T15:59:55.000Z');
         let t = initialTime;
         let lifecycleControl = null;
         let canaryCalls = 0;
@@ -34325,7 +34365,7 @@ async function runSelfTest() {
           stored.runner.processStop?.reason
         ].join('|');
       }),
-      want: 'restart-drain-ready|0|0|1|60000|true|restart-drain-ready|daily-reset-login-reserve|restart-drain'
+      want: 'restart-drain-ready|0|0|1|15000|true|restart-drain-ready|daily-reset-login-reserve|restart-drain'
     },
     {
       name: 'browserless runner pulls a pre-reset stamina nap forward to the reserved reset entry',
