@@ -1625,6 +1625,8 @@ function renderBrowserlessWebPanel() {
       'snapshot-safety-streak-pending': '登录点已安全，等待连续确认',
       'snapshot-safety-streak-missing': '缺少登录点安全结果',
       'daily-first-login-delay': '每日首次登录将在 00:00:00 准时开始',
+      'daily-reset-leave': '每日重置前主动退出，避免重置时被强制掉线',
+      'daily-reset-login-reserve': '已预留重置后的登录时段，等待服务器重置完成',
       'missing-manual-session': '等待登录信息',
       'missing-login-point': '缺少登录点坐标',
       'missing-snapshot-tick': '快照缺少时间戳',

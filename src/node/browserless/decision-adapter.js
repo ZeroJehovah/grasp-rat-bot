@@ -6746,6 +6746,45 @@ function buildLongStaminaExhaustedLeaveDecision(input, options = {}) {
   };
 }
 
+// The user-scheduled daily reset exit leaves the game on purpose shortly before
+// the UTC+8 day boundary, so the departure is confirmed while the server is still
+// up instead of becoming a pending exit while the day rolls over (2026-10-10..
+// 2026-10-12: frames stop 0.1-2.9s after 00:00:00 CST, leave requests answer HTTP
+// 502/404 while the reset runs, and our own recovery chain only re-entered 41-53s
+// later). It is a hard gate: inside the lead window the session ends regardless of
+// the ordinary profit or combat arbitration. A zero or unset lead disables the
+// whole reset schedule, so the browser path and focused decision tests are
+// unaffected unless the runner passes its configured lead.
+function dailyResetExitLeadMs(options = {}) {
+  const value = Number(options.dailyResetExitLeadMs ?? 0);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function buildDailyResetExitDecision(input, options = {}) {
+  if (!input?.self) return null;
+  const leadMs = dailyResetExitLeadMs(options);
+  if (!(leadMs > 0)) return null;
+  const nowMs = Number.isFinite(Number(options.nowMs))
+    ? Number(options.nowMs)
+    : (Number.isFinite(Number(input.nowMs)) ? Number(input.nowMs) : Date.now());
+  const resetAtMs = nextDailyStaminaResetAt(nowMs);
+  const remainingMs = resetAtMs - nowMs;
+  if (!(remainingMs > 0) || remainingMs > leadMs) return null;
+  return {
+    kind: 'leave',
+    band: 'safety',
+    reason: 'daily-reset-leave',
+    shouldLeave: true,
+    stopMotion: true,
+    dailyResetExit: {
+      leadMs,
+      resetAt: new Date(resetAtMs).toISOString(),
+      remainingMs
+    },
+    self: summarizeTarget(input.self)
+  };
+}
+
 function buildDailyStaminaFinalCoinDecision(input, options = {}) {
   if (!input?.self) return null;
   const coin = pickNearestDailyStaminaFinalCoinCore(safeBudgetCoinCandidates(input, options), {
@@ -12670,6 +12709,10 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     buildLongStaminaExhaustedLeaveDecision(input, safetyContextOptions),
     incomingThreatAssessment
   );
+  const dailyResetExitAction = attachIncomingCoverToLeaveDecision(
+    buildDailyResetExitDecision(input, safetyContextOptions),
+    incomingThreatAssessment
+  );
   const injuryHpExitAction = attachIncomingCoverToLeaveDecision(
     buildBrowserlessInjuryHpExitDecision(input, stateful, combat, safetyContextOptions),
     incomingThreatAssessment
@@ -12799,6 +12842,7 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     }), incomingThreatAssessment
   );
   let action = longStaminaExhaustedLeaveAction
+    || dailyResetExitAction
     || criticalIncomingExitAction
     || immediateCombatExitAction
     || immediateInjuryHpExitAction
@@ -15251,6 +15295,12 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       : null,
     incomingThreatAssessment
   );
+  const dailyResetExitAction = attachIncomingCoverToLeaveDecision(
+    input.self && !realtimeStale
+      ? buildDailyResetExitDecision(input, options)
+      : null,
+    incomingThreatAssessment
+  );
   const hardSafetyAction = safetyActionIsHardLeave(safetyAction) ? safetyAction : null;
   const combatExitAction = attachIncomingCoverToLeaveDecision(
     combat.exitAction || null,
@@ -15549,6 +15599,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     });
     let candidates = [
       candidate(hardSafetyAction, 10, 'hard-safety', true, { riskScore: 100 }),
+      candidate(dailyResetExitAction, 15, 'daily-reset-hard-gate', true, { riskScore: 100 }),
       candidate(longStaminaExhaustedLeaveAction, 20, 'stamina-exhausted-hard-gate', true, { riskScore: 100 }),
       candidate(criticalIncomingExitAction, 25, 'critical-incoming-hard-gate', true, { riskScore: 100 }),
       candidate(immediateCombatExitAction, 30, 'combat-exit-hard-gate', true, { riskScore: 100 }),
@@ -16440,6 +16491,7 @@ module.exports = {
   rememberBrowserlessAttackerDamage,
   effectiveProfitReward,
   establishedCombatLootPriority,
+  buildDailyResetExitDecision,
   buildBrowserlessDecision,
   buildOpportunityDecision,
   buildPostKillSettlementWaitDecision,

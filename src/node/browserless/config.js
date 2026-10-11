@@ -51,6 +51,8 @@ const DEFAULTS = {
   loginIntervalMs: 60000,
   actionSettlementRecoveryMaxMs: 10000,
   dailyFirstLoginDelayMs: 0,
+  dailyResetExitLeadMs: 10000,
+  dailyResetLoginDelayMs: 10000,
   loginPointSafetySuccessRequired: 1,
   loginPointSafetyProbeIntervalMs: 30000,
   loginPointSafetyLowHpThreshold: 50,
@@ -300,6 +302,14 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       DEFAULTS.actionSettlementRecoveryMaxMs
     ))),
     dailyFirstLoginDelayMs: numberEnv(env.GRASP_RAT_BROWSERLESS_DAILY_FIRST_LOGIN_DELAY_MS, DEFAULTS.dailyFirstLoginDelayMs),
+    dailyResetExitLeadMs: Math.max(0, Math.min(600000, numberEnv(
+      env.GRASP_RAT_BROWSERLESS_DAILY_RESET_EXIT_LEAD_MS,
+      DEFAULTS.dailyResetExitLeadMs
+    ))),
+    dailyResetLoginDelayMs: Math.max(0, Math.min(600000, numberEnv(
+      env.GRASP_RAT_BROWSERLESS_DAILY_RESET_LOGIN_DELAY_MS,
+      DEFAULTS.dailyResetLoginDelayMs
+    ))),
     loginPointSafetySuccessRequired: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_SUCCESS_REQUIRED, DEFAULTS.loginPointSafetySuccessRequired),
     loginPointSafetyProbeIntervalMs: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_PROBE_INTERVAL_MS, DEFAULTS.loginPointSafetyProbeIntervalMs),
     loginPointSafetyLowHpThreshold: numberEnv(env.GRASP_RAT_BROWSERLESS_LOGIN_POINT_SAFETY_LOW_HP_THRESHOLD, DEFAULTS.loginPointSafetyLowHpThreshold),
@@ -745,6 +755,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       )));
     } else if (arg === '--daily-first-login-delay-ms') {
       config.dailyFirstLoginDelayMs = numberEnv(argv[++i], config.dailyFirstLoginDelayMs);
+    } else if (arg === '--daily-reset-exit-lead-ms') {
+      config.dailyResetExitLeadMs = Math.max(0, Math.min(600000, numberEnv(argv[++i], config.dailyResetExitLeadMs)));
+    } else if (arg === '--daily-reset-login-delay-ms') {
+      config.dailyResetLoginDelayMs = Math.max(0, Math.min(600000, numberEnv(argv[++i], config.dailyResetLoginDelayMs)));
     } else if (arg === '--login-point-safety-success-required') {
       config.loginPointSafetySuccessRequired = numberEnv(argv[++i], config.loginPointSafetySuccessRequired);
     } else if (arg === '--login-point-safety-probe-interval-ms') {
@@ -1030,6 +1044,8 @@ function usage() {
     '  --loop-delay-ms <ms>    Delay before the next non-once live cycle after recoverable exit. Default: 30000',
     '  --action-settlement-recovery-max-ms <ms>  Bounded non-combat settlement recovery window (3000-30000). Default: 10000',
     '  --daily-first-login-delay-ms <ms>  Earliest UTC+8 daily first login after midnight. Default: 0',
+    '  --daily-reset-exit-lead-ms <ms>  Actively leave this long before the UTC+8 day boundary; 0 disables. Default: 10000',
+    '  --daily-reset-login-delay-ms <ms>  Earliest post-boundary login after the UTC+8 day boundary. Default: 10000',
     '  --login-point-safety-success-required <n>  Legacy consecutive checks when snapshot edge mode is disabled. Default: 1',
     '  --login-interval-ms <ms>  Hard minimum between successful logins; values below 60000 are clamped. Default: 60000',
     '  --login-point-safety-probe-interval-ms <ms>  Delay between those checks. Default: 30000',

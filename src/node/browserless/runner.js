@@ -281,6 +281,8 @@ function publicConfig(config) {
     loginIntervalMs: Math.max(60000, Number(config.loginIntervalMs || 0)),
     actionSettlementRecoveryMaxMs: actionSettlementRecoveryMaxMs(config),
     dailyFirstLoginDelayMs: Number(config.dailyFirstLoginDelayMs || 0),
+    dailyResetExitLeadMs: Math.max(0, Number(config.dailyResetExitLeadMs || 0)),
+    dailyResetLoginDelayMs: Math.max(0, Number(config.dailyResetLoginDelayMs || 0)),
     loginPointSafetySuccessRequired: Number(config.loginPointSafetySuccessRequired || 0),
     loginPointSafetyProbeIntervalMs: Number(config.loginPointSafetyProbeIntervalMs || 0),
     loginPointSingleBlockerBypassMs: Number(config.loginPointSingleBlockerBypassMs || 0),
@@ -926,6 +928,90 @@ function browserlessDailyFirstLoginDelayPlan(state, config = {}, nowMs = Date.no
     delayMs,
     previousRunId: '',
     error: 'daily-first-login-delay',
+    safetyReason: '',
+    explicitDelay: true,
+    notBeforeAt: new Date(notBeforeMs).toISOString()
+  };
+}
+
+// Daily reset window. The UTC+8 day boundary forces every live session offline:
+// on 2026-10-10..2026-10-12 the server stopped sending frames 0.1-2.9s after
+// 00:00:00 CST, its leave requests answered HTTP 502/404 while the world rolled
+// over, and the runner's own recovery chain only managed to re-enter 41-53s
+// later (a late pre-boundary login plus the UC-004 interval on 2026-10-12). The
+// runner therefore leaves on purpose dailyResetExitLeadMs before the boundary,
+// so the leave is confirmed while the server is still up, and reserves the first
+// post-boundary login instant dailyResetLoginDelayMs after the boundary. A zero
+// lead disables the whole reset schedule.
+const DAILY_RESET_RESERVE_MARGIN_MS = 1000;
+
+function browserlessDailyResetSchedule(config = {}, nowMs = Date.now()) {
+  const nowValue = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  const exitLeadMs = Math.max(0, Number(config.dailyResetExitLeadMs ?? 0) || 0);
+  const loginDelayMs = Math.max(0, Number(config.dailyResetLoginDelayMs ?? 0) || 0);
+  const loginIntervalMs = Math.max(0, Number(config.loginIntervalMs ?? 0) || 0);
+  const dayStartMs = browserlessDayStartMs(nowValue);
+  const boundaryMs = dayStartMs + DAY_MS;
+  const currentEntryAtMs = dayStartMs + loginDelayMs;
+  const nextEntryAtMs = boundaryMs + loginDelayMs;
+  // A login inside the last login interval before the boundary would consume the
+  // UC-004 login slot that the reserved reset entry needs, so the reserve opens a
+  // minute (plus a scheduling margin) ahead of that entry instead.
+  const reserveFromMs = exitLeadMs > 0
+    ? nextEntryAtMs - loginIntervalMs - DAILY_RESET_RESERVE_MARGIN_MS
+    : 0;
+  return {
+    nowMs: nowValue,
+    dayStartMs,
+    boundaryMs,
+    currentEntryAtMs,
+    nextEntryAtMs,
+    exitAtMs: exitLeadMs > 0 ? Math.max(dayStartMs, boundaryMs - exitLeadMs) : 0,
+    reserveFromMs,
+    exitLeadMs,
+    loginDelayMs,
+    loginIntervalMs
+  };
+}
+
+// Earliest instant at which a NEW login may start, or zero for no hold. The
+// reserve covers both sides of the boundary: from the last login interval before
+// it (so the reserved entry instant cannot be pushed out by UC-004) through
+// dailyResetLoginDelayMs after it (so the entry never races the server's own day
+// rollover). Pending-exit recovery, transport takeover, and an online session
+// are resolved before this gate in the main loop and keep their own paths.
+function browserlessDailyResetLoginNotBeforeMs(config = {}, nowMs = Date.now()) {
+  const schedule = browserlessDailyResetSchedule(config, nowMs);
+  if (!(schedule.exitLeadMs > 0)) return 0;
+  if (schedule.nowMs < schedule.currentEntryAtMs) return schedule.currentEntryAtMs;
+  if (schedule.nowMs >= schedule.reserveFromMs) return schedule.nextEntryAtMs;
+  return 0;
+}
+
+// The reserved reset entry instant that a scheduled wait must not sleep through,
+// or zero when the reset schedule is disabled. Unlike the login gate above this
+// ignores the reserve window on purpose: a five-minute stamina nap that starts
+// before the reserve and would otherwise wake at 00:01-00:04 still has to be
+// pulled forward to the entry instant, which is what makes the post-reset login
+// land at the reserved time rather than whenever the nap happened to end.
+function browserlessDailyResetNextEntryMs(config = {}, nowMs = Date.now()) {
+  const schedule = browserlessDailyResetSchedule(config, nowMs);
+  if (!(schedule.exitLeadMs > 0)) return 0;
+  return schedule.nowMs < schedule.currentEntryAtMs
+    ? schedule.currentEntryAtMs
+    : schedule.nextEntryAtMs;
+}
+
+function browserlessDailyResetLoginDelayPlan(config = {}, nowMs = Date.now()) {
+  const nowValue = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  const notBeforeMs = browserlessDailyResetLoginNotBeforeMs(config, nowValue);
+  if (!(notBeforeMs > nowValue)) return null;
+  return {
+    continue: true,
+    reason: 'daily-reset-login-reserve',
+    delayMs: notBeforeMs - nowValue,
+    previousRunId: '',
+    error: 'daily-reset-login-reserve',
     safetyReason: '',
     explicitDelay: true,
     notBeforeAt: new Date(notBeforeMs).toISOString()
@@ -1715,6 +1801,20 @@ function browserlessLoopPlan(result, config = {}) {
   // distance saving back, so it takes the fast path ahead of `cycle-complete`.
   if (safetyReason === 'login-point-relogin-shortcut-leave') {
     return resumeFast('login-point-relogin-shortcut-leave');
+  }
+  // The scheduled daily reset exit waits for the reserved post-boundary login
+  // instant instead of the ordinary cycle delay, so a confirmed pre-boundary
+  // leave is followed by the entry attempt as soon as the reset window allows
+  // it. Past that instant the ordinary fast retry applies.
+  if (safetyReason === 'daily-reset-leave') {
+    const resetEntryAtMs = browserlessDailyResetLoginNotBeforeMs(config, loopNowMs);
+    const resetEntryPending = resetEntryAtMs > loopNowMs;
+    return {
+      ...resume('daily-reset-leave'),
+      delayMs: resetEntryPending ? resetEntryAtMs - loopNowMs : fastDelayMs,
+      explicitDelay: true,
+      ...(resetEntryPending ? { notBeforeAt: new Date(resetEntryAtMs).toISOString() } : {})
+    };
   }
   if (result.ok) return resume('cycle-complete');
   if (safetyReason === 'stamina-budget-coin-leave' || safetyReason === 'stamina-exhausted-leave') {
@@ -3597,6 +3697,19 @@ async function runBrowserlessRunner(config, deps = {}) {
     const plannedNextRunAtMs = dailyFirstLoginDeadlineApplied
       ? dailyFirstLoginNotBeforeMs
       : initialPlannedNextRunAtMs;
+    // The reserved daily-reset entry is a fixed clock instant. A wait that would
+    // otherwise sleep through it is shortened to that instant, so a long stamina
+    // nap cannot swallow the post-boundary login. Pending-exit recovery,
+    // transport recovery, and the daily-first-login deadline keep their own
+    // scheduling.
+    const dailyResetEntryNotBeforeMs = pendingExit || transportRecovery || dailyFirstLoginDeadlineApplied
+      ? 0
+      : browserlessDailyResetNextEntryMs(config, schedulingNowMs);
+    const dailyResetEntryDeadlineApplied = dailyResetEntryNotBeforeMs > schedulingNowMs
+      && dailyResetEntryNotBeforeMs < plannedNextRunAtMs;
+    const scheduledNextRunAtMs = dailyResetEntryDeadlineApplied
+      ? dailyResetEntryNotBeforeMs
+      : plannedNextRunAtMs;
     const scheduledLoopPlan = dailyFirstLoginDeadlineApplied
       ? {
           ...loopPlan,
@@ -3605,7 +3718,15 @@ async function runBrowserlessRunner(config, deps = {}) {
           dailyFirstLoginDeadlineApplied: true,
           originalDelayMs: loopPlan.delayMs
         }
-      : loopPlan;
+      : (dailyResetEntryDeadlineApplied
+          ? {
+              ...loopPlan,
+              explicitDelay: true,
+              notBeforeAt: new Date(dailyResetEntryNotBeforeMs).toISOString(),
+              dailyResetEntryDeadlineApplied: true,
+              originalDelayMs: loopPlan.delayMs
+            }
+          : loopPlan);
     // Fresh login-point snapshot checks are deliberately deferred until the
     // next real login gate, after anonymous source-IP preflight completes.
     // The injected legacy switch exists only for focused historical wait
@@ -3621,7 +3742,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           )
         )
       : false;
-    const plannedDelayMs = Math.max(0, plannedNextRunAtMs - schedulingNowMs);
+    const plannedDelayMs = Math.max(0, scheduledNextRunAtMs - schedulingNowMs);
     const effectiveDelayMs = pendingExit
       ? Math.max(0, pendingExitDeadlineMs - schedulingNowMs)
       : (shouldPrepareSnapshotSafety
@@ -3633,13 +3754,14 @@ async function runBrowserlessRunner(config, deps = {}) {
                 ))
           : plannedDelayMs);
     const nextRunAtMs = effectiveDelayMs === plannedDelayMs
-      ? plannedNextRunAtMs
+      ? scheduledNextRunAtMs
       : schedulingNowMs + effectiveDelayMs;
     const nextRunAt = new Date(nextRunAtMs).toISOString();
     const waitDetail = {
       ...scheduledLoopPlan,
       delayMs: effectiveDelayMs,
       nextRunAt,
+      dailyResetEntryDeadlineApplied,
       exitAttemptId: pendingExit?.exitAttemptId || '',
       supervisorErrors: supervisorErrors.slice(-5)
     };
@@ -3666,6 +3788,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           explicitCooldown: Boolean(scheduledLoopPlan.explicitCooldown),
           explicitDelay: Boolean(scheduledLoopPlan.explicitDelay),
           dailyFirstLoginDeadlineApplied,
+          dailyResetEntryDeadlineApplied,
           previousRunId: loopPlan.previousRunId || '',
           ...(exitRecoveryWait ? {
             pendingExit: pendingExit || null,
@@ -4975,6 +5098,18 @@ async function runBrowserlessRunner(config, deps = {}) {
     );
     if (dailyFirstLoginPlan) {
       const stopped = await waitForLoopPlan(dailyFirstLoginPlan);
+      if (stopped) return stopped;
+      continue;
+    }
+    // The daily reset reserves the first post-boundary login instant. Every
+    // ordinary new-login path (including a pending exit cleared by a fresh
+    // snapshot) waits for it, so the one-minute login interval consumed by a
+    // late pre-boundary login can never delay the reset entry.
+    const dailyResetLoginPlan = !activePendingExit && !transportRecoveryState && !sessionOnline
+      ? browserlessDailyResetLoginDelayPlan(config, now())
+      : null;
+    if (dailyResetLoginPlan) {
+      const stopped = await waitForLoopPlan(dailyResetLoginPlan);
       if (stopped) return stopped;
       continue;
     }
@@ -11413,6 +11548,10 @@ module.exports = {
   CONFIRMED_LEAVE_SNAPSHOT_IGNORE_MS,
   browserlessDayKey,
   browserlessDailyFirstLoginDelayPlan,
+  browserlessDailyResetLoginDelayPlan,
+  browserlessDailyResetLoginNotBeforeMs,
+  browserlessDailyResetNextEntryMs,
+  browserlessDailyResetSchedule,
   browserlessLoginIntervalDelayPlan,
   browserlessLoopPlan,
   browserlessRestartDrainStateIsOffline,

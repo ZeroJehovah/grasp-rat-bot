@@ -181,6 +181,10 @@ function addEnvChecks(checks, env, envMode, persistedState = {}) {
   const legacySourceIpPool = env.GRASP_RAT_BROWSERLESS_SOURCE_IPS || '';
   const configuredDailyFirstLoginDelayMs = String(env.GRASP_RAT_BROWSERLESS_DAILY_FIRST_LOGIN_DELAY_MS || '').trim();
   const expectedDailyFirstLoginDelayMs = Number(BROWSERLESS_CONFIG_DEFAULTS.dailyFirstLoginDelayMs);
+  const configuredDailyResetExitLeadMs = String(env.GRASP_RAT_BROWSERLESS_DAILY_RESET_EXIT_LEAD_MS || '').trim();
+  const configuredDailyResetLoginDelayMs = String(env.GRASP_RAT_BROWSERLESS_DAILY_RESET_LOGIN_DELAY_MS || '').trim();
+  const expectedDailyResetExitLeadMs = Number(BROWSERLESS_CONFIG_DEFAULTS.dailyResetExitLeadMs);
+  const expectedDailyResetLoginDelayMs = Number(BROWSERLESS_CONFIG_DEFAULTS.dailyResetLoginDelayMs);
   const stateSession = sessionFromAnyState(persistedState);
   const stateLoginPoint = loginPointFromAnyState(persistedState);
   const profilePresent = Boolean(profile);
@@ -201,6 +205,20 @@ function addEnvChecks(checks, env, envMode, persistedState = {}) {
     !configuredDailyFirstLoginDelayMs
       || (isNumber(configuredDailyFirstLoginDelayMs) && Number(configuredDailyFirstLoginDelayMs) === expectedDailyFirstLoginDelayMs),
     `GRASP_RAT_BROWSERLESS_DAILY_FIRST_LOGIN_DELAY_MS=${configuredDailyFirstLoginDelayMs || `[default ${expectedDailyFirstLoginDelayMs}]`}, expected=${expectedDailyFirstLoginDelayMs}`
+  );
+  addCheck(
+    checks,
+    'env-daily-reset-exit-lead',
+    !configuredDailyResetExitLeadMs
+      || (isNumber(configuredDailyResetExitLeadMs) && Number(configuredDailyResetExitLeadMs) === expectedDailyResetExitLeadMs),
+    `GRASP_RAT_BROWSERLESS_DAILY_RESET_EXIT_LEAD_MS=${configuredDailyResetExitLeadMs || `[default ${expectedDailyResetExitLeadMs}]`}, expected=${expectedDailyResetExitLeadMs}`
+  );
+  addCheck(
+    checks,
+    'env-daily-reset-login-delay',
+    !configuredDailyResetLoginDelayMs
+      || (isNumber(configuredDailyResetLoginDelayMs) && Number(configuredDailyResetLoginDelayMs) === expectedDailyResetLoginDelayMs),
+    `GRASP_RAT_BROWSERLESS_DAILY_RESET_LOGIN_DELAY_MS=${configuredDailyResetLoginDelayMs || `[default ${expectedDailyResetLoginDelayMs}]`}, expected=${expectedDailyResetLoginDelayMs}`
   );
 
   if (envMode === 'safe') {

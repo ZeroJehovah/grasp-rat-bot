@@ -68,6 +68,7 @@ const {
   buildBrowserlessRealtimeControlDecision,
   buildBrowserlessRuntimeDefaults,
   buildBrowserlessStrategyInput,
+  buildDailyResetExitDecision,
   buildLowHpRecoveryThreatExitDecision,
   createBrowserlessDecisionAdapter,
   currentProfitThresholdEligibility,
@@ -176,6 +177,10 @@ const {
 } = require('../shared/runtime-defaults');
 const {
   browserlessDailyFirstLoginDelayPlan,
+  browserlessDailyResetLoginDelayPlan,
+  browserlessDailyResetLoginNotBeforeMs,
+  browserlessDailyResetNextEntryMs,
+  browserlessDailyResetSchedule,
   isFirstBrowserlessLoginOfDay,
   browserlessLoopPlan,
   preLoginSafetyLeadMs,
@@ -33631,6 +33636,174 @@ async function runSelfTest() {
       want: 'true|0|daily-first-login-delay|20000|2026-07-14T16:00:30.000Z|true|true|true'
     },
     {
+      name: 'browserless runner schedules the daily reset exit and reserves the post-reset login instant',
+      got: (() => {
+        const config = {
+          dailyResetExitLeadMs: 10000,
+          dailyResetLoginDelayMs: 10000,
+          loginIntervalMs: 60000
+        };
+        const quiet = browserlessDailyResetLoginNotBeforeMs(config, Date.parse('2026-07-14T15:50:00.000Z'));
+        const lastMinute = browserlessDailyResetLoginNotBeforeMs(config, Date.parse('2026-07-14T15:59:20.000Z'));
+        const lastTen = browserlessDailyResetLoginNotBeforeMs(config, Date.parse('2026-07-14T15:59:55.000Z'));
+        const atBoundary = browserlessDailyResetLoginNotBeforeMs(config, Date.parse('2026-07-14T16:00:00.000Z'));
+        const atEntry = browserlessDailyResetLoginNotBeforeMs(config, Date.parse('2026-07-14T16:00:10.000Z'));
+        const afterEntry = browserlessDailyResetLoginNotBeforeMs(config, Date.parse('2026-07-14T16:00:11.000Z'));
+        const schedule = browserlessDailyResetSchedule(config, Date.parse('2026-07-14T15:59:55.000Z'));
+        const plan = browserlessDailyResetLoginDelayPlan(config, Date.parse('2026-07-14T15:59:55.000Z'));
+        const disabled = browserlessDailyResetLoginDelayPlan(
+          { ...config, dailyResetExitLeadMs: 0 },
+          Date.parse('2026-07-14T15:59:55.000Z')
+        );
+        const nextEntryFromNap = browserlessDailyResetNextEntryMs(config, Date.parse('2026-07-14T15:56:00.000Z'));
+        const nextEntryAtBoundary = browserlessDailyResetNextEntryMs(config, Date.parse('2026-07-14T16:00:00.000Z'));
+        const nextEntryAfterEntry = browserlessDailyResetNextEntryMs(config, Date.parse('2026-07-14T16:00:11.000Z'));
+        return [
+          quiet,
+          new Date(lastMinute).toISOString(),
+          new Date(lastTen).toISOString(),
+          new Date(atBoundary).toISOString(),
+          atEntry,
+          afterEntry,
+          new Date(schedule.exitAtMs).toISOString(),
+          new Date(schedule.reserveFromMs).toISOString(),
+          plan.reason,
+          plan.delayMs,
+          plan.notBeforeAt,
+          plan.explicitDelay,
+          disabled === null,
+          new Date(nextEntryFromNap).toISOString(),
+          new Date(nextEntryAtBoundary).toISOString(),
+          new Date(nextEntryAfterEntry).toISOString(),
+          browserlessDailyResetNextEntryMs({ ...config, dailyResetExitLeadMs: 0 }, Date.parse('2026-07-14T15:56:00.000Z')) === 0
+        ].join('|');
+      })(),
+      want: '0|2026-07-14T16:00:10.000Z|2026-07-14T16:00:10.000Z|2026-07-14T16:00:10.000Z|0|0|2026-07-14T15:59:50.000Z|2026-07-14T15:59:09.000Z|daily-reset-login-reserve|15000|2026-07-14T16:00:10.000Z|true|true|2026-07-14T16:00:10.000Z|2026-07-14T16:00:10.000Z|2026-07-15T16:00:10.000Z|true'
+    },
+    {
+      name: 'browserless runner waits for the reserved reset entry after the daily reset leave',
+      got: (() => {
+        const config = {
+          once: false,
+          loopDelayMs: 30000,
+          dailyResetExitLeadMs: 10000,
+          dailyResetLoginDelayMs: 10000,
+          loginIntervalMs: 60000
+        };
+        const leave = completedAt => browserlessLoopPlan({
+          ok: true,
+          canary: {
+            runId: 'daily-reset-test',
+            completedAt,
+            safety: { event: { reason: 'daily-reset-leave', shouldLeave: true } }
+          }
+        }, config);
+        const beforeEntry = leave('2026-07-14T15:59:51.500Z');
+        const afterEntry = leave('2026-07-14T16:00:31.000Z');
+        return [
+          beforeEntry.continue,
+          beforeEntry.reason,
+          beforeEntry.delayMs,
+          beforeEntry.notBeforeAt,
+          beforeEntry.explicitDelay,
+          beforeEntry.safetyReason,
+          afterEntry.reason,
+          afterEntry.delayMs,
+          afterEntry.notBeforeAt === undefined
+        ].join('|');
+      })(),
+      want: 'true|daily-reset-leave|18500|2026-07-14T16:00:10.000Z|true|daily-reset-leave|daily-reset-leave|1000|true'
+    },
+    {
+      name: 'browserless daily reset exit is a hard gate inside the lead window only',
+      got: (() => {
+        const self = { user_id: 7, x: 0, y: 0, hp: 100 };
+        const leadWindow = Date.parse('2026-07-14T15:59:55.000Z');
+        const beforeWindow = Date.parse('2026-07-14T15:59:00.000Z');
+        const inside = buildDailyResetExitDecision({ self, nowMs: leadWindow }, {
+          dailyResetExitLeadMs: 10000,
+          nowMs: leadWindow
+        });
+        const outside = buildDailyResetExitDecision({ self, nowMs: beforeWindow }, {
+          dailyResetExitLeadMs: 10000,
+          nowMs: beforeWindow
+        });
+        const disabled = buildDailyResetExitDecision({ self, nowMs: leadWindow }, { nowMs: leadWindow });
+        const missingSelf = buildDailyResetExitDecision({ nowMs: leadWindow }, {
+          dailyResetExitLeadMs: 10000,
+          nowMs: leadWindow
+        });
+        return [
+          inside.kind,
+          inside.band,
+          inside.reason,
+          inside.shouldLeave,
+          inside.stopMotion,
+          inside.dailyResetExit.remainingMs,
+          inside.dailyResetExit.resetAt,
+          outside === null,
+          disabled === null,
+          missingSelf === null
+        ].join('|');
+      })(),
+      want: 'leave|safety|daily-reset-leave|true|true|5000|2026-07-14T16:00:00.000Z|true|true|true'
+    },
+    {
+      name: 'browserless runner plumbs the configured daily reset exit lead into the decision options',
+      got: (() => {
+        const defaults = parseBrowserlessRunnerArgs([
+          '--live',
+          '--user-id',
+          '7',
+          '--session-token',
+          'runner-secret-token',
+          '--login-point-x',
+          '1',
+          '--login-point-y',
+          '2'
+        ], {});
+        const overridden = parseBrowserlessRunnerArgs([
+          '--live',
+          '--user-id',
+          '7',
+          '--session-token',
+          'runner-secret-token',
+          '--login-point-x',
+          '1',
+          '--login-point-y',
+          '2',
+          '--daily-reset-exit-lead-ms',
+          '17500',
+          '--daily-reset-login-delay-ms',
+          '2500'
+        ], {});
+        const fromEnv = parseBrowserlessRunnerArgs([
+          '--live',
+          '--user-id',
+          '7',
+          '--session-token',
+          'runner-secret-token',
+          '--login-point-x',
+          '1',
+          '--login-point-y',
+          '2'
+        ], { GRASP_RAT_BROWSERLESS_DAILY_RESET_EXIT_LEAD_MS: '4000' });
+        const browserDefaults = buildBrowserlessRuntimeDefaults({});
+        return [
+          defaults.dailyResetExitLeadMs,
+          defaults.dailyResetLoginDelayMs,
+          overridden.dailyResetExitLeadMs,
+          overridden.dailyResetLoginDelayMs,
+          fromEnv.dailyResetExitLeadMs,
+          buildBrowserlessRuntimeDefaults(defaults).dailyResetExitLeadMs,
+          buildBrowserlessRuntimeDefaults(overridden).dailyResetExitLeadMs,
+          browserDefaults.dailyResetExitLeadMs
+        ].join('|');
+      })(),
+      want: '10000|10000|17500|2500|4000|10000|17500|0'
+    },
+
+    {
       name: 'browserless compact status migrates stale daily stamina reconnect display to 00:00:00',
       got: (() => {
         const waiting = buildCompactBrowserlessStatus({
@@ -33986,12 +34159,17 @@ async function runSelfTest() {
           }, Date.parse('2026-07-12T16:00:10.000Z'))
         ].join('|');
       }),
-      want: 'explicit-stop|0|50000|stamina-exhausted-leave|true|stamina-reset|stamina-exhausted-leave|2026-07-12T16:00:00.000Z|false|daily-first-login-invulnerability|true'
+      // The persisted stamina deadline still says 16:00:00, but the wake itself is
+      // pushed to the reserved reset entry instant (16:00:10), so the runner never
+      // starts a session in the seconds the server spends rolling the day over.
+      want: 'explicit-stop|0|60000|stamina-exhausted-leave|true|stamina-reset|stamina-exhausted-leave|2026-07-12T16:00:00.000Z|false|daily-first-login-invulnerability|true'
     },
     {
       name: 'browserless restart drain interrupts an in-process explicit stamina wait',
       got: () => withTempDirForTest(async dir => {
-        const initialTime = Date.parse('2026-07-12T15:59:10.000Z');
+        // Away from the reserved reset-entry window so this case keeps covering
+        // the plain drain-versus-explicit-stamina-wait interruption.
+        const initialTime = Date.parse('2026-07-12T14:00:00.000Z');
         let t = initialTime;
         let lifecycleControl = null;
         let canaryCalls = 0;
@@ -34072,6 +34250,156 @@ async function runSelfTest() {
         ].join('|');
       }),
       want: 'restart-drain-ready|1|0|1|true|restart-drain-ready|stamina-exhausted-leave|restart-drain'
+    },
+    {
+      name: 'browserless restart drain interrupts the reserved daily reset entry wait',
+      got: () => withTempDirForTest(async dir => {
+        const initialTime = Date.parse('2026-07-12T15:59:10.000Z');
+        let t = initialTime;
+        let lifecycleControl = null;
+        let canaryCalls = 0;
+        let precheckCalls = 0;
+        let sleepCalls = 0;
+        let sleptMs = 0;
+        const config = parseBrowserlessRunnerArgs([
+          '--live',
+          '--data-dir',
+          dir,
+          '--user-id',
+          '7',
+          '--session-token',
+          'runner-secret-token',
+          '--login-point-x',
+          '1',
+          '--login-point-y',
+          '2'
+        ], {});
+        config.snapshotEdgeEnabled = true;
+        const result = await runRunnerForSelfTest(config, {
+          now: () => t,
+          startStatusServer: false,
+          disableSourceIpPreflight: true,
+          allowLegacyPreLoginWaitPreparation: true,
+          onLifecycleControlReady: control => { lifecycleControl = control; },
+          sleep: ms => {
+            sleepCalls += 1;
+            sleptMs += ms;
+            return new Promise(resolve => {
+              queueMicrotask(() => lifecycleControl.requestDrain('restart-drain', { source: 'self-test' }));
+              if (!(ms > 0)) resolve();
+            });
+          },
+          runPreLoginSnapshotSafety: async () => {
+            precheckCalls += 1;
+            return {
+              ok: true,
+              reason: 'safe',
+              checkedAt: new Date(t).toISOString(),
+              required: 1,
+              streak: 1,
+              satisfied: true,
+              response: { summary: { valid: true, selfPresent: false, tick: 200 } }
+            };
+          },
+          runReadOnlyOnce: async () => {
+            canaryCalls += 1;
+            return {
+              ok: false,
+              runId: 'reserved-entry-hold',
+              completedAt: new Date(t).toISOString(),
+              error: 'explicit-stop',
+              safety: { event: { reason: 'explicit-stop', at: new Date(t).toISOString() } }
+            };
+          }
+        });
+        const stored = readBrowserlessStateFile(stateFilePath(config));
+        return [
+          result.reason,
+          canaryCalls,
+          precheckCalls,
+          sleepCalls,
+          sleptMs,
+          t === initialTime,
+          stored.runner.currentAction.reason,
+          stored.runner.gameplayDeadline?.reason,
+          stored.runner.processStop?.reason
+        ].join('|');
+      }),
+      want: 'restart-drain-ready|0|0|1|60000|true|restart-drain-ready|daily-reset-login-reserve|restart-drain'
+    },
+    {
+      name: 'browserless runner pulls a pre-reset stamina nap forward to the reserved reset entry',
+      got: () => withTempDirForTest(async dir => {
+        const initialTime = Date.parse('2026-07-12T15:56:00.000Z');
+        let t = initialTime;
+        let canaryCalls = 0;
+        let sleptMs = 0;
+        const config = parseBrowserlessRunnerArgs([
+          '--live',
+          '--data-dir',
+          dir,
+          '--user-id',
+          '7',
+          '--session-token',
+          'runner-secret-token',
+          '--login-point-x',
+          '1',
+          '--login-point-y',
+          '2'
+        ], {});
+        config.snapshotEdgeEnabled = true;
+        const result = await runRunnerForSelfTest(config, {
+          now: () => t,
+          startStatusServer: false,
+          disableSourceIpPreflight: true,
+          sleep: async ms => {
+            sleptMs += ms;
+            t += ms;
+          },
+          runPreLoginSnapshotSafety: async () => ({
+            ok: true,
+            reason: 'safe',
+            checkedAt: new Date(t).toISOString(),
+            required: 1,
+            streak: 1,
+            satisfied: true,
+            response: { summary: { valid: true, selfPresent: false } }
+          }),
+          runReadOnlyOnce: async () => {
+            canaryCalls += 1;
+            if (canaryCalls === 1) {
+              return {
+                ok: false,
+                runId: 'pre-reset-stamina-nap',
+                completedAt: new Date(t).toISOString(),
+                error: 'stamina-budget-coin-leave',
+                safety: {
+                  event: {
+                    reason: 'stamina-budget-coin-leave',
+                    at: new Date(t).toISOString(),
+                    detail: { decision: { reloginDelayMs: 300000 } }
+                  }
+                }
+              };
+            }
+            return {
+              ok: false,
+              runId: 'post-reset-entry',
+              completedAt: new Date(t).toISOString(),
+              error: 'explicit-stop',
+              safety: { event: { reason: 'explicit-stop', at: new Date(t).toISOString() } }
+            };
+          }
+        });
+        return [
+          result.reason,
+          canaryCalls,
+          sleptMs,
+          new Date(initialTime + sleptMs).toISOString(),
+          t === initialTime
+        ].join('|');
+      }),
+      want: 'explicit-stop|2|250000|2026-07-12T16:00:10.000Z|false'
     },
     {
       name: 'browserless runner prepares login point safety during reconnect wait',

@@ -374,6 +374,9 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     profitThresholdHourlyStaminaLimit: 3000,
     profitThresholdResetReserveMs: 1000,
     profitThresholdResetReserveStamina: 0,
+    // Runner-scheduled pre-boundary leave. Zero (the browser/frozen default) disables
+    // it, so only the browserless runner opts in through its own config value.
+    dailyResetExitLeadMs: numberDefault(config.dailyResetExitLeadMs, 0),
     targetWhitelistUrl: String(config.targetWhitelistUrl || ''),
     targetWhitelistPollMs: 10000,
     targetWhitelistTimeoutMs: 7000,
