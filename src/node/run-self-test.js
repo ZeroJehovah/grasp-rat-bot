@@ -33690,20 +33690,58 @@ async function runSelfTest() {
           runner: { lastLoginAt, ...runner },
           stats: { currentSession: { online: false } }
         });
+        const reservedEntryMs = Date.parse('2026-10-11T16:00:10.000Z');
+        const utc8Day = ms => Math.floor((ms + 8 * 60 * 60 * 1000) / (24 * 60 * 60 * 1000));
         const withinDay = browserlessLoginIntervalDelayPlan(
           state('2026-10-11T15:00:00.000Z'), config, Date.parse('2026-10-11T15:00:30.000Z'));
         const lastInstantOfDay = browserlessLoginIntervalDelayPlan(
           state('2026-10-11T15:59:52.885Z'), config, Date.parse('2026-10-11T15:59:58.000Z'));
         const atBoundary = browserlessLoginIntervalDelayPlan(
           state('2026-10-11T15:59:52.885Z'), config, Date.parse('2026-10-11T16:00:00.000Z'));
+        // 2026-10-13 boundary: the 23:59:48 CST login left a server entry whose
+        // deadline falls after midnight, and that record produced
+        // `runner-loop-wait reason=server-entry-interval` at the reserved entry,
+        // pushing the first post-reset login out by 38 seconds.
+        const previousDayEntry = {
+          entryNotBeforeAt: '2026-10-11T16:00:48.461Z',
+          lastServerEntry: {
+            userId: 28886, dayIndex: utc8Day(Date.parse('2026-10-11T15:59:48.461Z')),
+            count: 2, latestTick: 1712149,
+            earliestAt: '2026-10-11T15:59:47.968Z', latestAt: '2026-10-11T15:59:48.461Z',
+            timeEvidence: 'first-self'
+          }
+        };
         const atReservedEntry = browserlessLoginIntervalDelayPlan(
-          state('2026-10-11T15:59:52.885Z'), config, Date.parse('2026-10-11T16:00:10.000Z'));
-        const serverEntryInterval = browserlessLoginIntervalDelayPlan(
-          state('2026-10-11T15:59:52.885Z', {
-            loginAdmission: { entryNotBeforeAt: '2026-10-11T16:00:40.000Z' }
+          state('2026-10-11T15:59:52.885Z'), config, reservedEntryMs);
+        const crossDayServerEntry = browserlessLoginIntervalDelayPlan(
+          state('2026-10-11T15:59:48.461Z', { loginAdmission: previousDayEntry }), config, reservedEntryMs);
+        const deadlineOnlyEntry = browserlessLoginIntervalDelayPlan(
+          state('2026-10-11T15:59:48.461Z', {
+            loginAdmission: { entryNotBeforeAt: '2026-10-11T16:00:48.461Z' }
           }),
           config,
-          Date.parse('2026-10-11T16:00:10.000Z')
+          reservedEntryMs
+        );
+        const sameDayServerEntry = browserlessLoginIntervalDelayPlan(
+          state('2026-10-11T15:59:48.461Z', {
+            loginAdmission: {
+              entryNotBeforeAt: '2026-10-11T16:01:05.000Z',
+              lastServerEntry: {
+                ...previousDayEntry.lastServerEntry,
+                dayIndex: utc8Day(reservedEntryMs),
+                latestAt: '2026-10-11T16:00:05.000Z'
+              }
+            }
+          }),
+          config,
+          reservedEntryMs
+        );
+        const crossDayTransportBackoff = browserlessLoginIntervalDelayPlan(
+          state('2026-10-11T15:59:48.461Z', {
+            loginAdmission: { entryNotBeforeAt: '2026-10-11T16:00:48.461Z', retryNotBeforeAt: '2026-10-11T16:00:40.000Z' }
+          }),
+          config,
+          reservedEntryMs
         );
         return [
           withinDay.reason,
@@ -33712,11 +33750,15 @@ async function runSelfTest() {
           lastInstantOfDay.delayMs,
           atBoundary === null,
           atReservedEntry === null,
-          serverEntryInterval.reason,
-          serverEntryInterval.delayMs
+          crossDayServerEntry === null,
+          deadlineOnlyEntry === null,
+          sameDayServerEntry.reason,
+          sameDayServerEntry.delayMs,
+          crossDayTransportBackoff.reason,
+          crossDayTransportBackoff.delayMs
         ].join('|');
       })(),
-      want: 'login-interval|30000|login-interval|54885|true|true|server-entry-interval|30000'
+      want: 'login-interval|30000|login-interval|54885|true|true|true|true|server-entry-interval|55000|login-transport-backoff|30000'
     },
     {
       name: 'browserless runner waits for the reserved reset entry after the daily reset leave',

@@ -231,21 +231,45 @@ function reconcileLoginAdmission(value, options = {}) {
   return normalizeLoginAdmission(state);
 }
 
+// The UTC+8 day of the entry the server itself recorded, or null when no entry
+// evidence is stored. The server-reported join day is preferred because it is
+// the server's own rollover view. Older/partial state without that day falls
+// back to the local day of the recorded entry instant — `latestAt` when present,
+// otherwise reconstructed from the deadline the record produced, which is what
+// `reconcileLoginAdmission` adds the interval to.
+function serverEntryDayIndex(admission = {}, intervalMs = LOGIN_INTERVAL_MS) {
+  const entry = admission?.lastServerEntry;
+  const explicitDay = nullableNumber(entry?.dayIndex);
+  if (explicitDay !== null) return explicitDay;
+  const deadlineMs = timeMs(admission?.entryNotBeforeAt);
+  const evidenceMs = timeMs(entry?.latestAt)
+    || (deadlineMs ? deadlineMs - Math.max(0, Number(intervalMs) || 0) : 0);
+  return evidenceMs ? utc8DayIndex(evidenceMs) : null;
+}
+
 // The hard one-minute successful-login interval never spans a UTC+8 day boundary.
 // A login confirmed shortly before midnight therefore does not hold the new day's
 // first login back: the reserved post-boundary entry keeps its own instant
 // instead of being pushed a further minute out by the previous day's login. The
-// server-reported entry interval and the transport backoff stay as they are —
-// they are evidence about this transport, not a rate limit on our own logins.
+// server-recorded entry interval is the same rule read from the server's own
+// join record, so it is cleared the same way: on 2026-10-13 a login the server
+// recorded at 23:59:48 CST still produced `runner-loop-wait
+// reason=server-entry-interval` after the boundary and pushed the reserved entry
+// out by 38 seconds. A merely stale same-day record still applies. The transport
+// backoff stays as it is — it is evidence about this transport, not a rate limit
+// on our own logins.
 function loginAdmissionDeadline(state = {}, config = {}, nowMs = Date.now()) {
   const admission = normalizeLoginAdmission(state.runner?.loginAdmission);
   const lastLoginAtMs = timeMs(state.runner?.lastLoginAt);
   const nowValue = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
   const intervalMs = Math.max(LOGIN_INTERVAL_MS, Number(config.loginIntervalMs || LOGIN_INTERVAL_MS));
-  const crossDayLogin = lastLoginAtMs > 0 && utc8DayIndex(lastLoginAtMs) !== utc8DayIndex(nowValue);
+  const nowDayIndex = utc8DayIndex(nowValue);
+  const crossDayLogin = lastLoginAtMs > 0 && utc8DayIndex(lastLoginAtMs) !== nowDayIndex;
+  const entryDayIndex = serverEntryDayIndex(admission, intervalMs);
+  const crossDayServerEntry = entryDayIndex !== null && entryDayIndex !== nowDayIndex;
   const candidates = [
     { reason: 'login-interval', atMs: lastLoginAtMs && !crossDayLogin ? lastLoginAtMs + intervalMs : 0 },
-    { reason: 'server-entry-interval', atMs: timeMs(admission.entryNotBeforeAt) },
+    { reason: 'server-entry-interval', atMs: crossDayServerEntry ? 0 : timeMs(admission.entryNotBeforeAt) },
     { reason: 'login-transport-backoff', atMs: timeMs(admission.retryNotBeforeAt) }
   ];
   return candidates.reduce((best, item) => item.atMs >= best.atMs ? item : best);

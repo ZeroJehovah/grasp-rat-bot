@@ -161,6 +161,37 @@ async function runLoginAdmissionSelfTest() {
   const nextDay = reconcile(state, nextDayCanary);
   check('lower ticks/counts in a genuinely new day advance the epoch', nextDay.serverObservation.count === 1 && nextDay.serverObservation.latestTick === 4 && nextDay.lastServerEntry.dayIndex === dayIndex(nextDayMs));
 
+  // The server-recorded entry interval is the same one-minute rule read from the
+  // server's own join record, so it must not span the UTC+8 day boundary either.
+  // Regression basis: the 2026-10-12 23:59:48 CST login produced a server entry
+  // whose `entryNotBeforeAt` (00:00:48) still held the reserved 00:00:10 entry
+  // back by 38 seconds (`runner-loop-wait reason=server-entry-interval`).
+  const boundaryMs = Date.parse('2026-09-26T16:00:10.000Z');
+  const previousDayEntry = dayIndex(boundaryMs - 900000);
+  const nightEntry = {
+    entryNotBeforeAt: at(boundaryMs + 38461),
+    lastServerEntry: {
+      runId: 'pre-boundary-login', userId: 7, dayIndex: previousDayEntry, count: 2, latestTick: 1712149,
+      earliestAt: at(boundaryMs - 22462), latestAt: at(boundaryMs - 21939), timeEvidence: 'first-self'
+    }
+  };
+  const crossedServerEntry = browserlessLoginIntervalDelayPlan(
+    { runner: { lastLoginAt: at(boundaryMs - 22462), loginAdmission: nightEntry } }, {}, boundaryMs);
+  check('the server-recorded entry interval does not span the UTC+8 day boundary', crossedServerEntry === null);
+  const sameDayEntry = {
+    entryNotBeforeAt: at(boundaryMs + 50000),
+    lastServerEntry: { ...nightEntry.lastServerEntry, dayIndex: dayIndex(boundaryMs), latestAt: at(boundaryMs + 5000) }
+  };
+  const heldServerEntry = browserlessLoginIntervalDelayPlan(
+    { runner: { loginAdmission: sameDayEntry } }, {}, boundaryMs);
+  check('a same-day server entry still holds the next login for the exact remainder',
+    heldServerEntry.reason === 'server-entry-interval' && heldServerEntry.delayMs === 50000);
+  const lateTransportBackoff = browserlessLoginIntervalDelayPlan({
+    runner: { loginAdmission: { ...nightEntry, retryNotBeforeAt: at(boundaryMs + 30000) } }
+  }, {}, boundaryMs);
+  check('the transport backoff still spans the UTC+8 day boundary',
+    lateTransportBackoff.reason === 'login-transport-backoff' && lateTransportBackoff.delayMs === 30000);
+
   const delays = [];
   for (let index = 2; index <= 6; index++) {
     const start = completedAtMs + index * 400000;
