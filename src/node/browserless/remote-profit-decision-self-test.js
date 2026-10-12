@@ -228,30 +228,24 @@ function assertRealtimeSupersededMissionContinuity() {
     ...firstBatch,
     realtimeSupersededIds: ['99']
   };
-  const paused = decide(
+  // A bare raw realtime sighting that left no usable decision-layer observation
+  // (no panel row with coordinates) is not a realtime takeover. The mission
+  // stays authoritative and keeps navigating instead of pausing for the rest of
+  // the snapshot generation while a lower-value candidate takes the action
+  // (2026-10-13 00:12:49Z linuxdo_8015 detour).
+  const bareSignal = decide(
     adapter,
-    advancedState(fullStaminaSelf(), [], [{ drop_id: 'detour', amount: 1, x: 100, y: 0 }]),
+    advancedState(fullStaminaSelf()),
     2100,
     supersededBatch,
     { controlMode: 'profit-live', combatEnabled: true }
   );
-  assert.strictEqual(paused.action?.target?.type, 'coin');
-  assert.notStrictEqual(paused.action?.kind, 'seek-remote-player');
-  assert.strictEqual(paused.profit?.mission?.targetId, '99');
-  assert.strictEqual(paused.profit?.mission?.highValue, true);
-  assert.strictEqual(paused.profit?.mission?.navigationPaused, true);
-  assert.strictEqual(
-    paused.profit?.mission?.currentDistanceCm,
-    first.profit?.mission?.currentDistanceCm
-  );
-  assert.strictEqual(
-    paused.profit?.mission?.lastConfirmedAt,
-    first.profit?.mission?.lastConfirmedAt
-  );
-  assert.strictEqual(
-    paused.profit?.mission?.navigationPauseReason,
-    'realtime-superseded-awaiting-authority'
-  );
+  assert.strictEqual(bareSignal.action?.kind, 'seek-remote-player');
+  assert.strictEqual(bareSignal.action?.target?.userId, 99);
+  assert.strictEqual(bareSignal.profit?.mission?.targetId, '99');
+  assert.strictEqual(bareSignal.profit?.mission?.highValue, true);
+  assert.strictEqual(bareSignal.profit?.mission?.navigationPaused, false);
+  assert.notStrictEqual(bareSignal.profit?.mission?.currentDistanceCm, null);
 
   const realtimeMango = {
     entity_id: 2,
@@ -487,6 +481,56 @@ function assertLowerValuePassiveEnemyDoesNotTakeRemotePrimaryMission() {
     candidate.type === 'remote-player-navigation' && String(candidate.id) === '31361'
   )));
   assert.ok(recovered.profit?.candidates?.some(candidate => String(candidate.id) === '6398'));
+}
+
+// 2026-10-13 00:12:49Z: one raw realtime frame carried linuxdo_8015's user ID,
+// so the remote-profit worker marked the high-value remote mission superseded
+// before the decision layer had any usable observation of that player. The
+// mission then paused for the rest of the snapshot generation and a
+// lower-value realtime target won arbitration, which rode the approach off
+// course. A bare supersession signal must never block a still-valid mission.
+function assertBareRealtimeSupersessionDoesNotBlockRemoteMission() {
+  const common = {
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    singleCoinBaitEnabled: false,
+    finalActionArbitrationHoldMs: 0,
+    opportunitySwitchConfirmFrames: 1,
+    opportunitySwitchMargin: 0,
+    opportunitySwitchRelativeMargin: 0
+  };
+  const adapter = createBrowserlessDecisionAdapter(common);
+  const missionCandidate = remoteCandidate({
+    userId: 8015,
+    name: 'high-drop-afk',
+    x: 50000,
+    drop: 120,
+    expectedReward: 120,
+    adjustedScore: 1159298,
+    invulnerable: true,
+    invulnerableRemainingMs: 35868
+  });
+  const missionBatch = batch(missionCandidate, { generation: 2847 });
+  const established = decide(adapter, state(fullStaminaSelf()), 2000, missionBatch, common);
+  assert.strictEqual(established.action?.kind, 'seek-remote-player');
+  assert.strictEqual(established.profit?.mission?.targetId, '8015');
+
+  // The realtime frame only carries a lower-value Passive AFK player; the
+  // mission target itself has no panel row, so no takeover has happened.
+  const lowerValue = ordinaryProfitTarget(2470, 56000, 56, { name: 'andrews' });
+  const retained = decide(
+    adapter,
+    state(fullStaminaSelf(), [lowerValue]),
+    2100,
+    { ...missionBatch, realtimeSupersededIds: ['8015'] },
+    common
+  );
+  assert.strictEqual(retained.profit?.mission?.targetId, '8015');
+  assert.strictEqual(retained.profit?.mission?.highValue, true);
+  assert.strictEqual(retained.profit?.mission?.navigationPaused, false);
+  assert.strictEqual(retained.action?.kind, 'seek-remote-player');
+  assert.strictEqual(retained.action?.target?.userId, 8015);
 }
 
 function assertActivePlayerPickupRadiusCoinCompetition() {
@@ -3346,6 +3390,7 @@ function runRemoteProfitDecisionSelfTest() {
   assertImmediateRemoteRelease(remoteBatch, 210900, 211000);
   assertDynamicThresholdLinkedCoinRoute();
   assertRealtimeSupersededMissionContinuity();
+  assertBareRealtimeSupersessionDoesNotBlockRemoteMission();
   assertPassiveRealtimeDamageDoesNotDiscardRemoteMission();
   assertLowerValuePassiveEnemyDoesNotTakeRemotePrimaryMission();
   assertActivePlayerPickupRadiusCoinCompetition();

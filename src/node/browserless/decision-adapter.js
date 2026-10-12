@@ -8057,22 +8057,34 @@ function profitMissionRemoteState(input = {}, mission = {}, nowMs = Date.now(), 
   if (missSuppressed) return { ...state, invalidated: true, reason: 'remote-target-miss-suppressed' };
   if (explicitlyInvalidated) return { ...state, invalidated: true, reason: 'remote-target-invalidated' };
   if (realtimeSuperseded) {
-    const visibleTarget = (input.visibleTargets || []).find(target => (
+    // The worker accumulates this signal from raw realtime frames, before any
+    // Active/whitelist/range/economic admission, so a bare user ID only proves
+    // the client received a row for that player. Read the same panel
+    // projection the remote candidate filter reads, and keep the remote
+    // mission authoritative unless realtime can genuinely claim the target:
+    // either it is already an admitted realtime profit candidate, or the
+    // decision layer observes it as an active realtime entity that realtime
+    // should handle.
+    const observedTarget = (input.panelVisibleTargets || input.visibleTargets || []).find(target => (
       String(easyKillTargetUserId(target) ?? '') === id
     ));
     const realtimeAuthority = realtimeProfitAuthorityIds(input, options).has(id);
-    const passiveObservation = visibleTarget
-      && visibleTarget.alive !== false
-      && visibleTarget.active !== true
-      && visibleTarget.joinModeActive !== true
-      && visibleTarget.moving !== true
-      && visibleTarget.firing !== true;
     // A remote high-value mission may briefly appear in native view while a
     // third party changes its HP/activity. If that observation is still a
     // passive, non-profit candidate, keep the remote mission authoritative;
     // otherwise a lower-value remote candidate can replace it on the next
-    // refresh even though the original target is still alive.
-    if (passiveObservation && !realtimeAuthority) return state;
+    // refresh even though the original target is still alive. The same holds
+    // when the sighting left no usable observation at all: pausing then only
+    // blocks the mission from arbitration for the rest of the snapshot
+    // generation, which let a lower-value realtime target pull the approach
+    // off course on 2026-10-13 00:12:49Z (linuxdo_8015).
+    const passiveObservation = observedTarget
+      && observedTarget.alive !== false
+      && observedTarget.active !== true
+      && observedTarget.joinModeActive !== true
+      && observedTarget.moving !== true
+      && observedTarget.firing !== true;
+    if (!realtimeAuthority && (passiveObservation || !observedTarget)) return state;
     return {
       ...state,
       navigationPaused: true,
