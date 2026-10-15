@@ -2245,6 +2245,17 @@ function estimateAim(self, target, options = {}) {
     ? Math.floor((noDamageMs - noDamageStartMs) / noDamageStepMs) + 1
     : 0;
   const noDamageWidened = noDamageLevel > 0;
+  const fallbackPrecisionThresholdMs = Math.max(0, Number(
+    options.combatAimFallbackPrecisionNoDamageMs ?? 25000
+  ));
+  const fallbackPrecision = {
+    active: Boolean(
+      fallbackPrecisionThresholdMs > 0
+      && noDamageMs >= fallbackPrecisionThresholdMs
+    ),
+    noDamageMs: Math.round(noDamageMs),
+    thresholdMs: Math.round(fallbackPrecisionThresholdMs)
+  };
   let motionProbe = null;
   if (moving && noDamageWidened) {
     const hypotheses = [
@@ -2806,6 +2817,48 @@ function estimateAim(self, target, options = {}) {
       }
     }, options);
   }
+  // A long no-damage window with no valid trajectory proof is evidence that
+  // the predictive point is stale for this realtime target. Reacquire the
+  // current native point while keeping fire cadence and all safety reserves.
+  // This does not apply to snapshot/navigation targets or a proven route.
+  const fallbackPrecisionEligible = Boolean(
+    moving
+    && target.authority === 'realtime'
+    && distance <= Math.max(0, Number(options.combatAttackRange ?? options.attackRange ?? COMBAT_CONSTANTS.ATTACK_RANGE))
+    && fallbackPrecision.active
+    && !evasiveAim?.applied
+    && trajectoryAimProof?.valid !== true
+    && Number.isFinite(tx)
+    && Number.isFinite(ty)
+  );
+  let fallbackPrecisionApplied = false;
+  let fallbackPrecisionReason = '';
+  if (fallbackPrecisionEligible) {
+    x = tx;
+    y = ty;
+    fallbackPrecisionApplied = true;
+    fallbackPrecisionReason = 'realtime-current-point-no-damage';
+    trajectoryAimProof = evaluateRealtimeTrajectoryAim({
+      ok: true,
+      x,
+      y,
+      flightTicks,
+      predictedShooterOrigin: creationOracle.predictedShooterOrigin || fallbackPredictedShooterOrigin,
+      predictedTargetAtCreation: creationOracle.predictedTargetAtCreation || fallbackPredictedTargetAtCreation,
+      routeCoverage,
+      timing: {
+        createdTickEstimate: numberOrNull(options.observedTick) === null
+          ? null
+          : Number(options.observedTick) + observationToExecutionTicks,
+        executionDelayTicks: observationToExecutionTicks
+      }
+    }, options);
+    motionProbe = {
+      ...(motionProbe || {}),
+      hypothesis: 'realtime-current-point',
+      fallbackPrecision: true
+    };
+  }
   const finalAimPointReachability = evaluateAimPointReachabilityCore(
     creationOracle.predictedShooterOrigin || fallbackPredictedShooterOrigin,
     { x, y },
@@ -2851,9 +2904,11 @@ function estimateAim(self, target, options = {}) {
     x: Math.round(x),
     y: Math.round(y),
     mode: moving
-      ? (arrivalOccupancyApplied
+      ? (fallbackPrecisionApplied
+          ? 'realtime-current-point-fallback'
+          : (arrivalOccupancyApplied
           ? `arrival-occupancy-${String(routeCoverage?.selected || 'candidate').replace(/^arrival-occupancy(?:-)?/, '') || 'candidate'}`
-          : (intercept ? (noDamageWidened ? 'quadratic-intercept-motion-probe' : 'quadratic-intercept') : 'relative-linear-intercept-fallback'))
+          : (intercept ? (noDamageWidened ? 'quadratic-intercept-motion-probe' : 'quadratic-intercept') : 'relative-linear-intercept-fallback')))
       : (arrivalOccupancyApplied
           ? `arrival-occupancy-${String(routeCoverage?.selected || 'candidate').replace(/^arrival-occupancy(?:-)?/, '') || 'candidate'}`
           : 'exact'),
@@ -2867,6 +2922,9 @@ function estimateAim(self, target, options = {}) {
     noDamageMs: Math.round(noDamageMs),
     noDamageLevel,
     noDamageWidened,
+    fallbackPrecision,
+    fallbackPrecisionApplied,
+    fallbackPrecisionReason,
     successfulAimProtection,
     spreadScale: noDamageWidened ? Math.round((1 + Math.min(1, noDamageLevel * 0.2)) * 100) / 100 : 1,
     opponentProfile: profile,
@@ -6218,6 +6276,9 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       noDamageMs: aim.noDamageMs,
       noDamageWidened: aim.noDamageWidened,
       noDamageLevel: aim.noDamageLevel,
+      fallbackPrecision: aim.fallbackPrecision,
+      fallbackPrecisionApplied: aim.fallbackPrecisionApplied,
+      fallbackPrecisionReason: aim.fallbackPrecisionReason,
       motionProbe: aim.motionProbe,
       trajectoryCoverage: aim.trajectoryCoverage,
       evasiveAim: aim.evasiveAim,

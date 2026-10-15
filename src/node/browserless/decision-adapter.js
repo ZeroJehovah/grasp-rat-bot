@@ -5379,7 +5379,7 @@ function singleCoinBaitAnchoredOpportunity(input, candidate, bait, threshold, op
       staminaCost = opportunityMoveStaminaCost(distance, options, 0)
         + Math.max(0, Number(options.opportunityCoinPickupStaminaMs ?? BROWSER_RUNTIME_DEFAULTS.opportunityCoinPickupStaminaMs ?? 0));
     }
-  } else if (type === 'enemy') {
+  } else if (PLAYER_PROFIT_MISSION_TYPES.includes(type)) {
     const anchoredTarget = { ...source, distance };
     reward = profitOpportunityThresholdReward(candidate);
     staminaCost = opportunityEnemyStaminaCost(anchoredTarget, options);
@@ -5551,14 +5551,6 @@ function singleCoinBaitReturnPlan(input, opportunity, bait, anchoredOpportunitie
     };
   }
   const baitCost = opportunityCoinStaminaCost(bait, options);
-  const currentBest = singleCoinBaitBestOrdinaryOpportunity(opportunity, bait, options);
-  const currentBestNetROI = singleCoinBaitOpportunityNetRoi(currentBest);
-  const relativeMargin = Math.max(0, Number(
-    options.opportunitySwitchRelativeMargin
-      ?? BROWSER_RUNTIME_DEFAULTS.opportunitySwitchRelativeMargin
-      ?? 0
-  ));
-  const fixedSwitchCost = Math.max(0, Number(options.opportunitySwitchMargin || 0));
   const thresholdContext = opportunity?.threshold || null;
   const thresholdFloor = thresholdContext?.active === true
     ? Number(thresholdContext.threshold?.rewardCoins || 0)
@@ -5597,47 +5589,44 @@ function singleCoinBaitReturnPlan(input, opportunity, bait, anchoredOpportunitie
   const plans = candidates.map(candidate => {
     const reward = 1 + Math.max(0, Number(candidate.reward || 0));
     const staminaCost = Math.max(0, Number(baitCost || 0)) + Math.max(0, Number(candidate.staminaCost || 0));
-    const comparableNetROI = reward / Math.max(1, staminaCost + fixedSwitchCost);
-    // Threshold admission belongs to the continuation after the bait. The
-    // bait's own coin must not subsidize a one-coin tail; total reward/cost
-    // remains available below for comparing the complete committed plan.
+    const comparableNetROI = reward / Math.max(1, staminaCost);
+    // The bait is a commitment, not a competing ROI option. Once another
+    // candidate independently clears the dynamic threshold, collect the bait
+    // first and let the ordinary planner take that candidate afterward.
     const continuationThresholdEligible = profitRewardAndCostEligible(
       Number(candidate.reward || 0),
       Number(candidate.staminaCost || 0),
       thresholdContext
     );
     const planThresholdEligible = continuationThresholdEligible;
-    const requiredNetROI = Math.max(
-      thresholdFloor,
-      currentBestNetROI === null ? 0 : currentBestNetROI * (1 + relativeMargin)
-    );
+    const requiredNetROI = thresholdFloor;
     return {
       ...candidate,
       reward,
       staminaCost,
       netROI: reward / Math.max(1, staminaCost),
       comparableNetROI,
-      currentBestNetROI,
       thresholdFloor,
       planThresholdEligible,
       requiredNetROI,
-      allowed: planThresholdEligible && comparableNetROI >= requiredNetROI
+      allowed: planThresholdEligible
     };
   }).sort((left, right) => Number(right.comparableNetROI || 0) - Number(left.comparableNetROI || 0));
   const selected = plans.find(plan => plan.allowed) || plans[0] || null;
+  const currentBest = singleCoinBaitBestOrdinaryOpportunity(opportunity, bait, options);
   return selected ? {
     ...selected,
     currentBest: currentBest ? {
       type: currentBest.type || '',
       id: currentBest.id ?? coinRouteKey(currentBest.sourceCoin || currentBest),
       reward: singleCoinBaitOpportunityReward(currentBest),
-      staminaCost: Number.isFinite(Number(currentBest.staminaCost)) ? Number(currentBest.staminaCost) : null
+      staminaCost: Number.isFinite(Number(currentBest.staminaCost))
+        ? Number(currentBest.staminaCost)
+        : null
     } : null,
     suppressionReason: selected.allowed
       ? ''
-      : (!selected.planThresholdEligible
-          ? 'bait-plan-below-profit-threshold'
-          : 'bait-plan-below-current-profit-margin')
+      : 'bait-plan-below-profit-threshold'
   } : null;
 }
 
@@ -16534,6 +16523,7 @@ module.exports = {
   summarizeEnemyOpportunityTarget,
   recentCombatResidualThreatContinuityCore,
   recordAttackHistoryFromActionResult,
+  singleCoinBaitAnchoredOpportunity,
   singleCoinBaitReturnPlan,
   summarizeBrowserlessDecision,
   snapshotSelfKillEvidence,

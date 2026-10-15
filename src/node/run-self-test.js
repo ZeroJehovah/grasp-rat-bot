@@ -80,6 +80,7 @@ const {
   opportunityEnemyStaminaCost: browserlessOpportunityEnemyStaminaCost,
   recentCombatResidualThreatContinuityCore,
   recordAttackHistoryFromActionResult,
+  singleCoinBaitAnchoredOpportunity,
   singleCoinBaitReturnPlan,
   snapshotObservedKillEvidence,
   snapshotSelfKillEvidence,
@@ -16220,7 +16221,49 @@ async function runSelfTest() {
       want: 'single-coin-bait-hold|hold|coin|single-coin-bait-release|bait|release|next|next|true'
     },
     {
-      name: 'browserless single coin bait reprices distant returns against current profitable coins',
+      name: 'browserless single coin bait anchors eligible remote player navigation',
+      got: (() => {
+        const evaluation = singleCoinBaitAnchoredOpportunity(
+          {
+            self: {
+              stamina_1h_remaining_milli: 3000000,
+              stamina_1d_remaining_milli: 20000000
+            },
+            realtimeCoins: [],
+            profitCoins: [],
+            fallback: {}
+          },
+          {
+            type: 'remote-player-navigation',
+            id: 'remote-player',
+            reward: 20,
+            expectedReward: 20,
+            sourceTarget: {
+              userId: 'remote-player',
+              x: 5000,
+              y: 0,
+              distance: 5000,
+              active: true,
+              hp: 100
+            }
+          },
+          { id: 'bait', x: 0, y: 0, amount: 1 },
+          { active: true, threshold: { rewardCoins: 1, staminaMilli: 1000000 } },
+          {}
+        );
+        return [
+          evaluation?.type,
+          evaluation?.baitAnchorEvaluation?.type,
+          evaluation?.baitAnchorEvaluation?.pathClear,
+          evaluation?.baitAnchorEvaluation?.affordable,
+          evaluation?.profitThresholdEligible,
+          evaluation?.baitAnchorEvaluation?.id
+        ].join('|');
+      })(),
+      want: 'remote-player-navigation|remote-player-navigation|true|true|true|remote-player'
+    },
+    {
+      name: 'browserless single coin bait collects bait before an independently eligible distant candidate',
       got: (() => {
         const options = {
           userId: 7,
@@ -16295,7 +16338,7 @@ async function runSelfTest() {
           mismatch.profit.singleCoinBaitContinuation?.evaluationOrigin?.id || ''
         ].join('|');
       })(),
-      want: 'true|route-3|false|bait-plan-below-current-profit-margin|bait-3613|0|true|coin-4245|false|bait-4230|'
+      want: 'false|bait-3613|true||bait-3613|10|true|coin-4245|false|bait-4230|'
     },
     {
       name: 'single coin bait combination plans obey the global threshold floor',
@@ -16446,7 +16489,7 @@ async function runSelfTest() {
           JSON.stringify(productionReplayAgain) === JSON.stringify(productionReplay)
         ].join('|');
       })(),
-      want: 'true|true|0.0001|0.0001|false|true|bait-plan-below-current-profit-margin|true|false|false|bait-plan-below-current-profit-margin|false|true|bait-plan-below-current-profit-margin|true|true|true|0,0,0,0|true|10|true'
+      want: 'true|true|0.0001|0.0001|true|true||true|true|true||true|true||true|true|false|10,10,10,10|true|10|true'
     },
     {
       name: 'browserless low ROI bait plan loses commitment outside the close radius',
@@ -16510,7 +16553,7 @@ async function runSelfTest() {
           near.profit.singleCoinBait?.closeCommitmentRadiusCm
         ].join('|');
       })(),
-      want: 'dynamic-profit-threshold-wait|0|false|true|bait-plan-below-current-profit-margin|bait|10|1200'
+      want: 'single-coin-bait-release|10|true|true||bait|10|1200'
     },
     {
       name: 'browserless snapshot fallback bait survives a higher ROI AFK arrival until committed release',
@@ -20074,6 +20117,58 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'quadratic-intercept-motion-probe|true|4|true|true'
+    },
+    {
+      name: 'browserless long no-damage realtime aim reacquires current point without suppressing fire',
+      got: (() => {
+        const stateful = {
+          combatTarget: {
+            id: 8,
+            at: 1000,
+            firstSeenAt: 1000,
+            lastInRangeAt: 1000,
+            lastDamageAt: 1000,
+            hp: 80,
+            intent: 'engaged',
+            motionSamples: Array.from({ length: 4 }, (_, index) => ({
+              at: 1000 + index * 200,
+              x: 7000 + index * 80,
+              y: 0,
+              vx: 80,
+              vy: 0,
+              selfX: 0,
+              selfY: 0,
+              distance: 7000 + index * 80
+            }))
+          }
+        };
+        const combat = buildBrowserlessCombatDryRun({
+          userId: 7,
+          realtime: {
+            tick: 600,
+            self: { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+            entities: [
+              { entity_id: 1, user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+              { entity_id: 2, user_id: 8, name: 'moving-active', x: 8000, y: 0, vx: 80, vy: 0, hp: 80, current_join_mode: 'Active', firing: true, drop: 12 }
+            ],
+            bullets: []
+          }
+        }, {
+          nowMs: 30000,
+          decisionState: stateful,
+          combatAttackRange: 11000,
+          combatAimFallbackPrecisionNoDamageMs: 25000
+        });
+        return [
+          combat.aim.mode,
+          combat.aim.fallbackPrecisionApplied,
+          combat.aim.x,
+          combat.aim.y,
+          combat.shooting.wouldShoot,
+          stateful.combatAim.fallbackPrecisionApplied
+        ].join('|');
+      })(),
+      want: 'realtime-current-point-fallback|true|8000|0|true|true'
     },
     {
       name: 'browserless script aim ranks reachable routes from movement transition matrix',
