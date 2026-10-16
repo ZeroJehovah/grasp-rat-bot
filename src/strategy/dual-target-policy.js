@@ -360,6 +360,18 @@ function primaryRewardSurvivalRacePolicy(input = {}, options = {}) {
     options.secondaryTargetRaceDamageWindowMs ?? DEFAULT_SECONDARY_WINDOW_MS
   ));
   const secondarySamples = input.secondarySamples || input.combatTargetState?.motionSamples || [];
+  // Only this secondary's attributed injury can extend focus beyond close
+  // range. Aggregate pressure from another owner must not authorize it.
+  const secondaryDamageWindowMs = Math.max(250, Number(
+    options.secondaryTargetPressureWindowMs ?? DEFAULT_SECONDARY_PRESSURE_WINDOW_MS
+  ));
+  const secondaryDamageRows = attributedHpLossRows(secondarySamples, nowMs, secondaryDamageWindowMs);
+  const secondaryDamagePressure = {
+    active: secondaryDamageRows.length > 0,
+    windowMs: secondaryDamageWindowMs,
+    damageHp: secondaryDamageRows.reduce((total, row) => total + row.amount, 0),
+    lastDamageAt: secondaryDamageRows.at(-1)?.at ?? null
+  };
   const primarySamples = input.primarySamples || [];
   const incomingSamplesByOwner = input.incomingSamplesByOwner
     && typeof input.incomingSamplesByOwner === 'object'
@@ -441,6 +453,7 @@ function primaryRewardSurvivalRacePolicy(input = {}, options = {}) {
     primaryDistanceCm: Number.isFinite(primaryDistanceCm) ? primaryDistanceCm : null,
     pickupRadiusCm,
     closePressureActive: pressure.active === true,
+    secondaryDamagePressure,
     pressureEvidence,
     incomingOwnerCount: sampleGroups.length,
     attributedSamples: hasAttributedSamples,
@@ -641,9 +654,11 @@ function dualTargetFireArbitration(input = {}) {
       reason: 'primary-finish-race-authorized'
     };
   }
-  // General incoming pressure still owns Dodge and safety, but only sustained
-  // close pressure may divert an authorized primary shot to the secondary.
-  if (primaryNormalAuthorized && closePressure.active === true
+  // Beyond close range, require sustained fire AND recent attributed injury
+  // from this secondary. This does not grant the close-range quota exemption.
+  const damagingPressure = closePressure.sustainedAttack === true
+    && rewardRace.secondaryDamagePressure?.active === true;
+  if (primaryNormalAuthorized && (closePressure.active === true || damagingPressure)
     && pressureEvidence.active && rewardRace.shouldFocusSecondary) {
     return {
       mode: 'secondary-focus',
@@ -653,7 +668,9 @@ function dualTargetFireArbitration(input = {}) {
       primaryPhysicalEligible,
       primaryNormalAuthorized,
       primaryFinishAuthorized: false,
-      reason: 'secondary-close-pressure-hp50-race'
+      reason: closePressure.active === true
+        ? 'secondary-close-pressure-hp50-race'
+        : 'secondary-sustained-damage-hp50-race'
     };
   }
   if (primaryNormalAuthorized) {

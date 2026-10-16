@@ -675,6 +675,51 @@ function runStrategyModuleSelfTests() {
       && blockedPrimaryUnderPressure.mode === 'secondary-defensive'
   });
 
+  const damagingRaceInput = {
+    nowMs: 10000, selfHp: 67, primaryHp: 100, primaryDistanceCm: 5000,
+    closePressure: { active: false, sustainedAttack: true },
+    pressureEvidence: { active: true },
+    secondarySamples: [
+      { at: 9000, newBulletCount: 1, selfHp: 70 },
+      { at: 9900, newBulletCount: 1, selfHp: 67, selfDamageAmount: 3, attributableSelfDamage: true }
+    ]
+  };
+  const damagingRace = primaryRewardSurvivalRacePolicy(damagingRaceInput);
+  const arbitrateDamagingRace = (race, overrides = {}) => dualTargetFireArbitration({
+    secondaryActive: true, primaryNormalAuthorized: true,
+    closePressure: damagingRaceInput.closePressure,
+    pressureEvidence: damagingRaceInput.pressureEvidence, rewardRace: race, ...overrides
+  });
+  const injuryVariants = [
+    { name: 'expired', samples: [{ at: 8499, selfDamageAmount: 3 }] },
+    { name: 'future', samples: [{ at: 10001, selfDamageAmount: 3 }] },
+    { name: 'unattributed', samples: [{ at: 9900, selfHp: 67, selfHpLoss: 3 }] },
+    { name: 'zero-explicit', samples: [{ at: 9900, selfDamageAmount: 0, selfHpLoss: 3, attributableSelfDamage: true }] }
+  ];
+  results.push({
+    name: 'dual-target-damaging-secondary-focus-preserves-owner-freshness-and-finish-gates',
+    passed: damagingRace.secondaryDamagePressure.damageHp === 3
+      && arbitrateDamagingRace(damagingRace).reason === 'secondary-sustained-damage-hp50-race'
+      && injuryVariants.every(({ samples }) => {
+        const race = primaryRewardSurvivalRacePolicy({ ...damagingRaceInput,
+          secondarySamples: samples,
+          incomingSamplesByOwner: { other: damagingRaceInput.secondarySamples } });
+        return race.shouldFocusSecondary && !race.secondaryDamagePressure.active
+          && arbitrateDamagingRace(race).primarySelected;
+      })
+      && arbitrateDamagingRace(damagingRace, {
+        closePressure: { active: false, sustainedAttack: false }
+      }).primarySelected
+      && arbitrateDamagingRace(damagingRace, { pressureEvidence: { active: false } }).primarySelected
+      && arbitrateDamagingRace(damagingRace, { primaryFinishAuthorized: true }).mode === 'primary-finish-race'
+      && arbitrateDamagingRace(primaryRewardSurvivalRacePolicy({
+        ...damagingRaceInput, selfHp: 100, primaryHp: 1, primaryDistanceCm: 100
+      })).primarySelected
+      && primaryRewardSurvivalRacePolicy({ ...damagingRaceInput,
+        secondarySamples: [{ at: 8500, selfHpLoss: 3, attributableSelfDamage: true }]
+      }).secondaryDamagePressure.active
+  });
+
   const outsideClosePressureEvidence = incomingPressureEvidencePolicy({
     nowMs: 10000,
     ownerIds: ['32551'],

@@ -1384,6 +1384,19 @@ function assertDualTargetRuntimeRules() {
   assert.strictEqual(distantPressure.combat?.fireTarget?.userId, 42);
   assert.strictEqual(distantPressure.combat?.movement?.secondaryTarget?.direction?.dx, -1);
 
+  const damagingPressure = pressureDecision(distantPressureAdapter,
+    { ...primary, x: -5000, hp: 100 }, 12, 2200,
+    [pressureBullet('distant-1', 10), pressureBullet('distant-2', 11),
+      { ...pressureBullet('distant-hit', 12), x: 2000, y: 0, target_x: 0, target_y: 0 }], 67, 4000);
+  assert.strictEqual(damagingPressure.combat?.shooting?.mode, 'secondary-focus');
+  assert.strictEqual(damagingPressure.combat?.shooting?.primaryRewardSurvivalRace?.secondaryDamagePressure?.damageHp, 3);
+  assert.strictEqual(damagingPressure.combat?.shooting?.dualTargetArbitration?.reason,
+    'secondary-sustained-damage-hp50-race');
+  assert.strictEqual(damagingPressure.combat?.fireTarget?.userId, 8);
+  assert.strictEqual(damagingPressure.combat?.shooting?.secondaryPolicy?.throttleExempt, false);
+  assert.strictEqual(damagingPressure.combat?.shooting?.secondaryPolicy?.cadenceMs, 160);
+  assert.strictEqual(damagingPressure.combat?.movement?.secondaryTarget?.direction?.dx, -1);
+
   const safePressureAdapter = createBrowserlessDecisionAdapter(common);
   pressureDecision(
     safePressureAdapter,
