@@ -38,13 +38,25 @@ function runCombatOpportunityReplay(frames, shots, sourceEvents, options, helper
   let exitState = null;
   let lastShotAt = null;
   let previousId = '';
+  let previousSelfHp = null;
+  let previousTargetHp = null;
+  let cumulativeSelfDamage = 0;
+  let cumulativeTargetDamage = 0;
   let firstExit = null;
   const waits = [];
   for (const frame of native) {
     const d = frame.entry.combatOpportunityReplay;
     const targetId = String(d.target.userId ?? d.target.user_id ?? '');
-    if (targetId !== previousId) { samples = []; waitState = null; exitState = null; lastShotAt = null; }
+    if (targetId !== previousId) {
+      samples = []; waitState = null; exitState = null; lastShotAt = null;
+      previousSelfHp = null; previousTargetHp = null;
+      cumulativeSelfDamage = 0; cumulativeTargetDamage = 0;
+    }
     previousId = targetId;
+    if (previousSelfHp !== null) cumulativeSelfDamage += Math.max(0, previousSelfHp - frame.selfHp);
+    if (previousTargetHp !== null) cumulativeTargetDamage += Math.max(0, previousTargetHp - frame.targetHp);
+    previousSelfHp = frame.selfHp;
+    previousTargetHp = frame.targetHp;
     const shotAt = d.latestOpponentShotAt;
     const newShot = Number.isFinite(shotAt) && shotAt !== lastShotAt && shotAt <= frame.at && frame.at - shotAt <= 1500;
     samples.push({ at: frame.at, selfHp: frame.selfHp, targetHp: frame.targetHp, newBulletCount: newShot ? 1 : 0 });
@@ -65,6 +77,7 @@ function runCombatOpportunityReplay(frames, shots, sourceEvents, options, helper
       nowMs: frame.at, targetId, realtime: d.target.authority === 'realtime', secondary,
       commitment: Boolean(d.primary), selfHp: frame.selfHp, targetHp: frame.targetHp,
       invulnerable: d.target.invulnerable, engagedMs: d.engagedMs, acceptedShots: d.acceptedShots,
+      cumulativeSelfDamage, cumulativeTargetDamage,
       finishOpportunity: d.finishOpportunity, pressure, previous: exitState
     });
     exitState = candidate.state;

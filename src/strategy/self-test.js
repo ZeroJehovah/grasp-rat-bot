@@ -267,6 +267,10 @@ const {
   evaluateCombatHpExitCore,
   evaluatePredictedLeaveHpCore
 } = require('./combat-exit');
+const {
+  realtimeAimRecoveryCore,
+  uncommittedDefenseExitCore
+} = require('./combat-opportunity-tactics');
 const { OPPORTUNITY_CONSTANTS, calculateOpportunityROI, validateOpportunityConstants } = require('./opportunity-constants');
 const {
   buildDynamicProfitThresholdCore,
@@ -3469,6 +3473,74 @@ function runStrategyModuleSelfTests() {
       && safelySeparated.disengage === true
       && safelySeparated.safeDistanceReached === true
       && safelySeparated.shouldExit === false
+  });
+
+  const earlyAimRecovery = realtimeAimRecoveryCore({
+    realtime: true,
+    moving: true,
+    inRange: true,
+    trajectoryValid: false,
+    evasiveApplied: false,
+    currentEngagementDamaged: false,
+    noDamageMs: 450,
+    lateralFlips: 2,
+    maneuverScale: 0.4,
+    acceptedShots: 3,
+    targetX: 8000,
+    targetY: 0
+  });
+  const protectedAimRecovery = realtimeAimRecoveryCore({
+    realtime: true,
+    moving: true,
+    inRange: true,
+    trajectoryValid: false,
+    currentEngagementDamaged: true,
+    noDamageMs: 2000,
+    lateralFlips: 5,
+    maneuverScale: 0.8,
+    acceptedShots: 10,
+    targetX: 8000,
+    targetY: 0
+  });
+  results.push({
+    name: 'realtime-aim-recovery-requires-reversal-and-no-damage-without-current-hit',
+    passed: earlyAimRecovery.active === true
+      && earlyAimRecovery.reason === 'realtime-current-point-early-direction-reversal'
+      && protectedAimRecovery.active === false
+      && protectedAimRecovery.reason === 'realtime-aim-recovery-proven-damage'
+  });
+
+  const longDefensePressure = {
+    sustained: true,
+    damage: 6,
+    targetDamage: 0,
+    lossEvents: 3,
+    lastLossAt: 61500
+  };
+  const longDefensePending = uncommittedDefenseExitCore({
+    nowMs: 62000, targetId: 'long-defense', realtime: true, secondary: true, commitment: false,
+    selfHp: 58, targetHp: 70, engagedMs: 60000, acceptedShots: 50,
+    cumulativeSelfDamage: 42, cumulativeTargetDamage: 9, pressure: longDefensePressure
+  });
+  const longDefenseConfirmed = uncommittedDefenseExitCore({
+    nowMs: 62250, targetId: 'long-defense', realtime: true, secondary: true, commitment: false,
+    selfHp: 58, targetHp: 70, engagedMs: 60250, acceptedShots: 50,
+    cumulativeSelfDamage: 42, cumulativeTargetDamage: 9, pressure: longDefensePressure,
+    previous: longDefensePending.state
+  });
+  const committedLongDefense = uncommittedDefenseExitCore({
+    nowMs: 62250, targetId: 'long-defense', realtime: true, secondary: true, commitment: true,
+    selfHp: 58, targetHp: 70, engagedMs: 60250, acceptedShots: 50,
+    cumulativeSelfDamage: 42, cumulativeTargetDamage: 9, pressure: longDefensePressure,
+    previous: longDefensePending.state
+  });
+  results.push({
+    name: 'long-pure-defense-loss-exit-confirms-after-cumulative-losing-exchange',
+    passed: longDefensePending.shouldLeave === false
+      && longDefensePending.longQualifies === true
+      && longDefensePending.rule === 'long-sustained-poor-exchange-without-profit'
+      && longDefenseConfirmed.shouldLeave === true
+      && committedLongDefense.shouldLeave === false
   });
 
   const pressureBefore = combatPressurePhaseCore({

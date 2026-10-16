@@ -134,6 +134,7 @@ const { invulnerableApproachWindowCore } = require('../../strategy/invulnerable-
 const {
   pursuitApproachDirectionCore,
   combatPressureWindowCore,
+  realtimeAimRecoveryCore,
   invulnerableEscortWaitCore,
   uncommittedDefenseExitCore
 } = require('../../strategy/combat-opportunity-tactics');
@@ -2256,6 +2257,11 @@ function estimateAim(self, target, options = {}) {
     noDamageMs: Math.round(noDamageMs),
     thresholdMs: Math.round(fallbackPrecisionThresholdMs)
   };
+  const firstSeenAt = numberOrNull(combatTargetState?.firstSeenAt);
+  const lastDamageAt = numberOrNull(combatTargetState?.lastDamageAt);
+  const currentEngagementDamaged = firstSeenAt !== null
+    && lastDamageAt !== null
+    && lastDamageAt > firstSeenAt;
   let motionProbe = null;
   if (moving && noDamageWidened) {
     const hypotheses = [
@@ -2817,6 +2823,20 @@ function estimateAim(self, target, options = {}) {
       }
     }, options);
   }
+  const earlyAimRecovery = realtimeAimRecoveryCore({
+    realtime: target.authority === 'realtime',
+    moving,
+    inRange: distance <= Math.max(0, Number(options.combatAttackRange ?? options.attackRange ?? COMBAT_CONSTANTS.ATTACK_RANGE)),
+    trajectoryValid: trajectoryAimProof?.valid === true,
+    evasiveApplied: evasiveAim?.applied === true,
+    currentEngagementDamaged,
+    noDamageMs,
+    lateralFlips: profile.lateralFlips,
+    maneuverScale: profile.maneuverScale,
+    acceptedShots: options.actualShots,
+    targetX: tx,
+    targetY: ty
+  }, options);
   // A long no-damage window with no valid trajectory proof is evidence that
   // the predictive point is stale for this realtime target. Reacquire the
   // current native point while keeping fire cadence and all safety reserves.
@@ -2825,7 +2845,7 @@ function estimateAim(self, target, options = {}) {
     moving
     && target.authority === 'realtime'
     && distance <= Math.max(0, Number(options.combatAttackRange ?? options.attackRange ?? COMBAT_CONSTANTS.ATTACK_RANGE))
-    && fallbackPrecision.active
+    && (fallbackPrecision.active || earlyAimRecovery.active)
     && !evasiveAim?.applied
     && trajectoryAimProof?.valid !== true
     && Number.isFinite(tx)
@@ -2837,7 +2857,9 @@ function estimateAim(self, target, options = {}) {
     x = tx;
     y = ty;
     fallbackPrecisionApplied = true;
-    fallbackPrecisionReason = 'realtime-current-point-no-damage';
+    fallbackPrecisionReason = earlyAimRecovery.active
+      ? earlyAimRecovery.reason
+      : 'realtime-current-point-no-damage';
     trajectoryAimProof = evaluateRealtimeTrajectoryAim({
       ok: true,
       x,
@@ -2923,6 +2945,7 @@ function estimateAim(self, target, options = {}) {
     noDamageLevel,
     noDamageWidened,
     fallbackPrecision,
+    earlyAimRecovery,
     fallbackPrecisionApplied,
     fallbackPrecisionReason,
     successfulAimProtection,
@@ -6391,6 +6414,8 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     finishOpportunity: stateful?.combatTarget?.primaryFinishRace?.active === true,
     engagedMs: combatPhase?.engagedMs ?? (Number(options.nowMs) - Number(combatTargetState?.firstSeenAt)),
     acceptedShots: stateful?.combatMetrics?.acceptedShots || 0,
+    cumulativeSelfDamage: Number(stateful?.combatMetrics?.selfDamage || 0),
+    cumulativeTargetDamage: Number(stateful?.combatMetrics?.targetDamage || 0),
     pressure: combatOpportunityPressure,
     previous: combatTargetState?.uncommittedDefenseState
   }, options);

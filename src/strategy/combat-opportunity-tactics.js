@@ -14,7 +14,16 @@ const COMBAT_OPPORTUNITY_DEFAULTS = Object.freeze({
   defenseMinEngagedMs: 3000,
   defenseMinDamageHp: 18,
   defenseDamageRatio: 2,
-  defenseMinDamageGapHp: 12
+  defenseMinDamageGapHp: 12,
+  defenseLongMinEngagedMs: 60000,
+  defenseLongMinDamageHp: 18,
+  defenseLongMaxTargetDamageHp: 12,
+  defenseLongDamageRatio: 1.5,
+  defenseLongMinDamageGapHp: 12,
+  defenseLongRecentDamageHp: 3,
+  aimRecoveryMinNoDamageMs: 450,
+  aimRecoveryMinDirectionFlips: 2,
+  aimRecoveryMinShots: 3
 });
 
 function finite(value) {
@@ -109,6 +118,55 @@ function combatPressureWindowCore(samples = [], nowMs = 0) {
   };
 }
 
+function realtimeAimRecoveryCore(input = {}, options = {}) {
+  const noDamageMs = Math.max(0, Number(input.noDamageMs || 0));
+  const lateralFlips = Math.max(0, Number(input.lateralFlips || 0));
+  const maneuverScale = Math.max(0, Number(input.maneuverScale || 0));
+  const acceptedShots = Math.max(0, Number(input.acceptedShots || 0));
+  const minimumNoDamageMs = Math.max(0, Number(
+    options.combatAimRecoveryMinNoDamageMs ?? COMBAT_OPPORTUNITY_DEFAULTS.aimRecoveryMinNoDamageMs
+  ));
+  const minimumDirectionFlips = Math.max(1, Number(
+    options.combatAimRecoveryMinDirectionFlips ?? COMBAT_OPPORTUNITY_DEFAULTS.aimRecoveryMinDirectionFlips
+  ));
+  const minimumShots = Math.max(1, Number(
+    options.combatAimRecoveryMinShots ?? COMBAT_OPPORTUNITY_DEFAULTS.aimRecoveryMinShots
+  ));
+  const eligible = input.enabled !== false
+    && input.realtime === true
+    && input.moving === true
+    && input.inRange === true
+    && input.trajectoryValid !== true
+    && input.evasiveApplied !== true
+    && input.currentEngagementDamaged !== true
+    && Number.isFinite(Number(input.targetX))
+    && Number.isFinite(Number(input.targetY))
+    && noDamageMs >= minimumNoDamageMs
+    && lateralFlips >= minimumDirectionFlips
+    && maneuverScale >= 0.35
+    && acceptedShots >= minimumShots;
+  let reason = 'realtime-aim-recovery-not-applicable';
+  if (eligible) reason = 'realtime-current-point-early-direction-reversal';
+  else if (input.realtime !== true) reason = 'realtime-aim-recovery-non-realtime';
+  else if (input.inRange !== true) reason = 'realtime-aim-recovery-out-of-range';
+  else if (input.currentEngagementDamaged === true) reason = 'realtime-aim-recovery-proven-damage';
+  else if (acceptedShots < minimumShots) reason = 'realtime-aim-recovery-insufficient-shots';
+  else if (lateralFlips < minimumDirectionFlips || maneuverScale < 0.35) reason = 'realtime-aim-recovery-insufficient-direction-evidence';
+  else if (noDamageMs < minimumNoDamageMs) reason = 'realtime-aim-recovery-insufficient-no-damage';
+  else if (input.trajectoryValid === true) reason = 'realtime-aim-recovery-trajectory-proven';
+  return {
+    active: eligible,
+    reason,
+    noDamageMs: Math.round(noDamageMs),
+    lateralFlips: Math.round(lateralFlips),
+    maneuverScale: Number(maneuverScale.toFixed(3)),
+    acceptedShots: Math.round(acceptedShots),
+    minimumNoDamageMs,
+    minimumDirectionFlips,
+    minimumShots
+  };
+}
+
 function invulnerableEscortWaitCore(input = {}, options = {}) {
   const nowMs = finite(input.nowMs);
   const primary = input.primary;
@@ -172,12 +230,26 @@ function uncommittedDefenseExitCore(input = {}, options = {}) {
     && pressure.damage >= defaults.defenseMinDamageHp
     && pressure.damage >= pressure.targetDamage * defaults.defenseDamageRatio
     && pressure.damage - pressure.targetDamage >= defaults.defenseMinDamageGapHp;
-  if (!qualifies) return reset('defense-exchange-not-severe');
+  const cumulativeSelfDamage = Math.max(0, Number(input.cumulativeSelfDamage || 0));
+  const cumulativeTargetDamage = Math.max(0, Number(input.cumulativeTargetDamage || 0));
+  const longQualifies = Number(input.engagedMs) >= defaults.defenseLongMinEngagedMs
+    && Number(input.acceptedShots) >= 10
+    && pressure.sustained
+    && pressure.damage >= defaults.defenseLongRecentDamageHp
+    && pressure.lastLossAt !== null
+    && nowMs - pressure.lastLossAt <= 1500
+    && cumulativeSelfDamage >= defaults.defenseLongMinDamageHp
+    && cumulativeTargetDamage <= defaults.defenseLongMaxTargetDamageHp
+    && cumulativeSelfDamage >= cumulativeTargetDamage * defaults.defenseLongDamageRatio
+    && cumulativeSelfDamage - cumulativeTargetDamage >= defaults.defenseLongMinDamageGapHp;
+  if (!qualifies && !longQualifies) return reset('defense-exchange-not-severe');
   const previous = continuous(input.previous, id, nowMs) ? input.previous : null;
   const since = previous?.since ?? nowMs;
   const shouldLeave = nowMs - since >= defaults.confirmMs;
   return {
     shouldLeave, reason: shouldLeave ? 'uncommitted-defense-poor-exchange-leave' : 'uncommitted-defense-confirming',
+    rule: longQualifies ? 'long-sustained-poor-exchange-without-profit' : 'sustained-poor-exchange-without-profit',
+    longQualifies,
     pressure, hp50EtaMs: Number.isFinite(hp50EtaMs) ? hp50EtaMs : null,
     killEtaMs: Number.isFinite(killEtaMs) ? killEtaMs : null,
     state: { id, at: nowMs, since }
@@ -188,6 +260,7 @@ module.exports = {
   COMBAT_OPPORTUNITY_DEFAULTS,
   pursuitApproachDirectionCore,
   combatPressureWindowCore,
+  realtimeAimRecoveryCore,
   invulnerableEscortWaitCore,
   uncommittedDefenseExitCore
 };

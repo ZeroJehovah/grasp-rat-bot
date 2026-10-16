@@ -5,7 +5,7 @@ const {
   pursuitApproachDirectionCore: heading, combatPressureWindowCore: pressureWindow,
   invulnerableEscortWaitCore: wait, uncommittedDefenseExitCore: exit
 } = require('../../strategy/combat-opportunity-tactics');
-const { buildCombatMovementPlan, buildBrowserlessCombatDryRun } = require('./combat-adapter');
+const { buildCombatMovementPlan, buildBrowserlessCombatDryRun, estimateAim } = require('./combat-adapter');
 const { buildUncommittedDefenseExitAction: finalExit } = require('./uncommitted-defense');
 const { buildIncomingPressureFixture } = require('./incoming-pressure-self-test');
 const { buildBrowserlessDecision, buildBrowserlessRealtimeControlDecision } = require('./decision-adapter');
@@ -149,6 +149,40 @@ function runCombatOpportunitySelfTest() {
     assert.notStrictEqual(decide(low.state, low.stateful, low.options).action.reason, decision.action.reason,
       'the existing HP-50 hard exit retains precedence');
   }
+  const reversalSamples = [
+    [-35, -35], [-35, -35], [-35, -35], [-35, 35], [-35, 35], [-35, 35],
+    [-35, -35], [-35, -35], [0, -50], [0, -50], [-35, 35], [-35, 35], [-35, 35]
+  ].map(([vx, vy], index) => ({
+    at: 1000 + index * 50,
+    x: 8000 + index * 20,
+    y: 500 + index * 10,
+    vx, vy,
+    selfX: 0,
+    selfY: 0,
+    distance: 8000,
+    selfHp: 100,
+    targetHp: 100
+  }));
+  const recoveredAim = estimateAim(
+    { user_id: 1, x: 0, y: 0, hp: 100 },
+    { user_id: 2, x: 8240, y: 630, vx: -35, vy: 35, hp: 100, authority: 'realtime' },
+    {
+      nowMs: 1600,
+      combatAttackRange: 11000,
+      actualShots: 3,
+      executionTiming: { medianTicks: 1, p90Ticks: 1, madTicks: 0, source: 'confirmed-shoot-rolling', sampleCount: 10 },
+      combatTargetState: {
+        firstSeenAt: 1000,
+        lastDamageAt: 1000,
+        noDamageMs: 600,
+        motionSamples: reversalSamples,
+        opponentBehaviorState: { recentHitRate: 0 }
+      }
+    }
+  );
+  assert.strictEqual(recoveredAim.fallbackPrecisionApplied, true);
+  assert.strictEqual(recoveredAim.fallbackPrecisionReason, 'realtime-current-point-early-direction-reversal');
+  assert.deepStrictEqual({ x: recoveredAim.x, y: recoveredAim.y }, { x: 8240, y: 630 });
   return { ok: true, groups: 8 };
 }
 
