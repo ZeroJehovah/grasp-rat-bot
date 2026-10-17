@@ -51,6 +51,7 @@ const {
   updateCombatProbePhaseCore
 } = require('../../strategy/combat-fire-discipline');
 const { COMBAT_CONSTANTS } = require('../../strategy/combat-constants');
+const { usesCombatStaminaWindow, combatStaminaWindowCore } = require('../../strategy/combat-stamina-window');
 const { previousActionWasRecoveryCore } = require('../../strategy/recovery-contact-guard');
 const {
   evaluateCombatExchangeStopLossCore,
@@ -3339,6 +3340,7 @@ function reconcileBrowserlessProfitEscortContinuity(
 
 function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   if (!self || !target) return { dx: 0, dy: 0, reason: 'missing-target', spacing: null, dodge: null, modifiers: [] };
+  const independentCombatMovement = usesCombatStaminaWindow(target);
   const combatTargetState = options.combatTargetState || null;
   const opponentBehavior = combatTargetState?.opponentBehaviorState || null;
   const noDamageMs = Math.max(0, Number(combatTargetState?.noDamageMs || 0));
@@ -3581,7 +3583,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   let preDodgeBlockedReason = '';
   if (shootingPhaseState !== 'preparing') preDodgeBlockedReason = 'shooting-phase-not-preparing';
   else if (!lowVariationCadence) preDodgeBlockedReason = 'cycle-unstable';
-  else if (selfStamina5s !== null && selfStamina5s < activeDodgeReserveMs + preDodgeStaminaCostMs) preDodgeBlockedReason = 'stamina-insufficient';
+  else if (!independentCombatMovement && selfStamina5s !== null && selfStamina5s < activeDodgeReserveMs + preDodgeStaminaCostMs) preDodgeBlockedReason = 'stamina-insufficient';
   else if (!moving) preDodgeBlockedReason = 'self-stationary';
   else if (urgentOldBulletThreat) preDodgeBlockedReason = 'old-bullet-threat';
   else if (latestSafeCommandTick !== null && currentTick !== null && currentTick > latestSafeCommandTick) preDodgeBlockedReason = 'flight-time-insufficient';
@@ -4198,7 +4200,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
             || opponentBehavior?.metrics?.realBulletPressure
             || burstSampleCount >= 2
         ),
-        lowStamina: selfStamina5s !== null
+        lowStamina: !independentCombatMovement && selfStamina5s !== null
           && selfStamina5s < activeDodgeReserveMs + preDodgeStaminaCostMs,
         exitActive: options.leaveActive === true,
         collisionRisk: options.collisionRisk === true,
@@ -4678,12 +4680,13 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     preDodgeCandidate,
     preDodgeBlockedReason: preDodge ? '' : preDodgeBlockedReason,
     combatStaminaBudget: {
+      movementIndependent: independentCombatMovement,
       hardReserveMs: combatHardReserveMs,
       normalDodgeReserveMs,
       pressureDodgeReserveMs,
       activeDodgeReserveMs,
       preDodgeStaminaCostMs,
-      distanceAwareLowStaminaThresholdMs: activeDodgeReserveMs + preDodgeStaminaCostMs
+      distanceAwareLowStaminaThresholdMs: independentCombatMovement ? 0 : activeDodgeReserveMs + preDodgeStaminaCostMs
     },
     contactEntryGuard: options.contactEntryGuard || null,
     shootingPhaseSource: shootingPhase?.shootingPhaseSource || '',
@@ -6696,7 +6699,13 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
         Number(options.combatClosePressureReserveMs ?? runtimePressureReserveMs)
       )
     : runtimeDodgeReserveMs;
+  const combatShootingBudget = combatStaminaWindowCore(
+    state?.command?.shooting?.staminaDispatches || [],
+    Number(options.nowMs || Date.now()),
+    options.combatShotStaminaCostMs
+  );
   const fireState = target ? determineCombatFireState(self || {}, target, {
+    combatShootingBudget: usesCombatStaminaWindow(target) ? combatShootingBudget : null,
     targetPressureFire: bullets.some(bullet => Number(bullet.ownerId) === Number(target.user_id)),
     closePressure: closePressureActive,
     closePressureAttack: pressureAttackActive,
@@ -6987,6 +6996,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     bullet => Number(bullet.ownerId) === Number(primaryFireTarget?.user_id ?? primaryFireTarget?.userId)
   );
   const primaryFireState = primaryFireTarget ? determineCombatFireState(self || {}, primaryFireTarget, {
+    combatShootingBudget: usesCombatStaminaWindow(primaryFireTarget) ? combatShootingBudget : null,
     targetPressureFire: primaryTargetPressureFire,
     closePressure: false,
     closePressureAttack: false,
@@ -7212,6 +7222,14 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       ? 'primary-finish-race'
       : primaryFireAuthorizationClass)
     : fireAuthorization.fireAuthorizationClass;
+  // Finish/close-pressure arbitration cannot override the shared physical
+  // shooting allowance. It has no authority over movement or Dodge.
+  if (resolvedWouldShoot && usesCombatStaminaWindow(selectedFireTarget, fireTargetRole)
+    && !combatShootingBudget.allowed) {
+    resolvedWouldShoot = false;
+    resolvedFinalFireBlocker = 'combat-window-exhausted';
+    resolvedFireAuthorizationClass = 'shooting-budget-blocked';
+  }
   if (!primarySelected && resolvedWouldShoot && secondaryPolicy && !secondaryPolicy.allowed) {
     resolvedWouldShoot = false;
     resolvedFinalFireBlocker = `secondary:${secondaryPolicy.reason}`;
@@ -7454,6 +7472,8 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       shotCostMs: numberOrNull(selectedFireState.shotCostMs),
       dodgeActionCostMs: numberOrNull(selectedFireState.dodgeActionCostMs),
       movementDodgeApplied,
+      staminaWindow: usesCombatStaminaWindow(selectedFireTarget, fireTargetRole)
+        ? combatShootingBudget : null,
       lowConfidenceThrottle: Boolean(lowConfidence.throttle),
       behaviorSuppressed: behaviorSuppressFire,
       behaviorSuppressionApplied: false,

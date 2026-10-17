@@ -1,6 +1,7 @@
 'use strict';
 
 const { summarizeGrzShotAck } = require('../../shared/grz-frame');
+const { COMBAT_FIRE_WINDOW_MS, shotStaminaCostMilli } = require('../../strategy/combat-stamina-window');
 
 const EMPTY_ARRAY = Object.freeze([]);
 
@@ -547,6 +548,7 @@ function createInitialState(userId = 0, controlGeneration = '') {
       lateAckCount: 0,
       duplicateAckCount: 0,
       pendingShots: [],
+      staminaDispatches: [],
       expiredShots: [],
       confirmedShots: [],
       shootExecutionEvents: [],
@@ -1282,6 +1284,7 @@ function createBrowserlessStateStore(options = {}) {
         dispatchTick: numericOrNull(request.observedTick)
       }),
       requestedAtMs,
+      shotCostMilli: shotStaminaCostMilli(request.shotCostMilli),
       targetId: request.targetId ?? null,
       targetX: numericOrNull(request.targetX),
       targetY: numericOrNull(request.targetY),
@@ -1334,6 +1337,14 @@ function createBrowserlessStateStore(options = {}) {
       evasiveAimDisagreementDeg: numericOrNull(request.evasiveAimDisagreementDeg)
     };
     state.command.requestedShots += 1;
+    state.command.staminaDispatches = state.command.staminaDispatches
+      .filter(item => item.requestedAtMs > requestedAtMs - COMBAT_FIRE_WINDOW_MS);
+    state.command.staminaDispatches.push({
+      requestId: shot.requestId,
+      requestedAtMs,
+      shotCostMilli: shot.shotCostMilli,
+      executionClass: shot.executionClass
+    });
     state.command.pendingShots.push(shot);
     // Keep enough recent requests to correlate a normal cadence during a
     // delayed-ACK window. Pending ACKs are diagnostic ownership state, not a
@@ -1520,6 +1531,7 @@ function createBrowserlessStateStore(options = {}) {
         ackTimeoutMs,
         timing,
         shooterOrigin: currentShotOriginSummary(),
+        staminaDispatches: cloneJson(state.command.staminaDispatches),
         pendingShots: cloneJson(state.command.pendingShots.slice(-8)),
         expiredShots: cloneJson(state.command.expiredShots.slice(-8)),
         confirmedShots: cloneJson(state.command.confirmedShots.slice(-16)),
@@ -1604,6 +1616,7 @@ function createBrowserlessStateStore(options = {}) {
           ackTimeoutMs,
           timing,
           shooterOrigin: currentShotOriginSummary(),
+          staminaDispatches: state.command.staminaDispatches,
           pendingShots: state.command.pendingShots.length ? state.command.pendingShots.slice(-8) : EMPTY_ARRAY,
           expiredShots: state.command.expiredShots.length ? state.command.expiredShots.slice(-8) : EMPTY_ARRAY,
           confirmedShots: state.command.confirmedShots.length ? state.command.confirmedShots.slice(-16) : EMPTY_ARRAY,

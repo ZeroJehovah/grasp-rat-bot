@@ -12,6 +12,12 @@ const { evaluateAfkFirePolicyCore } = require('../../strategy/afk-fire-policy');
 const { isInvulnerableEntity } = require('../../strategy/combat-target-selection');
 const { stamina5sRemaining } = require('../../strategy/combat-fire-discipline');
 const {
+  COMBAT_FIRE_WINDOW_MS,
+  shotStaminaCostMilli,
+  usesCombatStaminaWindow,
+  combatStaminaWindowCore
+} = require('../../strategy/combat-stamina-window');
+const {
   observeProfitCompetitorEvidence,
   profitKillRacePolicy
 } = require('../../strategy/profit-kill-race');
@@ -682,6 +688,7 @@ function createInitialActionState() {
     velocityOwnershipSuppressedCount: 0,
     velocityRepeatSuppressedCount: 0,
     shootRepeatSuppressedCount: 0,
+    staminaDispatches: [],
     lastRepeatTimerDriftMs: 0,
     lastTransportBufferedAmount: 0,
     lastVelocityTelemetry: null,
@@ -3569,6 +3576,34 @@ function createBrowserlessActionAdapter(options = {}) {
         })
       };
     }
+    const shotCostMilli = shotStaminaCostMilli(executionClass === SHOOT_EXECUTION_CLASSES.COMBAT
+      ? options.combatShotStaminaCostMs : options.opportunityShotStaminaCostMs);
+    const knownDispatches = shotMeta.stateSnapshot?.command?.shooting?.staminaDispatches || [];
+    const dispatchesById = new Map();
+    for (const dispatch of [...knownDispatches, ...state.staminaDispatches]) {
+      if (Number(dispatch.requestedAtMs) > atMs - COMBAT_FIRE_WINDOW_MS) {
+        dispatchesById.set(dispatch.requestId, dispatch);
+      }
+    }
+    state.staminaDispatches = Array.from(dispatchesById.values())
+      .sort((a, b) => a.requestedAtMs - b.requestedAtMs);
+    const staminaWindow = combatStaminaWindowCore(state.staminaDispatches, atMs, shotCostMilli);
+    if (executionClass === SHOOT_EXECUTION_CLASSES.COMBAT
+      && usesCombatStaminaWindow(target, shotMeta.targetRole) && !staminaWindow.allowed) {
+      state.skippedCount += 1;
+      return {
+        ok: true,
+        skipped: true,
+        reason: 'combat-window-exhausted',
+        staminaWindow,
+        execution: emitShootExecution({
+          ...executionContext,
+          type: 'shoot-skip',
+          skipReason: 'combat-window-exhausted',
+          outcome: 'shooting-budget-blocked'
+        })
+      };
+    }
     try {
       transport.sendShoot(targetX, targetY, startX, startY);
     } catch (err) {
@@ -3588,6 +3623,12 @@ function createBrowserlessActionAdapter(options = {}) {
         })
       };
     }
+    state.staminaDispatches.push({
+      requestId,
+      requestedAtMs: atMs,
+      shotCostMilli,
+      executionClass
+    });
     const combatShot = shotMeta.combatDecision || null;
     const combatAim = combatShot?.aim || null;
     const combatShooting = combatShot?.shooting || null;
@@ -3617,6 +3658,7 @@ function createBrowserlessActionAdapter(options = {}) {
       target,
       commandId: nextCommandId,
       requestedAtMs: atMs,
+      shotCostMilli,
       targetId: targetRepeatKey(target),
       targetRole: String(shotMeta.targetRole || ''),
       primaryFinishRace: shotMeta.primaryFinishRace || null,
@@ -3697,6 +3739,7 @@ function createBrowserlessActionAdapter(options = {}) {
           segmentGeneration: command.segmentGeneration,
           ownerSelfId: command.ownerSelfId,
           requestedAtMs: command.sentAtMs,
+          shotCostMilli: command.shotCostMilli,
           targetId: targetRepeatKey(target),
           targetRole: command.targetRole,
           primaryFinishRace: command.primaryFinishRace,

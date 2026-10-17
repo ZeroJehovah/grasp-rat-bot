@@ -19782,7 +19782,7 @@ async function runSelfTest() {
           combat.shooting.reason
         ].join('|');
       })(),
-      want: '8|unavoidable-current-shot|true|false|true|target-pressure-fire'
+      want: '8|unavoidable-current-shot|true|false|true|combat-window-ready'
     },
     {
       name: 'browserless combat movement closes passive runner engagement',
@@ -19819,7 +19819,7 @@ async function runSelfTest() {
           combat.shooting.reason
         ].join('|');
       })(),
-      want: '8|passive-runner-close|true|1|0|passive-runner'
+      want: '8|passive-runner-close|true|1|0|combat-window-ready'
     },
     {
       name: 'browserless ballistic close shortens fast-transition flight and preserves profit mission resume',
@@ -21770,7 +21770,7 @@ async function runSelfTest() {
           decision.combat.shooting.reason
         ].join('|');
       })(),
-      want: 'flee|safety|incoming-bullet-dodge|8|defensive|direct-threat-dodge|true|target-pressure-fire'
+      want: 'flee|safety|incoming-bullet-dodge|8|defensive|direct-threat-dodge|true|combat-window-ready'
     },
     {
       name: 'browserless recovery first dodges when incoming bullet hp rule does not require exit',
@@ -23488,7 +23488,7 @@ async function runSelfTest() {
       want: '0|true|true|true|5000|true||||||'
     },
     {
-      name: 'browserless combat finish pressure can shoot with reserve',
+      name: 'browserless combat finish pressure uses the combat window',
       got: (() => {
         const combat = buildBrowserlessCombatDryRun({
           userId: 7,
@@ -23516,10 +23516,10 @@ async function runSelfTest() {
           combat.shooting.commandSuppressed
         ].join('|');
       })(),
-      want: 'true|finish|finish-low-threat|true|true'
+      want: 'true|normal|combat-window-ready|true|true'
     },
     {
-      name: 'browserless combat dry-run computes quadratic intercept and reserve suppression',
+      name: 'browserless combat dry-run computes quadratic intercept without stamina reserve suppression',
       got: (() => {
         const aim = estimateAim(
           { user_id: 7, x: 0, y: 0 },
@@ -23562,7 +23562,7 @@ async function runSelfTest() {
           combat.shooting.commandSuppressed
         ].join('|');
       })(),
-      want: 'quadratic-intercept|1875|true|quadratic-intercept|unavoidable-current-shot|disabled|below-hard-reserve|false|true'
+      want: 'quadratic-intercept|1875|true|quadratic-intercept|unavoidable-current-shot|normal|combat-window-ready|false|true'
     },
     {
       name: 'browserless combat fire treats unknown self stamina as unknown not zero',
@@ -23588,7 +23588,7 @@ async function runSelfTest() {
           combat.self.stamina5s === null
         ].join('|');
       })(),
-      want: 'normal|normal-fire|true|true|true|true'
+      want: 'normal|combat-window-ready|true|true|true|true'
     },
     {
       name: 'browserless combat uses snapshot-enriched self stamina',
@@ -23633,7 +23633,7 @@ async function runSelfTest() {
           decision.combat.shooting.wouldShoot
         ].join('|');
       })(),
-      want: 'true|500|500|snapshot|disabled|below-hard-reserve|false'
+      want: 'true|500|500|snapshot|normal|combat-window-ready|false'
     },
     {
       name: 'browserless decision adapter exposes combat dry-run action without firing',

@@ -11289,6 +11289,7 @@ async function runBrowserlessRunnerSelfTest() {
     const dynamicWhitelist = await require('./dynamic-whitelist-self-test').runDynamicWhitelistSelfTest();
     const rankedPlayerDeath = require('./ranked-player-death-self-test').runRankedPlayerDeathSelfTest();
     const secondaryDodge = require('./secondary-dodge-self-test').runSecondaryDodgeSelfTest();
+    const combatStaminaWindow = require('./combat-stamina-window-self-test').runCombatStaminaWindowSelfTest();
     const rewardFinishSpacing = require('./reward-finish-spacing-self-test').runRewardFinishSpacingSelfTest();
     const combatSearchRegression = require('./combat-search-regression-self-test').runCombatSearchRegressionSelfTest();
     const recoveryContact = require('./recovery-contact-self-test').runRecoveryContactSelfTest();
@@ -11412,6 +11413,7 @@ async function runBrowserlessRunnerSelfTest() {
         && dynamicWhitelist.ok
         && rankedPlayerDeath.ok
         && secondaryDodge.ok
+        && combatStaminaWindow.ok
         && rewardFinishSpacing.ok
         && combatSearchRegression.ok
         && recoveryContact.ok
@@ -11525,6 +11527,7 @@ async function runBrowserlessRunnerSelfTest() {
       dynamicWhitelist,
       rankedPlayerDeath,
       secondaryDodge,
+      combatStaminaWindow,
       rewardFinishSpacing,
       combatSearchRegression,
       recoveryContact,

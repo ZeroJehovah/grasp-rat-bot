@@ -20,7 +20,10 @@ function runSecondaryDodgeSelfTest() {
   for (const override of [{ leaveActive: true }, { collisionRisk: true }, { combatDistanceAwareDodgeEnabled: false }]) {
     assert(!buildCombatMovementPlan(self, target, [], { ...options, ...override }).distanceAwareDodge.applied);
   }
-  assert(!buildCombatMovementPlan({ ...self, stamina_5s_remaining_milli: 3500 }, target, [], options).distanceAwareDodge.applied);
+  for (const stamina of [3500, 2400, 500, 0]) {
+    assert(buildCombatMovementPlan({ ...self, stamina_5s_remaining_milli: stamina }, target, [], options)
+      .distanceAwareDodge.applied, 'shooting reserves cannot block defensive pre-dodge');
+  }
   const bullet = { x: -200, y: 0, distance: 200, incoming: true, speed: 500, direction: { dx: 1, dy: 0 }, timeToImpact: 20, remainingTicks: 1 };
   const forecast = remainingTicks => calculateDodgeDirection(self, [{ ...bullet, remainingTicks }], { hitRadius: 90, commandDelayTicks: 5 });
   const stopped = forecast(1).threatField.find(row => row.dx === 0 && row.dy === 0);
@@ -127,9 +130,9 @@ function runSecondaryDodgeSelfTest() {
   const lowBudget = buildCombatMovementPlan({ ...self, vy: -50, stamina_5s_remaining_milli: 2400 },
     { ...target, x: -2500, y: -1500, vx: 35, vy: 35, distance: Math.hypot(2500, 1500) },
     [{ ...bullet, bullet_id: 1, ownerId: 2, cpa: 10 }], options);
-  assert(!lowBudget.distanceAwareDodge.applied);
-  assert.strictEqual(lowBudget.distanceAwareDodge.preDodgeReason, 'stamina-insufficient');
-  assert(!lowBudget.dodgeOwnership.executionDirection.accepted, 'execution repair cannot lower Dodge reserves');
+  assert(lowBudget.distanceAwareDodge.applied);
+  assert.notStrictEqual(lowBudget.distanceAwareDodge.preDodgeReason, 'stamina-insufficient');
+  assert(lowBudget.dodgeOwnership.executionDirection.accepted, 'low stamina cannot erase the evaluated Dodge direction');
   // A diagonal escort heading used to exclude both cardinal tangents even
   // when every direction had the same unavoidable current-shot risk.
   const escortSelf = { ...self, hp: 100, vy: -50, stamina_5s_remaining_milli: 6600 };
