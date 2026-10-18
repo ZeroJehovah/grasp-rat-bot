@@ -96,7 +96,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     combatClosePressureMaxRangeCm: numberDefault(config.combatClosePressureMaxRangeCm, 5500),
     combatFrameJitterMs: numberDefault(config.combatFrameJitterMs, 50),
     combatClosePressureHysteresisCm: numberDefault(config.combatClosePressureHysteresisCm, 300),
-    combatClosePressureShootEveryMs: numberDefault(config.combatClosePressureShootEveryMs, 520),
+    combatClosePressureShootEveryMs: numberDefault(config.combatClosePressureShootEveryMs, 500),
     combatClosePressureReserveMs: numberDefault(config.combatClosePressureReserveMs, 2600),
     combatClosePressureMinSelfHp: numberDefault(config.combatClosePressureMinSelfHp, 60),
     combatClosePressureMaxHpGap: numberDefault(config.combatClosePressureMaxHpGap, 20),
@@ -111,7 +111,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     combatEfficiencyExpectedDamagePerShot: numberDefault(config.combatEfficiencyExpectedDamagePerShot, 3),
     combatEfficiencyExpectedShotCadenceMs: numberDefault(
       config.combatEfficiencyExpectedShotCadenceMs,
-      numberDefault(config.combatShootMinIntervalMs, 160)
+      numberDefault(config.combatShootMinIntervalMs, 500)
     ),
     combatEfficiencyMinimumWindowMs: numberDefault(config.combatEfficiencyMinimumWindowMs, 1000),
     combatEfficiencyCloseStepCm: numberDefault(config.combatEfficiencyCloseStepCm, 1000),
@@ -158,14 +158,14 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     combatLowHpNoDamageLeaveThreshold: 70,
     combatLowHpNoDamageLeaveMs: 15000,
     combatLowHpNoDamageMinGap: 0,
-    combatShootEveryMs: 160,
+    combatShootEveryMs: 500,
     secondaryTargetWindowMs: numberDefault(config.secondaryTargetWindowMs, 5000),
     secondaryTargetRetentionWindowMs: numberDefault(
       config.secondaryTargetRetentionWindowMs,
       incomingPressureEvidenceLeaseMs
     ),
-    secondaryTargetBaseCadenceMs: numberDefault(config.secondaryTargetBaseCadenceMs, 160),
-    secondaryTargetMaxCadenceMs: numberDefault(config.secondaryTargetMaxCadenceMs, 160),
+    secondaryTargetBaseCadenceMs: numberDefault(config.secondaryTargetBaseCadenceMs, 500),
+    secondaryTargetMaxCadenceMs: numberDefault(config.secondaryTargetMaxCadenceMs, 500),
     secondaryTargetNoDamageStepMs: numberDefault(config.secondaryTargetNoDamageStepMs, 0),
     secondaryTargetCloseDistanceCm: numberDefault(config.secondaryTargetCloseDistanceCm, 2000),
     secondaryTargetPressureWindowMs: numberDefault(config.secondaryTargetPressureWindowMs, 1500),
@@ -250,7 +250,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     combatPassiveRunnerConfirmMs: 2500,
     combatOpponentProbeMs: 6000,
     combatOpponentProbeReserveMs: 5600,
-    combatOpponentProbeEveryMs: 520,
+    combatOpponentProbeEveryMs: 500,
     combatPassiveRunnerCloseRange: 4500,
     combatPassiveRunnerPrecisionRange: 5500,
     combatPassiveRunnerPrecisionMaxNoDamageMs: 8000,
@@ -281,7 +281,7 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     combatAimLowConfidenceThreshold: 0.6,
     combatAimLowConfidenceMinDistance: 9000,
     combatAimLowConfidenceMotionScale: 0.65,
-    combatAimLowConfidenceEveryMs: 520,
+    combatAimLowConfidenceEveryMs: 500,
     combatTradeEstimateWindowMs: 6000,
     combatTradeEstimateMinWindowMs: 1800,
     combatTradeEstimateMinSelfDamage: 6,

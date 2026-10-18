@@ -9,13 +9,16 @@ const {
   targetLaneAlignmentDirectionCore
 } = require('../../strategy/coin-motion');
 const { evaluateAfkFirePolicyCore } = require('../../strategy/afk-fire-policy');
+const {
+  evaluateAfkFiveFrameSafety,
+  evaluateAfkPrearrivalCompetition
+} = require('../../strategy/afk-fire-safety');
+const { nextGridDelayMs } = require('../../strategy/tick-grid-shooting');
 const { isInvulnerableEntity } = require('../../strategy/combat-target-selection');
 const { stamina5sRemaining } = require('../../strategy/combat-fire-discipline');
 const {
   COMBAT_FIRE_WINDOW_MS,
-  shotStaminaCostMilli,
-  usesCombatStaminaWindow,
-  combatStaminaWindowCore
+  shotStaminaCostMilli
 } = require('../../strategy/combat-stamina-window');
 const {
   observeProfitCompetitorEvidence,
@@ -48,8 +51,10 @@ const DEFAULT_COMMAND_INTERVAL_MS = 500;
 const DEFAULT_SETTLEMENT_FRAMES = 2;
 const DEFAULT_MOVEMENT_SETTLEMENT_STALL_MS = 5000;
 const DEFAULT_MOVEMENT_SETTLEMENT_MIN_DISTANCE_CM = 80;
-const DEFAULT_COMBAT_SHOOT_MIN_INTERVAL_MS = 160;
-const DEFAULT_AFK_SHOOT_MIN_INTERVAL_MS = 450;
+const DEFAULT_COMBAT_SHOOT_MIN_INTERVAL_MS = 500;
+const DEFAULT_AFK_SHOOT_MIN_INTERVAL_MS = 500;
+const SAFE_AFK_SHOOT_CADENCE_MS = 250;
+const DEFAULT_SERVER_TICK_MS = 50;
 const DEFAULT_AFK_SHOOT_ACK_RECOVERY_MS = 6500;
 const DEFAULT_AFK_SHOOT_CORRELATION_OFFSET_CM = 24;
 const DEFAULT_SHOOT_PENDING_TRACKING_LIMIT = 64;
@@ -489,13 +494,15 @@ function afkFirePolicyOptions(options = {}) {
     maxRangeCm: afkAttackFireMaxRangeCm(options),
     ownDamageRateHpPerSec: options.afkAttackOwnDamageRateHpPerSec ?? BROWSER_RUNTIME_DEFAULTS.afkAttackOwnDamageRateHpPerSec ?? 3,
     externalDamageRateHpPerSec: options.afkAttackExternalDamageRateHpPerSec ?? BROWSER_RUNTIME_DEFAULTS.afkAttackExternalDamageRateHpPerSec ?? 2.05,
-    hpSafetyBuffer: options.afkAttackHpSafetyBuffer ?? BROWSER_RUNTIME_DEFAULTS.afkAttackHpSafetyBuffer ?? 3,
+    arrivalHpReserve: options.afkAttackArrivalHpReserve ?? 10,
     shotDamageHp: options.afkAttackShotDamageHp ?? options.combatEfficiencyExpectedDamagePerShot ?? 3,
     shotFlightMs: options.afkAttackShotFlightMs,
     projectileSpeedCmPerSec: options.afkAttackProjectileSpeedCmPerSec
       ?? BROWSER_RUNTIME_DEFAULTS.afkAttackProjectileSpeedCmPerSec
       ?? 10000,
-    shotCadenceMs: DEFAULT_AFK_SHOOT_MIN_INTERVAL_MS,
+    shotCadenceMs: DEFAULT_COMBAT_SHOOT_MIN_INTERVAL_MS,
+    tickMs: options.combatServerTickMs ?? DEFAULT_SERVER_TICK_MS,
+    gridStep: 10,
     axisSpeedCmPerSec: options.invulnerableProfitAxisSpeedCmPerSec ?? BROWSER_RUNTIME_DEFAULTS.invulnerableProfitAxisSpeedCmPerSec,
     diagonalSpeedCmPerSec: options.invulnerableProfitDiagonalSpeedCmPerSec ?? BROWSER_RUNTIME_DEFAULTS.invulnerableProfitDiagonalSpeedCmPerSec,
     segmentOverheadMs: options.invulnerableProfitRouteSegmentOverheadMs ?? BROWSER_RUNTIME_DEFAULTS.invulnerableProfitRouteSegmentOverheadMs
@@ -617,6 +624,13 @@ function createInitialActionState() {
     shootPendingTrackingEvictedCount: 0,
     pendingShootCommands: [],
     latestObservedTick: null,
+    latestShootingEpoch: null,
+    latestShootingTick: null,
+    fallbackShootSlot: {
+      epoch: null,
+      lastClaimedTick: null,
+      lastClaimedGridStep: null
+    },
     latestObservedAtMs: null,
     shootAckTimeoutMs: 3000,
     stopCount: 0,
@@ -747,6 +761,10 @@ function summarizeCommand(command) {
     baseCadenceMs: command.baseCadenceMs ?? null,
     executionCadenceMs: command.executionCadenceMs ?? command.cadenceMs ?? null,
     advisoryCadenceMs: command.advisoryCadenceMs ?? null,
+    shootingEpoch: command.shootingEpoch ?? null,
+    shootingTick: command.shootingTick ?? null,
+    gridStep: command.gridStep ?? null,
+    frameClaim: command.frameClaim ?? null,
     targetId: command.targetId ?? null,
     targetRole: command.targetRole || '',
     primaryFinishRace: command.primaryFinishRace || null,
@@ -836,6 +854,15 @@ function createBrowserlessActionAdapter(options = {}) {
     options.afkShootCorrelationOffsetCm ?? DEFAULT_AFK_SHOOT_CORRELATION_OFFSET_CM
   );
   const onShootRequest = typeof options.onShootRequest === 'function' ? options.onShootRequest : null;
+  const tryClaimShootSlot = typeof options.tryClaimShootSlot === 'function'
+    ? options.tryClaimShootSlot
+    : null;
+  const getDamagingPlayerIds = typeof options.getDamagingPlayerIds === 'function'
+    ? options.getDamagingPlayerIds
+    : null;
+  const combatServerTickMs = Math.max(1, Number(
+    options.combatServerTickMs ?? DEFAULT_SERVER_TICK_MS
+  ) || DEFAULT_SERVER_TICK_MS);
   const getSegmentGeneration = typeof options.getSegmentGeneration === 'function'
     ? options.getSegmentGeneration
     : null;
@@ -925,6 +952,23 @@ function createBrowserlessActionAdapter(options = {}) {
       skipReason: String(event.skipReason || ''),
       outcome: String(event.outcome || ''),
       observedTick: optionalNumber(event.observedTick),
+      shootingEpoch: event.shootingEpoch === null || event.shootingEpoch === undefined
+        ? null
+        : String(event.shootingEpoch),
+      shootingTick: optionalNumber(event.shootingTick),
+      gridStep: optionalNumber(event.gridStep),
+      frameClaim: event.frameClaim && typeof event.frameClaim === 'object'
+        ? {
+            ok: event.frameClaim.ok === true,
+            reason: String(event.frameClaim.reason || ''),
+            epoch: event.frameClaim.epoch === null || event.frameClaim.epoch === undefined
+              ? null
+              : String(event.frameClaim.epoch),
+            tick: optionalNumber(event.frameClaim.tick),
+            gridStep: optionalNumber(event.frameClaim.gridStep),
+            lastClaimedTick: optionalNumber(event.frameClaim.lastClaimedTick)
+          }
+        : null,
       advisoryReasons: Array.isArray(event.advisoryReasons)
         ? event.advisoryReasons.map(String).filter(Boolean).slice(0, 8)
         : [],
@@ -2676,6 +2720,12 @@ function createBrowserlessActionAdapter(options = {}) {
       const targetKey = targetRepeatKey(target);
       const externalEvidence = externalAfkDamageEvidence(gateOptions.stateSnapshot, self, target);
       const pendingDamage = pendingOwnDamageHp(target, commandShooting);
+      // Production snapshots carry the epoch-bound watermark. Synthetic
+      // action-adapter fixtures that do not install the shared store may use
+      // their raw tick as a test-only stand-in; the wire gate still remains the
+      // authority whenever a store claim callback is present.
+      const shootingTick = gateOptions.stateSnapshot?.realtime?.shootingTick
+        ?? (!tryClaimShootSlot ? gateOptions.stateSnapshot?.realtime?.tick : null);
       firePolicy = evaluateAfkFirePolicyCore({
         self,
         target,
@@ -2685,7 +2735,9 @@ function createBrowserlessActionAdapter(options = {}) {
         invulnerable: target?.invulnerable,
         pendingOwnDamageHp: pendingDamage,
         externalDamageRateHpPerSec: externalEvidence.externalDamageRateHpPerSec,
-        targetKey
+        targetKey,
+        shootingTick,
+        lastClaimedTick: gateOptions.stateSnapshot?.realtime?.shootingLastClaimedTick
       }, afkFirePolicyOptions(options));
       firePolicy.externalBulletEvidenceCount = externalEvidence.bulletEvidenceCount;
       firePolicy.unexplainedExternalDamageRateHpPerSec = externalEvidence.unexplainedDamageRateHpPerSec;
@@ -2700,6 +2752,22 @@ function createBrowserlessActionAdapter(options = {}) {
           firePolicy,
           profitKillRace
         };
+      }
+      if (firePolicy.prearrival) {
+        const competition = afkPrearrivalCompetition(gateOptions.stateSnapshot, self, target);
+        firePolicy.prearrivalCompetition = competition;
+        if (!competition.allowed) {
+          return {
+            ok: false,
+            reason: 'profit-target-competition-position-blocked',
+            stamina5s,
+            requiredStaminaMs,
+            staminaPlan,
+            outstanding: null,
+            firePolicy,
+            profitKillRace
+          };
+        }
       }
     }
     if (stamina5s !== null && stamina5s < requiredStaminaMs) {
@@ -2804,10 +2872,18 @@ function createBrowserlessActionAdapter(options = {}) {
             })
       };
     }
-    const afkCadenceMs = Math.max(afkShootMinIntervalMs, Number(cadenceMs || 0));
+    const fiveFramePlan = afkFiveFramePlan(stateSnapshot, self, target, sendOptions);
+    const gridStep = fiveFramePlan.allowed ? 5 : 10;
+    const afkCadenceMs = gridStep === 5
+      ? SAFE_AFK_SHOOT_CADENCE_MS
+      : Math.max(afkShootMinIntervalMs, DEFAULT_COMBAT_SHOOT_MIN_INTERVAL_MS, Number(cadenceMs || 0));
     const sent = sendShoot(targetX, targetY, startX, startY, reason, target, afkCadenceMs, {
       executionClass: SHOOT_EXECUTION_CLASSES.PROFIT_OPPORTUNITY,
-      aimMode: aim.slot === 0 ? 'afk-center' : 'afk-ack-correlation'
+      aimMode: aim.slot === 0 ? 'afk-center' : 'afk-ack-correlation',
+      stateSnapshot,
+      gridStep,
+      finalActionStationary: sendOptions.finalActionStationary === true,
+      fiveFramePlan
     });
     sent.aimCorrelation = {
       slot: aim.slot,
@@ -2822,6 +2898,7 @@ function createBrowserlessActionAdapter(options = {}) {
     sent.staminaPlan = gate.staminaPlan || null;
     sent.firePolicy = gate.firePolicy || null;
     sent.profitKillRace = gate.profitKillRace || null;
+    sent.fiveFramePlan = fiveFramePlan;
     if (state.shootRepeat && !sent.skipped && sent.command) {
       state.shootRepeatWaitReason = '';
       state.shootRepeatOutstandingCommandId = sent.command.id ?? null;
@@ -3128,13 +3205,34 @@ function createBrowserlessActionAdapter(options = {}) {
       if (timerDriftMs > repeatMaxDriftMs || transportBufferedAmount() > transportHighWaterBytes) {
         state.shootRepeatSuppressedCount += 1;
         state.shootRepeatWaitReason = 'shoot-repeat-overloaded';
-        armShootRepeatTimer(current.cadenceMs);
+        armShootRepeatTimer(repeatWakeDelay(current));
         return;
       }
       dispatchShootRepeat();
     }, delay);
     unrefTimer(state.shootRepeatTimer);
     return delay;
+  }
+
+  function repeatWakeDelay(repeat) {
+    // Production snapshots carry the epoch-bound watermark. Synthetic
+    // fixtures without a state store have no watermark, so their raw frame
+    // number is the only available grid phase; the wire gate still rejects
+    // any shot that does not match the real store watermark.
+    const watermark = optionalNumber(
+      repeat?.stateSnapshot?.realtime?.shootingTick
+        ?? repeat?.stateSnapshot?.realtime?.tick
+    );
+    const claimed = optionalNumber(repeat?.lastClaimedTick);
+    return nextGridDelayMs({
+      tick: watermark,
+      tickMs: combatServerTickMs,
+      gridStep: repeat?.gridStep || 10,
+      // Only a watermark still on the just-claimed tick needs to advance a
+      // full grid. When the watermark has already moved past the claim, the
+      // next wake belongs on the next boundary rather than one grid later.
+      afterClaim: claimed !== null && (watermark === null || watermark <= claimed)
+    });
   }
 
   function dispatchShootRepeat() {
@@ -3159,30 +3257,16 @@ function createBrowserlessActionAdapter(options = {}) {
         || gate.reason === 'profit-target-competition-position-blocked'
         || gate.reason === 'afk-shoot-stamina-reserve') {
         state.shootRepeatWaitReason = gate.reason;
-        armShootRepeatTimer(repeat.cadenceMs);
+        armShootRepeatTimer(repeatWakeDelay(repeat));
       } else {
         cancelShootRepeat(gate.reason);
       }
       return blockedAfkShootResult(gate, repeat.target, false);
     }
-    const lastSentAtMs = optionalNumber(state.lastShootCommand?.sentAtMs);
-    const remainingMs = lastSentAtMs === null
-      ? 0
-      : Math.max(0, repeat.cadenceMs - (now() - lastSentAtMs));
-    if (remainingMs > 0) {
-      state.shootRepeatWaitReason = 'shoot-command-throttled';
-      armShootRepeatTimer(remainingMs);
-      return {
-        ok: true,
-        skipped: true,
-        reason: 'shoot-command-throttled',
-        cadenceMs: repeat.cadenceMs
-      };
-    }
     if (transportBufferedAmount() > transportHighWaterBytes) {
       state.shootRepeatSuppressedCount += 1;
       state.shootRepeatWaitReason = 'shoot-repeat-overloaded';
-      armShootRepeatTimer(repeat.cadenceMs);
+      armShootRepeatTimer(repeatWakeDelay(repeat));
       return {
         ok: true,
         skipped: true,
@@ -3193,7 +3277,8 @@ function createBrowserlessActionAdapter(options = {}) {
       recordSkip: false,
       staminaMode: repeat.staminaMode,
       dynamicFire: repeat.dynamicFire,
-      primaryTarget: repeat.primaryTarget
+      primaryTarget: repeat.primaryTarget,
+      finalActionStationary: repeat.finalActionStationary === true
     });
     if (!sent.ok) {
       cancelShootRepeat(sent.error || sent.reason || 'shoot-repeat-failed', { error: true });
@@ -3201,11 +3286,16 @@ function createBrowserlessActionAdapter(options = {}) {
     }
     if (!sent.skipped) {
       state.shootRepeatSentCount += 1;
+      repeat.gridStep = sent.fiveFramePlan?.gridStep || repeat.gridStep || 10;
+      repeat.lastClaimedTick = optionalNumber(sent.frameClaim?.tick)
+        ?? optionalNumber(sent.command?.shootingTick);
+      armShootRepeatTimer(repeatWakeDelay(repeat));
       return sent;
     }
-    if (sent.reason === 'shoot-command-throttled') {
+    if (String(sent.reason || '').startsWith('shoot-frame:')) {
       state.shootRepeatWaitReason = sent.reason;
-      armShootRepeatTimer(repeat.cadenceMs);
+      if (sent.fiveFramePlan?.gridStep) repeat.gridStep = sent.fiveFramePlan.gridStep;
+      armShootRepeatTimer(repeatWakeDelay(repeat));
     }
     return sent;
   }
@@ -3224,18 +3314,22 @@ function createBrowserlessActionAdapter(options = {}) {
     const staminaMode = repeatOptions.staminaMode === 'afk-attack'
       ? 'afk-attack'
       : 'configured-reserve';
+    const initialFiveFramePlan = afkFiveFramePlan(stateSnapshot, self, target, repeatOptions);
     const repeat = {
       self,
       reason,
       target,
       targetKey,
       cadenceMs: repeatCadenceMs,
+      gridStep: initialFiveFramePlan.gridStep,
+      lastClaimedTick: null,
       staminaMode,
       commandShooting: stateSnapshot?.command?.shooting || null,
       observedTick: optionalNumber(stateSnapshot?.realtime?.tick),
       dynamicFire: repeatOptions.dynamicFire !== false,
       stateSnapshot,
-      primaryTarget: repeatOptions.primaryTarget === true
+      primaryTarget: repeatOptions.primaryTarget === true,
+      finalActionStationary: repeatOptions.finalActionStationary === true
     };
     const token = state.shootRepeatToken + 1;
     state.shootRepeatToken = token;
@@ -3442,9 +3536,111 @@ function createBrowserlessActionAdapter(options = {}) {
     state.shootPendingTrackingEvictedCount += overflow;
   }
 
+  function shootDecisionFrame(shotMeta = {}) {
+    const realtime = shotMeta.stateSnapshot?.realtime
+      || activeApplyContext?.stateSnapshot?.realtime
+      || null;
+    // The frame a decision was made from is the raw realtime tick of that
+    // snapshot; the store watermark is compared against it synchronously at
+    // send time. A late or out-of-order frame therefore never authorizes the
+    // newer watermark slot, and a repeated decision never reuses a slot.
+    const tick = shotMeta.shootingTick ?? realtime?.tick;
+    return {
+      epoch: shotMeta.shootingEpoch ?? realtime?.shootingEpoch ?? null,
+      tick: optionalNumber(tick),
+      gridStep: Number(shotMeta.gridStep) === 5 ? 5 : 10,
+      realtime
+    };
+  }
+
+  function claimShootFrame(shotMeta = {}) {
+    const frame = shootDecisionFrame(shotMeta);
+    const atMs = now();
+    if (tryClaimShootSlot) {
+      try {
+        return tryClaimShootSlot({
+          decisionEpoch: frame.epoch,
+          decisionTick: frame.tick,
+          gridStep: frame.gridStep,
+          atMs
+        });
+      } catch (err) {
+        return { ok: false, reason: 'shoot-frame-claim-error', error: err?.message || String(err) };
+      }
+    }
+    // Synthetic action-adapter tests without a state store have no production
+    // epoch. Give them a control-generation-scoped synthetic epoch and still
+    // enforce the one-shot-per-frame rule; a missing tick is never authorized.
+    if (frame.tick === null) return { ok: false, reason: 'missing-decision-tick' };
+    const syntheticEpoch = frame.epoch || `synthetic:${controlGeneration || 'control'}`;
+    const slot = state.fallbackShootSlot;
+    if (slot.epoch !== syntheticEpoch) {
+      slot.epoch = syntheticEpoch;
+      slot.lastClaimedTick = null;
+      slot.lastClaimedGridStep = null;
+    }
+    if (frame.tick % frame.gridStep !== 0) return { ok: false, reason: 'frame-not-on-grid' };
+    if (slot.lastClaimedTick !== null && frame.tick <= slot.lastClaimedTick) {
+      return { ok: false, reason: 'frame-slot-already-consumed' };
+    }
+    slot.lastClaimedTick = frame.tick;
+    slot.lastClaimedGridStep = frame.gridStep;
+    return { ok: true, reason: 'frame-slot-claimed', epoch: syntheticEpoch, tick: frame.tick, gridStep: frame.gridStep };
+  }
+
+  function damagingPlayerIds() {
+    if (!getDamagingPlayerIds) return [];
+    try {
+      const ids = getDamagingPlayerIds();
+      return Array.isArray(ids) ? ids : [];
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function afkFiveFramePlan(stateSnapshot, self, target, sendOptions = {}) {
+    const realtime = stateSnapshot?.realtime || null;
+    const ids = damagingPlayerIds();
+    const lastCommand = state.lastCommand;
+    const lastCommandStationary = !lastCommand
+      || (!Number(lastCommand.dx || 0) && !Number(lastCommand.dy || 0));
+    return evaluateAfkFiveFrameSafety({
+      self,
+      target,
+      entities: realtime?.entities,
+      bullets: realtime?.bullets,
+      damagingPlayerIds: ids === null ? ['__damage-evidence-unavailable__'] : ids,
+      frameAgeMs: realtime?.frameAgeMs,
+      receivedAtMs: realtime?.receivedAtMs,
+      nowMs: now(),
+      finalActionStationary: sendOptions.finalActionStationary === true && lastCommandStationary
+    }, {
+      freshMs: options.combatRealtimeTargetFreshMs ?? 500,
+      fullRangeCm: afkAttackFullRangeCm(options),
+      attackRangeCm: options.combatAttackRange ?? options.attackRange ?? DEFAULT_ATTACK_RANGE_CM,
+      dodgeRangeBufferCm: BROWSER_RUNTIME_DEFAULTS.combatDodgeRangeBuffer
+    });
+  }
+
+  function afkPrearrivalCompetition(stateSnapshot, self, target) {
+    const realtime = stateSnapshot?.realtime || null;
+    const ids = damagingPlayerIds();
+    return evaluateAfkPrearrivalCompetition({
+      self,
+      target,
+      entities: realtime?.entities,
+      bullets: realtime?.bullets,
+      damagingPlayerIds: ids === null ? ['__damage-evidence-unavailable__'] : ids,
+      frameAgeMs: realtime?.frameAgeMs,
+      receivedAtMs: realtime?.receivedAtMs,
+      nowMs: now()
+    }, { freshMs: options.combatRealtimeTargetFreshMs ?? 500 });
+  }
+
   function sendShoot(targetX, targetY, startX, startY, reason, target = null, cadenceMs = combatShootMinIntervalMs, shotMeta = {}) {
     const atMs = now();
     const executionClass = normalizeShootExecutionClass(shotMeta.executionClass);
+    const decisionFrame = shootDecisionFrame(shotMeta);
     const requestId = `${controlGeneration || 'control'}:shoot-attempt:${nextShootAttemptSequence++}`;
     const publishedSegmentGeneration = executionClass === SHOOT_EXECUTION_CLASSES.COMBAT
       ? String(getSegmentGeneration?.({
@@ -3469,6 +3665,9 @@ function createBrowserlessActionAdapter(options = {}) {
       advisoryCadenceMs: shotMeta.advisoryCadenceMs,
       lastDispatchAt: state.lastShootCommand?.sentAtMs,
       observedTick: shotMeta.observedTick ?? state.latestObservedTick,
+      shootingEpoch: decisionFrame.epoch,
+      shootingTick: decisionFrame.tick,
+      gridStep: decisionFrame.gridStep,
       advisoryReasons: shotMeta.advisoryReasons,
       targetRole: shotMeta.targetRole,
       primaryFinishRace: shotMeta.primaryFinishRace
@@ -3557,25 +3756,7 @@ function createBrowserlessActionAdapter(options = {}) {
         })
       };
     }
-    const last = state.lastShootCommand;
-    const intervalMs = Math.max(combatShootMinIntervalMs, Number(cadenceMs || 0));
-    if (last && atMs - Number(last.sentAtMs || 0) < intervalMs) {
-      state.skippedCount += 1;
-      return {
-        ok: true,
-        skipped: true,
-        reason: 'shoot-command-throttled',
-        command: summarizeCommand(last),
-        cadenceMs: intervalMs,
-        execution: emitShootExecution({
-          ...executionContext,
-          type: 'shoot-skip',
-          executionCadenceMs: intervalMs,
-          skipReason: 'shoot-command-throttled',
-          outcome: 'skipped'
-        })
-      };
-    }
+    const intervalMs = Math.max(1, Number(cadenceMs || combatShootMinIntervalMs));
     const shotCostMilli = shotStaminaCostMilli(executionClass === SHOOT_EXECUTION_CLASSES.COMBAT
       ? options.combatShotStaminaCostMs : options.opportunityShotStaminaCostMs);
     const knownDispatches = shotMeta.stateSnapshot?.command?.shooting?.staminaDispatches || [];
@@ -3587,23 +3768,25 @@ function createBrowserlessActionAdapter(options = {}) {
     }
     state.staminaDispatches = Array.from(dispatchesById.values())
       .sort((a, b) => a.requestedAtMs - b.requestedAtMs);
-    const staminaWindow = combatStaminaWindowCore(state.staminaDispatches, atMs, shotCostMilli);
-    if (executionClass === SHOOT_EXECUTION_CLASSES.COMBAT
-      && usesCombatStaminaWindow(target, shotMeta.targetRole) && !staminaWindow.allowed) {
+    const frameClaim = claimShootFrame(shotMeta);
+    if (!frameClaim.ok) {
       state.skippedCount += 1;
+      const skipReason = `shoot-frame:${frameClaim.reason}`;
       return {
         ok: true,
         skipped: true,
-        reason: 'combat-window-exhausted',
-        staminaWindow,
+        reason: skipReason,
+        frameClaim,
         execution: emitShootExecution({
           ...executionContext,
           type: 'shoot-skip',
-          skipReason: 'combat-window-exhausted',
-          outcome: 'shooting-budget-blocked'
+          skipReason,
+          outcome: 'frame-gate-blocked',
+          frameClaim
         })
       };
     }
+    executionContext.frameClaim = frameClaim;
     try {
       transport.sendShoot(targetX, targetY, startX, startY);
     } catch (err) {
@@ -3661,6 +3844,12 @@ function createBrowserlessActionAdapter(options = {}) {
       shotCostMilli,
       targetId: targetRepeatKey(target),
       targetRole: String(shotMeta.targetRole || ''),
+      shootingEpoch: decisionFrame.epoch === null || decisionFrame.epoch === undefined
+        ? null
+        : String(decisionFrame.epoch),
+      shootingTick: numberOrNull(decisionFrame.tick),
+      gridStep: decisionFrame.gridStep,
+      frameClaim,
       primaryFinishRace: shotMeta.primaryFinishRace || null,
       cadenceMs: intervalMs,
       baseCadenceMs: numberOrNull(shotMeta.baseCadenceMs),
@@ -3748,6 +3937,9 @@ function createBrowserlessActionAdapter(options = {}) {
           startX: command.startX,
           startY: command.startY,
           observedTick: command.observedTick,
+          shootingEpoch: command.shootingEpoch,
+          shootingTick: command.shootingTick,
+          gridStep: command.gridStep,
           aimMode: command.aimMode,
           hypothesis: command.hypothesis,
           flightTicks: command.flightTicks,
@@ -4141,11 +4333,12 @@ function createBrowserlessActionAdapter(options = {}) {
   function canScheduleShootRepeat(shoot) {
     return Boolean(shoot?.ok && (
       shoot.command
-      || shoot.reason === 'shoot-command-throttled'
+      || String(shoot.reason || '').startsWith('shoot-frame:')
       || shoot.reason === 'afk-shoot-stamina-reserve'
       || shoot.reason === 'afk-shoot-correlation-slots-exhausted'
       || shoot.reason === 'afk-fire-delay-own-kill-before-near'
       || shoot.reason === 'afk-fire-delay-external-kill-before-near'
+      || shoot.reason === 'afk-fire-missing-game-tick'
       || shoot.reason === 'afk-fire-approach-range'
       || shoot.reason === 'profit-target-competition-position-blocked'
     ));
@@ -4523,7 +4716,12 @@ function createBrowserlessActionAdapter(options = {}) {
       target,
       decision?.action?.reason || decision?.reason || 'profit-afk-attack',
       combatShootMinIntervalMs,
-      { staminaMode, dynamicFire: options.afkAttackDynamicFireEnabled !== false, primaryTarget: true }
+      {
+        staminaMode,
+        dynamicFire: options.afkAttackDynamicFireEnabled !== false,
+        primaryTarget: true,
+        finalActionStationary: fullAttack && !competitionApproach
+      }
     );
     const repeat = canScheduleShootRepeat(shoot)
       ? scheduleShootRepeat(
@@ -4532,7 +4730,12 @@ function createBrowserlessActionAdapter(options = {}) {
           target,
           decision?.action?.reason || decision?.reason || 'profit-afk-attack',
           shoot.cadenceMs,
-          { staminaMode, dynamicFire: options.afkAttackDynamicFireEnabled !== false, primaryTarget: true }
+          {
+            staminaMode,
+            dynamicFire: options.afkAttackDynamicFireEnabled !== false,
+            primaryTarget: true,
+            finalActionStationary: fullAttack && !competitionApproach
+          }
         )
       : null;
     return {
@@ -4764,6 +4967,8 @@ function createBrowserlessActionAdapter(options = {}) {
     const shootRepeatValid = validateShootRepeatState(stateSnapshot);
     observeMovementStall(stateSnapshot);
     state.latestObservedTick = optionalNumber(stateSnapshot?.realtime?.tick);
+    state.latestShootingEpoch = stateSnapshot?.realtime?.shootingEpoch ?? null;
+    state.latestShootingTick = optionalNumber(stateSnapshot?.realtime?.shootingTick);
     state.latestObservedAtMs = optionalNumber(stateSnapshot?.realtime?.receivedAtMs);
     state.shootAckTimeoutMs = Math.max(500, Number(
       stateSnapshot?.command?.shooting?.ackTimeoutMs ?? state.shootAckTimeoutMs ?? initialShootAckTimeoutMs

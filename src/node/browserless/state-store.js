@@ -2,6 +2,13 @@
 
 const { summarizeGrzShotAck } = require('../../shared/grz-frame');
 const { COMBAT_FIRE_WINDOW_MS, shotStaminaCostMilli } = require('../../strategy/combat-stamina-window');
+const {
+  createTickGridShootingState,
+  observeRealtimeTick,
+  claimShootSlot,
+  tickGridSnapshot
+} = require('../../strategy/tick-grid-shooting');
+const { utc8DayKey, utc8DayStartMs } = require('./utc8-day');
 
 const EMPTY_ARRAY = Object.freeze([]);
 
@@ -502,6 +509,9 @@ function createInitialState(userId = 0, controlGeneration = '') {
       authority: 'realtime',
       source: 'pos',
       tick: null,
+      shootingEpoch: null,
+      shootingTick: null,
+      shootingLastClaimedTick: null,
       receivedAtMs: 0,
       self: null,
       lastSelf: null,
@@ -594,6 +604,13 @@ function createBrowserlessStateStore(options = {}) {
     String(reason || 'start').replace(/[^\w.-]+/g, '_').slice(0, 32)
   ].join(':');
   const state = createInitialState(options.userId, nextControlGeneration('start'));
+  // This watermark intentionally survives store.reset(): same-day reconnect,
+  // relogin, and control-generation changes must not reopen consumed slots.
+  // The runner passes one process-lifetime object across canary sessions so a
+  // normal same-day relogin also shares the slot lineage.
+  const shootingFrame = options.shootingFrame && typeof options.shootingFrame === 'object'
+    ? options.shootingFrame
+    : createTickGridShootingState();
   let shotTimingCache = { samples: null, value: null };
   let shotAckTimeoutCache = { samples: null, value: null };
   let shotOriginCache = { samples: null, value: null };
@@ -722,6 +739,23 @@ function createBrowserlessStateStore(options = {}) {
       skipReason: String(event.skipReason || ''),
       outcome: String(event.outcome || ''),
       observedTick: optionalNumericOrNull(event.observedTick),
+      shootingEpoch: event.shootingEpoch === null || event.shootingEpoch === undefined
+        ? null
+        : String(event.shootingEpoch),
+      shootingTick: optionalNumericOrNull(event.shootingTick),
+      gridStep: optionalNumericOrNull(event.gridStep),
+      frameClaim: event.frameClaim && typeof event.frameClaim === 'object'
+        ? {
+            ok: event.frameClaim.ok === true,
+            reason: String(event.frameClaim.reason || ''),
+            epoch: event.frameClaim.epoch === null || event.frameClaim.epoch === undefined
+              ? null
+              : String(event.frameClaim.epoch),
+            tick: optionalNumericOrNull(event.frameClaim.tick),
+            gridStep: optionalNumericOrNull(event.frameClaim.gridStep),
+            lastClaimedTick: optionalNumericOrNull(event.frameClaim.lastClaimedTick)
+          }
+        : null,
       evasiveAimModelVersion: String(event.evasiveAimModelVersion || ''),
       evasiveAimStrategy: String(event.evasiveAimStrategy || ''),
       evasiveAimTriggerReason: String(event.evasiveAimTriggerReason || ''),
@@ -827,7 +861,19 @@ function createBrowserlessStateStore(options = {}) {
     if (reuseRealtimeFrameObjects && normalizedEntityCount !== normalizedEntities.length) {
       normalizedEntities.length = normalizedEntityCount;
     }
+    const shootingObservation = observeRealtimeTick(shootingFrame, {
+      tick: meta.tick,
+      receivedAtMs: meta.receivedAtMs
+    }, {
+      dayKey: utc8DayKey,
+      dayStart: utc8DayStartMs
+    });
+    const shootingSnapshot = tickGridSnapshot(shootingFrame);
     state.realtime.tick = meta.tick;
+    state.realtime.shootingEpoch = shootingSnapshot.epoch;
+    state.realtime.shootingTick = shootingSnapshot.tick;
+    state.realtime.shootingLastClaimedTick = shootingSnapshot.lastClaimedTick;
+    state.realtime.shootingObservation = shootingObservation;
     state.realtime.receivedAtMs = meta.receivedAtMs;
     state.realtime.entities = normalizedEntities;
     state.realtime.entitiesByUserId = entitiesByUserId;
@@ -1284,6 +1330,9 @@ function createBrowserlessStateStore(options = {}) {
         dispatchTick: numericOrNull(request.observedTick)
       }),
       requestedAtMs,
+      shootingEpoch: request.shootingEpoch ?? null,
+      shootingTick: optionalNumericOrNull(request.shootingTick),
+      gridStep: optionalNumericOrNull(request.gridStep),
       shotCostMilli: shotStaminaCostMilli(request.shotCostMilli),
       targetId: request.targetId ?? null,
       targetX: numericOrNull(request.targetX),
@@ -1471,10 +1520,15 @@ function createBrowserlessStateStore(options = {}) {
   }
 
   function getRealtimeState(nowMs = now()) {
+    const shooting = tickGridSnapshot(shootingFrame);
     return {
       authority: 'realtime',
       source: 'pos',
       tick: state.realtime.tick,
+      shootingEpoch: shooting.epoch,
+      shootingTick: shooting.tick,
+      shootingLastClaimedTick: shooting.lastClaimedTick,
+      shootingFrame: shooting,
       receivedAtMs: state.realtime.receivedAtMs,
       frameAgeMs: frameAge(nowMs, state.realtime.receivedAtMs),
       self: cloneJson(state.realtime.self),
@@ -1559,6 +1613,7 @@ function createBrowserlessStateStore(options = {}) {
     expirePendingShots(nowMs);
     const timing = currentShotTimingSummary();
     const ackTimeoutMs = currentShotAckTimeoutMs();
+    const shooting = tickGridSnapshot(shootingFrame);
     return {
       userId: state.userId,
       latestFrameAtMs: state.latestFrameAtMs,
@@ -1569,6 +1624,10 @@ function createBrowserlessStateStore(options = {}) {
         authority: 'realtime',
         source: 'pos',
         tick: state.realtime.tick,
+        shootingEpoch: shooting.epoch,
+        shootingTick: shooting.tick,
+        shootingLastClaimedTick: shooting.lastClaimedTick,
+        shootingFrame: shooting,
         receivedAtMs: state.realtime.receivedAtMs,
         frameAgeMs: frameAge(nowMs, state.realtime.receivedAtMs),
         self: state.realtime.self,
@@ -1644,6 +1703,12 @@ function createBrowserlessStateStore(options = {}) {
     recordShootExecution,
     recordShootRequest,
     recordVelocityRequest,
+    tryClaimShootSlot(request = {}) {
+      return claimShootSlot(shootingFrame, request);
+    },
+    getShootingFrameState() {
+      return tickGridSnapshot(shootingFrame);
+    },
     reset,
     setShootExecutionListener,
     setUserId

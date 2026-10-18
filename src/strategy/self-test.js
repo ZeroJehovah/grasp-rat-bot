@@ -293,9 +293,252 @@ const {
   runLoginPointReloginShortcutSelfTest
 } = require('./login-point-relogin-shortcut-self-test');
 const { playerProfitScoreMultiplierCore } = require('./player-profit-score');
+const {
+  normalizeGameTick,
+  createTickGridShootingState,
+  observeRealtimeTick,
+  claimShootSlot,
+  tickGridSnapshot,
+  countGridSlotsUntil,
+  nextGridDelayMs
+} = require('./tick-grid-shooting');
+const { evaluateAfkFiveFrameSafety, evaluateAfkPrearrivalCompetition } = require('./afk-fire-safety');
+const { evaluateAfkFirePolicyCore } = require('./afk-fire-policy');
 
 function runStrategyModuleSelfTests() {
   const results = [];
+
+  const tickState = createTickGridShootingState();
+  const dayOneStart = 100000;
+  const dayTwoStart = 200000;
+  const initialTick = observeRealtimeTick(tickState, {
+    tick: 100,
+    receivedAtMs: dayOneStart + 5000
+  }, { dateKey: 'day-1', dayStart: () => dayOneStart });
+  const duplicateTick = observeRealtimeTick(tickState, {
+    tick: 100,
+    receivedAtMs: dayOneStart + 5050
+  }, { dateKey: 'day-1', dayStart: () => dayOneStart });
+  const olderTick = observeRealtimeTick(tickState, {
+    tick: 90,
+    receivedAtMs: dayOneStart + 5100
+  }, { dateKey: 'day-1', dayStart: () => dayOneStart });
+  const advancedTick = observeRealtimeTick(tickState, {
+    tick: 110,
+    receivedAtMs: dayOneStart + 5500
+  }, { dateKey: 'day-1', dayStart: () => dayOneStart });
+  const oldEpoch = tickState.epoch;
+  const firstClaim = claimShootSlot(tickState, {
+    decisionEpoch: oldEpoch,
+    decisionTick: 110,
+    gridStep: 10,
+    atMs: dayOneStart + 5501
+  });
+  const repeatedClaim = claimShootSlot(tickState, {
+    decisionEpoch: oldEpoch,
+    decisionTick: 110,
+    gridStep: 10,
+    atMs: dayOneStart + 5502
+  });
+  const rotatedTick = observeRealtimeTick(tickState, {
+    tick: 110,
+    receivedAtMs: dayTwoStart + 17000
+  }, { dateKey: 'day-2', dayStart: () => dayTwoStart });
+  const newEpochClaim = claimShootSlot(tickState, {
+    decisionEpoch: tickState.epoch,
+    decisionTick: 110,
+    gridStep: 10,
+    atMs: dayTwoStart + 17001
+  });
+  const latePriorDayTick = observeRealtimeTick(tickState, {
+    tick: 1719423,
+    receivedAtMs: dayTwoStart + 17100
+  }, { dateKey: 'day-2', dayStart: () => dayTwoStart });
+  const sameDayReconnectTick = observeRealtimeTick(tickState, {
+    tick: 120,
+    receivedAtMs: dayTwoStart + 17500
+  }, { dateKey: 'day-2', dayStart: () => dayTwoStart });
+  const tickSnapshot = tickGridSnapshot(tickState);
+  results.push({
+    name: 'tick-grid-watermark-rotates-only-on-utc8-day-change-and-consumes-one-slot',
+    passed: initialTick.ok === true
+      && initialTick.reason === 'epoch-initialized'
+      && duplicateTick.reason === 'duplicate-watermark-tick'
+      && olderTick.reason === 'older-watermark-tick'
+      && advancedTick.reason === 'watermark-advanced'
+      && firstClaim.ok === true
+      && repeatedClaim.reason === 'frame-slot-already-consumed'
+      && rotatedTick.reason === 'epoch-rotated'
+      && tickState.epoch !== oldEpoch
+      && newEpochClaim.ok === true
+      && newEpochClaim.tick === 110
+      && (latePriorDayTick.reason === 'cross-day-tick-implausible'
+        || latePriorDayTick.reason === 'implausible-tick-for-realtime-day')
+      && latePriorDayTick.tick === 110
+      && sameDayReconnectTick.ok === true
+      && sameDayReconnectTick.epoch === newEpochClaim.epoch
+      && tickSnapshot.tick === 120
+      && tickSnapshot.lastClaimedTick === 110
+      && normalizeGameTick('120') === 120
+      && normalizeGameTick('0') === null
+      && normalizeGameTick(-1) === null
+      && normalizeGameTick(1.5) === null
+      && normalizeGameTick('') === null
+  });
+
+  results.push({
+    name: 'tick-grid-slot-count-and-next-boundary-never-authorize-catch-up',
+    passed: countGridSlotsUntil({ currentTick: 15, etaMs: 1000, tickMs: 50, gridStep: 10 }) === 2
+      && countGridSlotsUntil({ currentTick: 15, etaMs: 1000, tickMs: 50, gridStep: 10, lastClaimedTick: 20 }) === 1
+      && countGridSlotsUntil({ currentTick: 15, etaMs: 1000, tickMs: 50, gridStep: 10, lastClaimedTick: 35 }) === 0
+      && nextGridDelayMs({ tick: 15, tickMs: 50, gridStep: 10 }) === 250
+      && nextGridDelayMs({ tick: 10, tickMs: 50, gridStep: 10, afterClaim: true }) === 500
+      && nextGridDelayMs({ tick: 20, tickMs: 50, gridStep: 10, afterClaim: true }) === 500
+      && nextGridDelayMs({ tick: null, tickMs: 50, gridStep: 10 }) === 50
+  });
+
+  const safetySelf = { user_id: 1, x: 0, y: 0 };
+  const safetyTarget = { user_id: 2, x: 500, y: 0, active: false };
+  const safetyBase = {
+    self: safetySelf,
+    target: safetyTarget,
+    entities: [safetySelf, safetyTarget],
+    bullets: [],
+    damagingPlayerIds: [],
+    receivedAtMs: 1000,
+    nowMs: 1050,
+    finalActionStationary: true
+  };
+  const safeFive = evaluateAfkFiveFrameSafety(safetyBase, {
+    fullRangeCm: 1000,
+    attackRangeCm: 14500,
+    dodgeRangeBufferCm: 1000
+  });
+  const dangerPlayer = { user_id: 3, x: 14000, y: 0, active: true };
+  const dangerFive = evaluateAfkFiveFrameSafety({
+    ...safetyBase,
+    entities: [safetySelf, safetyTarget, dangerPlayer]
+  }, { fullRangeCm: 1000, attackRangeCm: 14500, dodgeRangeBufferCm: 1000 });
+  const missingDangerPosition = evaluateAfkFiveFrameSafety({
+    ...safetyBase,
+    damagingPlayerIds: [3]
+  }, { fullRangeCm: 1000, attackRangeCm: 14500, dodgeRangeBufferCm: 1000 });
+  const unknownBullet = evaluateAfkFiveFrameSafety({
+    ...safetyBase,
+    bullets: [{ bullet_id: 9 }]
+  }, { fullRangeCm: 1000, attackRangeCm: 14500, dodgeRangeBufferCm: 1000 });
+  const activeTarget = evaluateAfkFiveFrameSafety({
+    ...safetyBase,
+    target: { ...safetyTarget, active: true },
+    entities: [safetySelf, { ...safetyTarget, active: true }]
+  }, { fullRangeCm: 1000, attackRangeCm: 14500, dodgeRangeBufferCm: 1000 });
+  const movingAction = evaluateAfkFiveFrameSafety({
+    ...safetyBase,
+    finalActionStationary: false
+  }, { fullRangeCm: 1000, attackRangeCm: 14500, dodgeRangeBufferCm: 1000 });
+  const staleFrame = evaluateAfkFiveFrameSafety({
+    ...safetyBase,
+    nowMs: 1600
+  }, { freshMs: 500, fullRangeCm: 1000, attackRangeCm: 14500, dodgeRangeBufferCm: 1000 });
+  results.push({
+    name: 'afk-five-frame-grid-fails-closed-on-danger-position-and-target-activity',
+    passed: safeFive.allowed === true
+      && safeFive.gridStep === 5
+      && safeFive.dangerPlayers.length === 0
+      && dangerFive.allowed === false
+      && dangerFive.blockers.includes('danger-player-in-radius')
+      && dangerFive.gridStep === 10
+      && missingDangerPosition.blockers.includes('danger-position-missing:3')
+      && unknownBullet.blockers.includes('ambiguous-bullet-owner')
+      && activeTarget.blockers.includes('target-no-longer-afk')
+      && movingAction.blockers.includes('final-action-still-moves')
+      && staleFrame.blockers.includes('realtime-position-not-fresh')
+  });
+
+  const prearrivalSelf = { user_id: 1, x: 0, y: 0 };
+  const prearrivalTarget = { user_id: 2, x: 5000, y: 0, active: false };
+  const closerCompetitor = { user_id: 3, x: 3000, y: 0, current_join_mode: 'Active' };
+  const equalCompetitor = { user_id: 4, x: 10000, y: 0, vx: 1, vy: 0 };
+  const prearrivalCompetitionBase = {
+    self: prearrivalSelf,
+    target: prearrivalTarget,
+    receivedAtMs: 2000,
+    nowMs: 2050
+  };
+  const closerBlocked = evaluateAfkPrearrivalCompetition({
+    ...prearrivalCompetitionBase,
+    entities: [prearrivalSelf, prearrivalTarget, closerCompetitor],
+    bullets: []
+  });
+  const equalAllowed = evaluateAfkPrearrivalCompetition({
+    ...prearrivalCompetitionBase,
+    entities: [prearrivalSelf, prearrivalTarget, equalCompetitor],
+    bullets: [],
+    damagingPlayerIds: [77]
+  });
+  const missingCompetitorPosition = evaluateAfkPrearrivalCompetition({
+    ...prearrivalCompetitionBase,
+    entities: [prearrivalSelf, prearrivalTarget],
+    bullets: [{ bullet_id: 8, owner_user_id: 88 }]
+  });
+  results.push({
+    name: 'afk-prearrival-competition-uses-fresh-realtime-activity-and-fails-closed',
+    passed: closerBlocked.allowed === false
+      && closerBlocked.blockers.includes('closer-active-competitor:3')
+      && equalAllowed.allowed === true
+      && equalAllowed.competitors.length === 1
+      && missingCompetitorPosition.blockers.includes('competitor-position-missing:88')
+  });
+
+  const afkPolicyOptions = {
+    fullRangeCm: 1000,
+    maxRangeCm: 14500,
+    tickMs: 50,
+    gridStep: 10,
+    arrivalHpReserve: 10,
+    shotDamageHp: 3
+  };
+  const prearrivalPolicy = evaluateAfkFirePolicyCore({
+    self: { x: 0, y: 0 },
+    target: { x: 5000, y: 0 },
+    distanceCm: 5000,
+    hp: 20,
+    shootingTick: 100,
+    lastClaimedTick: 100
+  }, afkPolicyOptions);
+  const healthyPrearrivalPolicy = evaluateAfkFirePolicyCore({
+    self: { x: 0, y: 0 },
+    target: { x: 5000, y: 0 },
+    distanceCm: 5000,
+    hp: 100,
+    shootingTick: 100,
+    lastClaimedTick: 100
+  }, afkPolicyOptions);
+  const outsidePrearrivalRange = evaluateAfkFirePolicyCore({
+    self: { x: 0, y: 0 },
+    target: { x: 14501, y: 0 },
+    distanceCm: 14501,
+    hp: 100,
+    shootingTick: 100,
+    lastClaimedTick: 100
+  }, afkPolicyOptions);
+  const missingGameTick = evaluateAfkFirePolicyCore({
+    self: { x: 0, y: 0 },
+    target: { x: 5000, y: 0 },
+    distanceCm: 5000,
+    hp: 20
+  }, afkPolicyOptions);
+  results.push({
+    name: 'afk-prearrival-budget-uses-current-hp-pending-damage-and-grid-slot-count',
+    passed: prearrivalPolicy.authorized === false
+      && prearrivalPolicy.reason === 'afk-fire-delay-own-kill-before-near'
+      && prearrivalPolicy.shotBudget === 3
+      && prearrivalPolicy.availableShots > prearrivalPolicy.shotBudget
+      && healthyPrearrivalPolicy.authorized === true
+      && healthyPrearrivalPolicy.prearrival === true
+      && outsidePrearrivalRange.reason === 'afk-fire-approach-range'
+      && missingGameTick.reason === 'afk-fire-missing-game-tick'
+  });
 
   const recoveryCurve = [
     [40, 100],
@@ -409,6 +652,12 @@ function runStrategyModuleSelfTests() {
     dispatchTimes: [6000, 8000],
     lastShotAt: 8000
   });
+  const secondaryRecentShot = secondaryFirePolicy({
+    nowMs: 10000,
+    combatTargetState: { noDamageMs: 10000, motionSamples: secondarySamples },
+    dispatchTimes: [6000],
+    lastShotAt: 9950
+  });
   const secondaryCloseExempt = secondaryFirePolicy({
     nowMs: 10000,
     target: { distance: 1000 },
@@ -456,13 +705,15 @@ function runStrategyModuleSelfTests() {
   }, 12000);
   results.push({
     name: 'secondary-fire-cadence-quota-close-pressure-and-invulnerable-gates',
-    passed: secondaryCadenceMs(0) === 160
-      && secondaryCadenceMs(10000) === 160
+    passed: secondaryCadenceMs(0) === 500
+      && secondaryCadenceMs(10000) === 500
       && secondaryAllowed.allowed === true
       && secondaryAllowed.ownShots === 1
       && secondaryAllowed.opponentShots === 2
       && secondaryQuotaBlocked.allowed === false
       && secondaryQuotaBlocked.reason === 'secondary-five-second-shot-quota'
+      && secondaryRecentShot.allowed === true
+      && secondaryRecentShot.quotaAvailable === true
       && secondaryCloseExempt.allowed === true
       && secondaryCloseExempt.throttleExempt === true
       && secondaryCloseExempt.reason === 'secondary-close-pressure-normal-fire'
@@ -3845,6 +4096,14 @@ function runStrategyModuleSelfTests() {
       && defensivePersistentThreatRelease.reason === 'persistent-target-threat'
   });
 
+  // Keep the loot-race fixture focused on competitor ETA and safety gates.
+  // The default 1200ms horizon can only fit two ten-frame slots, so a 12 HP
+  // target needs an explicit horizon after the cadence forecast moved to
+  // 500ms per normal shot.
+  const lootRaceOptions = {
+    combatLootRacePositioningEnabled: true,
+    combatLootRaceMaxKillHorizonMs: 2500
+  };
   const lootRaceActive = lootRacePositioningCore({
     self: { user_id: 1, x: 0, y: 0, hp: 100 },
     target: { user_id: 2, x: 5000, y: 0, hp: 12, drop: 47, dropKnown: true },
@@ -3858,9 +4117,7 @@ function runStrategyModuleSelfTests() {
     aim: { predictedTargetAtCreation: { x: 5000, y: 0 } },
     closePressureActive: true,
     closePressureTooClose: false
-  }, {
-    combatLootRacePositioningEnabled: true
-  });
+  }, lootRaceOptions);
   const lootRaceNoCompetitor = lootRacePositioningCore({
     self: { user_id: 1, x: 0, y: 0, hp: 100 },
     target: { user_id: 2, x: 5000, y: 0, hp: 12, drop: 47, dropKnown: true },
@@ -3873,7 +4130,7 @@ function runStrategyModuleSelfTests() {
     aim: { predictedTargetAtCreation: { x: 5000, y: 0 } },
     closePressureActive: true,
     closePressureTooClose: false
-  });
+  }, lootRaceOptions);
   const lootRaceHighHp = lootRacePositioningCore({
     self: { user_id: 1, x: 0, y: 0, hp: 100 },
     target: { user_id: 2, x: 5000, y: 0, hp: 75, drop: 47, dropKnown: true },
@@ -3882,7 +4139,7 @@ function runStrategyModuleSelfTests() {
     aim: { predictedTargetAtCreation: { x: 5000, y: 0 } },
     closePressureActive: true,
     closePressureTooClose: false
-  });
+  }, lootRaceOptions);
   const lootRaceLowHp = lootRacePositioningCore({
     self: { user_id: 1, x: 0, y: 0, hp: 50 },
     target: { user_id: 2, x: 5000, y: 0, hp: 12, drop: 47, dropKnown: true },
@@ -3891,7 +4148,7 @@ function runStrategyModuleSelfTests() {
     aim: { predictedTargetAtCreation: { x: 5000, y: 0 } },
     closePressureActive: true,
     closePressureTooClose: false
-  });
+  }, lootRaceOptions);
   results.push({
     name: 'loot-race-positioning-uses-realtime-competitor-eta-and-preserves-safety-gates',
     passed: lootRaceActive.active === true
@@ -3915,11 +4172,11 @@ function runStrategyModuleSelfTests() {
     profitThresholdCoinsPer10Stamina: 1
   });
   const efficiencyWindow100 = combatEfficiencyWindowCore(efficiencyThreshold100, {
-    combatShootMinIntervalMs: 160,
+    combatEfficiencyExpectedShotCadenceMs: 500,
     combatShotStaminaCostMs: 500
   });
   const efficiencyWindow50 = combatEfficiencyWindowCore(efficiencyThreshold50, {
-    combatShootMinIntervalMs: 160,
+    combatEfficiencyExpectedShotCadenceMs: 500,
     combatShotStaminaCostMs: 500
   });
   results.push({
@@ -3928,12 +4185,16 @@ function runStrategyModuleSelfTests() {
       && efficiencyWindow100.referenceDamageHp === 9
       && efficiencyWindow100.expectedHitRate === 0.016667
       && efficiencyWindow100.expectedStaminaForReferenceDamage === 90
-      && efficiencyWindow100.evaluationWindowMs === 28800
+      && efficiencyWindow100.evaluationWindowMs === 90000
       && efficiencyWindow50.expectedHitRate === 0.033333
       && efficiencyWindow50.expectedStaminaForReferenceDamage === 45
-      && efficiencyWindow50.evaluationWindowMs === 14400
+      && efficiencyWindow50.evaluationWindowMs === 45000
   });
   const measuredEfficiencyOptions = {
+    // These assertions cover phase transitions, not the derived window length;
+    // keep the original 30-second phase clock explicit while the default
+    // ten-frame derivation is covered above.
+    combatEfficiencyWindowMs: 30000,
     combatControlIntervalMs: 50,
     combatServerTickMs: 50,
     combatBulletSpeedPerTick: 500,

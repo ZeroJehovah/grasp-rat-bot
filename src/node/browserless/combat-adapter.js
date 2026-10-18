@@ -6705,11 +6705,10 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     options.combatShotStaminaCostMs
   );
   const fireState = target ? determineCombatFireState(self || {}, target, {
-    combatShootingBudget: usesCombatStaminaWindow(target) ? combatShootingBudget : null,
     targetPressureFire: bullets.some(bullet => Number(bullet.ownerId) === Number(target.user_id)),
     closePressure: closePressureActive,
     closePressureAttack: pressureAttackActive,
-    closePressureCadenceMs: options.combatClosePressureShootEveryMs ?? 520,
+    closePressureCadenceMs: options.combatClosePressureShootEveryMs ?? 500,
     closePressureReserveMs: options.combatClosePressureReserveMs ?? 2600,
     hardReserveMs: runtimeHardReserveMs,
     dodgeReserveMs: fireDodgeReserveMs,
@@ -6888,7 +6887,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       closePressureActive
         ? Number(pressureAttackActive
             ? (options.combatShootMinIntervalMs ?? COMBAT_CONSTANTS.SHOOT_EVERY_MS)
-            : (options.combatClosePressureShootEveryMs ?? 520))
+            : (options.combatClosePressureShootEveryMs ?? 500))
         : 0
     ),
     reason: sharedFireBudget.suppressFire
@@ -6996,7 +6995,6 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     bullet => Number(bullet.ownerId) === Number(primaryFireTarget?.user_id ?? primaryFireTarget?.userId)
   );
   const primaryFireState = primaryFireTarget ? determineCombatFireState(self || {}, primaryFireTarget, {
-    combatShootingBudget: usesCombatStaminaWindow(primaryFireTarget) ? combatShootingBudget : null,
     targetPressureFire: primaryTargetPressureFire,
     closePressure: false,
     closePressureAttack: false,
@@ -7047,7 +7045,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
         closePressureActive
           ? Math.max(0, Number(pressureAttackActive
               ? (options.combatShootMinIntervalMs ?? COMBAT_CONSTANTS.SHOOT_EVERY_MS)
-              : (options.combatClosePressureShootEveryMs ?? 520)))
+              : (options.combatClosePressureShootEveryMs ?? 500)))
           : 0
       );
   const maximumCadenceMs = closePressureActive ? NaN : Number(behaviorPolicy?.maximumCadenceMs);
@@ -7222,14 +7220,6 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       ? 'primary-finish-race'
       : primaryFireAuthorizationClass)
     : fireAuthorization.fireAuthorizationClass;
-  // Finish/close-pressure arbitration cannot override the shared physical
-  // shooting allowance. It has no authority over movement or Dodge.
-  if (resolvedWouldShoot && usesCombatStaminaWindow(selectedFireTarget, fireTargetRole)
-    && !combatShootingBudget.allowed) {
-    resolvedWouldShoot = false;
-    resolvedFinalFireBlocker = 'combat-window-exhausted';
-    resolvedFireAuthorizationClass = 'shooting-budget-blocked';
-  }
   if (!primarySelected && resolvedWouldShoot && secondaryPolicy && !secondaryPolicy.allowed) {
     resolvedWouldShoot = false;
     resolvedFinalFireBlocker = `secondary:${secondaryPolicy.reason}`;

@@ -30,7 +30,7 @@ function frame(target, overrides = {}) {
   };
   return {
     realtime: {
-      tick: overrides.tick ?? 1,
+      tick: overrides.tick ?? 10,
       receivedAtMs: overrides.receivedAtMs ?? 1000,
       self,
       entities: [self, target, ...(overrides.entities || [])],
@@ -177,7 +177,7 @@ function runAfkDynamicFireSelfTest() {
     }]
   }), action({ userId: 41, x: 10000, y: 0, hp: 100, invulnerable: false }));
   assert.strictEqual(externalEvidence.shoot.skipped, true);
-  assert.strictEqual(externalEvidence.shoot.reason, 'afk-fire-delay-external-kill-before-near');
+  assert.strictEqual(externalEvidence.shoot.reason, 'afk-fire-delay-own-kill-before-near');
   assert.strictEqual(externalEvidence.shoot.firePolicy.externalBulletEvidenceCount, 1);
   assert.strictEqual(externalEvidence.shoot.firePolicy.externalDamageRateHpPerSec, 2.05);
   assert.strictEqual(evidenceShots.length, 0);
@@ -201,12 +201,12 @@ function runAfkDynamicFireSelfTest() {
       }
     }
   });
-  const selfBulletOnly = selfBulletAdapter.applyDecision(frame(externallyPressured, {
+  const selfBulletOnly = selfBulletAdapter.applyDecision(frame({ ...externallyPressured, hp: 100 }, {
     tick: 20,
     receivedAtMs: 1500,
     bullets: [{
       bullet_id: 902,
-      owner_id: 1,
+      owner_user_id: 7,
       start_x: 0,
       start_y: 0,
       dir_x: 1,
@@ -336,7 +336,7 @@ function runAfkDynamicFireSelfTest() {
 
   const pickupRadiusTarget = { ...target, x: 150, hp: 3 };
   const pickupRadiusAllowed = competitionAdapter.applyDecision(frame(pickupRadiusTarget, {
-    tick: 2,
+    tick: 10,
     entities: [{ ...activeCompetitor, x: 140 }]
   }), action({ userId: 41, x: 150, y: 0, hp: 3, invulnerable: false }));
   assert.strictEqual(pickupRadiusAllowed.shoot.skipped, false);
@@ -381,9 +381,54 @@ function runAfkDynamicFireSelfTest() {
   assert.strictEqual(repeatShots.length, 1);
   assert.strictEqual(repeatAdapter.getState().shootRepeatWaitReason, 'profit-target-competition-position-blocked');
 
+  let gridNow = 30000;
+  let gridTimerId = 0;
+  const gridShots = [];
+  const gridVelocities = [];
+  const gridAdapter = createBrowserlessActionAdapter({
+    userId: 7,
+    now: () => gridNow,
+    commandIntervalMs: 0,
+    shootRepeatEnabled: false,
+    afkAttackDynamicFireEnabled: true,
+    setTimeout: () => ++gridTimerId,
+    clearTimeout: () => {},
+    transport: {
+      sendVelocity(dx, dy) {
+        gridVelocities.push({ dx, dy });
+        return { ok: true };
+      },
+      sendShoot(x, y) {
+        gridShots.push({ x, y });
+        return { ok: true };
+      }
+    }
+  });
+
+  const gridSafeTarget = { ...target, x: 500, hp: 100 };
+  const safeFiveFrame = gridAdapter.applyDecision(frame(gridSafeTarget, {
+    tick: 15,
+    receivedAtMs: gridNow
+  }), action({ userId: 41, x: 500, y: 0, hp: 100, invulnerable: false }));
+  assert.strictEqual(safeFiveFrame.shoot.skipped, false);
+  assert.strictEqual(safeFiveFrame.shoot.command.gridStep, 5);
+  assert.strictEqual(safeFiveFrame.shoot.command.frameClaim.tick, 15);
+  assert.strictEqual(gridShots.length, 1);
+
+  gridNow += 250;
+  const gridDangerTarget = { ...target, x: 500, hp: 100 };
+  const dangerTenFrame = gridAdapter.applyDecision(frame(gridDangerTarget, {
+    tick: 20,
+    receivedAtMs: gridNow,
+    entities: [{ ...activeCompetitor, x: 14000 }]
+  }), action({ userId: 41, x: 500, y: 0, hp: 100, invulnerable: false }));
+  assert.strictEqual(dangerTenFrame.shoot.skipped, false);
+  assert.strictEqual(dangerTenFrame.shoot.command.gridStep, 10);
+  assert.strictEqual(gridShots.length, 2);
+
   return {
     ok: true,
-    cases: 11,
+    cases: 13,
     velocityCount: velocities.length,
     shootCount: shots.length,
     evidenceShootCount: evidenceShots.length,

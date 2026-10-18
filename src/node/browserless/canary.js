@@ -1736,7 +1736,8 @@ async function runReadOnlyCanary(config, options = {}) {
   const stateStore = options.stateStore || createBrowserlessStateStore({
     userId: config.userId,
     now,
-    reuseRealtimeFrameObjects: true
+    reuseRealtimeFrameObjects: true,
+    shootingFrame: options.shootingFrame
   });
   const runtimeDefaults = buildBrowserlessRuntimeDefaults(config);
   const genesisWhitelist = options.targetWhitelist || createBrowserlessTargetWhitelist({
@@ -4813,6 +4814,10 @@ async function runReadOnlyCanary(config, options = {}) {
           onVelocityRequest: request => stateStore.recordVelocityRequest(request, { returnInternal: true }),
           getSegmentGeneration: context => combatBattleLog?.currentSegmentGeneration?.(context) || '',
           onShootRequest: request => stateStore.recordShootRequest(request, { returnInternal: true }),
+          tryClaimShootSlot: request => stateStore.tryClaimShootSlot(request),
+          getDamagingPlayerIds: () => (typeof damagePlayerTracker?.userIds === 'function'
+            ? damagePlayerTracker.userIds(now())
+            : (damagePlayerTracker?.status?.(now())?.userIds || [])),
           onShootExecution: event => stateStore.recordShootExecution?.(event, {
             returnInternal: true,
             listenerUsesInternal: true

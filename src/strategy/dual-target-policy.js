@@ -3,8 +3,8 @@
 const { COMBAT_CONSTANTS } = require('./combat-constants');
 
 const DEFAULT_SECONDARY_WINDOW_MS = 5000;
-const DEFAULT_SECONDARY_BASE_CADENCE_MS = 160;
-const DEFAULT_SECONDARY_MAX_CADENCE_MS = 160;
+const DEFAULT_SECONDARY_BASE_CADENCE_MS = 500;
+const DEFAULT_SECONDARY_MAX_CADENCE_MS = 500;
 const DEFAULT_SECONDARY_NO_DAMAGE_STEP_MS = 0;
 const DEFAULT_SECONDARY_CLOSE_DISTANCE_CM = 2000;
 const DEFAULT_SECONDARY_PRESSURE_WINDOW_MS = 1500;
@@ -708,12 +708,13 @@ function secondaryFirePolicy(input = {}, options = {}) {
   const opponentShots = opponentShotCountInWindow(state.motionSamples, nowMs, windowMs);
   const cadenceMs = secondaryCadenceMs(state.noDamageMs, options);
   const lastShotAt = Number(input.lastShotAt || 0);
-  const cadenceReady = !lastShotAt || nowMs - lastShotAt >= cadenceMs;
   const quotaAvailable = ownShots < opponentShots;
   const invulnerable = input.invulnerable === true || target.invulnerable === true;
   const closePressure = secondaryClosePressurePolicy(input, options);
   const throttleExempt = closePressure.active;
-  const allowed = !invulnerable && (throttleExempt || (quotaAvailable && cadenceReady));
+  // Cadence is a forecast for the shared 10-frame grid, never an independent
+  // transmission gate. The rolling quota may still make a legal frame slower.
+  const allowed = !invulnerable && (throttleExempt || quotaAvailable);
   return {
     allowed,
     invulnerable,
@@ -721,7 +722,6 @@ function secondaryFirePolicy(input = {}, options = {}) {
     opponentShots,
     windowMs,
     cadenceMs,
-    cadenceReady,
     quotaAvailable,
     throttleExempt,
     closePressure,
@@ -731,7 +731,7 @@ function secondaryFirePolicy(input = {}, options = {}) {
         ? 'secondary-close-pressure-normal-fire'
         : !quotaAvailable
           ? 'secondary-five-second-shot-quota'
-          : !cadenceReady ? 'secondary-cadence' : 'secondary-defensive-fire'
+          : 'secondary-defensive-fire'
   };
 }
 

@@ -30,7 +30,7 @@ const COMBAT_CONSTANTS = {
   DISADVANTAGE_MIN_SAMPLES: 4,             // combatDisadvantageMinSamples - minimum observations
 
   // Fire discipline and stamina
-  SHOOT_EVERY_MS: 160,                    // shootEveryMs - normal fire cadence
+  SHOOT_EVERY_MS: 500,                    // normal ten-frame grid estimate
   SHOOT_RESERVE_BAND_MS: 360,             // combatShootReserveBandMs - reserve band fire cadence
   SHOOT_HARD_RESERVE_MS: 1200,            // combatShootHardReserveMs - hard floor for shooting
   SHOOT_DODGE_RESERVE_MS: 2400,           // combatShootDodgeReserveMs - normal dodge reserve
@@ -42,7 +42,7 @@ const COMBAT_CONSTANTS = {
   // Opponent probe (early engagement)
   OPPONENT_PROBE_MS: 6000,                // combatOpponentProbeMs
   OPPONENT_PROBE_RESERVE_MS: 5600,        // combatOpponentProbeReserveMs
-  OPPONENT_PROBE_EVERY_MS: 520,           // combatOpponentProbeEveryMs
+  OPPONENT_PROBE_EVERY_MS: 500,           // combatOpponentProbeEveryMs
 
   // Finish pressure
   FINISH_LOW_THREAT_HP: 75,               // combatFinishLowThreatHp - target HP for finish
@@ -65,7 +65,7 @@ const COMBAT_CONSTANTS = {
   BULLET_HIT_RADIUS_CM: 90,               // Measured server hit radius
   RENDER_DELAY_TICKS: 2,                  // combatInterceptRenderDelayTicks
   INTERCEPT_LOW_CONFIDENCE_THRESHOLD: 0.6, // combatInterceptLowConfidenceThreshold
-  INTERCEPT_LOW_CONFIDENCE_FIRE_MS: 520,  // combatInterceptLowConfidenceFireMs
+  INTERCEPT_LOW_CONFIDENCE_FIRE_MS: 500,  // combatInterceptLowConfidenceFireMs
 
   // Combat tick and frame gaps
   COMBAT_TICK_GAP_OFFLINE_MS: 5000,       // combatTickGapOfflineMs

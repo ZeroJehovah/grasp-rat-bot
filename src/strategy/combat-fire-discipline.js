@@ -48,22 +48,9 @@ function stamina5sRemaining(self) {
  */
 function determineCombatFireState(self, target, context = {}) {
   const stamina5s = stamina5sRemaining(self);
-  if (context.combatShootingBudget) {
-    const budget = context.combatShootingBudget;
-    return {
-      state: budget.allowed ? FIRE_STATE.NORMAL : FIRE_STATE.PAUSED,
-      cadenceMs: budget.allowed ? COMBAT_CONSTANTS.SHOOT_EVERY_MS : Infinity,
-      reserve: 0,
-      reason: budget.allowed ? 'combat-window-ready' : 'combat-window-exhausted',
-      stamina5s,
-      hardReserve: 0,
-      dodgeReserve: 0,
-      shotCostMs: budget.shotCostMilli,
-      dodgeActionCostMs: 0,
-      requiredStaminaMs: 0,
-      combatShootingBudget: budget
-    };
-  }
+  // The shared epoch/tick slot is the only fire-rate authorization. The old
+  // rolling stamina window remains a diagnostic and classification input, but
+  // may not bypass target pressure, reserve, or Dodge decisions here.
   const hardReserve = Math.max(
     0,
     Number(context.hardReserveMs ?? COMBAT_CONSTANTS.SHOOT_HARD_RESERVE_MS)

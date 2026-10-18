@@ -355,10 +355,13 @@ function runCombatShotExecutionSelfTest() {
   };
   const modes = ['mixed/unknown', 'zigzag-strafe', 'retreat-kite', 'charge-close', 'high-entropy', 'low-confidence'];
   for (let index = 0; index < modes.length; index += 1) {
-    actionNow += index === 0 ? 0 : 160;
+    actionNow += index === 0 ? 0 : 500;
+    stateSnapshot.realtime.tick = (index + 1) * 10;
+    stateSnapshot.realtime.receivedAtMs = actionNow;
+    stateSnapshot.command = actionStore.getCommandState(actionNow);
     const decision = combatDecision('execution-generation', modes[index], 160, 1000, {
       controlGeneration: actionControl,
-      tick: index + 1,
+      tick: stateSnapshot.realtime.tick,
       aim: index === 0 ? {
         evasiveAim: {
           modelVersion: 'evasive-aim-2026-08-14-v1',
@@ -409,7 +412,10 @@ function runCombatShotExecutionSelfTest() {
     engagementOptions(actionControl, 40)
   );
   const secondaryGeneration = secondaryStateful.combatMetrics.engagementGeneration;
-  actionNow += 160;
+  actionNow += 500;
+  stateSnapshot.realtime.tick = 70;
+  stateSnapshot.realtime.receivedAtMs = actionNow;
+  stateSnapshot.command = actionStore.getCommandState(actionNow);
   const primaryFireTarget = {
     ...combatTarget(42, 4200),
     combatRole: 'primary',
@@ -422,7 +428,7 @@ function runCombatShotExecutionSelfTest() {
     1000,
     {
       controlGeneration: actionControl,
-      tick: 39,
+      tick: 70,
       target: secondaryTarget,
       shooting: {
         target: primaryFireTarget,
@@ -546,7 +552,10 @@ function runCombatShotExecutionSelfTest() {
           && event.skipReason === 'primary-finish-race-realtime-target-missing'
       )));
 
-  actionNow += 160;
+  actionNow += 500;
+  stateSnapshot.realtime.tick = 80;
+  stateSnapshot.realtime.receivedAtMs = actionNow;
+  stateSnapshot.command = actionStore.getCommandState(actionNow);
   const secondaryDispatch = adapter.applyDecision(stateSnapshot, combatDecision(
     secondaryGeneration,
     'mixed/unknown',
@@ -554,7 +563,7 @@ function runCombatShotExecutionSelfTest() {
     1000,
     {
       controlGeneration: actionControl,
-      tick: 40,
+      tick: 80,
       target: secondaryTarget
     }
   ));
@@ -580,11 +589,11 @@ function runCombatShotExecutionSelfTest() {
     active: false,
     current_join_mode: undefined
   };
-  actionNow += 160;
+  actionNow += 500;
   const dispatchesBeforeExecutionBlock = wireDispatches;
   const executionCompetitionSnapshot = {
     realtime: {
-      tick: 41,
+      tick: 90,
       receivedAtMs: actionNow,
       self: { user_id: 1, x: 0, y: 0 },
       entities: [lowHpPrimary, quietBulletOwner],
@@ -596,7 +605,7 @@ function runCombatShotExecutionSelfTest() {
     executionCompetitionSnapshot,
     combatDecision(secondaryGeneration, 'mixed/unknown', 160, 1000, {
       controlGeneration: actionControl,
-      tick: 41,
+      tick: 90,
       target: lowHpPrimary,
       shooting: {
         target: lowHpPrimary,
@@ -614,10 +623,10 @@ function runCombatShotExecutionSelfTest() {
         ?.includes('realtime-bullet-owner')
       && wireDispatches === dispatchesBeforeExecutionBlock);
 
-  actionNow += 160;
+  actionNow += 500;
   const missingPositionExecutionBlocked = adapter.applyDecision({
     realtime: {
-      tick: 411,
+      tick: 100,
       receivedAtMs: actionNow,
       self: { user_id: 1, x: 0, y: 0 },
       entities: [lowHpPrimary],
@@ -626,7 +635,7 @@ function runCombatShotExecutionSelfTest() {
     command: actionStore.getCommandState(actionNow)
   }, combatDecision(secondaryGeneration, 'mixed/unknown', 160, 1000, {
     controlGeneration: actionControl,
-    tick: 411,
+    tick: 100,
     target: lowHpPrimary,
     shooting: {
       target: lowHpPrimary,
@@ -643,10 +652,10 @@ function runCombatShotExecutionSelfTest() {
       && missingPositionExecutionBlocked.shoot?.profitKillRace?.executionGateReason === 'new-or-retained-execution-evidence'
       && wireDispatches === dispatchesBeforeExecutionBlock);
 
-  actionNow += 160;
+  actionNow += 500;
   const decisionBlocked = adapter.applyDecision({
     realtime: {
-      tick: 42,
+      tick: 110,
       receivedAtMs: actionNow,
       self: { user_id: 1, x: 0, y: 0 },
       entities: [lowHpPrimary],
@@ -655,7 +664,7 @@ function runCombatShotExecutionSelfTest() {
     command: actionStore.getCommandState(actionNow)
   }, combatDecision(secondaryGeneration, 'mixed/unknown', 160, 1000, {
     controlGeneration: actionControl,
-    tick: 42,
+    tick: 110,
     target: lowHpPrimary,
     shooting: {
       target: lowHpPrimary,
@@ -673,7 +682,7 @@ function runCombatShotExecutionSelfTest() {
       && decisionBlocked.shoot?.profitKillRace?.executionGateReason === 'decision-block-retained'
       && wireDispatches === dispatchesBeforeExecutionBlock);
 
-  actionNow += 160;
+  actionNow += 500;
   const lowHpSecondary = {
     ...lowHpPrimary,
     user_id: 8,
@@ -685,14 +694,14 @@ function runCombatShotExecutionSelfTest() {
     ...executionCompetitionSnapshot,
     realtime: {
       ...executionCompetitionSnapshot.realtime,
-      tick: 43,
+      tick: 120,
       receivedAtMs: actionNow,
       entities: [lowHpSecondary, quietBulletOwner]
     },
     command: actionStore.getCommandState(actionNow)
   }, combatDecision(secondaryGeneration, 'mixed/unknown', 160, 1000, {
     controlGeneration: actionControl,
-    tick: 43,
+    tick: 120,
     target: lowHpSecondary,
     shooting: {
       target: lowHpSecondary,
@@ -706,18 +715,24 @@ function runCombatShotExecutionSelfTest() {
       && wireDispatches === dispatchesBeforeExecutionBlock + 1);
 
   actionNow += 50;
+  stateSnapshot.realtime.tick = 120;
+  stateSnapshot.realtime.receivedAtMs = actionNow;
+  stateSnapshot.command = actionStore.getCommandState(actionNow);
   const throttled = adapter.applyDecision(stateSnapshot, combatDecision(
     'execution-generation',
     'mixed/unknown',
     160,
     1000,
-    { controlGeneration: actionControl, tick: 20 }
+    { controlGeneration: actionControl, tick: 120 }
   ));
-  check('cadence skip is explicit and generation-bound', throttled.shoot?.reason === 'shoot-command-throttled'
-    && throttled.shoot?.execution?.skipReason === 'shoot-command-throttled'
+  check('frame-slot skip is explicit and generation-bound', throttled.shoot?.reason === 'shoot-frame:frame-slot-already-consumed'
+    && throttled.shoot?.execution?.skipReason === 'shoot-frame:frame-slot-already-consumed'
     && throttled.shoot?.execution?.engagementGeneration === 'execution-generation');
 
-  actionNow += 160;
+  actionNow += 500;
+  stateSnapshot.realtime.tick = 130;
+  stateSnapshot.realtime.receivedAtMs = actionNow;
+  stateSnapshot.command = actionStore.getCommandState(actionNow);
   const reserveBlocked = adapter.applyDecision(stateSnapshot, combatDecision(
     'execution-generation',
     'mixed/unknown',
@@ -725,7 +740,7 @@ function runCombatShotExecutionSelfTest() {
     1000,
     {
       controlGeneration: actionControl,
-      tick: 21,
+      tick: 130,
       shooting: {
         wouldShoot: false,
         commandSuppressed: true,
@@ -745,13 +760,16 @@ function runCombatShotExecutionSelfTest() {
     baseCadenceMs: 160,
     executionCadenceMs: 160
   });
-  actionNow += 160;
+  actionNow += 500;
+  stateSnapshot.realtime.tick = 140;
+  stateSnapshot.realtime.receivedAtMs = actionNow;
+  stateSnapshot.command = actionStore.getCommandState(actionNow);
   const staleAfterSafety = adapter.applyDecision(stateSnapshot, combatDecision(
     'execution-generation',
     'charge-close',
     160,
     1000,
-    { controlGeneration: actionControl, tick: 23 }
+    { controlGeneration: actionControl, tick: 140 }
   ));
   check('safety-trigger seals the active generation before a stale combat action', safetyStop.sealed === true
     && safetyStop.engagementGeneration === 'execution-generation'
@@ -769,6 +787,98 @@ function runCombatShotExecutionSelfTest() {
     && event.engagementGeneration === 'execution-generation'
     && event.outcome === 'shooting-sealed'
   )));
+
+  let claimNowMs = 20000;
+  let claimWireAttempts = 0;
+  const claimEvents = [];
+  const claimStore = createBrowserlessStateStore({ userId: 1, now: () => claimNowMs });
+  claimStore.ingestFrame({
+    type: 'pos',
+    tick: 100,
+    entities: [{ user_id: 1, x: 0, y: 0, hp: 100 }, combatTarget(8)],
+    bullets: []
+  }, { receivedAtMs: claimNowMs });
+  const claimControl = claimStore.beginControlGeneration('ws-open');
+  const claimAdapter = createBrowserlessActionAdapter({
+    now: () => claimNowMs,
+    controlGeneration: claimControl,
+    commandIntervalMs: 0,
+    combatShootMinIntervalMs: 500,
+    shootRepeatEnabled: false,
+    tryClaimShootSlot: request => claimStore.tryClaimShootSlot(request),
+    onShootExecution: event => {
+      claimEvents.push(event);
+      return event;
+    },
+    transport: {
+      sendVelocity() {},
+      sendShoot() {
+        claimWireAttempts += 1;
+        throw new Error('websocket is not open');
+      }
+    }
+  });
+  const claimRealtime = () => ({
+    tick: claimStore.getShootingFrameState().tick,
+    shootingEpoch: claimStore.getShootingFrameState().epoch,
+    shootingTick: claimStore.getShootingFrameState().tick,
+    receivedAtMs: claimNowMs,
+    frameAgeMs: 0,
+    self: { user_id: 1, x: 0, y: 0, hp: 100 },
+    entities: [{ user_id: 1, x: 0, y: 0, hp: 100 }, combatTarget(8)],
+    bullets: []
+  });
+  const claimDecision = tick => combatDecision('claim-generation', 'mixed/unknown', 500, 1000, {
+    controlGeneration: claimControl,
+    tick,
+    shooting: {
+      cadenceMs: 500,
+      executionCadenceMs: 500
+    }
+  });
+  const firstClaimSnapshot = {
+    realtime: claimRealtime(),
+    command: claimStore.getCommandState(claimNowMs)
+  };
+  const transportRejected = claimAdapter.applyDecision(firstClaimSnapshot, claimDecision(100));
+  check('transport rejection occurs after the shared slot is consumed', transportRejected.shoot?.reason === 'send-shoot-failed'
+    && claimWireAttempts === 1
+    && claimStore.getShootingFrameState().lastClaimedTick === 100
+    && transportRejected.shoot?.execution?.frameClaim?.reason === 'frame-slot-claimed'
+    && claimEvents.some(event => event.type === 'shoot-transport-rejected'
+      && event.frameClaim?.tick === 100));
+  const repeatedFrame = claimAdapter.applyDecision(firstClaimSnapshot, claimDecision(100));
+  check('repeated decision cannot reuse a consumed frame slot', repeatedFrame.shoot?.reason === 'shoot-frame:frame-slot-already-consumed'
+    && repeatedFrame.shoot?.execution?.outcome === 'frame-gate-blocked'
+    && claimWireAttempts === 1);
+  claimNowMs += 500;
+  claimStore.ingestFrame({ type: 'pos', tick: 110, entities: [], bullets: [] }, {
+    receivedAtMs: claimNowMs
+  });
+  const staleDecision = claimAdapter.applyDecision({
+    realtime: { ...claimRealtime(), tick: 100 },
+    command: claimStore.getCommandState(claimNowMs)
+  }, claimDecision(100));
+  check('late decision frame is discarded instead of being retargeted to the current watermark', staleDecision.shoot?.reason === 'shoot-frame:decision-tick-stale'
+    && claimWireAttempts === 1);
+  const currentFrame = claimAdapter.applyDecision({
+    realtime: claimRealtime(),
+    command: claimStore.getCommandState(claimNowMs)
+  }, claimDecision(110));
+  check('current realtime watermark is required at the wire gate', currentFrame.shoot?.reason === 'send-shoot-failed'
+    && claimWireAttempts === 2
+    && claimStore.getShootingFrameState().lastClaimedTick === 110);
+  claimNowMs += 250;
+  claimStore.ingestFrame({ type: 'pos', tick: 115, entities: [], bullets: [] }, {
+    receivedAtMs: claimNowMs
+  });
+  const offGrid = claimAdapter.applyDecision({
+    realtime: claimRealtime(),
+    command: claimStore.getCommandState(claimNowMs)
+  }, claimDecision(115));
+  check('non-grid frame skips only the shot and leaves the prior slot consumed', offGrid.shoot?.reason === 'shoot-frame:frame-not-on-grid'
+    && claimWireAttempts === 2
+    && claimStore.getShootingFrameState().lastClaimedTick === 110);
 
   return { ok: true, cases };
 }

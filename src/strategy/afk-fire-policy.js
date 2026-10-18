@@ -1,6 +1,7 @@
 'use strict';
 
 const { estimateEightWayRouteCore } = require('./eight-way-route-eta');
+const { countGridSlotsUntil } = require('./tick-grid-shooting');
 
 function numberOrNull(value) {
   const number = Number(value);
@@ -12,7 +13,6 @@ function evaluateAfkFirePolicyCore(input = {}, options = {}) {
   const hp = numberOrNull(input.remainingHp ?? input.hp);
   const fullRange = Math.max(0, Number(options.fullRangeCm ?? 1000) || 1000);
   const maxRange = Math.max(fullRange, Number(options.maxRangeCm ?? 14500) || 14500);
-  const ownDps = Math.max(0, Number(options.ownDamageRateHpPerSec ?? 3) || 3);
   const externalDps = Math.max(0, Number(input.externalDamageRateHpPerSec
     ?? options.externalDamageRateHpPerSec
     ?? 0) || 0);
@@ -21,8 +21,11 @@ function evaluateAfkFirePolicyCore(input = {}, options = {}) {
   const flightMs = Math.max(0, Number(input.shotFlightMs
     ?? options.shotFlightMs
     ?? (distance === null ? 0 : distance * 1000 / projectileSpeed)) || 0);
-  const cadenceMs = Math.max(1, Number(options.shotCadenceMs ?? 450) || 450);
-  const safetyBuffer = Math.max(0, Number(options.hpSafetyBuffer ?? 3) || 3);
+  const cadenceMs = Math.max(1, Number(options.shotCadenceMs ?? 500) || 500);
+  const arrivalHpReserve = Math.max(0, Number(options.arrivalHpReserve ?? 10) || 10);
+  const tickMs = Math.max(1, Number(options.tickMs ?? options.combatServerTickMs ?? 50) || 50);
+  const gridStep = Number(options.gridStep) === 5 ? 5 : 10;
+  const currentTick = Number(input.shootingTick ?? input.gameTick);
   const pendingDamage = Math.max(0, Number(input.pendingOwnDamageHp || 0) || 0);
   if (input.invulnerable === true) return { authorized: false, reason: 'afk-fire-invulnerable' };
   if (distance === null || hp === null) return { authorized: false, reason: 'afk-fire-missing-realtime-hp-or-distance' };
@@ -36,26 +39,38 @@ function evaluateAfkFirePolicyCore(input = {}, options = {}) {
     segmentOverheadMs: options.segmentOverheadMs
   });
   const timeToNearMs = Math.max(0, Number(route.etaMs || 0));
-  const ownProjectedBeforeNear = pendingDamage
-    + ownDps * ((timeToNearMs + flightMs) / 1000)
-    + shotDamage;
   const externalProjectedBeforeNear = externalDps * (timeToNearMs / 1000);
-  const combinedProjectedBeforeNear = ownProjectedBeforeNear + externalProjectedBeforeNear;
-  const ownKillTimeMs = ownDps > 0 ? Math.max(0, hp - pendingDamage) / ownDps * 1000 : Infinity;
+  const availableShots = Number.isSafeInteger(currentTick) && currentTick > 0
+    ? countGridSlotsUntil({
+        currentTick,
+        etaMs: timeToNearMs,
+        tickMs,
+        gridStep,
+        lastClaimedTick: input.lastClaimedTick
+      })
+    : null;
+  const shotBudget = Number.isFinite(hp) && availableShots !== null
+    ? Math.max(0, Math.floor((hp - pendingDamage - externalProjectedBeforeNear - arrivalHpReserve) / shotDamage))
+    : null;
+  const shotBudgetWithoutExternal = Number.isFinite(hp) && availableShots !== null
+    ? Math.max(0, Math.floor((hp - pendingDamage - arrivalHpReserve) / shotDamage))
+    : null;
+  const ownKillTimeMs = null;
   const externalKillTimeMs = externalDps > 0 ? hp / externalDps * 1000 : Infinity;
   const near = distance <= fullRange;
-  const ownWouldFinishEarly = !near && hp <= ownProjectedBeforeNear + safetyBuffer;
-  const combinedWouldFinishEarly = !near
-    && externalDps > 0
-    && hp <= combinedProjectedBeforeNear + safetyBuffer;
-  const authorized = near || (!ownWouldFinishEarly && !combinedWouldFinishEarly);
+  const budgetReady = availableShots !== null && shotBudget !== null && availableShots <= shotBudget;
+  const authorized = near || budgetReady;
+  const ownWouldFinishEarly = !near && availableShots !== null && shotBudgetWithoutExternal !== null
+    && availableShots > shotBudgetWithoutExternal;
   return {
     authorized,
     reason: authorized
       ? 'afk-fire-authorized'
-      : (ownWouldFinishEarly
+      : (!near && availableShots === null
+          ? 'afk-fire-missing-game-tick'
+          : (ownWouldFinishEarly
           ? 'afk-fire-delay-own-kill-before-near'
-          : 'afk-fire-delay-external-kill-before-near'),
+          : 'afk-fire-delay-external-kill-before-near')),
     distanceCm: Math.round(distance),
     remainingHp: hp,
     fullRangeCm: Math.round(fullRange),
@@ -63,15 +78,18 @@ function evaluateAfkFirePolicyCore(input = {}, options = {}) {
     near,
     timeToNearMs: Math.round(timeToNearMs),
     route,
-    ownProjectedBeforeNear: Number(ownProjectedBeforeNear.toFixed(2)),
+    prearrival: !near,
+    arrivalHpReserve,
+    shotDamageHp: shotDamage,
+    availableShots,
+    shotBudget,
+    shotBudgetWithoutExternal,
     externalProjectedBeforeNear: Number(externalProjectedBeforeNear.toFixed(2)),
-    combinedProjectedBeforeNear: Number(combinedProjectedBeforeNear.toFixed(2)),
     ownKillTimeMs: Number.isFinite(ownKillTimeMs) ? Math.round(ownKillTimeMs) : null,
     externalKillTimeMs: Number.isFinite(externalKillTimeMs) ? Math.round(externalKillTimeMs) : null,
     externalDamageRateHpPerSec: Number(externalDps.toFixed(3)),
     shotFlightMs: Math.round(flightMs),
     pendingDamageHp: pendingDamage,
-    shotDamageHp: shotDamage,
     shotCadenceMs: Math.round(cadenceMs)
   };
 }

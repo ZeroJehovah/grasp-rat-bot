@@ -88,7 +88,7 @@ function apply(adapter, target, stamina5s, entities = []) {
   };
   return adapter.applyDecision({
     realtime: {
-      tick: 1,
+      tick: 10,
       receivedAtMs: 1000,
       self: { ...self, stamina_5s_remaining_milli: stamina5s },
       entities: [{ ...self, stamina_5s_remaining_milli: stamina5s }, target, ...entities],
@@ -213,7 +213,7 @@ function runAfkCombatHandoffReserveSelfTest() {
     const target = afkTarget();
     const result = adapter.applyDecision({
       realtime: {
-        tick: 1,
+        tick: 10,
         receivedAtMs: 1000,
         self,
         entities: [self, target],

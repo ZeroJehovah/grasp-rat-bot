@@ -1394,7 +1394,7 @@ function assertDualTargetRuntimeRules() {
     'secondary-sustained-damage-hp50-race');
   assert.strictEqual(damagingPressure.combat?.fireTarget?.userId, 8);
   assert.strictEqual(damagingPressure.combat?.shooting?.secondaryPolicy?.throttleExempt, false);
-  assert.strictEqual(damagingPressure.combat?.shooting?.secondaryPolicy?.cadenceMs, 160);
+  assert.strictEqual(damagingPressure.combat?.shooting?.secondaryPolicy?.cadenceMs, 500);
   assert.strictEqual(damagingPressure.combat?.movement?.secondaryTarget?.direction?.dx, -1);
 
   const safePressureAdapter = createBrowserlessDecisionAdapter(common);
@@ -2616,7 +2616,7 @@ function assertAfkProfitIgnoresOffLaneActiveBystander() {
     stamina_5s_limit_milli: 10000
   });
   const profitTarget = ordinaryProfitTarget(42, 12801, 147);
-  const firstState = escortState(self, [profitTarget], 1);
+  const firstState = escortState(self, [profitTarget], 10);
   const first = decide(decisionAdapter, firstState, 1000, null, adapterOptions);
   assert.strictEqual(first.action?.kind, 'attack');
   assert.strictEqual(first.action?.target?.userId, 42);
@@ -2826,7 +2826,7 @@ function assertPostKillSettlementContinuity() {
     }
   });
   const execution = actionAdapter.applyDecision(
-    { realtime: { tick: 1, self, entities: [self, secondary] } },
+    { realtime: { tick: 10, self, entities: [self, secondary] } },
     {
       action: {
         kind: 'combat-live',
@@ -2879,7 +2879,7 @@ function assertPostKillSettlementContinuity() {
           sendShoot(x, y) { fired.push({ x, y }); return { ok: true }; }
         }
       });
-      adapter.applyDecision({ realtime: { tick: 2, self, entities: [self, secondary] } }, {
+      adapter.applyDecision({ realtime: { tick: 20, self, entities: [self, secondary] } }, {
         action: composite, combat: { target: secondary, ...protectedCombat.dryRun }
       });
       assert.deepStrictEqual(sent.at(-1), direction, 'settlement must preserve Dodge on the physical velocity path');

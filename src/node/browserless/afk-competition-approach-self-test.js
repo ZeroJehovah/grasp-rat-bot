@@ -124,8 +124,12 @@ function runAfkCompetitionApproachSelfTest() {
     assert.equal(recovered.shoot.skipped, false);
     h.setNow(2450);
     h.adapter.observeState(h.frame({ x: -100, y: 0, stamina: 9500 }));
+    assert.equal(h.shots.length, 1);
+    assert.equal(h.adapter.getState().shootRepeatWaitReason, 'shoot-frame:frame-not-on-grid');
+    h.setNow(2500);
+    h.adapter.observeState(h.frame({ x: -100, y: 0, stamina: 9500 }));
     assert.equal(h.shots.length, 2);
-    assert.equal(h.shots[1].at - h.shots[0].at, 450);
+    assert.equal(h.shots[1].at - h.shots[0].at, 500);
     h.adapter.sealTransport(); cases++;
   }
   {

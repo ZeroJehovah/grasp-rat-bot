@@ -195,6 +195,15 @@ function createDailyDamagePlayerTracker(options = {}) {
     };
   }
 
+  // Hot-path callers only need the identity set; skip the per-player clone
+  // that status() performs for panels and reports.
+  function userIds(atMs = now()) {
+    ensureToday(atMs);
+    return Object.values(store.players)
+      .map(player => player.userId)
+      .filter(userId => userId !== null && userId !== undefined);
+  }
+
   function hasUserId(target, atMs = now()) {
     ensureToday(atMs);
     const userId = playerUserId(target);
@@ -461,6 +470,7 @@ function createDailyDamagePlayerTracker(options = {}) {
     recordDamage,
     resetObservation,
     hasUserId,
+    userIds,
     status
   };
 }

@@ -57,6 +57,7 @@ const {
   movementTimingSummary,
   selectRealtimeCombatState
 } = require('./browserless/state-store');
+const { createTickGridShootingState } = require('../strategy/tick-grid-shooting');
 const { evaluateCombatHpExitCore } = require('../strategy/combat-exit');
 const {
   activeTargetCompletionEstimate,
@@ -5663,7 +5664,7 @@ async function runSelfTest() {
           budget.authorizationSource
         ].join('|');
       })(),
-      want: 'paused|close-pressure-movement-reserve|pressure|160|2600|false|close-pressure-full-attack'
+      want: 'paused|close-pressure-movement-reserve|pressure|500|2600|false|close-pressure-full-attack'
     },
     {
       name: 'browserless stable close range overrides exhausted high-entropy fire gates without coverage',
@@ -8111,6 +8112,144 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'realtime|11|600|realtime|pos|100|2|realtime'
+    },
+    {
+      name: 'browserless shooting watermark uses one epoch-bound realtime slot across reset and day rotation',
+      got: (() => {
+        const firstDayMs = Date.parse('2026-10-18T12:00:00.000Z');
+        const nextDayMs = Date.parse('2026-10-18T16:00:17.000Z');
+        const store = createBrowserlessStateStore({ userId: 7, now: () => firstDayMs });
+        store.ingestFrame({ type: 'pos', tick: 100, entities: [], bullets: [] }, {
+          receivedAtMs: firstDayMs
+        });
+        const firstEpoch = store.getShootingFrameState().epoch;
+        const firstClaim = store.tryClaimShootSlot({
+          decisionEpoch: firstEpoch,
+          decisionTick: 100,
+          gridStep: 10,
+          atMs: firstDayMs + 50
+        });
+        store.reset({ userId: 7, reason: 'session-restart' });
+        const afterReset = store.getShootingFrameState();
+        store.ingestFrame({ type: 'pos', tick: 100, entities: [], bullets: [] }, {
+          receivedAtMs: firstDayMs + 100
+        });
+        const duplicateTick = store.getShootingFrameState();
+        store.ingestFrame({ type: 'pos', tick: 110, entities: [], bullets: [] }, {
+          receivedAtMs: firstDayMs + 600
+        });
+        const secondClaim = store.tryClaimShootSlot({
+          decisionEpoch: duplicateTick.epoch,
+          decisionTick: 110,
+          gridStep: 10,
+          atMs: firstDayMs + 650
+        });
+        store.ingestFrame({ type: 'snapshot', tick: 500, entities: [], bullets: [] }, {
+          receivedAtMs: firstDayMs + 700
+        });
+        const afterSnapshot = store.getShootingFrameState();
+        const freshStore = createBrowserlessStateStore({ userId: 7 });
+        const freshClaim = freshStore.tryClaimShootSlot({
+          decisionEpoch: 'shoot-epoch:1',
+          decisionTick: 100,
+          gridStep: 10,
+          atMs: firstDayMs
+        });
+        const oldEpoch = afterSnapshot.epoch;
+        store.ingestFrame({ type: 'pos', tick: 110, entities: [], bullets: [] }, {
+          receivedAtMs: nextDayMs
+        });
+        const rotated = store.getShootingFrameState();
+        const newDayClaim = store.tryClaimShootSlot({
+          decisionEpoch: rotated.epoch,
+          decisionTick: 110,
+          gridStep: 10,
+          atMs: nextDayMs + 50
+        });
+        store.ingestFrame({ type: 'pos', tick: 1719423, entities: [], bullets: [] }, {
+          receivedAtMs: nextDayMs + 100
+        });
+        const afterLateTick = store.getShootingFrameState();
+        store.ingestFrame({ type: 'pos', tick: 120, entities: [], bullets: [] }, {
+          receivedAtMs: nextDayMs + 500
+        });
+        const afterReconnect = store.getShootingFrameState();
+        const invalidStore = createBrowserlessStateStore({ userId: 7 });
+        for (const tick of [0, -1, 1.5, null]) {
+          invalidStore.ingestFrame({ type: 'pos', tick, entities: [], bullets: [] }, {
+            receivedAtMs: firstDayMs + 50
+          });
+        }
+        const invalidWatermark = invalidStore.getShootingFrameState();
+        invalidStore.ingestFrame({ type: 'pos', tick: 100, entities: [], bullets: [] }, {
+          receivedAtMs: firstDayMs + 100
+        });
+        const recoveredWatermark = invalidStore.getShootingFrameState();
+        return [
+          firstClaim.ok,
+          afterReset.epoch === firstEpoch,
+          afterReset.lastClaimedTick,
+          duplicateTick.tick,
+          duplicateTick.staleObservationCount,
+          secondClaim.ok,
+          afterSnapshot.tick,
+          afterSnapshot.lastClaimedTick,
+          freshClaim.reason,
+          freshStore.getShootingFrameState().epoch,
+          rotated.epoch === oldEpoch,
+          rotated.tick,
+          newDayClaim.ok,
+          afterLateTick.tick,
+          afterLateTick.lastClaimedTick,
+          afterLateTick.staleObservationCount > 0,
+          afterReconnect.tick,
+          afterReconnect.epoch === rotated.epoch,
+          invalidWatermark.tick,
+          invalidWatermark.observationCount,
+          recoveredWatermark.tick,
+          recoveredWatermark.observationCount
+        ].join('|');
+      })(),
+      want: 'true|true|100|100|1|true|110|110|missing-realtime-watermark||false|110|true|110|110|true|120|true||0|100|1'
+    },
+    {
+      name: 'browserless canary session stores can share one process shooting watermark',
+      got: (() => {
+        const atMs = Date.parse('2026-10-18T12:00:00.000Z');
+        const sharedFrame = createTickGridShootingState();
+        const first = createBrowserlessStateStore({ userId: 7, now: () => atMs, shootingFrame: sharedFrame });
+        first.ingestFrame({ type: 'pos', tick: 100, entities: [], bullets: [] }, { receivedAtMs: atMs });
+        const epoch = first.getShootingFrameState().epoch;
+        const firstClaim = first.tryClaimShootSlot({
+          decisionEpoch: epoch,
+          decisionTick: 100,
+          gridStep: 10,
+          atMs
+        });
+        const second = createBrowserlessStateStore({
+          userId: 7,
+          now: () => atMs + 50,
+          shootingFrame: sharedFrame
+        });
+        second.ingestFrame({ type: 'pos', tick: 100, entities: [], bullets: [] }, {
+          receivedAtMs: atMs + 50
+        });
+        const afterSecondIngest = second.getShootingFrameState();
+        const duplicate = second.tryClaimShootSlot({
+          decisionEpoch: epoch,
+          decisionTick: 100,
+          gridStep: 10,
+          atMs: atMs + 50
+        });
+        return [
+          firstClaim.ok,
+          afterSecondIngest.epoch === epoch,
+          afterSecondIngest.tick,
+          afterSecondIngest.lastClaimedTick,
+          duplicate.reason
+        ].join('|');
+      })(),
+      want: 'true|true|100|100|frame-slot-already-consumed'
     },
     {
       name: 'browserless state store realtime object reuse matches isolated normalization',
@@ -12637,7 +12776,7 @@ async function runSelfTest() {
           stateful.combatTarget !== null
         ].join('|');
       })(),
-      want: 'combat-live|combat-live-realtime|true|false|8|true'
+      want: 'combat-live|combat-live-realtime|true|true|8|true'
     },
     {
       name: 'browserless profit pursuit keeps finishing within one attack range beyond center',
@@ -12919,6 +13058,7 @@ async function runSelfTest() {
           },
           fallback: { tick: 64, frameAgeMs: 100, entities: [], coinDrops: [], messages: [] }
         }, stateful, {
+          combatEfficiencyWindowMs: 30000,
           nowMs: 62000,
           controlMode: 'profit-live',
           combatEnabled: true,
@@ -13534,6 +13674,7 @@ async function runSelfTest() {
           }
         }, stateful, {
           ...buildBrowserlessRuntimeDefaults({}),
+          combatEfficiencyWindowMs: 30000,
           nowMs: 61000,
           controlMode: 'profit-live',
           combatEnabled: true,
@@ -13684,6 +13825,7 @@ async function runSelfTest() {
           }
         }, stateful, {
           ...buildBrowserlessRuntimeDefaults({}),
+          combatEfficiencyWindowMs: 30000,
           nowMs: 61000,
           controlMode: 'profit-live',
           combatEnabled: true,
@@ -13763,6 +13905,7 @@ async function runSelfTest() {
             realtime: { tick: Math.round(nowMs / 50), frameAgeMs: 0, self, entities: [self, target], bullets: [] },
             fallback: { tick: Math.round(nowMs / 50), frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
           }, stateful, {
+            combatEfficiencyWindowMs: 30000,
             nowMs,
             controlMode: 'profit-live',
             combatEnabled: true,
@@ -13930,6 +14073,7 @@ async function runSelfTest() {
           };
         };
         const pressure = buildBrowserlessCombatDryRun(frame(88), {
+          combatEfficiencyWindowMs: 30000,
           nowMs: 61000,
           decisionState: easonState,
           liveCombatEnabled: true,
@@ -13941,6 +14085,7 @@ async function runSelfTest() {
         const hardState = JSON.parse(JSON.stringify(easonState));
         hardState.combatTarget.self = { userId: 7, hp: 40 };
         const hardExit = buildBrowserlessCombatDryRun(frame(40), {
+          combatEfficiencyWindowMs: 30000,
           nowMs: 61100,
           decisionState: hardState,
           liveCombatEnabled: true,
@@ -14003,7 +14148,7 @@ async function runSelfTest() {
           }
         });
         const far = farAdapter.applyDecision({
-          realtime: { self: farSelf, entities: [farSelf, farTarget], bullets: [], tick: 1 }
+          realtime: { self: farSelf, entities: [farSelf, farTarget], bullets: [], tick: 10, frameAgeMs: 0 }
         }, {
           kind: 'profit-candidate',
           band: 'profit',
@@ -14028,7 +14173,7 @@ async function runSelfTest() {
           }
         });
         const close = closeAdapter.applyDecision({
-          realtime: { self: closeSelf, entities: [closeSelf, closeTarget], bullets: [], tick: 2 }
+          realtime: { self: closeSelf, entities: [closeSelf, closeTarget], bullets: [], tick: 20, frameAgeMs: 0 }
         }, {
           kind: 'profit-candidate',
           band: 'profit',
@@ -14053,7 +14198,7 @@ async function runSelfTest() {
           }
         });
         const full = fullAdapter.applyDecision({
-          realtime: { self: fullSelf, entities: [fullSelf, fullTarget], bullets: [], tick: 3 }
+          realtime: { self: fullSelf, entities: [fullSelf, fullTarget], bullets: [], tick: 30, frameAgeMs: 0 }
         }, {
           kind: 'profit-candidate',
           band: 'profit',
@@ -14103,7 +14248,8 @@ async function runSelfTest() {
           realtime: {
             self: approachSelf,
             entities: [approachSelf, { user_id: 8, x: 6000, y: 0, hp: 80, invulnerable: true }],
-            tick: 1
+            tick: 10,
+            frameAgeMs: 0
           }
         }, {
           kind: 'profit-candidate',
@@ -14129,7 +14275,8 @@ async function runSelfTest() {
           realtime: {
             self: waitSelf,
             entities: [waitSelf, { user_id: 8, x: 5000, y: 0, hp: 80, invulnerable: true }],
-            tick: 2
+            tick: 20,
+            frameAgeMs: 0
           }
         }, {
           kind: 'profit-candidate',
@@ -14188,7 +14335,8 @@ async function runSelfTest() {
           realtime: {
             self,
             entities: [self, realtimePassiveAfk({ user_id: 8, x: 5000, y: 0, hp: 80 })],
-            tick: 1
+            tick: 10,
+            frameAgeMs: 0
           }
         }, decision);
         const protectedShootCount = commands.filter(item => item === 'shoot').length;
@@ -14204,7 +14352,8 @@ async function runSelfTest() {
               invulnerable: false,
               invulnerableRemainingMs: 0
             })],
-            tick: 2
+            tick: 20,
+            frameAgeMs: 0
           }
         }, decision);
         return [
@@ -14301,7 +14450,7 @@ async function runSelfTest() {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
           type: 'pos',
-          tick: 59,
+          tick: 60,
           entities: [
             { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
             fullStamina5s({ entity_id: 2, user_id: 8, name: 'stationary-afk', x: 9585, y: 0, hp: 80, current_join_mode: 'Passive', drop: 12 })
@@ -14325,7 +14474,7 @@ async function runSelfTest() {
         });
         store.ingestFrame({
           type: 'pos',
-          tick: 60,
+          tick: 70,
           entities: [
             { entity_id: 1, user_id: 7, name: 'self', x: 583, y: 0, hp: 100, max_hp: 100, stamina_5s_remaining_milli: 10000 },
             fullStamina5s({ entity_id: 2, user_id: 8, name: 'stationary-afk', x: 9585, y: 0, hp: 80, current_join_mode: 'Passive', drop: 12 })
@@ -14371,7 +14520,7 @@ async function runSelfTest() {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
           type: 'pos',
-          tick: 59,
+          tick: 60,
           entities: [
             { entity_id: 1, user_id: 7, name: 'self', x: 0, y: 0, hp: 100, max_hp: 100 },
             fullStamina5s({ entity_id: 2, user_id: 8, name: 'afk', x: 1000, y: 0, hp: 80, current_join_mode: 'Passive', drop: 12 })
@@ -19782,7 +19931,7 @@ async function runSelfTest() {
           combat.shooting.reason
         ].join('|');
       })(),
-      want: '8|unavoidable-current-shot|true|false|true|combat-window-ready'
+      want: '8|unavoidable-current-shot|true|false|true|target-pressure-fire'
     },
     {
       name: 'browserless combat movement closes passive runner engagement',
@@ -19819,7 +19968,7 @@ async function runSelfTest() {
           combat.shooting.reason
         ].join('|');
       })(),
-      want: '8|passive-runner-close|true|1|0|combat-window-ready'
+      want: '8|passive-runner-close|true|1|0|passive-runner'
     },
     {
       name: 'browserless ballistic close shortens fast-transition flight and preserves profit mission resume',
@@ -21770,7 +21919,7 @@ async function runSelfTest() {
           decision.combat.shooting.reason
         ].join('|');
       })(),
-      want: 'flee|safety|incoming-bullet-dodge|8|defensive|direct-threat-dodge|true|combat-window-ready'
+      want: 'flee|safety|incoming-bullet-dodge|8|defensive|direct-threat-dodge|true|target-pressure-fire'
     },
     {
       name: 'browserless recovery first dodges when incoming bullet hp rule does not require exit',
@@ -23516,10 +23665,10 @@ async function runSelfTest() {
           combat.shooting.commandSuppressed
         ].join('|');
       })(),
-      want: 'true|normal|combat-window-ready|true|true'
+      want: 'true|finish|finish-low-threat|true|true'
     },
     {
-      name: 'browserless combat dry-run computes quadratic intercept without stamina reserve suppression',
+      name: 'browserless combat dry-run computes quadratic intercept while hard stamina reserve blocks fire',
       got: (() => {
         const aim = estimateAim(
           { user_id: 7, x: 0, y: 0 },
@@ -23562,7 +23711,7 @@ async function runSelfTest() {
           combat.shooting.commandSuppressed
         ].join('|');
       })(),
-      want: 'quadratic-intercept|1875|true|quadratic-intercept|unavoidable-current-shot|normal|combat-window-ready|false|true'
+      want: 'quadratic-intercept|1875|true|quadratic-intercept|unavoidable-current-shot|disabled|below-hard-reserve|false|true'
     },
     {
       name: 'browserless combat fire treats unknown self stamina as unknown not zero',
@@ -23588,7 +23737,7 @@ async function runSelfTest() {
           combat.self.stamina5s === null
         ].join('|');
       })(),
-      want: 'normal|combat-window-ready|true|true|true|true'
+      want: 'normal|normal-fire|true|true|true|true'
     },
     {
       name: 'browserless combat uses snapshot-enriched self stamina',
@@ -23633,7 +23782,7 @@ async function runSelfTest() {
           decision.combat.shooting.wouldShoot
         ].join('|');
       })(),
-      want: 'true|500|500|snapshot|normal|combat-window-ready|false'
+      want: 'true|500|500|snapshot|disabled|below-hard-reserve|false'
     },
     {
       name: 'browserless decision adapter exposes combat dry-run action without firing',
@@ -25044,7 +25193,7 @@ async function runSelfTest() {
           fs.rmSync(dir, { recursive: true, force: true });
         }
       })(),
-      want: 'false|60000|5000|1|0|true|true|true|true|true|160'
+      want: 'false|60000|5000|1|0|true|true|true|true|true|500'
     },
     {
       name: 'browserless economic stop-loss replay cuts long no-damage chase and preserves short control',
@@ -26373,7 +26522,7 @@ async function runSelfTest() {
           }
         });
         const action = adapter.applyDecision({
-          realtime: { self, entities: [self, target], bullets: [], tick: 1 }
+          realtime: { self, entities: [self, target], bullets: [], tick: 10 }
         }, {
           kind: 'profit-candidate',
           band: 'profit',
@@ -26396,7 +26545,7 @@ async function runSelfTest() {
       want: 'profit-attack|velocity|shoot|vel 0 0,shoot 1000 0 0 0|1|1'
     },
     {
-      name: 'browserless AFK ACK pacing keeps the production 450ms minimum interval',
+      name: 'browserless AFK fire uses the shared ten-frame slot and a late ACK does not gate the next shot',
       got: (() => {
         let t = 1000;
         const commands = [];
@@ -26424,7 +26573,7 @@ async function runSelfTest() {
           }
         });
         const action = adapter.applyDecision({
-          realtime: { self, entities: [target], tick: 1 },
+          realtime: { self, entities: [target], tick: 10 },
           command: { shooting: { pendingShots: [], expiredShots: [] } }
         }, {
           kind: 'profit-candidate',
@@ -26433,7 +26582,7 @@ async function runSelfTest() {
         });
         t = 1200;
         adapter.observeState({
-          realtime: { self, entities: [target], tick: 2 },
+          realtime: { self, entities: [target], tick: 20 },
           command: {
             lastAck: {
               bullet_id: 43,
@@ -26444,21 +26593,28 @@ async function runSelfTest() {
           }
         });
         const waiting = adapter.getState();
-        const timer = timers.find(item => !item.canceled);
+        const timer = timers.filter(item => !item.canceled && item.ms >= 250).pop();
         t += timer.ms;
         timer.fn();
+        const afterWake = adapter.getState();
+        adapter.observeState({
+          realtime: { self, entities: [target], tick: 30 },
+          command: { shooting: { pendingShots: [], expiredShots: [] } }
+        });
         const state = adapter.getState();
         return [
           action.shoot.repeat.repeatMs,
           waiting.shootSentCount,
-          waiting.shootRepeatWaitReason,
+          waiting.shootRepeatWaitReason || 'none',
           timer.ms,
+          afterWake.shootSentCount,
+          afterWake.shootRepeatWaitReason,
           state.shootSentCount,
           state.shootRepeatSentCount,
           commands.join(',')
         ].join('|');
       })(),
-      want: '450|1|shoot-command-throttled|250|2|1|vel 0 0,shoot 1000 0 0 0,shoot 1000 0 0 0'
+      want: '500|2|none|500|2|shoot-frame:frame-slot-already-consumed|3|2|vel 0 0,shoot 1000 0 0 0,shoot 1000 0 0 0,shoot 1024 0 0 0'
     },
     {
       name: 'browserless action adapter keeps AFK fire moving while a late ACK is pending',
@@ -26494,13 +26650,13 @@ async function runSelfTest() {
           action: { kind: 'attack', band: 'profit', target }
         };
         const action = adapter.applyDecision({
-          realtime: { self, entities: [target], tick: 1 },
+          realtime: { self, entities: [target], tick: 10 },
           command: { shooting: { pendingShots: [], expiredShots: [] } }
         }, decision);
         const firstCommandId = action.shoot.command.id;
         t = 4500;
         const expiredState = {
-          realtime: { self, entities: [target], tick: 2 },
+          realtime: { self, entities: [target], tick: 20 },
           command: {
             shooting: {
               ackTimeoutMs: 3000,
@@ -26523,7 +26679,7 @@ async function runSelfTest() {
         const refreshedSelf = { ...self, x: 100, y: 50 };
         const refreshedTarget = { ...target, x: 1100, y: 100 };
         adapter.observeState({
-          realtime: { self: refreshedSelf, entities: [refreshedTarget], tick: 3 },
+          realtime: { self: refreshedSelf, entities: [refreshedTarget], tick: 30, frameAgeMs: 0 },
           command: {
             lastAck: {
               bullet_id: 44,
@@ -26547,7 +26703,7 @@ async function runSelfTest() {
           commands.join(',')
         ].join('|');
       })(),
-      want: 'profit-attack|true|shoot-command-throttled|1|3|2|3|2|5|vel 0 0,shoot 1000 0 0 0,shoot 1024 0 0 0,vel 0 0,shoot 1100 100 100 50'
+      want: 'profit-attack|true|shoot-frame:frame-slot-already-consumed|1|3|2|3|2|5|vel 0 0,shoot 1000 0 0 0,shoot 1024 0 0 0,vel 0 0,shoot 1100 100 100 50'
     },
     {
       name: 'browserless AFK shooting continues after a missing ACK with a distinct retry aim',
@@ -26583,11 +26739,11 @@ async function runSelfTest() {
           action: { kind: 'attack', band: 'profit', target }
         };
         const first = adapter.applyDecision({
-          realtime: { self, entities: [target], tick: 1 },
+          realtime: { self, entities: [target], tick: 10 },
           command: { shooting: { pendingShots: [], expiredShots: [] } }
         }, decision);
         const expiredState = {
-          realtime: { self, entities: [target], tick: 2 },
+          realtime: { self, entities: [target], tick: 20 },
           command: {
             shooting: {
               ackTimeoutMs: 1000,
@@ -26610,7 +26766,7 @@ async function runSelfTest() {
         t = 7500;
         adapter.observeState({
           ...expiredState,
-          realtime: { self, entities: [target], tick: 3 }
+          realtime: { self, entities: [target], tick: 30 }
         });
         const state = adapter.getState();
         return [
@@ -26645,7 +26801,7 @@ async function runSelfTest() {
           }
         });
         const action = adapter.applyDecision({
-          realtime: { self: { x: 0, y: 0, stamina5s: 10000 }, entities: [target], tick: 1 },
+          realtime: { self: { x: 0, y: 0, stamina5s: 10000 }, entities: [target], tick: 10 },
           command: {
             shooting: {
               pendingShots: [{ commandId: 99, targetId: '8', requestedAtMs: 900 }],
@@ -26689,7 +26845,7 @@ async function runSelfTest() {
           realtime: {
             self: { x: 0, y: 0 },
             entities: [target],
-            tick: 1
+            tick: 10
           },
           command: { shooting: { pendingShots: [], expiredShots: [] } }
         }, {
@@ -26736,7 +26892,7 @@ async function runSelfTest() {
         };
         const ready = makeAdapter();
         const readyAction = ready.adapter.applyDecision({
-          realtime: { self: { x: 0, y: 0 }, entities: [target], tick: 1 },
+          realtime: { self: { x: 0, y: 0 }, entities: [target], tick: 10, frameAgeMs: 0 },
           command: { shooting: { pendingShots: [], expiredShots: [] } }
         }, {
           kind: 'profit-candidate',
@@ -26746,7 +26902,7 @@ async function runSelfTest() {
         });
         const blocked = makeAdapter();
         const blockedAction = blocked.adapter.applyDecision({
-          realtime: { self: { x: 0, y: 0 }, entities: [target], tick: 1 },
+          realtime: { self: { x: 0, y: 0 }, entities: [target], tick: 10, frameAgeMs: 0 },
           command: { shooting: { pendingShots: [], expiredShots: [] } }
         }, {
           kind: 'profit-candidate',
@@ -26792,7 +26948,7 @@ async function runSelfTest() {
           };
         };
         const apply = (fixture, stamina5s) => fixture.adapter.applyDecision({
-          realtime: { self: { x: 0, y: 0 }, entities: [target], tick: 1 },
+          realtime: { self: { x: 0, y: 0 }, entities: [target], tick: 10, frameAgeMs: 0 },
           command: { shooting: { pendingShots: [], expiredShots: [] } }
         }, {
           kind: 'profit-candidate',
@@ -26833,9 +26989,10 @@ async function runSelfTest() {
           now: () => t,
           commandIntervalMs: 1,
           decisionIntervalMs: 500,
-          combatShootMinIntervalMs: 160,
-          afkShootMinIntervalMs: 160,
+          combatShootMinIntervalMs: 500,
+          afkShootMinIntervalMs: 500,
           shootRepeatEnabled: true,
+          shootRepeatHoldMs: 3000,
           attackRangeCm: 14500,
           transportHighWaterBytes: 4096,
           setTimeout: (fn, ms) => {
@@ -26853,7 +27010,7 @@ async function runSelfTest() {
           }
         });
         const action = adapter.applyDecision({
-          realtime: { self, entities: [target], tick: 1 },
+          realtime: { self, entities: [target], tick: 10 },
           command: { shooting: { pendingShots: [], expiredShots: [] } }
         }, {
           kind: 'profit-candidate',
@@ -26867,7 +27024,7 @@ async function runSelfTest() {
         bufferedAmount = 8192;
         t = 1200;
         adapter.observeState({
-          realtime: { self, entities: [target], tick: 2 },
+          realtime: { self, entities: [target], tick: 20 },
           command: {
             lastAck: {
               bullet_id: 45,
@@ -26877,21 +27034,27 @@ async function runSelfTest() {
             shooting: { pendingShots: [], expiredShots: [] }
           }
         });
+        const pausedPublication = adapter.getPublicationState();
         bufferedAmount = 0;
-        const resumed = timers.shift();
+        const resumed = timers.filter(item => !item.canceled && item.ms >= 250).pop();
         t += resumed.ms;
         resumed.fn();
+        const afterWake = adapter.getState();
+        t += 500;
+        adapter.observeState({
+          realtime: { self, entities: [target], tick: 30 },
+          command: { shooting: { pendingShots: [], expiredShots: [] } }
+        });
         const state = adapter.getState();
-        const publicationState = adapter.getPublicationState();
         return [
           commands.join(','),
+          pausedPublication.shootRepeatSuppressedCount,
+          afterWake.shootSentCount,
           state.shootSentCount,
-          state.shootRepeatSentCount,
-          publicationState.shootRepeatSuppressedCount,
           state.lastTransportBufferedAmount
         ].join('|');
       })(),
-      want: 'vel 0 0,shoot 1000 0 0 0|1|0|2|0'
+      want: 'vel 0 0,shoot 1000 0 0 0,shoot 1000 0 0 0,shoot 1024 0 0 0|1|2|3|0'
     },
     {
       name: 'browserless action adapter keeps AFK repeat cadence across a decision boundary',
@@ -26933,12 +27096,12 @@ async function runSelfTest() {
           }
         };
         const first = adapter.applyDecision({
-          realtime: { self, entities: [target], tick: 1 },
+          realtime: { self, entities: [target], tick: 10 },
           command: { shooting: { pendingShots: [], expiredShots: [] } }
         }, decision);
         t = 2000;
         const second = adapter.applyDecision({
-          realtime: { self, entities: [target], tick: 2 },
+          realtime: { self, entities: [target], tick: 20 },
           command: {
             shooting: {
               pendingShots: [{ commandId: first.shoot.command.id, targetId: '8', targetX: 1000, targetY: 0 }],
@@ -26948,7 +27111,7 @@ async function runSelfTest() {
         }, decision);
         t = 2160;
         adapter.observeState({
-          realtime: { self, entities: [target], tick: 3 },
+          realtime: { self, entities: [target], tick: 30 },
           command: {
             lastAck: {
               bullet_id: 46,
@@ -27002,7 +27165,7 @@ async function runSelfTest() {
           }
         });
         const action = adapter.applyDecision({
-          realtime: { self, entities: [target], tick: 1 }
+          realtime: { self, entities: [target], tick: 10 }
         }, {
           kind: 'profit-candidate',
           band: 'profit',
@@ -27015,7 +27178,7 @@ async function runSelfTest() {
         adapter.observeState({
           realtime: {
             self,
-            tick: 2,
+            tick: 20,
             entities: [
               { user_id: 8, x: 1000, y: 0, current_join_mode: 'Active' }
             ]
@@ -27071,7 +27234,7 @@ async function runSelfTest() {
           }
         });
         const action = adapter.applyDecision({
-          realtime: { self, entities: [target], tick: 1 }
+          realtime: { self, entities: [target], tick: 10 }
         }, {
           kind: 'profit-candidate',
           band: 'profit',
@@ -27080,7 +27243,7 @@ async function runSelfTest() {
         adapter.observeState({
           realtime: {
             self,
-            tick: 2,
+            tick: 20,
             entities: [{ ...target, invulnerable: true, invulnerableRemainingMs: 5000 }]
           }
         });
@@ -27300,9 +27463,9 @@ async function runSelfTest() {
             opportunisticShot: target
           }
         });
-        t = 1160;
+        t = 1600;
         adapter.observeState({
-          realtime: { self, entities: [target], tick: 71 },
+          realtime: { self, entities: [target], tick: 80 },
           command: {
             lastAck: {
               bullet_id: 47,
@@ -27324,7 +27487,7 @@ async function runSelfTest() {
           commands[commands.length - 1]
         ].join('|');
       })(),
-      want: 'opportunistic-shot|2|1|3|160|cadence-repeat|shoot 1000 0 0 0|shoot 1000 0 0 0'
+      want: 'opportunistic-shot|2|1|3|500|cadence-repeat|shoot 1000 0 0 0|shoot 1000 0 0 0'
     },
     {
       name: 'browserless opportunistic shot is suppressed during recovery',
@@ -27371,7 +27534,7 @@ async function runSelfTest() {
           }
         });
         const action = adapter.applyDecision({
-          realtime: { self: { x: 0, y: 0 }, tick: 1 }
+          realtime: { self: { x: 0, y: 0 }, tick: 10 }
         }, {
           kind: 'combat-live',
           band: 'combat',
@@ -27437,7 +27600,7 @@ async function runSelfTest() {
       name: 'browserless action adapter preserves internal and external shoot request callback contracts',
       got: (() => {
         const stateSnapshot = {
-          realtime: { self: { x: 0, y: 0 }, tick: 7 }
+          realtime: { self: { x: 0, y: 0 }, tick: 10 }
         };
         const decision = {
           kind: 'combat-live',
@@ -27638,8 +27801,8 @@ async function runSelfTest() {
         for (let index = 0; index < 6; index += 1) {
           t = 1000 + index * 160;
           results.push(adapter.applyDecision({
-            realtime: { self: { x: 0, y: 0 }, tick: index + 1 }
-          }, decision(index + 1)));
+            realtime: { self: { x: 0, y: 0 }, tick: (index + 1) * 10 }
+          }, decision((index + 1) * 10)));
         }
         const state = adapter.getState();
         return [
@@ -29186,7 +29349,7 @@ async function runSelfTest() {
           shootRepeatEnabled: false,
           commandIntervalMs: 0
         });
-        const before = adapter.applyDecision({ realtime: { self: { x: 0, y: 0 } } }, {
+        const before = adapter.applyDecision({ realtime: { self: { x: 0, y: 0 }, tick: 10 } }, {
           action: { kind: 'combat-live', band: 'combat', reason: 'combat-live-realtime' },
           combat: {
             target: { userId: 8, x: 1000, y: 0 },

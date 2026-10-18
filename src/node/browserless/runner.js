@@ -119,6 +119,7 @@ const {
   effectiveLongStaminaExhaustedWindows
 } = require('../../shared/daily-stamina-window');
 const { createBrowserlessActionAdapter } = require('./action-adapter');
+const { createTickGridShootingState } = require('../../strategy/tick-grid-shooting');
 const {
   buildBrowserlessCombatDryRun,
   runCombatAttackClockSelfTest
@@ -2160,6 +2161,9 @@ function browserlessRestartDrainStateIsOffline(state = {}) {
 }
 
 async function runBrowserlessRunner(config, deps = {}) {
+  // One slot lineage for the runner process. Canary sessions are created per
+  // login, but same-day reconnect/relogin must not reopen a consumed frame.
+  const processShootingFrame = createTickGridShootingState();
   const now = typeof deps.now === 'function' ? deps.now : Date.now;
   const sleep = typeof deps.sleep === 'function'
     ? deps.sleep
@@ -5323,6 +5327,7 @@ async function runBrowserlessRunner(config, deps = {}) {
           combatCompletionTracker,
           damagePlayerTracker,
           dynamicWhitelist,
+          shootingFrame: processShootingFrame,
           allowMissingLoginPointBootstrap: true,
           onSnapshotSafety: recordSnapshotSafetyProgress,
           getRecoveryLineageState,
@@ -5487,6 +5492,7 @@ async function runBrowserlessRunner(config, deps = {}) {
         combatCompletionTracker,
         damagePlayerTracker,
         dynamicWhitelist,
+        shootingFrame: processShootingFrame,
         bypassPreLoginSafetyReason,
         precheckedSnapshotSafety,
         transportRecoveryEscalation,

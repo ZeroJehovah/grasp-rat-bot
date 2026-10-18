@@ -62,7 +62,8 @@ function runInvulnerableAfkSelfTest() {
     distanceCm: 10000,
     hp: 20,
     pendingOwnDamageHp: 3,
-    externalDamageRateHpPerSec: 0
+    externalDamageRateHpPerSec: 0,
+    shootingTick: 100
   }, {
     fullRangeCm: 1000,
     maxRangeCm: 14500,
@@ -83,7 +84,8 @@ function runInvulnerableAfkSelfTest() {
     distanceCm: 10000,
     hp: 45,
     pendingOwnDamageHp: 0,
-    externalDamageRateHpPerSec: 2.05
+    externalDamageRateHpPerSec: 2.05,
+    shootingTick: 100
   }, {
     fullRangeCm: 1000,
     maxRangeCm: 14500,
@@ -95,9 +97,10 @@ function runInvulnerableAfkSelfTest() {
     segmentOverheadMs: 120
   });
   assert.strictEqual(combinedDelayed.authorized, false);
-  assert.strictEqual(combinedDelayed.reason, 'afk-fire-delay-external-kill-before-near');
-  assert.ok(combinedDelayed.ownProjectedBeforeNear < combinedDelayed.remainingHp);
-  assert.ok(combinedDelayed.combinedProjectedBeforeNear >= combinedDelayed.remainingHp - 3);
+  assert.strictEqual(combinedDelayed.reason, 'afk-fire-delay-own-kill-before-near');
+  assert.strictEqual(combinedDelayed.arrivalHpReserve, 10);
+  assert.ok(combinedDelayed.availableShots > combinedDelayed.shotBudget);
+  assert.ok(combinedDelayed.externalProjectedBeforeNear > 0);
 
   const near = evaluateAfkFirePolicyCore({
     self: { x: 0, y: 0 },

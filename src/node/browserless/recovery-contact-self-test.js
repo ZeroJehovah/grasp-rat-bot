@@ -362,7 +362,15 @@ function runRecoveryContactSelfTest() {
       candidateKeys(ungatedDecision).includes('recover:wait-for-full-stamina-and-hp'),
       true
     );
-    assert.strictEqual(guardedDecision.reason, ungatedDecision.reason);
+    // 十帧节奏把战斗效率评估窗口从 14.4s 拉长到约 45s, 22s 的交战还没走完效率
+    // 窗口, 因此不再进入近身压迫阶段; 最终结果由是否压制原地恢复决定。压制只
+    // 决定留下交战, 不能绕过体力储备: 这里 2239/5000 仍然不足以支付下一发。
+    assert.strictEqual(guardedDecision.reason, 'combat-live-realtime');
+    assert.strictEqual(guardedDecision.action.kind, 'combat-live');
+    assert.strictEqual(guardedDecision.combat.shooting.wouldShoot, false);
+    assert.strictEqual(guardedDecision.combat.shooting.reason, 'finish-reserve');
+    assert.strictEqual(ungatedDecision.reason, 'wait-for-full-stamina-and-hp');
+    assert.strictEqual(ungatedDecision.action.kind, 'recover');
     cases.push('engaged-threat-in-attack-range-drops-the-recovery-hold-candidate');
   }
 

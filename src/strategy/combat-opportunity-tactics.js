@@ -190,7 +190,7 @@ function invulnerableEscortWaitCore(input = {}, options = {}) {
   const travelMs = Math.max(0, distance - 150) / 1000 * 1000;
   // Optimistic lower bound: every normal-cadence shot hits for 3 HP.
   // A pessimistic kill estimate would defer an otherwise collectible reward.
-  const killMs = Math.ceil(primaryHp / 3) * 160;
+  const killMs = Math.ceil(primaryHp / 3) * 500;
   // Approach can overlap protection. Rates affect this safety wait only,
   // never reward, score, target admission, or fire authorization.
   const rewardEtaMs = knownRemaining ? Math.max(remaining, travelMs) + killMs + 500 : null;
