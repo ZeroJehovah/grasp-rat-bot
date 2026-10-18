@@ -99,6 +99,7 @@ const DEFAULT_NEAR_COIN_CONTINUATION_LEASE_SLACK_MS = 125;
 const DEFAULT_NEAR_COIN_CONTINUATION_MIN_LEASE_MS = 250;
 const DEFAULT_NEAR_COIN_CONTINUATION_STOP_SPEED_TOLERANCE = 1;
 const DEFAULT_NEAR_COIN_CONTINUATION_SNAPSHOT_MAX_AGE_MS = 5000;
+const DEFAULT_PERSISTENT_COIN_CONTINUATION_SNAPSHOT_MAX_AGE_MS = 90000;
 const INVULNERABILITY_METADATA_FIELDS = Object.freeze([
   'invulnerable_remaining_ticks',
   'invincible_remaining_ticks',
@@ -2092,6 +2093,12 @@ function createBrowserlessActionAdapter(options = {}) {
 
   function currentCoinForContinuation(stateSnapshot, targetKey, continuation) {
     const realtime = stateSnapshot?.realtime || null;
+    const plannerTarget = continuation?.target || null;
+    const snapshotTarget = plannerTarget?.snapshotOnly === true
+      || plannerTarget?.authority === 'snapshot'
+      || plannerTarget?.source === 'snapshot';
+    const persistentSnapshotTarget = snapshotTarget
+      && plannerTarget?.persistentCandidateEligible === true;
     const realtimeCoinListAvailable = Boolean(
       realtime
       && (!realtime.authority || realtime.authority === 'realtime')
@@ -2102,13 +2109,10 @@ function createBrowserlessActionAdapter(options = {}) {
     if (realtimeCoinListAvailable) {
       // An explicit realtime list is authoritative, including removal of the
       // selected coin. Never resurrect a missing realtime coin from fallback.
-      return realtime.coinDrops.find(coin => coinTargetKey(coin) === targetKey) || null;
+      const realtimeCoin = realtime.coinDrops.find(coin => coinTargetKey(coin) === targetKey) || null;
+      if (realtimeCoin || !persistentSnapshotTarget) return realtimeCoin;
     }
 
-    const plannerTarget = continuation?.target || null;
-    const snapshotTarget = plannerTarget.snapshotOnly === true
-      || plannerTarget.authority === 'snapshot'
-      || plannerTarget.source === 'snapshot';
     if (!snapshotTarget) return null;
     const fallback = stateSnapshot?.fallback || stateSnapshot?.snapshot || null;
     if (!fallback
@@ -2120,9 +2124,12 @@ function createBrowserlessActionAdapter(options = {}) {
     }
     const maxAgeMs = Math.max(
       1000,
-      Number(options.coinContinuationSnapshotMaxAgeMs
-        ?? options.snapshotCoinFallbackMaxAgeMs
-        ?? DEFAULT_NEAR_COIN_CONTINUATION_SNAPSHOT_MAX_AGE_MS)
+      Number((persistentSnapshotTarget
+        ? (options.coinContinuationPersistentSnapshotMaxAgeMs
+          ?? DEFAULT_PERSISTENT_COIN_CONTINUATION_SNAPSHOT_MAX_AGE_MS)
+        : (options.coinContinuationSnapshotMaxAgeMs
+          ?? options.snapshotCoinFallbackMaxAgeMs
+          ?? DEFAULT_NEAR_COIN_CONTINUATION_SNAPSHOT_MAX_AGE_MS)))
     );
     const frameAgeMs = optionalNumber(fallback.frameAgeMs);
     // An unknown age is not evidence that the snapshot is fresh enough to

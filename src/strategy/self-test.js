@@ -137,6 +137,10 @@ const {
   snapshotCoinNavigationReasonCore
 } = require('./coin-target');
 const {
+  persistentCoinObservationKeyCore,
+  updatePersistentCoinObservationsCore
+} = require('./coin-persistence');
+const {
   coinFailureIgnoreCore,
   staleCoinEscapeDirectionCore,
   coinProgressIntentCore,
@@ -10183,6 +10187,150 @@ function runStrategyModuleSelfTests() {
       && Math.abs(interpolatedKnnFeatures[3] - interpolatedKnnFeatures[5]) < 1e-9
       && outsideTrainingRange.applied === false
       && outsideTrainingRange.reason === 'outside-trained-distance'
+  });
+
+  const persistenceBase = {
+    minAmount: 10,
+    waitTicks: 400,
+    maxGapTicks: 1800,
+    maxAgeMs: 90000,
+    maxEntries: 256,
+    epoch: 1,
+    dayKey: '2026-10-18'
+  };
+  const persistenceCoin = { drop_id: 500, amount: 5000, x: 100000, y: 0 };
+  const updatePersistence = (records, options) => updatePersistentCoinObservationsCore(records, {
+    ...persistenceBase,
+    ...options
+  });
+
+  const liveThenSnapshotEarlyRecords = {};
+  updatePersistence(liveThenSnapshotEarlyRecords, {
+    nowMs: 1000000,
+    realtimeTick: 1000,
+    realtimeObservedAtMs: 1000000,
+    realtimeCoins: [persistenceCoin]
+  });
+  const liveThenSnapshotEarly = updatePersistence(liveThenSnapshotEarlyRecords, {
+    nowMs: 1030000,
+    snapshotTick: 1399,
+    snapshotObservedAtMs: 1030000,
+    snapshotCoins: [persistenceCoin],
+    snapshotHasCoinList: true
+  });
+  const liveThenSnapshotBoundary = updatePersistence(liveThenSnapshotEarlyRecords, {
+    nowMs: 1040000,
+    snapshotTick: 1400,
+    snapshotObservedAtMs: 1040000,
+    snapshotCoins: [persistenceCoin],
+    snapshotHasCoinList: true
+  });
+
+  const snapshotFirstRecords = {};
+  const snapshotFirst = updatePersistence(snapshotFirstRecords, {
+    nowMs: 2000000,
+    snapshotTick: 2000,
+    snapshotObservedAtMs: 2000000,
+    snapshotCoins: [persistenceCoin],
+    snapshotHasCoinList: true
+  });
+  const snapshotDuplicate = updatePersistence(snapshotFirstRecords, {
+    nowMs: 2010000,
+    snapshotTick: 2000,
+    snapshotObservedAtMs: 2010000,
+    snapshotCoins: [persistenceCoin],
+    snapshotHasCoinList: true
+  });
+  const snapshotDuplicateObservationCount = snapshotFirstRecords['id:500']?.snapshotObservationCount;
+  const snapshotSecondEarly = updatePersistence(snapshotFirstRecords, {
+    nowMs: 2030000,
+    snapshotTick: 2399,
+    snapshotObservedAtMs: 2030000,
+    snapshotCoins: [persistenceCoin],
+    snapshotHasCoinList: true
+  });
+  const snapshotSecondBoundary = updatePersistence(snapshotFirstRecords, {
+    nowMs: 2040000,
+    snapshotTick: 2400,
+    snapshotObservedAtMs: 2040000,
+    snapshotCoins: [persistenceCoin],
+    snapshotHasCoinList: true
+  });
+
+  const snapshotThenRealtimeRecords = {};
+  updatePersistence(snapshotThenRealtimeRecords, {
+    nowMs: 3000000,
+    snapshotTick: 3000,
+    snapshotObservedAtMs: 3000000,
+    snapshotCoins: [persistenceCoin],
+    snapshotHasCoinList: true
+  });
+  const snapshotThenRealtimeEarly = updatePersistence(snapshotThenRealtimeRecords, {
+    nowMs: 3030000,
+    realtimeTick: 3399,
+    realtimeObservedAtMs: 3030000,
+    realtimeCoins: [persistenceCoin]
+  });
+  const snapshotThenRealtimeBoundary = updatePersistence(snapshotThenRealtimeRecords, {
+    nowMs: 3040000,
+    realtimeTick: 3400,
+    realtimeObservedAtMs: 3040000,
+    realtimeCoins: [persistenceCoin]
+  });
+
+  const disappearedRecords = {};
+  updatePersistence(disappearedRecords, {
+    nowMs: 4000000,
+    snapshotTick: 4000,
+    snapshotObservedAtMs: 4000000,
+    snapshotCoins: [persistenceCoin],
+    snapshotHasCoinList: true
+  });
+  updatePersistence(disappearedRecords, {
+    nowMs: 4010000,
+    snapshotTick: 4010,
+    snapshotObservedAtMs: 4010000,
+    snapshotCoins: [],
+    snapshotHasCoinList: true
+  });
+  const reappeared = updatePersistence(disappearedRecords, {
+    nowMs: 4030000,
+    snapshotTick: 4200,
+    snapshotObservedAtMs: 4030000,
+    snapshotCoins: [persistenceCoin],
+    snapshotHasCoinList: true
+  });
+  const reappearedRecord = disappearedRecords['id:500'];
+
+  results.push({
+    name: 'high-value-coin-persistence-requires-explicit-id-and-distinct-evidence',
+    passed: persistentCoinObservationKeyCore({ x: 1, y: 2, amount: 5000 }) === ''
+      && persistentCoinObservationKeyCore({
+        stableCoinId: null,
+        drop_id: '1:2:5000',
+        id: '1:2:5000',
+        x: 1,
+        y: 2,
+        amount: 5000
+      }) === ''
+      && persistentCoinObservationKeyCore(persistenceCoin) === 'id:500'
+      && Object.keys(liveThenSnapshotEarly).length === 0
+      && liveThenSnapshotBoundary['id:500']?.qualification === 'realtime-then-snapshot-ticks'
+      && liveThenSnapshotBoundary['id:500']?.snapshotObservationCount === 2
+      && Object.keys(snapshotFirst).length === 0
+      && Object.keys(snapshotDuplicate).length === 0
+      && snapshotDuplicateObservationCount === 1
+      // Two distinct complete snapshots are enough for a snapshot-only coin;
+      // their normal ~600-tick spacing already exceeds the 20-second intent.
+      && snapshotSecondEarly['id:500']?.qualification === 'snapshot-distinct-observations'
+      && snapshotSecondEarly['id:500']?.snapshotObservationCount === 2
+      && snapshotSecondBoundary['id:500']?.qualification === 'snapshot-distinct-observations'
+      && snapshotSecondBoundary['id:500']?.snapshotObservationCount === 3
+      && Object.keys(snapshotThenRealtimeEarly).length === 0
+      && snapshotThenRealtimeBoundary['id:500']?.qualification === 'snapshot-then-realtime-ticks'
+      && Object.keys(reappeared).length === 0
+      && reappearedRecord?.snapshotObservationCount === 1
+      && reappearedRecord?.firstSeenTick === 4200
   });
 
   // Test opportunity constants validation

@@ -2906,6 +2906,262 @@ function assertPostKillSettlementContinuity() {
     'the final prospective-Dodge owner remains authoritative without a live projectile lease');
 }
 
+function assertPersistentHighValueCoinAdmission() {
+  const common = {
+    userId: 7,
+    controlMode: 'non-combat-profit',
+    combatEnabled: false,
+    dynamicProfitThresholdEnabled: false,
+    singleCoinBaitEnabled: false,
+    finalActionArbitrationHoldMs: 0,
+    opportunitySwitchConfirmFrames: 1,
+    opportunitySwitchMargin: 0,
+    opportunitySwitchRelativeMargin: 0
+  };
+  const t0 = Date.parse('2026-10-18T11:00:00Z');
+  const snapshotFrame = ({
+    tick,
+    snapshotTick = tick,
+    nowMs,
+    self = fullStaminaSelf(),
+    snapshotCoins = [],
+    realtimeCoins = [],
+    entities = []
+  }) => {
+    const frame = state(self, entities, realtimeCoins, realtimeCoins.length > 0);
+    frame.realtime.tick = tick;
+    frame.realtime.receivedAtMs = nowMs;
+    frame.fallback = {
+      tick: snapshotTick,
+      frameAgeMs: 0,
+      receivedAtMs: nowMs,
+      entities: [],
+      coinDrops: snapshotCoins,
+      coinDropsObserved: true,
+      messages: []
+    };
+    return frame;
+  };
+
+  const farCoin = { drop_id: 500, amount: 5000, x: 100000, y: 0 };
+  const firstAdapter = createBrowserlessDecisionAdapter(common);
+  const first = decide(
+    firstAdapter,
+    snapshotFrame({ tick: 1000, nowMs: t0, snapshotCoins: [farCoin] }),
+    t0,
+    null,
+    common
+  );
+  assert.strictEqual(first.action?.kind, 'wait');
+  const repeatedSnapshot = decide(
+    firstAdapter,
+    snapshotFrame({ tick: 1000, nowMs: t0 + 1000, snapshotCoins: [farCoin] }),
+    t0 + 1000,
+    null,
+    common
+  );
+  assert.strictEqual(repeatedSnapshot.action?.kind, 'wait');
+  const persistence = firstAdapter.getRealtimePersistenceState();
+  assert.strictEqual(persistence.persistentCoinObservations?.['id:500']?.snapshotObservationCount, 1);
+  assert.strictEqual(persistence.persistentCoinSnapshotIdentity, '1000');
+
+  // Production planning runs in a Worker: its updated ledger must return
+  // through syncPlannerDecision, or the next statePatch resets the Worker's
+  // copy to the main thread's empty ledger.
+  assert.strictEqual(
+    first.stateful?.persistentCoinObservations?.['id:500']?.snapshotObservationCount,
+    1,
+    'the planner result must serialize the persistence ledger'
+  );
+  assert.strictEqual(
+    first.stateful?.persistentCoinSnapshotIdentity,
+    '1000',
+    'the planner result must serialize the snapshot identity'
+  );
+  const plannerMirror = createBrowserlessDecisionAdapter(common);
+  plannerMirror.syncPlannerDecision({
+    stateful: {
+      profitTickEpoch: first.stateful.profitTickEpoch,
+      persistentCoinObservations: first.stateful.persistentCoinObservations,
+      persistentCoinSnapshotIdentity: first.stateful.persistentCoinSnapshotIdentity
+    }
+  });
+  const mirroredPersistence = plannerMirror.getRealtimePersistenceState();
+  assert.strictEqual(
+    mirroredPersistence.persistentCoinObservations?.['id:500']?.snapshotObservationCount,
+    1
+  );
+  assert.strictEqual(mirroredPersistence.persistentCoinSnapshotIdentity, '1000');
+  firstAdapter.patchState(mirroredPersistence);
+
+  const restoredAdapter = createBrowserlessDecisionAdapter(common);
+  restoredAdapter.patchState(persistence);
+  const secondNow = t0 + 30000;
+  const secondFrame = snapshotFrame({
+    // Two distinct complete snapshots are the snapshot-only persistence
+    // signal. Normal polls are about 600 ticks apart; an unusually early
+    // second poll still proves continuity without a second tick threshold.
+    tick: 1399,
+    nowMs: secondNow,
+    snapshotCoins: [farCoin]
+  });
+  const second = decide(restoredAdapter, secondFrame, secondNow, null, common);
+  assert.strictEqual(second.action?.kind, 'seek-coin');
+  assert.strictEqual(Number(second.action?.target?.id), 500);
+  assert.strictEqual(second.action?.target?.persistentCandidateEligible, true);
+  assert.strictEqual(second.input?.profitCoinSource, 'snapshot-persistent');
+  assert.ok(second.input?.dataGaps?.includes('persistent-snapshot-coin-candidate'));
+  assert.ok(second.profit?.candidates?.some(candidate => Number(candidate.id) === 500));
+
+  const roiFrame = snapshotFrame({
+    tick: 1399,
+    nowMs: secondNow,
+    snapshotCoins: [farCoin],
+    realtimeCoins: [{ drop_id: 501, amount: 1000, x: 1000, y: 0 }]
+  });
+  const roiDecision = decide(restoredAdapter, roiFrame, secondNow, null, common);
+  assert.strictEqual(roiDecision.action?.kind, 'coin');
+  assert.strictEqual(Number(roiDecision.action?.target?.id), 501);
+
+  const competitorCoin = { drop_id: 600, amount: 5000, x: 25000, y: 0 };
+  const competitor = {
+    entity_id: 8,
+    user_id: 8,
+    name: 'competitor',
+    x: 23000,
+    y: 0,
+    hp: 100,
+    max_hp: 100,
+    active: true,
+    current_join_mode: 'Active',
+    stamina_5s_remaining_milli: 500000,
+    stamina_5s_limit_milli: 1000000
+  };
+  const competitionAdapter = createBrowserlessDecisionAdapter(common);
+  decide(
+    competitionAdapter,
+    snapshotFrame({
+      tick: 5000,
+      nowMs: t0,
+      snapshotCoins: [competitorCoin],
+      realtimeCoins: [competitorCoin],
+      entities: [competitor]
+    }),
+    t0,
+    null,
+    common
+  );
+  const beforeBoundary = decide(
+    competitionAdapter,
+    snapshotFrame({
+      tick: 5399,
+      snapshotTick: 5000,
+      nowMs: t0 + 21995,
+      snapshotCoins: [competitorCoin],
+      realtimeCoins: [competitorCoin],
+      entities: [competitor]
+    }),
+    t0 + 21995,
+    null,
+    common
+  );
+  assert.notStrictEqual(Number(beforeBoundary.action?.target?.id), 600);
+  assert.ok(!(beforeBoundary.profit?.candidates || []).some(candidate => (
+    candidate.type === 'coin' && Number(candidate.id) === 600
+  )));
+  assert.strictEqual(beforeBoundary.input?.activeCoinCompetition?.contested?.length, 1);
+  const atBoundary = decide(
+    competitionAdapter,
+    snapshotFrame({
+      tick: 5400,
+      nowMs: t0 + 22000,
+      snapshotCoins: [competitorCoin],
+      realtimeCoins: [competitorCoin],
+      entities: [competitor]
+    }),
+    t0 + 22000,
+    null,
+    common
+  );
+  assert.strictEqual(atBoundary.input?.activeCoinCompetition?.persistentBypassCount, 1);
+  assert.strictEqual(Number(atBoundary.action?.target?.id), 600);
+
+  const noCompetitorCoin = { drop_id: 650, amount: 5000, x: 100000, y: 0 };
+  const noCompetitorAdapter = createBrowserlessDecisionAdapter(common);
+  decide(
+    noCompetitorAdapter,
+    snapshotFrame({ tick: 7000, nowMs: t0, snapshotCoins: [noCompetitorCoin] }),
+    t0,
+    null,
+    common
+  );
+  const enteredView = decide(
+    noCompetitorAdapter,
+    snapshotFrame({
+      tick: 7050,
+      snapshotTick: 7000,
+      nowMs: t0 + 2500,
+      self: fullStaminaSelf({ x: 90000 }),
+      snapshotCoins: [noCompetitorCoin],
+      realtimeCoins: [noCompetitorCoin]
+    }),
+    t0 + 2500,
+    null,
+    common
+  );
+  assert.strictEqual(enteredView.action?.kind, 'coin');
+  assert.strictEqual(Number(enteredView.action?.target?.id), 650);
+  assert.notStrictEqual(enteredView.action?.target?.persistentCandidateEligible, true);
+
+  const leftViewCoin = { drop_id: 700, amount: 5000, x: 40000, y: 0 };
+  const leftViewCompetitor = { ...competitor, x: 39000, y: 0 };
+  const leftViewAdapter = createBrowserlessDecisionAdapter(common);
+  decide(
+    leftViewAdapter,
+    snapshotFrame({
+      tick: 6000,
+      nowMs: t0,
+      realtimeCoins: [leftViewCoin],
+      entities: [leftViewCompetitor]
+    }),
+    t0,
+    null,
+    common
+  );
+  const movedSelf = fullStaminaSelf({ x: -20000, y: 0 });
+  const leftViewEarly = decide(
+    leftViewAdapter,
+    snapshotFrame({
+      tick: 6399,
+      nowMs: t0 + 19995,
+      self: movedSelf,
+      snapshotCoins: [leftViewCoin]
+    }),
+    t0 + 19995,
+    null,
+    common
+  );
+  assert.notStrictEqual(Number(leftViewEarly.action?.target?.id), 700);
+  const leftViewBoundary = decide(
+    leftViewAdapter,
+    snapshotFrame({
+      tick: 6400,
+      nowMs: t0 + 20000,
+      self: movedSelf,
+      snapshotCoins: [leftViewCoin]
+    }),
+    t0 + 20000,
+    null,
+    common
+  );
+  assert.strictEqual(leftViewBoundary.action?.kind, 'seek-coin');
+  assert.strictEqual(Number(leftViewBoundary.action?.target?.id), 700);
+  assert.strictEqual(
+    leftViewBoundary.action?.target?.persistentCoinObservation?.qualification,
+    'realtime-then-snapshot-ticks'
+  );
+}
+
 function runRemoteProfitDecisionSelfTest() {
   const realtimeScoreOptions = {
     isAfkProfitTarget: () => true,
@@ -3415,6 +3671,7 @@ function runRemoteProfitDecisionSelfTest() {
   assertDualTargetRuntimeRules();
   assertHpSegmentedSecondaryEngagementRules();
   assertPostKillSettlementContinuity();
+  assertPersistentHighValueCoinAdmission();
 
   const ordinaryAdapter = createBrowserlessDecisionAdapter({
     userId: 7,

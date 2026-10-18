@@ -99,6 +99,7 @@ const {
   createCanaryRunId,
   createMainThreadTimingStats,
   nextCombatControlTickCore,
+  overlayPersistentCoinPersistenceState,
   plannerResponseHasNewerPreemption,
   recordMainThreadTask,
   runPreLoginSnapshotSafety,
@@ -17233,6 +17234,32 @@ async function runSelfTest() {
         })
       ].join('|'),
       want: 'true|false|true'
+    },
+    {
+      name: 'browserless realtime worker cannot overwrite the planner-owned persistence ledger',
+      got: (() => {
+        const workerState = {
+          combatTarget: { id: 7 },
+          persistentCoinObservations: {
+            'id:500': { snapshotObservationCount: 1 }
+          },
+          persistentCoinSnapshotIdentity: '1000'
+        };
+        const overlaid = overlayPersistentCoinPersistenceState(workerState, {
+          persistentCoinObservations: {
+            'id:500': { snapshotObservationCount: 2 }
+          },
+          persistentCoinSnapshotIdentity: '1600'
+        });
+        return [
+          overlaid.persistentCoinObservations?.['id:500']?.snapshotObservationCount,
+          overlaid.persistentCoinSnapshotIdentity,
+          overlaid.combatTarget?.id,
+          overlaid === workerState,
+          overlayPersistentCoinPersistenceState(null, {})
+        ].join('|');
+      })(),
+      want: '2|1600|7|false|'
     },
     {
       name: 'browserless final arbitration does not hold over safety action',

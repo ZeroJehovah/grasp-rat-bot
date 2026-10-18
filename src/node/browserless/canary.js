@@ -340,6 +340,16 @@ function plannerResponseHasNewerPreemption(sentStatePatch = null, currentStatePa
     > finalActionPreemptionGeneration(sentStatePatch);
 }
 
+function overlayPersistentCoinPersistenceState(workerState = null, authoritativeState = null) {
+  if (!workerState) return null;
+  if (!authoritativeState || typeof authoritativeState !== 'object') return workerState;
+  return {
+    ...workerState,
+    persistentCoinObservations: authoritativeState.persistentCoinObservations || {},
+    persistentCoinSnapshotIdentity: String(authoritativeState.persistentCoinSnapshotIdentity || '')
+  };
+}
+
 function createTimingAggregate() {
   return {
     count: 0,
@@ -2046,6 +2056,15 @@ async function runReadOnlyCanary(config, options = {}) {
   let realtimeControlWorkerLastPersistenceAtMs = 0;
   let realtimeControlWorkerContext = null;
   let realtimeControlWorkerContextAtMs = 0;
+  // Only the planner observes coin snapshots. The realtime Worker mirrors the
+  // ledger through syncPlannerDecision, so an older in-flight realtime
+  // persistence response must never overwrite the main adapter's newer copy.
+  const withAuthoritativePersistentCoinState = workerState => {
+    const authoritative = decisionAdapter.getPersistentCoinPersistenceState?.()
+      || decisionAdapter.getRealtimePersistenceState?.()
+      || null;
+    return overlayPersistentCoinPersistenceState(workerState, authoritative);
+  };
   let plannerInFlight = false;
   let combatPersistenceScheduled = false;
   let combatPersistenceAtMs = 0;
@@ -3088,13 +3107,13 @@ async function runReadOnlyCanary(config, options = {}) {
     return realtimeControlWorkerContext;
   };
   const realtimePersistenceState = () => (
-    realtimeControlWorkerPersistenceState
+    withAuthoritativePersistentCoinState(realtimeControlWorkerPersistenceState)
       || decisionAdapter.getRealtimePersistenceState?.()
       || null
   );
   const realtimeDecisionState = () => {
     const base = decisionAdapter.getState?.() || {};
-    const current = realtimeControlWorkerPersistenceState;
+    const current = withAuthoritativePersistentCoinState(realtimeControlWorkerPersistenceState);
     return current && typeof current === 'object' ? { ...base, ...current } : base;
   };
   const applyDecisionWorkerEffects = effects => {
@@ -3387,7 +3406,9 @@ async function runReadOnlyCanary(config, options = {}) {
       const requestAgeMs = Math.max(0, responseAtMs - Number(request.atMs || responseAtMs));
       stages['worker-response-state'] = performance.now() - taskStarted;
       if (workerResult?.persistenceState) {
-        realtimeControlWorkerPersistenceState = workerResult.persistenceState;
+        realtimeControlWorkerPersistenceState = withAuthoritativePersistentCoinState(
+          workerResult.persistenceState
+        );
         realtimeControlWorkerStatusSummary = workerResult.statusSummary || realtimeControlWorkerStatusSummary;
         realtimeControlWorkerLastPersistenceAtMs = responseAtMs;
       }
@@ -5165,7 +5186,9 @@ async function runReadOnlyCanary(config, options = {}) {
       await realtimeControlWorker.flush();
       const finalRealtimeState = await realtimeControlWorker.requestPersistence();
       if (finalRealtimeState?.persistenceState) {
-        realtimeControlWorkerPersistenceState = finalRealtimeState.persistenceState;
+        realtimeControlWorkerPersistenceState = withAuthoritativePersistentCoinState(
+          finalRealtimeState.persistenceState
+        );
         realtimeControlWorkerStatusSummary = finalRealtimeState.statusSummary || realtimeControlWorkerStatusSummary;
       }
       await realtimeControlWorker.finalize(
@@ -5290,6 +5313,7 @@ module.exports = {
   inspectCanaryFrame,
   loginPointFromState,
   nextCombatControlTickCore,
+  overlayPersistentCoinPersistenceState,
   plannerResponseHasNewerPreemption,
   recordMainThreadTask,
   runPreLoginSnapshotSafety,

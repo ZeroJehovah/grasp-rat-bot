@@ -58,6 +58,12 @@ const {
   snapshotCoinNavigationReasonCore
 } = require('../../strategy/coin-target');
 const {
+  DEFAULT_HIGH_VALUE_COIN_PERSISTENCE,
+  persistentCoinObservationKeyCore,
+  updatePersistentCoinObservationsCore
+} = require('../../strategy/coin-persistence');
+const { utc8DayKey } = require('./utc8-day');
+const {
   isOrdinarySnapshotProfitMissionCore,
   profitMissionArrivalStateCore
 } = require('../../strategy/profit-mission-arrival');
@@ -1883,11 +1889,16 @@ function normalizeCoinForDecision(drop, self, authority = 'snapshot') {
   const x = numberOrNull(drop.x);
   const y = numberOrNull(drop.y);
   if (!Number.isFinite(Number(x)) || !Number.isFinite(Number(y))) return null;
-  const id = drop.drop_id ?? drop.id ?? `${Math.round(x)}:${Math.round(y)}:${drop.amount ?? 0}`;
+  const stableCoinId = drop.stableCoinId ?? drop.stable_coin_id
+    ?? drop.drop_id ?? drop.id ?? drop.coin_id;
+  const id = stableCoinId ?? `${Math.round(x)}:${Math.round(y)}:${drop.amount ?? 0}`;
   return {
     ...drop,
     drop_id: id,
     id,
+    stableCoinId: stableCoinId === null || stableCoinId === undefined
+      ? null
+      : String(stableCoinId),
     x,
     y,
     amount: Math.max(0, Number(drop.amount || 0)),
@@ -1897,6 +1908,124 @@ function normalizeCoinForDecision(drop, self, authority = 'snapshot') {
     native: authority === 'realtime' || authority === 'native',
     snapshot: authority === 'snapshot',
     snapshotOnly: authority === 'snapshot'
+  };
+}
+
+function persistentCoinWaitTicks(options = {}) {
+  return Math.max(0, Math.round(Number(
+    options.highValueCoinPersistenceWaitTicks
+      ?? DEFAULT_HIGH_VALUE_COIN_PERSISTENCE.waitTicks
+  )));
+}
+
+function snapshotCoinObservationTime(fallback = {}, nowMs = Date.now()) {
+  const receivedAtMs = numberOrNull(fallback?.receivedAtMs);
+  if (receivedAtMs !== null && receivedAtMs > 0) return receivedAtMs;
+  const frameAgeMs = numberOrNull(fallback?.frameAgeMs);
+  return frameAgeMs === null ? null : Math.max(0, nowMs - Math.max(0, frameAgeMs));
+}
+
+function realtimeCoinObservationTime(realtime = {}, nowMs = Date.now()) {
+  const receivedAtMs = numberOrNull(realtime?.receivedAtMs);
+  if (receivedAtMs !== null && receivedAtMs > 0) return receivedAtMs;
+  const frameAgeMs = numberOrNull(realtime?.frameAgeMs);
+  return frameAgeMs === null ? nowMs : Math.max(0, nowMs - Math.max(0, frameAgeMs));
+}
+
+function observePersistentHighValueCoinCandidates({
+  realtimeCoins = [],
+  snapshotCoins = [],
+  realtime = {},
+  fallback = {},
+  nowMs = Date.now(),
+  stateful = {},
+  options = {}
+} = {}) {
+  const waitTicks = persistentCoinWaitTicks(options);
+  const maxAgeMs = Math.max(1000, Number(
+    options.highValueCoinPersistenceMaxAgeMs
+      ?? DEFAULT_HIGH_VALUE_COIN_PERSISTENCE.maxAgeMs
+  ));
+  const snapshotMaxAgeMs = Math.max(1000, Number(
+    options.highValueCoinSnapshotMaxAgeMs
+      ?? maxAgeMs
+  ));
+  const snapshotObservedAtMs = snapshotCoinObservationTime(fallback, nowMs);
+  const snapshotAgeMs = snapshotObservedAtMs === null
+    ? null
+    : Math.max(0, nowMs - snapshotObservedAtMs);
+  const snapshotTick = positiveTick(fallback?.tick);
+  const realtimeTick = positiveTick(realtime?.tick);
+  const snapshotHasCoinList = fallback?.coinDropsObserved === true
+    && Array.isArray(fallback?.coinDrops);
+  const realtimeHasCoinList = realtime?.coinDropsObserved === true
+    && Array.isArray(realtime?.coinDrops);
+  const snapshotSameDay = snapshotObservedAtMs !== null
+    && utc8DayKey(snapshotObservedAtMs) === utc8DayKey(nowMs);
+  const snapshotUsable = Boolean(
+    snapshotHasCoinList
+      && snapshotTick !== null
+      && snapshotObservedAtMs !== null
+      && snapshotAgeMs !== null
+      && snapshotAgeMs <= snapshotMaxAgeMs
+      && snapshotSameDay
+  );
+  // "Different snapshots" means different game observations, not the HTTP
+  // receipt time. Re-reading the same tick must not advance the observation
+  // count or reset the per-snapshot handling above.
+  const snapshotIdentity = snapshotUsable ? String(snapshotTick) : '';
+  const snapshotIsNew = Boolean(snapshotIdentity)
+    && stateful?.persistentCoinSnapshotIdentity !== snapshotIdentity;
+  if (!stateful.persistentCoinObservations
+    || typeof stateful.persistentCoinObservations !== 'object'
+    || Array.isArray(stateful.persistentCoinObservations)) {
+    stateful.persistentCoinObservations = {};
+  }
+  const eligibleByKey = updatePersistentCoinObservationsCore(
+    stateful.persistentCoinObservations,
+    {
+      nowMs,
+      dayKey: utc8DayKey(nowMs),
+      epoch: currentProfitTickEpoch(stateful),
+      realtimeTick: realtimeHasCoinList ? realtimeTick : null,
+      snapshotTick: snapshotUsable ? snapshotTick : null,
+      realtimeObservedAtMs: realtimeCoinObservationTime(realtime, nowMs),
+      snapshotObservedAtMs: snapshotUsable ? snapshotObservedAtMs : null,
+      realtimeCoins: realtimeHasCoinList ? realtimeCoins : [],
+      snapshotCoins: snapshotUsable ? snapshotCoins : [],
+      snapshotHasCoinList: snapshotUsable,
+      snapshotIsNew,
+      minAmount: highValueCoinPriorityAmount(options),
+      waitTicks,
+      maxGapTicks: options.highValueCoinPersistenceMaxGapTicks
+        ?? DEFAULT_HIGH_VALUE_COIN_PERSISTENCE.maxGapTicks,
+      maxAgeMs,
+      maxEntries: options.highValueCoinPersistenceMaxEntries
+        ?? DEFAULT_HIGH_VALUE_COIN_PERSISTENCE.maxEntries
+    }
+  );
+  if (snapshotUsable) stateful.persistentCoinSnapshotIdentity = snapshotIdentity;
+  return {
+    waitTicks,
+    eligibleByKey,
+    snapshotUsable,
+    snapshotAgeMs,
+    snapshotTick,
+    snapshotSameDay,
+    realtimeHasCoinList,
+    observationCount: Object.keys(stateful.persistentCoinObservations || {}).length
+  };
+}
+
+function decoratePersistentCoinCandidate(coin, observation) {
+  if (!coin || !observation) return coin;
+  const key = persistentCoinObservationKeyCore(coin);
+  const eligibility = key ? observation.eligibleByKey?.[key] : null;
+  if (!eligibility) return coin;
+  return {
+    ...coin,
+    persistentCandidateEligible: true,
+    persistentCoinObservation: eligibility
   };
 }
 
@@ -2088,6 +2217,8 @@ function advanceProfitTickEpoch(stateful = {}, realtimeTick, options = {}) {
     // resurrected after the server's daily tick reset.
     stateful.completedProfitTargets = {};
     stateful.completedProfitKillEvidence = {};
+    stateful.persistentCoinObservations = {};
+    stateful.persistentCoinSnapshotIdentity = '';
   }
   if (previousTick === null || tick > previousTick || tick < previousTick) {
     stateful.profitLastRealtimeTick = tick;
@@ -3131,6 +3262,9 @@ function summarizeCoin(coin) {
     coinRoute: routeMeta,
     native: Boolean(coin.native),
     snapshotOnly: Boolean(coin.snapshotOnly),
+    persistentCandidateEligible: coin.persistentCandidateEligible === true,
+    persistentCoinObservation: coin.persistentCoinObservation || null,
+    activeCoinCompetitionBypassed: coin.activeCoinCompetitionBypassed || null,
     sourceUserId,
     selfKilledPlayerDrop: Boolean(coin.selfKilledPlayerDrop),
     primaryTargetDropPriority: Boolean(coin.primaryTargetDropPriority),
@@ -3704,7 +3838,9 @@ function partitionActiveCoinCompetition(self, coins = [], visibleTargets = [], o
       activeCompetitorCount: activeCompetitors.length,
       contested: [],
       discounted: [],
-      released: []
+      released: [],
+      persistentBypassCount: 0,
+      persistentBypassed: []
     };
   }
   const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
@@ -3725,6 +3861,7 @@ function partitionActiveCoinCompetition(self, coins = [], visibleTargets = [], o
   const panel = [];
   const contested = [];
   const discounted = [];
+  const persistentBypassed = [];
   const competitionOptions = activeCoinCompetitionOptions(options);
   const easyKillCompetitors = activeCompetitors.filter(target => target?.easyKillKnown === true);
   const ordinaryCompetitors = activeCompetitors.filter(target => target?.easyKillKnown !== true);
@@ -3767,6 +3904,36 @@ function partitionActiveCoinCompetition(self, coins = [], visibleTargets = [], o
       available.push(adjustedCoin);
       panel.push(adjustedCoin);
       discounted.push(summary);
+      continue;
+    }
+    if (competition && coin?.persistentCandidateEligible === true) {
+      for (const [existingKey, existingRecord] of Object.entries(state)) {
+        if (String(existingRecord?.coinKey || '') !== coinKey) continue;
+        coinCompetitionRelease(
+          stateful,
+          existingKey,
+          existingRecord,
+          'persistent-high-value-coin-eligible',
+          nowMs,
+          releases
+        );
+      }
+      const summary = {
+        ...competition,
+        coinKey,
+        authority: String(coin?.authority || ''),
+        snapshotOnly: Boolean(coin?.snapshotOnly),
+        contestHeld: false,
+        releaseReason: 'persistent-high-value-coin-eligible',
+        persistentObservation: coin.persistentCoinObservation || null
+      };
+      const adjustedCoin = {
+        ...coin,
+        activeCoinCompetitionBypassed: summary
+      };
+      available.push(adjustedCoin);
+      panel.push(adjustedCoin);
+      persistentBypassed.push(summary);
       continue;
     }
     if (competition) {
@@ -3879,7 +4046,9 @@ function partitionActiveCoinCompetition(self, coins = [], visibleTargets = [], o
     activeCompetitorCount: activeCompetitors.length,
     contested,
     discounted,
-    released: releases
+    released: releases,
+    persistentBypassCount: persistentBypassed.length,
+    persistentBypassed
   };
 }
 
@@ -4416,12 +4585,25 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     .map(drop => normalizeCoinForDecision(drop, self, 'realtime'))
     .filter(Boolean)
     .filter(coin => Number(coin.amount || 0) > 0);
-  const realtimeCoins = realtimeCoinsRaw;
   const snapshotCoinsRaw = (Array.isArray(fallback.coinDrops) ? fallback.coinDrops : [])
     .map(drop => normalizeCoinForDecision(drop, self, 'snapshot'))
     .filter(Boolean)
     .filter(coin => Number(coin.amount || 0) > 0);
-  const snapshotCoins = snapshotCoinsRaw;
+  const persistentCoinObservation = observePersistentHighValueCoinCandidates({
+    realtimeCoins: realtimeCoinsRaw,
+    snapshotCoins: snapshotCoinsRaw,
+    realtime,
+    fallback,
+    nowMs,
+    stateful,
+    options
+  });
+  const realtimeCoins = realtimeCoinsRaw.map(coin => (
+    decoratePersistentCoinCandidate(coin, persistentCoinObservation)
+  ));
+  const snapshotCoins = snapshotCoinsRaw.map(coin => (
+    decoratePersistentCoinCandidate(coin, persistentCoinObservation)
+  ));
   const snapshotVisibleCoinMaxDistanceRaw = Number(options.snapshotVisibleCoinMaxDistanceCm
     ?? options.snapshotCoinFallbackMaxDistanceCm
     ?? options.globalCoinMaxDistance
@@ -4433,6 +4615,10 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     snapshotVisibleCoinMaxDistance > 0
       && Number.isFinite(Number(coin.distance))
       && Number(coin.distance) <= snapshotVisibleCoinMaxDistance
+  ));
+  const persistentSnapshotProfitCoins = snapshotCoins.filter(coin => (
+    coin.persistentCandidateEligible === true
+      && persistentCoinObservation.snapshotUsable
   ));
   const selfKilledPlayerDropFallbackEnabled = options.controlMode === 'profit-live';
   const selfKilledPlayerDropCoins = selfKilledPlayerDropFallbackEnabled
@@ -4475,13 +4661,21 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
       : coin))
     : [];
   const rawProfitCoins = realtimeCoins.length
-    ? realtimeCoins
+    ? mergeProfitCoinCandidates(realtimeCoins, persistentSnapshotProfitCoins)
     : (selfKilledPlayerDropCoins.length
-        ? mergeProfitCoinCandidates(selfKilledPlayerDropProfitCoins, snapshotFallbackProfitCoins)
-        : snapshotFallbackProfitCoins);
+        ? mergeProfitCoinCandidates(
+            selfKilledPlayerDropProfitCoins,
+            snapshotFallbackProfitCoins,
+            persistentSnapshotProfitCoins
+          )
+        : mergeProfitCoinCandidates(snapshotFallbackProfitCoins, persistentSnapshotProfitCoins));
   const profitCoinSource = realtimeCoins.length
     ? 'realtime'
-    : (selfKilledPlayerDropCoins.length ? 'snapshot-player-drop' : (snapshotFallbackAllowed ? 'snapshot-fallback' : 'none'));
+    : (selfKilledPlayerDropCoins.length
+        ? 'snapshot-player-drop'
+        : (snapshotFallbackAllowed
+            ? 'snapshot-fallback'
+            : (persistentSnapshotProfitCoins.length ? 'snapshot-persistent' : 'none')));
   const activeCoinCompetition = partitionActiveCoinCompetition(self, rawProfitCoins, visibleTargets, {
     ...options,
     nowMs,
@@ -4491,6 +4685,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const panelProfitCoins = activeCoinCompetition.panel;
   if (activeCoinCompetition.contested.length) dataGaps.push('active-player-coin-competition');
   if (activeCoinCompetition.discounted.length) dataGaps.push('easy-kill-only-coin-competition-discount');
+  if (persistentSnapshotProfitCoins.length) dataGaps.push('persistent-snapshot-coin-candidate');
   const result = {
     userId: Number(state?.userId || options.userId || 0),
     nowMs,
@@ -4555,7 +4750,20 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
       discountedCoinCount: activeCoinCompetition.discounted.length,
       contested: activeCoinCompetition.contested.slice(0, 8),
       discounted: activeCoinCompetition.discounted.slice(0, 8),
-      released: activeCoinCompetition.released.slice(0, 8)
+      released: activeCoinCompetition.released.slice(0, 8),
+      persistentBypassCount: activeCoinCompetition.persistentBypassCount || 0,
+      persistentBypassed: (activeCoinCompetition.persistentBypassed || []).slice(0, 8)
+    },
+    persistentCoins: {
+      waitTicks: persistentCoinObservation.waitTicks,
+      observationCount: persistentCoinObservation.observationCount,
+      eligibleCount: Object.keys(persistentCoinObservation.eligibleByKey || {}).length,
+      snapshotEligibleCount: persistentSnapshotProfitCoins.length,
+      snapshotUsable: persistentCoinObservation.snapshotUsable,
+      snapshotAgeMs: persistentCoinObservation.snapshotAgeMs,
+      snapshotTick: persistentCoinObservation.snapshotTick,
+      snapshotSameDay: persistentCoinObservation.snapshotSameDay,
+      eligible: Object.values(persistentCoinObservation.eligibleByKey || {}).slice(0, 8)
     },
     bullets: Array.isArray(realtime.bullets) ? realtime.bullets : [],
     dataGaps
@@ -6781,7 +6989,11 @@ function buildDailyStaminaFinalCoinDecision(input, options = {}) {
     // profit is visible. Near daily exhaustion it is safer to keep moving to
     // that normal fallback than to wait in-game solely because the 1d budget
     // cannot cover the full route.
-    isSnapshotOnlyCoin: item => Boolean(item?.snapshotOnly && !input?.fallback?.snapshotCoinFallbackAllowed),
+    isSnapshotOnlyCoin: item => Boolean(
+      item?.snapshotOnly
+        && item?.persistentCandidateEligible !== true
+        && !input?.fallback?.snapshotCoinFallbackAllowed
+    ),
     coinStaminaCost: item => opportunityCoinStaminaCost(item, options),
     dailyStaminaBudgetIsLimiting: staminaCost => dailyStaminaBudgetIsLimitingCore(
       staminaCost,
@@ -7052,7 +7264,11 @@ function coinRouteCoreOptions(input, stateful = {}, options = {}) {
       })
       .filter(coin => coinSafeFromThreats(coin, routeThreats, options))
       .filter(coin => opportunityStaminaAffordable(routeSelf, opportunityCoinStaminaCost(coin, options), options)),
-    isSnapshotOnlyCoin: coin => Boolean(coin?.snapshotOnly && input?.profitCoinSource !== 'snapshot-fallback'),
+    isSnapshotOnlyCoin: coin => Boolean(
+      coin?.snapshotOnly
+        && coin?.persistentCandidateEligible !== true
+        && input?.profitCoinSource !== 'snapshot-fallback'
+    ),
     heldChoice: currentHeldCoinChoice(stateful, input?.nowMs),
     heldRouteChoice: currentHeldCoinRouteChoice(stateful, input?.nowMs)
   };
@@ -8733,6 +8949,9 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
   const explorationConfig = reconcileControlledExplorationSessions(input, stateful, options);
   const coinMaxDistance = Math.max(0, Number(options.coinMaxDistance || BROWSER_RUNTIME_DEFAULTS.coinMaxDistance));
   const globalCoinMaxDistance = Math.max(0, Number(options.globalCoinMaxDistance || DEFAULT_GLOBAL_COIN_MAX_DISTANCE));
+  const snapshotCoinMaxDistance = Math.max(0, Number(
+    options.snapshotCoinMaxDistance ?? BROWSER_RUNTIME_DEFAULTS.snapshotCoinMaxDistance
+  ));
   const opportunityThreats = profitOpportunityThreats(input);
   const routeSelectionOptions = { ...options, profitThresholdContext: thresholdContext };
   clearDangerousOpportunityState(stateful, input.nowMs);
@@ -8741,15 +8960,25 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     && coinDecisionKey(fieldMigrationCandidate) !== arrivalHeldCoinKey
     ? fieldMigrationCandidate
     : null;
+  const persistentSnapshotCoins = planningProfitCoins.filter(coin => (
+    coin?.snapshotOnly === true && coin?.persistentCandidateEligible === true
+  ));
   const coinGroups = planningProfitCoins.length
     ? [
         { coins: planningProfitCoins, maxDistance: coinMaxDistance },
         { coins: planningProfitCoins, maxDistance: globalCoinMaxDistance },
+        ...(persistentSnapshotCoins.length
+          ? [{ coins: persistentSnapshotCoins, maxDistance: snapshotCoinMaxDistance }]
+          : []),
         ...(fieldMigrationCoin ? [{ coins: [fieldMigrationCoin], maxDistance: Math.max(0, Number(options.fieldMigrationMaxDistance ?? BROWSER_RUNTIME_DEFAULTS.fieldMigrationMaxDistance)) }] : [])
       ]
     : [];
   const visibleRouteCoins = uniqueVisibleRouteCoinsCore(coinGroups, {
-    isSnapshotOnlyCoin: coin => Boolean(coin?.snapshotOnly && input.profitCoinSource !== 'snapshot-fallback'),
+    isSnapshotOnlyCoin: coin => Boolean(
+      coin?.snapshotOnly
+        && coin?.persistentCandidateEligible !== true
+        && input.profitCoinSource !== 'snapshot-fallback'
+    ),
     coinKey: coinRouteKey
   });
   const activeSingleCoinBait = thresholdContext.active
@@ -15969,6 +16198,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
       profitEscortContinuity: cloneJson(stateful.profitEscortContinuity || null),
       profitEscortContinuityLastRelease: cloneJson(stateful.profitEscortContinuityLastRelease || null),
       legacyStateMigration: cloneJson(stateful.legacyStateMigration || null),
+      persistentCoinObservations: cloneJson(stateful.persistentCoinObservations || {}),
+      persistentCoinSnapshotIdentity: String(stateful.persistentCoinSnapshotIdentity || ''),
       singleCoinBait: cloneJson(stateful.singleCoinBait || null),
       outsideCenterIdle: cloneJson(stateful.outsideCenterIdle || null),
       loginPointReloginShortcut: cloneJson(stateful.loginPointReloginShortcut || null),
@@ -16269,6 +16500,23 @@ function createBrowserlessDecisionAdapter(options = {}) {
           .sort((left, right) => Number(right[1]?.observedAt || 0) - Number(left[1]?.observedAt || 0))
           .slice(0, 512));
       }
+      if (Object.prototype.hasOwnProperty.call(plannerState, 'persistentCoinObservations')) {
+        const incomingEpoch = numberOrNull(plannerState.profitTickEpoch);
+        const currentEpoch = currentProfitTickEpoch(decisionState);
+        if (incomingEpoch === null || incomingEpoch >= currentEpoch) {
+          const incoming = plannerState.persistentCoinObservations
+            && typeof plannerState.persistentCoinObservations === 'object'
+            && !Array.isArray(plannerState.persistentCoinObservations)
+            ? plannerState.persistentCoinObservations
+            : {};
+          decisionState.persistentCoinObservations = cloneJson(incoming);
+          if (Object.prototype.hasOwnProperty.call(plannerState, 'persistentCoinSnapshotIdentity')) {
+            decisionState.persistentCoinSnapshotIdentity = String(
+              plannerState.persistentCoinSnapshotIdentity || ''
+            );
+          }
+        }
+      }
       if (Object.prototype.hasOwnProperty.call(plannerState, 'profitEscortContinuity')) {
         const incomingContinuity = plannerState.profitEscortContinuity || null;
         const incomingRelease = plannerState.profitEscortContinuityLastRelease || null;
@@ -16387,6 +16635,12 @@ function createBrowserlessDecisionAdapter(options = {}) {
         combatLearning: decisionState.combatLearning || null
       };
     },
+    getPersistentCoinPersistenceState() {
+      return {
+        persistentCoinObservations: decisionState.persistentCoinObservations || {},
+        persistentCoinSnapshotIdentity: decisionState.persistentCoinSnapshotIdentity || ''
+      };
+    },
     getRealtimePersistenceState() {
       return {
         finalActionPreemption: decisionState.finalActionPreemption || null,
@@ -16394,6 +16648,8 @@ function createBrowserlessDecisionAdapter(options = {}) {
         profitMission: decisionState.profitMission || null,
         completedProfitTargets: decisionState.completedProfitTargets || {},
         completedProfitKillEvidence: decisionState.completedProfitKillEvidence || {},
+        persistentCoinObservations: decisionState.persistentCoinObservations || {},
+        persistentCoinSnapshotIdentity: decisionState.persistentCoinSnapshotIdentity || '',
         profitTickEpoch: currentProfitTickEpoch(decisionState),
         profitLastRealtimeTick: numberOrNull(decisionState.profitLastRealtimeTick),
         profitEscortContinuity: decisionState.profitEscortContinuity || null,

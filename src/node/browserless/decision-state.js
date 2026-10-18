@@ -126,6 +126,8 @@ function createInitialDecisionState(options = {}) {
     attackHistory: asArray(options.attackHistory),
     postAttackCoinObservations: asRecord(options.postAttackCoinObservations),
     postAttackCoinBaseline: cloneJson(options.postAttackCoinBaseline || null),
+    persistentCoinObservations: asRecord(options.persistentCoinObservations),
+    persistentCoinSnapshotIdentity: String(options.persistentCoinSnapshotIdentity || ''),
     postAttackSettlements: cloneJson(options.postAttackSettlements || {}),
     postAttackSettlement: cloneJson(options.postAttackSettlement || null),
     postKillSettlements: cloneJson(options.postKillSettlements || {}),
@@ -241,7 +243,9 @@ function summarizeBrowserlessDecisionState(state, options = {}) {
       recentAttempts: recordEntries(coinAttempts, limit),
       recentFailures: recordEntries(coinFailures, limit),
       recentIgnored: recordEntries(ignoredCoins, limit),
-      recentCollectedIgnores: recordEntries(collectedCoinIgnores, limit)
+      recentCollectedIgnores: recordEntries(collectedCoinIgnores, limit),
+      persistentObservationCount: Object.keys(state.persistentCoinObservations || {}).length,
+      recentPersistentObservations: recordEntries(state.persistentCoinObservations || {}, limit)
     },
     attackHistory: {
       count: Array.isArray(state.attackHistory) ? state.attackHistory.length : 0,
