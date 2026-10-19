@@ -20,10 +20,12 @@ const {
   applyCombatMovementModifiers,
   calculateCombatSpacing,
   calculateDodgeDirection,
+  candidateWithinBoundaryCore,
   currentProspectiveReactionSlackCore,
   contactEntryRiskCore,
   contactEntrySyntheticBulletCore,
   deriveCombatReactionBudgetCore,
+  directionThreatCore,
   resolveDistanceAwareDodgeCore,
   selectCombatMovementArbitrationCore,
   safeRetreatInterceptCandidateCore,
@@ -131,6 +133,12 @@ const {
   resolveDodgeExecutionDirectionCore,
   selectCombatMovementOwnerCore
 } = require('../../strategy/combat-movement-ownership');
+const {
+  directionKey: dodgeDirectionKeyCore,
+  movementSafetyOverrideCore,
+  selectDodgeCandidateCore
+} = require('../../strategy/combat-dodge-selection');
+const RAW_DODGE_THREAT_FIELD = Symbol('raw-dodge-threat-field');
 const { invulnerableApproachWindowCore } = require('../../strategy/invulnerable-approach-window');
 const {
   pursuitApproachDirectionCore,
@@ -462,19 +470,32 @@ function summarizeDodgeThreatField(threatField = []) {
     dx: Number(item.dx || 0),
     dy: Number(item.dy || 0),
     directHits: Number(item.directHits || 0),
+    hitRadiusCm: optionalNumberOrNull(item.hitRadiusCm),
     avoidableHits: Number(item.avoidableHits || 0),
     unavoidableHits: Number(item.unavoidableHits || 0),
-    minCPA: numberOrNull(item.minCPA),
-    rawMinCPA: numberOrNull(item.rawMinCPA),
-    worstCaseCpaCm: numberOrNull(item.worstCaseCpaCm),
-    minTTI: numberOrNull(item.minTTI),
+    physicalHits: Number(item.physicalHits || 0),
+    robustHits: Number(item.robustHits ?? item.directHits ?? 0),
+    minCPA: optionalNumberOrNull(item.minCPA),
+    rawMinCPA: optionalNumberOrNull(item.rawMinCPA),
+    minRawCpaCm: optionalNumberOrNull(item.minRawCpaCm),
+    minRobustCpaCm: optionalNumberOrNull(item.minRobustCpaCm),
+    minRawClearanceCm: optionalNumberOrNull(item.minRawClearanceCm),
+    minRobustClearanceCm: optionalNumberOrNull(item.minRobustClearanceCm),
+    firstPhysicalCollisionTtiMs: optionalNumberOrNull(item.firstPhysicalCollisionTtiMs),
+    firstPhysicalCollisionBulletId: String(item.firstPhysicalCollisionBulletId || ''),
+    minClearanceBulletId: String(item.minClearanceBulletId || ''),
+    minRobustClearanceBulletId: String(item.minRobustClearanceBulletId || ''),
+    physicalCollisionBulletIds: (item.physicalCollisionBulletIds || []).slice(0, 8).map(String),
+    robustCollisionBulletIds: (item.robustCollisionBulletIds || []).slice(0, 8).map(String),
+    worstCaseCpaCm: optionalNumberOrNull(item.worstCaseCpaCm),
+    minTTI: optionalNumberOrNull(item.minTTI),
     reactionBudgetMs: optionalNumberOrNull(item.reactionBudgetMs),
     scheduleRobust: item.scheduleRobust !== false,
     robustClassification: String(item.robustClassification || ''),
     unconfirmedTransitionRisk: Boolean(item.unconfirmedTransitionRisk),
-    trajectoryResidualCm: numberOrNull(item.trajectoryResidualCm),
-    timingUncertaintyTicks: numberOrNull(item.timingUncertaintyTicks),
-    targetDistanceChange: numberOrNull(item.targetDistanceChange),
+    trajectoryResidualCm: optionalNumberOrNull(item.trajectoryResidualCm),
+    timingUncertaintyTicks: optionalNumberOrNull(item.timingUncertaintyTicks),
+    targetDistanceChange: optionalNumberOrNull(item.targetDistanceChange),
     velocityScheduleConfidence: String(item.velocityScheduleConfidence || ''),
     velocityScheduleVariants: (item.velocityScheduleVariants || []).slice(0, 4).map(variant => ({
       name: String(variant.name || ''),
@@ -483,19 +504,20 @@ function summarizeDodgeThreatField(threatField = []) {
     dangerousBullets: (item.dangerousBullets || []).slice(0, 3).map(bullet => ({
       bulletId: String(bullet.bulletId || ''),
       ownerId: bullet.ownerId ?? null,
-      timeToImpact: numberOrNull(bullet.timeToImpact),
-      cpa: numberOrNull(bullet.cpa),
-      worstCaseCpaCm: numberOrNull(bullet.worstCaseCpaCm),
-      currentHoldCpaCm: numberOrNull(bullet.currentHoldCpaCm),
-      expectedCpaCm: numberOrNull(bullet.expectedCpaCm),
-      lateCpaCm: numberOrNull(bullet.lateCpaCm),
+      timeToImpact: optionalNumberOrNull(bullet.timeToImpact),
+      cpa: optionalNumberOrNull(bullet.cpa),
+      worstCaseCpaCm: optionalNumberOrNull(bullet.worstCaseCpaCm),
+      signedRobustCpaCm: optionalNumberOrNull(bullet.signedRobustCpaCm),
+      currentHoldCpaCm: optionalNumberOrNull(bullet.currentHoldCpaCm),
+      expectedCpaCm: optionalNumberOrNull(bullet.expectedCpaCm),
+      lateCpaCm: optionalNumberOrNull(bullet.lateCpaCm),
       predictedHit: Boolean(bullet.predictedHit),
       currentHoldHit: Boolean(bullet.currentHoldHit),
       expectedHit: Boolean(bullet.expectedHit),
       lateHit: Boolean(bullet.lateHit),
       avoidable: Boolean(bullet.avoidable),
-      trajectoryResidualCm: numberOrNull(bullet.trajectoryResidualCm),
-      trajectoryUncertaintyCm: numberOrNull(bullet.trajectoryUncertaintyCm)
+      trajectoryResidualCm: optionalNumberOrNull(bullet.trajectoryResidualCm),
+      trajectoryUncertaintyCm: optionalNumberOrNull(bullet.trajectoryUncertaintyCm)
     }))
   }));
 }
@@ -3594,9 +3616,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       && nextShotInMs !== null
   );
   const preDodgeStaminaCost = preDodgeStaminaCostMs;
-  const preDodgeDirectionThreat = currentDirectionThreats.slice().sort((a, b) =>
-    Number(a?.directHits || 0) - Number(b?.directHits || 0)
-      || Number(b?.minCPA || 0) - Number(a?.minCPA || 0))[0] || null;
+  const preDodgeDirectionThreat = directionThreatCore(dodge?.threatField || [], currentDirection);
   const ordinaryDodgeThreat = (dodge?.threatField || []).find(item =>
     Number(item?.dx) === Number(dodge?.dx) && Number(item?.dy) === Number(dodge?.dy)) || null;
   const preDodgeCandidate = shootingPhaseState === 'preparing' ? {
@@ -4476,7 +4496,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     else if (closePressureTooClose) profitEscort.overrideReason = 'close-pressure-separation';
     else profitEscort.overrideReason = reason || 'combat-spacing-override';
   }
-  return {
+  const movementPlan = {
     dx: Number(movement.dx || 0),
     dy: Number(movement.dy || 0),
     reason,
@@ -4692,6 +4712,8 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     shootingPhaseSource: shootingPhase?.shootingPhaseSource || '',
     oldBulletPressure: Boolean((bullets || []).length)
   };
+  movementPlan[RAW_DODGE_THREAT_FIELD] = Array.isArray(dodge?.threatField) ? dodge.threatField : null;
+  return movementPlan;
 }
 
 function pickIncomingBullet(bullets = [], options = {}) {
@@ -5352,13 +5374,9 @@ function buildCombatExchangeRetreatMovement(baseMovement, self, target, exchange
   const candidates = Array.isArray(baseMovement?.dodge?.threatField)
     ? baseMovement.dodge.threatField.slice()
     : [];
-  const selected = candidates.sort((left, right) => (
-    Number(left.directHits || 0) - Number(right.directHits || 0)
-      || Number(left.unavoidableHits || 0) - Number(right.unavoidableHits || 0)
-      || Number(left.avoidableHits || 0) - Number(right.avoidableHits || 0)
-      || Number(right.targetDistanceChange || -Infinity) - Number(left.targetDistanceChange || -Infinity)
-      || Number(right.minCPA || -Infinity) - Number(left.minCPA || -Infinity)
-  ))[0] || null;
+  const selected = selectDodgeCandidateCore(candidates, {
+    scoreCandidate: item => -Number(item.targetDistanceChange || 0)
+  });
   const awayDx = Math.sign(Number(self?.x || 0) - Number(target?.x || 0));
   const awayDy = Math.sign(Number(self?.y || 0) - Number(target?.y || 0));
   const dx = selected ? Number(selected.dx || 0) : awayDx;
@@ -5379,8 +5397,17 @@ function buildCombatExchangeRetreatMovement(baseMovement, self, target, exchange
         dx,
         dy,
         directHits: Number(selected.directHits || 0),
+        physicalHits: Number(selected.physicalHits || 0),
+        robustHits: Number(selected.robustHits ?? selected.directHits ?? 0),
         unavoidableHits: Number(selected.unavoidableHits || 0),
         minCPA: Number.isFinite(Number(selected.minCPA)) ? Number(selected.minCPA) : null,
+        minRawCpaCm: Number.isFinite(Number(selected.minRawCpaCm))
+          ? Number(selected.minRawCpaCm)
+          : null,
+        minRawClearanceCm: Number.isFinite(Number(selected.minRawClearanceCm))
+          ? Number(selected.minRawClearanceCm)
+          : null,
+        minClearanceBulletId: String(selected.minClearanceBulletId || ''),
         targetDistanceChange: Number.isFinite(Number(selected.targetDistanceChange))
           ? Number(selected.targetDistanceChange)
           : null
@@ -6356,6 +6383,12 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     combatAim: aim.ok ? aim : null,
     contactEntryGuard: contactApplies ? contactEntryGuard : null
   }, mergedOptions => buildCombatMovementPlan(self, target, bullets, mergedOptions));
+  const rawDodgeThreatField = Array.isArray(movement?.[RAW_DODGE_THREAT_FIELD])
+    ? movement[RAW_DODGE_THREAT_FIELD]
+    : [];
+  const dodgeHitRadiusCm = Math.max(1, Number(
+    options.combatBulletHitRadiusCm ?? COMBAT_CONSTANTS.BULLET_HIT_RADIUS_CM
+  ));
   if (stateful?.profitEscortContinuity?.active === true && movement?.profitEscort?.latched === true) {
     stateful.profitEscortContinuity = {
       ...stateful.profitEscortContinuity,
@@ -6507,10 +6540,10 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       && latestTransitionTick !== null
       && currentTick - latestTransitionTick <= 2
   );
-  const selectedThreat = (movement?.dodge?.threatField || []).find(item => (
-    Number(item?.dx || 0) === Number(movement.dx || 0)
-      && Number(item?.dy || 0) === Number(movement.dy || 0)
-  )) || null;
+  const selectedThreat = directionThreatCore(
+    movement?.dodge?.threatField || [],
+    { dx: movement?.dx || 0, dy: movement?.dy || 0 }
+  );
   const reactionBudgetMs = optionalNumberOrNull(selectedThreat?.reactionBudgetMs)
     ?? Math.max(0, timingUpperTicks * 50 + 150);
   const newThreatUrgent = (bullets || []).some(bullet => {
@@ -7305,6 +7338,101 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
   }
   movement.primaryFinishRace = primaryFinishRace;
   movement.ownership = finalMovementOwner;
+  const movementSafetyHardGateReason = exitDecision?.shouldLeave === true
+    ? 'combat-hard-exit'
+    : (options.leaveActive === true
+        ? 'leave-active'
+        : (options.recoveryNavigationPaused === true
+            ? 'recovery-navigation'
+            : (options.combatMovementSafetyOverrideDisabled === true
+                ? 'movement-safety-override-disabled'
+                : '')));
+  const movementBoundary = options.combatBoundary || options.boundary || null;
+  const movementSafety = rawDodgeThreatField.length
+    ? movementSafetyOverrideCore({
+        threatField: rawDodgeThreatField,
+        currentDirection: movement,
+        hardGate: Boolean(movementSafetyHardGateReason),
+        hardGateReason: movementSafetyHardGateReason
+      }, {
+        hitRadius: dodgeHitRadiusCm,
+        candidateAllowed: candidate => candidateWithinBoundaryCore(self, candidate, {
+          boundary: movementBoundary,
+          boundaryMarginCm: options.combatBoundaryMarginCm ?? options.boundaryMarginCm,
+          moveSpeedPerTick: options.combatMoveSpeedPerTick || 50
+        })
+      })
+    : {
+        applied: false,
+        reason: 'no-current-threat-field',
+        current: null,
+        selected: null,
+        direction: null
+      };
+  if (movementSafety.applied && movementSafety.direction) {
+    const originalOwner = String(movement.ownership?.owner || 'ordinary-escort');
+    const originalDirection = { dx: Number(movement.dx || 0), dy: Number(movement.dy || 0) };
+    movement = {
+      ...movement,
+      dx: Number(movementSafety.direction.dx || 0),
+      dy: Number(movementSafety.direction.dy || 0),
+      reason: 'movement-safety-override',
+      modifiers: Array.from(new Set([...(movement.modifiers || []), 'dodge', 'movement-safety-override']))
+    };
+    movement.dodge = {
+      ...(movement.dodge || {}),
+      dx: Number(movementSafety.direction.dx || 0),
+      dy: Number(movementSafety.direction.dy || 0),
+      reason: 'movement-safety-override',
+      applied: true
+    };
+    movement.dodgeOwnership = {
+      ...(movement.dodgeOwnership || {}),
+      active: true,
+      currentThreat: true,
+      owner: 'emergency-dodge',
+      direction: {
+        dx: Number(movementSafety.direction.dx || 0),
+        dy: Number(movementSafety.direction.dy || 0)
+      },
+      reason: 'movement-safety-override',
+      executionDirection: {
+        direction: {
+          dx: Number(movementSafety.direction.dx || 0),
+          dy: Number(movementSafety.direction.dy || 0)
+        },
+        accepted: true,
+        changed: originalDirection.dx !== Number(movementSafety.direction.dx || 0)
+          || originalDirection.dy !== Number(movementSafety.direction.dy || 0),
+        reason: 'final-movement-safety-override'
+      }
+    };
+    movement.movementSafetyOverride = {
+      enabled: true,
+      applied: true,
+      reason: movementSafety.reason,
+      threatFieldSource: 'movement-dodge',
+      originalOwner,
+      overrideOwner: 'movement-safety-override',
+      originalDirection,
+      selectedDirection: { ...movementSafety.direction },
+      originalRisk: movementSafety.current,
+      selectedRisk: movementSafety.selected
+    };
+  } else {
+    movement.movementSafetyOverride = {
+      enabled: !movementSafetyHardGateReason,
+      applied: false,
+      reason: movementSafety.reason,
+      hardGate: movementSafetyHardGateReason,
+      threatFieldSource: rawDodgeThreatField.length ? 'movement-dodge' : '',
+      originalOwner: String(movement.ownership?.owner || 'ordinary-escort'),
+      overrideOwner: '',
+      originalDirection: { dx: Number(movement.dx || 0), dy: Number(movement.dy || 0) },
+      originalRisk: movementSafety.current,
+      selectedRisk: movementSafety.selected
+    };
+  }
   if (stateful && movement.dodgeOwnership) stateful.dodgeOwnership = movement.dodgeOwnership;
   if (stateful?.combatMetrics) {
     const metrics = stateful.combatMetrics;
@@ -7610,5 +7738,6 @@ module.exports = {
   runCombatAttackClockSelfTest,
   syncCombatShotExecutionEvents,
   syncConfirmedCombatShots,
+  summarizeDodgeThreatField,
   summarizeCombatTarget
 };

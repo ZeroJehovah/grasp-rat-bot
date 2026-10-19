@@ -2,6 +2,11 @@
 
 const { calculateDodgeDirection } = require('../../strategy/combat-movement');
 const {
+  collapsedDodgeCandidatesCore,
+  compareDodgeCandidateRiskCore,
+  selectDodgeCandidateCore
+} = require('../../strategy/combat-dodge-selection');
+const {
   normalizeCombatBullet,
   normalizeCombatEntity,
   summarizeCombatTarget
@@ -98,22 +103,17 @@ function targetTangentPreference(self, target) {
 }
 
 function sameThreatClass(candidate, safest) {
-  return Number(candidate?.avoidableHits || 0) === Number(safest?.avoidableHits || 0)
-    && Number(candidate?.directHits || 0) === Number(safest?.directHits || 0);
+  return compareDodgeCandidateRiskCore(candidate, safest) === 0;
 }
 
 function preferMovingCover(dodge) {
   if (!dodge || Number(dodge.dx || 0) || Number(dodge.dy || 0)) return dodge;
-  const safest = (dodge.threatField || []).find(item => (
-    Number(item.dx || 0) === Number(dodge.dx || 0)
-      && Number(item.dy || 0) === Number(dodge.dy || 0)
-  )) || dodge.threatField?.[0] || null;
+  const safest = selectDodgeCandidateCore(dodge.threatField || []);
   if (!safest) return dodge;
-  const moving = (dodge.threatField || []).find(item => (
+  const moving = selectDodgeCandidateCore((dodge.threatField || []).filter(item => (
     (Number(item.dx || 0) || Number(item.dy || 0))
       && sameThreatClass(item, safest)
-      && Number(item.minCPA || 0) >= Number(safest.minCPA || 0) * 0.9
-  ));
+  )));
   return moving
     ? { ...dodge, dx: moving.dx, dy: moving.dy, reason: 'safe-moving-leave-cover' }
     : dodge;
@@ -138,7 +138,8 @@ function noBulletCover(self, target, pending = {}) {
 }
 
 function selectedThreat(threatField, dx, dy) {
-  return (threatField || []).find(item => Number(item.dx) === Number(dx) && Number(item.dy) === Number(dy)) || null;
+  return collapsedDodgeCandidatesCore(threatField)
+    .find(item => Number(item.dx) === Number(dx) && Number(item.dy) === Number(dy)) || null;
 }
 
 function leavePendingDecision(cover) {
@@ -203,9 +204,18 @@ function triggerCoverFromPending(state, pending = {}, options = {}) {
     incomingOwnerIds: Array.isArray(existing?.incomingOwnerIds) ? existing.incomingOwnerIds : [],
     incomingBulletIds: Array.isArray(existing?.incomingBulletIds) ? existing.incomingBulletIds : [],
     directHits: numberOrNull(existing?.directHits ?? threat?.directHits) ?? 0,
+    physicalHits: numberOrNull(existing?.physicalHits ?? threat?.physicalHits) ?? 0,
+    robustHits: numberOrNull(existing?.robustHits ?? threat?.robustHits ?? threat?.directHits) ?? 0,
     avoidableHits: numberOrNull(existing?.avoidableHits ?? threat?.avoidableHits) ?? 0,
     unavoidableHits: numberOrNull(existing?.unavoidableHits ?? threat?.unavoidableHits) ?? 0,
     minCPA: numberOrNull(existing?.minCPA ?? threat?.minCPA),
+    minRawCpaCm: numberOrNull(existing?.minRawCpaCm ?? threat?.minRawCpaCm),
+    minRawClearanceCm: numberOrNull(existing?.minRawClearanceCm ?? threat?.minRawClearanceCm),
+    minRobustClearanceCm: numberOrNull(existing?.minRobustClearanceCm ?? threat?.minRobustClearanceCm),
+    firstPhysicalCollisionBulletId: String(
+      existing?.firstPhysicalCollisionBulletId ?? threat?.firstPhysicalCollisionBulletId ?? ''
+    ),
+    minClearanceBulletId: String(existing?.minClearanceBulletId ?? threat?.minClearanceBulletId ?? ''),
     minTTI: numberOrNull(existing?.minTTI ?? threat?.minTTI),
     threatField
   };
@@ -264,9 +274,16 @@ function buildLeavePendingCover(state = {}, pending = {}, options = {}) {
         ?? `${bullet.createdTick ?? ''}:${bullet.startX ?? bullet.x ?? ''}:${bullet.startY ?? bullet.y ?? ''}`
     )).filter(Boolean),
     directHits: numberOrNull(threat?.directHits) ?? 0,
+    physicalHits: numberOrNull(threat?.physicalHits) ?? 0,
+    robustHits: numberOrNull(threat?.robustHits ?? threat?.directHits) ?? 0,
     avoidableHits: numberOrNull(threat?.avoidableHits) ?? 0,
     unavoidableHits: numberOrNull(threat?.unavoidableHits) ?? 0,
     minCPA: numberOrNull(threat?.minCPA),
+    minRawCpaCm: numberOrNull(threat?.minRawCpaCm),
+    minRawClearanceCm: numberOrNull(threat?.minRawClearanceCm),
+    minRobustClearanceCm: numberOrNull(threat?.minRobustClearanceCm),
+    firstPhysicalCollisionBulletId: String(threat?.firstPhysicalCollisionBulletId || ''),
+    minClearanceBulletId: String(threat?.minClearanceBulletId || ''),
     minTTI: numberOrNull(threat?.minTTI),
     threatField: dodge?.threatField || null
   };

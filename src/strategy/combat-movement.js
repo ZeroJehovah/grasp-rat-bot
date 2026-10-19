@@ -8,6 +8,15 @@
 
 const { COMBAT_CONSTANTS } = require('./combat-constants');
 const { nearbyActiveProfitCompetitors } = require('./profit-kill-race');
+const {
+  collapsedDodgeCandidatesCore,
+  compareDodgeCandidateRiskCore,
+  directionKey,
+  isPhysicalDodgeSafeCore,
+  isRobustDodgeSafeCore,
+  selectDodgeCandidateCore,
+  safestTierCandidateCore
+} = require('./combat-dodge-selection');
 
 const NORMALIZED_PENDING_VELOCITY_COMMANDS = Symbol('normalized-pending-velocity-commands');
 const NORMALIZED_PENDING_VELOCITY_EVENTS = Symbol('normalized-pending-velocity-events');
@@ -57,25 +66,17 @@ function normalizedDirection(direction = {}) {
 }
 
 function directionThreatCore(threatField = [], direction = {}) {
-  const normalized = normalizedDirection(direction);
-  let selected = null;
-  for (const item of threatField || []) {
-    if (Number(item?.dx) !== normalized.dx || Number(item?.dy) !== normalized.dy) continue;
-    if (!selected
-      || Number(item?.directHits || 0) < Number(selected?.directHits || 0)
-      || (Number(item?.directHits || 0) === Number(selected?.directHits || 0)
-        && Number(item?.minCPA || 0) > Number(selected?.minCPA || 0))) {
-      selected = item;
-    }
-  }
-  return selected;
+  const key = directionKey(direction);
+  return collapsedDodgeCandidatesCore(threatField)
+    .find(item => directionKey(item) === key) || null;
 }
 
 function movementThreatSafeCore(threat, minimumCpaCm = 200) {
   if (!threat) return true;
   const worstCaseCpa = Number(threat.worstCaseCpaCm ?? threat.minCPA ?? Infinity);
-  return Number(threat.directHits || 0) === 0
-    && Number(threat.unavoidableHits || 0) === 0
+  return isPhysicalDodgeSafeCore(threat)
+    && isRobustDodgeSafeCore(threat)
+    && Number(threat.directHits || 0) === 0
     && threat.scheduleRobust !== false
     && worstCaseCpa >= Math.max(1, Number(minimumCpaCm || 200));
 }
@@ -92,21 +93,20 @@ function strategicDirectionProgressCore(direction = {}, strategicDirection = {})
 }
 
 function safestStrategicProgressDirectionCore(threatField = [], strategicDirection = {}, minimumCpaCm = 200) {
-  const candidates = (threatField || [])
+  const candidates = collapsedDodgeCandidatesCore(threatField)
     .filter(item => item && (Number(item.dx || 0) || Number(item.dy || 0)))
-    .filter(item => Number(item.unavoidableHits || 0) === 0)
     .filter(item => movementThreatSafeCore(item, minimumCpaCm))
     .map(item => ({
       ...item,
       ...normalizedDirection(item),
       strategicProgress: strategicDirectionProgressCore(item, strategicDirection)
     }))
-    .filter(item => item.strategicProgress > 0)
-    .sort((left, right) => Number(right.strategicProgress) - Number(left.strategicProgress)
-      || Number(right.minCPA ?? right.worstCaseCpaCm ?? 0)
-        - Number(left.minCPA ?? left.worstCaseCpaCm ?? 0));
+    .filter(item => item.strategicProgress > 0);
+  const selected = selectDodgeCandidateCore(candidates, {
+    scoreCandidate: item => Number(item.strategicProgress || 0)
+  });
   return {
-    direction: candidates[0] || null,
+    direction: selected || null,
     candidateCount: candidates.length
   };
 }
@@ -209,10 +209,8 @@ function stabilizeCombatMovementDirectionCore(input = {}, options = {}) {
   const heldUnavoidableHits = Math.max(0, Number(heldThreat?.unavoidableHits || 0));
   const candidateCpa = Number(candidateThreat?.worstCaseCpaCm ?? candidateThreat?.minCPA ?? Infinity);
   const heldCpa = Number(heldThreat?.worstCaseCpaCm ?? heldThreat?.minCPA ?? Infinity);
-  const candidateSafe = movementThreatSafeCore(candidateThreat, minimumCpaCm)
-    && candidateUnavoidableHits === 0;
-  const heldSafe = movementThreatSafeCore(heldThreat, minimumCpaCm)
-    && heldUnavoidableHits === 0;
+  const candidateSafe = movementThreatSafeCore(candidateThreat, minimumCpaCm);
+  const heldSafe = movementThreatSafeCore(heldThreat, minimumCpaCm);
   const selectedTick = Number.isFinite(Number(previous.selectedTick)) ? Number(previous.selectedTick) : null;
   const selectedElapsedTicks = tick !== null && selectedTick !== null
     ? Math.max(0, tick - selectedTick)
@@ -234,8 +232,15 @@ function stabilizeCombatMovementDirectionCore(input = {}, options = {}) {
         ? Math.max(0, tick - proposedTick)
         : Math.max(0, Math.floor((nowMs - proposedAtMs) / tickMs)))
     : selectedElapsedTicks;
-  const reducedHits = candidateDirectHits < heldDirectHits
-    || candidateUnavoidableHits < heldUnavoidableHits;
+  const riskComparison = candidateThreat && heldThreat
+    ? compareDodgeCandidateRiskCore(candidateThreat, heldThreat)
+    : null;
+  // Direction stability only yields immediately to a safer collision tier.
+  // Smaller clearance gains remain eligible for the normal settlement hold;
+  // materialCpaGainCm below still handles a large, lane-level improvement.
+  const reducedHits = Boolean(candidateThreat && heldThreat
+    && (candidateThreat.physicalHits < heldThreat.physicalHits
+      || candidateThreat.robustHits < heldThreat.robustHits));
   const restoredSafety = heldCpa < minimumCpaCm && candidateCpa >= minimumCpaCm;
   const materialCpaGain = Number.isFinite(candidateCpa) && Number.isFinite(heldCpa)
     && candidateCpa - heldCpa >= materialCpaGainCm;
@@ -257,8 +262,7 @@ function stabilizeCombatMovementDirectionCore(input = {}, options = {}) {
     && withinWindow
     && heldSafe
     && candidateSafe
-    && candidateDirectHits >= heldDirectHits
-    && candidateUnavoidableHits >= heldUnavoidableHits;
+    && (riskComparison === null || riskComparison <= 0);
 
   if (canHold) {
     const newProposal = !proposedMatchesCandidate;
@@ -754,10 +758,7 @@ function compareDodgeThreatCore(a, b) {
   // A short reaction budget does not make a projectile unavoidable in every
   // direction. Minimize all collisions first; on a tie, avoid the imminent
   // ones before threats that still leave time for another control update.
-  return a.directHits - b.directHits
-    || a.unavoidableHits - b.unavoidableHits
-    || b.minCPA - a.minCPA
-    || b.minTTI - a.minTTI;
+  return compareDodgeCandidateRiskCore(a, b);
 }
 
 /**
@@ -835,8 +836,14 @@ function calculateDodgeDirection(self, bullets, options = {}) {
     let directHits = 0;
     let avoidableHits = 0;
     let unavoidableHits = 0;
+    let physicalHits = 0;
     let minCPA = Infinity;
+    let minRobustCpaCm = Infinity;
     let rawMinCPA = Infinity;
+    let firstPhysicalCollisionTtiMs = Infinity;
+    let firstPhysicalCollisionBulletId = '';
+    let minClearanceBulletId = '';
+    let minRobustClearanceBulletId = '';
     let minTTI = Infinity;
     let scheduleRobust = true;
     let unconfirmedTransitionRisk = false;
@@ -845,6 +852,11 @@ function calculateDodgeDirection(self, bullets, options = {}) {
 
     for (const bullet of incoming) {
       const tti = Number(bullet.timeToImpact || 1000);
+      const bulletId = String(
+        bullet?.bullet_id
+          ?? bullet?.bulletId
+          ?? `${bullet?.createdTick ?? bullet?.created_tick ?? ''}:${bullet?.startX ?? bullet?.x ?? ''}:${bullet?.startY ?? bullet?.y ?? ''}`
+      );
       const bulletX = Number(bullet.x);
       const bulletY = Number(bullet.y);
       const directionX = Number(bullet.direction?.dx);
@@ -903,7 +915,8 @@ function calculateDodgeDirection(self, bullets, options = {}) {
         trajectoryResidualCm,
         Number(bullet.trajectoryUncertaintyCm ?? bullet.trajectory_uncertainty_cm ?? 0)
       ));
-      const robustCpa = Math.max(0, cpa - trajectoryUncertaintyCm);
+      const signedRobustCpa = cpa - trajectoryUncertaintyCm;
+      const robustCpa = Math.max(0, signedRobustCpa);
       const currentHoldRobustCpa = Math.max(0, currentHoldCpa - trajectoryUncertaintyCm);
       const expectedRobustCpa = Math.max(0, expectedCpa - trajectoryUncertaintyCm);
       const lateRobustCpa = Math.max(0, lateCpa - trajectoryUncertaintyCm);
@@ -918,12 +931,19 @@ function calculateDodgeDirection(self, bullets, options = {}) {
         if (tti < reactionBudgetMs) unavoidableHits++;
         else avoidableHits++;
       }
+      if (cpa < hitRadius) {
+        physicalHits += 1;
+        if (tti < firstPhysicalCollisionTtiMs) {
+          firstPhysicalCollisionTtiMs = tti;
+          firstPhysicalCollisionBulletId = bulletId;
+        }
+      }
+      if (signedRobustCpa < minRobustCpaCm) {
+        minRobustCpaCm = signedRobustCpa;
+        minRobustClearanceBulletId = bulletId;
+      }
       bulletRisks.push({
-        bulletId: String(
-          bullet?.bullet_id
-            ?? bullet?.bulletId
-            ?? `${bullet?.createdTick ?? bullet?.created_tick ?? ''}:${bullet?.startX ?? bullet?.x ?? ''}:${bullet?.startY ?? bullet?.y ?? ''}`
-        ),
+        bulletId,
         ownerId: bullet?.ownerId ?? bullet?.owner_id ?? null,
         createdTick: Number.isFinite(Number(bullet?.createdTick ?? bullet?.created_tick))
           ? Number(bullet.createdTick ?? bullet.created_tick)
@@ -935,6 +955,7 @@ function calculateDodgeDirection(self, bullets, options = {}) {
         timeToImpact: Number.isFinite(tti) ? tti : null,
         cpa: Number.isFinite(cpa) ? cpa : null,
         worstCaseCpaCm: Number.isFinite(robustCpa) ? robustCpa : null,
+        signedRobustCpaCm: Number.isFinite(signedRobustCpa) ? signedRobustCpa : null,
         currentHoldCpaCm: Number.isFinite(currentHoldRobustCpa) ? currentHoldRobustCpa : null,
         expectedCpaCm: Number.isFinite(expectedRobustCpa) ? expectedRobustCpa : null,
         lateCpaCm: Number.isFinite(lateRobustCpa) ? lateRobustCpa : null,
@@ -946,7 +967,10 @@ function calculateDodgeDirection(self, bullets, options = {}) {
         lateHit,
         avoidable: robustCpa < hitRadius && tti >= reactionBudgetMs
       });
-      if (cpa < rawMinCPA) rawMinCPA = cpa;
+      if (cpa < rawMinCPA) {
+        rawMinCPA = cpa;
+        minClearanceBulletId = bulletId;
+      }
       if (robustCpa < minCPA) minCPA = robustCpa;
       if (tti < minTTI) minTTI = tti;
     }
@@ -961,11 +985,33 @@ function calculateDodgeDirection(self, bullets, options = {}) {
     return {
       dx: dir.dx,
       dy: dir.dy,
+      hitRadiusCm: hitRadius,
       directHits,
+      robustHits: directHits,
+      physicalHits,
       avoidableHits,
       unavoidableHits,
       minCPA,
+      minRobustCpaCm: Number.isFinite(minRobustCpaCm) ? minRobustCpaCm : null,
       rawMinCPA,
+      minRawCpaCm: Number.isFinite(rawMinCPA) ? rawMinCPA : null,
+      minRawClearanceCm: Number.isFinite(rawMinCPA) ? rawMinCPA - hitRadius : null,
+      minRobustClearanceCm: Number.isFinite(minRobustCpaCm)
+        ? minRobustCpaCm - hitRadius
+        : null,
+      firstPhysicalCollisionTtiMs: Number.isFinite(firstPhysicalCollisionTtiMs)
+        ? firstPhysicalCollisionTtiMs
+        : null,
+      firstPhysicalCollisionBulletId,
+      minClearanceBulletId,
+      minRobustClearanceBulletId,
+      physicalCollisionBulletIds: bulletRisks
+        .filter(item => item.cpa !== null && Number(item.cpa) < hitRadius)
+        .map(item => item.bulletId),
+      robustCollisionBulletIds: bulletRisks
+        .filter(item => item.worstCaseCpaCm !== null && Number(item.worstCaseCpaCm) < hitRadius)
+        .map(item => item.bulletId),
+      dodgeRiskBullets: bulletRisks.slice(0, 16),
       worstCaseCpaCm: minCPA,
       minTTI,
       commandDelayTicks,
@@ -1012,7 +1058,10 @@ function calculateDodgeDirection(self, bullets, options = {}) {
   threatField.sort(compareDodgeThreatCore);
 
   // Prefer tangent movement if safe
-  const safest = threatField[0];
+  const safest = selectDodgeCandidateCore(threatField, {
+    hitRadius,
+    currentDirection: observedVelocity
+  });
   const tangentPreference = options.tangentPreference || null;
 
   if (tangentPreference && safest.directHits === 0) {
@@ -1021,7 +1070,7 @@ function calculateDodgeDirection(self, bullets, options = {}) {
       d.dx === tangentPreference.dx && d.dy === tangentPreference.dy
     );
 
-    if (tangentDir && tangentDir.directHits === safest.directHits && tangentDir.minCPA >= safest.minCPA * 0.92) {
+    if (tangentDir && compareDodgeCandidateRiskCore(tangentDir, safest, { hitRadius }) === 0) {
       return {
         dx: tangentDir.dx,
         dy: tangentDir.dy,
@@ -1039,6 +1088,7 @@ function calculateDodgeDirection(self, bullets, options = {}) {
   return {
     dx: safest.dx,
     dy: safest.dy,
+    hitRadiusCm: hitRadius,
     reason: safest.unavoidableHits > 0 && safest.avoidableHits === 0
       ? 'unavoidable-current-shot'
       : (safest.directHits > 0 ? 'direct-threat-dodge' : 'safe-dodge'),
@@ -1501,10 +1551,9 @@ function selectStochasticDodgeCandidateCore(candidates = [], options = {}) {
 function distanceAwareCandidateRowsCore(input = {}, radialIntent = {}, options = {}) {
   const threatField = Array.isArray(input.threatField) ? input.threatField : [];
   const source = threatField.length
-    ? threatField
-        .filter(item => Number(item?.directHits || 0) === 0
-          && Number(item?.unavoidableHits || 0) === 0
-          && item?.scheduleRobust !== false)
+    ? collapsedDodgeCandidatesCore(threatField, options)
+        .filter(item => isPhysicalDodgeSafeCore(item)
+          && isRobustDodgeSafeCore(item))
         .map(item => ({
           ...item,
           dx: item.dx,
@@ -1677,6 +1726,7 @@ function resolveDistanceAwareDodgeCore(input = {}, options = {}) {
   let randomChoice = null;
   let randomHoldUntil = null;
   let suppressCurrentShotDodge = false;
+  let completeRiskFallback = false;
   let latch = modeDecision.state?.latch || null;
   const currentThreat = reactionSlack.currentShotAvoidability !== 'safe'
     || reactionSlack.threateningBulletCount > 0;
@@ -1766,16 +1816,19 @@ function resolveDistanceAwareDodgeCore(input = {}, options = {}) {
       const physicallyClose = Number.isFinite(reactionSlack.prospectiveReactionSlackMs)
         && reactionSlack.prospectiveReactionSlackMs <= Number(reactionSlack.tickMs || 50);
       const field = Array.isArray(actualThreatField) ? actualThreatField : [];
-      const minHits = Math.min(...field.map(row => Number(row.directHits || 0)));
-      const minUnavoidable = Math.min(...field.filter(row => Number(row.directHits || 0) === minHits)
-        .map(row => Number(row.unavoidableHits || 0)));
+      const boundedField = collapsedDodgeCandidatesCore(field, {
+        candidateAllowed: row => candidateWithinBoundaryCore(input.self, row, options)
+      });
+      const bestRisk = selectDodgeCandidateCore(boundedField, {
+        preferredDirection: radialIntent
+      });
       const tx = Number(target.x) - Number(input.self?.x);
       const ty = Number(target.y) - Number(input.self?.y);
       const distance = Math.hypot(tx, ty);
-      const geometricTangents = physicallyClose && minHits > 0 && distance > 0 ? field.filter(row => {
+      const geometricTangents = physicallyClose && bestRisk && distance > 0 ? boundedField.filter(row => {
         const length = Math.hypot(row.dx, row.dy);
-        return length > 0 && Number(row.directHits || 0) === minHits
-          && Number(row.unavoidableHits || 0) === minUnavoidable
+        return length > 0
+          && compareDodgeCandidateRiskCore(row, bestRisk) === 0
           && Math.abs((row.dx * tx + row.dy * ty) / (length * distance)) <= Math.SQRT1_2
           && candidateWithinBoundaryCore(input.self, row, options);
       }) : [];
@@ -1794,6 +1847,21 @@ function resolveDistanceAwareDodgeCore(input = {}, options = {}) {
         && Number(previousLatch.holdUntilMs) > nowMs
         ? tangents.find(row => row.dx === previousLatchDirection.dx && row.dy === previousLatchDirection.dy)
         : null;
+      const baselineRisk = directionThreatCore(boundedField, currentDirection)
+        || directionThreatCore(boundedField, pendingDirection)
+        || directionThreatCore(boundedField, input.unavoidableHoldDirection);
+      const strictRiskImprovement = Boolean(bestRisk && baselineRisk
+        && compareDodgeCandidateRiskCore(bestRisk, baselineRisk) < 0);
+      const fallbackRisk = bestRisk
+        ? selectDodgeCandidateCore(boundedField.filter(row => (
+          compareDodgeCandidateRiskCore(row, bestRisk) === 0
+          && sameRadialIntentCore(row, radialIntent, {
+            minimumDot: 0,
+            allowAxisPause: escortAxisPause
+          })
+        )), { preferredDirection: radialIntent })
+          || (strictRiskImprovement ? bestRisk : null)
+        : null;
       const selection = retained ? { selected: retained, randomChoice: previousLatch.randomChoice }
         : selectStochasticDodgeCandidateCore(tangents, options);
       if (selection.selected) {
@@ -1805,18 +1873,31 @@ function resolveDistanceAwareDodgeCore(input = {}, options = {}) {
         preDodgeReason = retained ? 'latched-close-tangent' : 'unavoidable-close-tangent';
         preDodgeTrigger = true;
       } else {
-        // The current shot has no safe command sequence left. Do not reverse
-        // into an unproven direction; preserve the existing movement and wait
-        // for the next volley to become actionable.
-        preDodgeReason = 'unavoidable-current-shot';
-        selectedDirection = normalizedDirection(
-          input.unavoidableHoldDirection
-            || pendingDirection
-            || currentDirection
-        );
-        suppressCurrentShotDodge = true;
-        latch = null;
-        invalidatePreviousLatch = true;
+        // No candidate avoids every bullet, but the current/pending lane is
+        // not evidence of safety. A physically close shot still uses the
+        // complete risk key so the best clearance and latest actual collision
+        // win regardless of the base navigation intent.
+        if (fallbackRisk && (physicallyClose || strictRiskImprovement)) {
+          closeSubmode = null;
+          selectedDirection = fallbackRisk;
+          preDodgeReason = 'unavoidable-best-risk-fallback';
+          preDodgeTrigger = true;
+          completeRiskFallback = true;
+          randomHoldUntil = nowMs + Math.max(
+            Number(options.latchMinimumHoldMs ?? 250),
+            Number(reactionSlack.commandBudgetMs || 0)
+          );
+        } else {
+          preDodgeReason = 'unavoidable-current-shot';
+          selectedDirection = normalizedDirection(
+            input.unavoidableHoldDirection
+              || pendingDirection
+              || currentDirection
+          );
+          suppressCurrentShotDodge = true;
+          latch = null;
+          invalidatePreviousLatch = true;
+        }
       }
     } else if (previousLatchActive) {
       closeSubmode = DISTANCE_AWARE_DODGE_SUBMODES.has(String(previousLatch.submode))
@@ -1842,7 +1923,9 @@ function resolveDistanceAwareDodgeCore(input = {}, options = {}) {
         score: finiteMovementNumber(candidate.predictedCpaCm ?? candidate.minCpaCm ?? candidate.score, 0)
       }));
       const bestPredictive = prediction.predictiveEligible
-        ? predictiveCandidates.slice().sort((left, right) => Number(right.score || 0) - Number(left.score || 0))[0]
+        ? selectDodgeCandidateCore(predictiveCandidates, {
+            scoreCandidate: candidate => Number(candidate.score || 0)
+          })
         : null;
       if (bestPredictive && Number(bestPredictive.score || 0) > Number(reactionSlack.nextVolleyMinCpaCm || 0)) {
         closeSubmode = 'predictive';
@@ -1898,14 +1981,15 @@ function resolveDistanceAwareDodgeCore(input = {}, options = {}) {
       : null;
     const selectedThreat = directionThreatCore(selectedThreatField, selectedDirection);
     const stableDirectionSafe = Boolean(stabilityThreat
-      && stabilityThreat.directHits === 0
-      && stabilityThreat.unavoidableHits === 0
+      && isPhysicalDodgeSafeCore(stabilityThreat)
+      && isRobustDodgeSafeCore(stabilityThreat)
       && stabilityThreat.scheduleRobust !== false);
     const selectedDirectionImprovesCpa = Boolean(
       selectedThreat
-        && Number.isFinite(Number(selectedThreat.minCPA))
-        && Number.isFinite(Number(stabilityThreat?.minCPA))
-        && Number(selectedThreat.minCPA) - Number(stabilityThreat.minCPA) >= Math.max(
+        && Number.isFinite(Number(selectedThreat.minRobustClearanceCm ?? selectedThreat.minCPA))
+        && Number.isFinite(Number(stabilityThreat?.minRobustClearanceCm ?? stabilityThreat?.minCPA))
+        && Number(selectedThreat.minRobustClearanceCm ?? selectedThreat.minCPA)
+          - Number(stabilityThreat.minRobustClearanceCm ?? stabilityThreat.minCPA) >= Math.max(
           Number(options.directionStabilityMinimumCpaGainCm ?? 90),
           Number(options.minimumCpaCm ?? 200) * 0.5
         )
@@ -1945,7 +2029,8 @@ function resolveDistanceAwareDodgeCore(input = {}, options = {}) {
       createdAtMs: previousLatch?.createdAtMs || nowMs
     };
     latch = nextLatch;
-    if (!sameRadialIntentCore(selectedDirection, radialIntent, { minimumDot: 0, allowAxisPause: escortAxisPause })) {
+    if (!completeRiskFallback
+      && !sameRadialIntentCore(selectedDirection, radialIntent, { minimumDot: 0, allowAxisPause: escortAxisPause })) {
       applied = false;
       selectedDirection = null;
       preDodgeReason = 'radial-intent-preserved';
@@ -2141,23 +2226,23 @@ function contactEntrySyntheticBulletCore(self, target, options = {}) {
 }
 
 function pickSafeClosingDodgeCore(threatField = [], options = {}) {
-  const candidates = (threatField || []).filter(Boolean);
+  const candidates = collapsedDodgeCandidatesCore(threatField, options);
   if (!candidates.length) return null;
-  const minimumDirectHits = Math.min(...candidates.map(item => Number(item.directHits ?? Infinity)));
-  if (minimumDirectHits > 0) return null;
-  const safestCpa = Math.max(...candidates
-    .filter(item => Number(item.directHits || 0) === minimumDirectHits)
-    .map(item => Number(item.minCPA || 0)));
+  const physicalSafeCandidates = candidates.filter(item => isPhysicalDodgeSafeCore(item));
+  if (!physicalSafeCandidates.length) return null;
+  const safestCpa = Math.max(...physicalSafeCandidates
+    .map(item => Number(item.minCPA ?? item.worstCaseCpaCm ?? 0)));
   const hitRadius = Math.max(1, Number(options.hitRadius || 200));
   const cpaRatio = Math.max(0, Math.min(1, Number(options.minimumCpaRatio ?? 0.75)));
   const minimumCpa = Math.max(hitRadius * 1.25, safestCpa * cpaRatio);
   const minimumClosing = Math.max(0, Number(options.minimumClosingCm ?? 25));
-  return candidates
-    .filter(item => Number(item.directHits || 0) === 0)
+  const closing = physicalSafeCandidates
     .filter(item => Number(item.targetDistanceChange || 0) <= -minimumClosing)
-    .filter(item => Number(item.minCPA || 0) >= minimumCpa)
-    .sort((a, b) => Number(a.targetDistanceChange || 0) - Number(b.targetDistanceChange || 0)
-      || Number(b.minCPA || 0) - Number(a.minCPA || 0))[0] || null;
+    .filter(item => Number(item.minCPA ?? item.worstCaseCpaCm ?? 0) >= minimumCpa);
+  return selectDodgeCandidateCore(closing, {
+    hitRadius,
+    scoreCandidate: item => -Number(item.targetDistanceChange || 0)
+  });
 }
 
 function safeRetreatInterceptCandidateCore(self, target, context = {}) {
@@ -2198,16 +2283,12 @@ function safeRetreatInterceptCandidateCore(self, target, context = {}) {
     return { ...base, reason: 'multiple-attackers' };
   }
 
-  const threatField = Array.isArray(context.threatField) ? context.threatField : [];
+  const threatField = collapsedDodgeCandidatesCore(context.threatField);
   const minimumCpaCm = Math.max(1, Number(context.minimumCpaCm ?? 200));
-  const danger = threatField.some(item => Number(item?.directHits || 0) > 0
-    || Number(item?.unavoidableHits || 0) > 0);
+  const danger = threatField.some(item => !isPhysicalDodgeSafeCore(item)
+    || !isRobustDodgeSafeCore(item));
   if (danger) return { ...base, reason: 'collision-pressure-present' };
-  const safeDirections = threatField.filter(item => (
-    Number(item?.directHits || 0) === 0
-      && Number(item?.unavoidableHits || 0) === 0
-      && Number(item?.worstCaseCpaCm ?? item?.minCPA ?? 0) >= minimumCpaCm
-  ));
+  const safeDirections = threatField.filter(item => movementThreatSafeCore(item, minimumCpaCm));
   if (threatField.length > 0 && safeDirections.length === 0) {
     return { ...base, reason: 'no-zero-risk-dodge-direction' };
   }
@@ -2269,11 +2350,7 @@ function safeRetreatInterceptCandidateCore(self, target, context = {}) {
   const candidateThreat = threatField.find(item => (
     Number(item?.dx) === direction.dx && Number(item?.dy) === direction.dy
   )) || null;
-  if (candidateThreat && (
-    Number(candidateThreat.directHits || 0) > 0
-      || Number(candidateThreat.unavoidableHits || 0) > 0
-      || Number(candidateThreat.worstCaseCpaCm ?? candidateThreat.minCPA ?? 0) < minimumCpaCm
-  )) {
+  if (candidateThreat && !movementThreatSafeCore(candidateThreat, minimumCpaCm)) {
     return { ...base, direction, interceptPoint, reason: 'intercept-direction-not-collision-safe' };
   }
   const currentDistance = Math.hypot(relativeX, relativeY);
@@ -2405,6 +2482,7 @@ function isRecoverableOutOfRangeTarget(self, target, engagement = {}) {
 
 module.exports = {
   calculateCombatSpacing,
+  candidateWithinBoundaryCore,
   directionThreatCore,
   classifyDistanceAwareDodgeModeCore,
   createSeededRandomCore,

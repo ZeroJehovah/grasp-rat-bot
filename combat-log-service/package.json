@@ -6,7 +6,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node server.js --self-test && node watchdog-dry-run-replay.js --self-test && node watchdog-smoke.js && node cleanup-logs.js --self-test && node analyze-logs.js --self-test && node daily-summary.js --self-test && node replay-combat.js --self-test",
+    "test": "node server.js --self-test && node watchdog-dry-run-replay.js --self-test && node watchdog-smoke.js && node cleanup-logs.js --self-test && node analyze-logs.js --self-test && node daily-summary.js --self-test && node replay-combat.js --self-test && node audit-dodge-lane-arbitration.js --self-test",
+    "audit:dodge-lane": "node audit-dodge-lane-arbitration.js",
     "watchdog:replay": "node watchdog-dry-run-replay.js",
     "watchdog:smoke": "node watchdog-smoke.js",
     "cleanup": "node cleanup-logs.js",

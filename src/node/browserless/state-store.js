@@ -194,16 +194,70 @@ function bulletDirectionAndSpeed(bullet) {
   };
 }
 
-function bulletTrajectorySummary(history) {
+function bulletTrajectorySample(bullet, frameTick) {
+  if (!bullet || typeof bullet !== 'object') return null;
+  const tick = numericOrNull(frameTick);
+  const explicitX = numericOrNull(bullet.x ?? bullet.current_x ?? bullet.currentX);
+  const explicitY = numericOrNull(bullet.y ?? bullet.current_y ?? bullet.currentY);
+  const startX = numericOrNull(bullet.start_x ?? bullet.startX);
+  const startY = numericOrNull(bullet.start_y ?? bullet.startY);
+  const createdTick = numericOrNull(bullet.created_tick ?? bullet.createdTick);
+  const rawSpeed = numericOrNull(bullet.speed_per_tick ?? bullet.speedPerTick ?? bullet.speed);
+  const direction = bulletDirectionAndSpeed(bullet);
+  const directionComplete = Number.isFinite(direction.dx)
+    && Number.isFinite(direction.dy)
+    && (direction.dx !== 0 || direction.dy !== 0);
+  const speed = rawSpeed !== null && rawSpeed > 0 ? rawSpeed : null;
+  const completeServerKinematics = tick !== null
+    && startX !== null
+    && startY !== null
+    && createdTick !== null
+    && directionComplete
+    && speed !== null;
+  if (explicitX !== null && explicitY !== null && tick !== null) {
+    return {
+      tick,
+      x: explicitX,
+      y: explicitY,
+      dx: direction.dx,
+      dy: direction.dy,
+      speed: speed ?? direction.speed,
+      positionSource: 'explicit',
+      completeServerKinematics
+    };
+  }
+  if (!completeServerKinematics) return null;
+  const ageTicks = Math.max(0, tick - createdTick);
+  return {
+    tick,
+    x: startX + direction.dx * speed * ageTicks,
+    y: startY + direction.dy * speed * ageTicks,
+    dx: direction.dx,
+    dy: direction.dy,
+    speed,
+    positionSource: 'server-projection',
+    completeServerKinematics: true
+  };
+}
+
+function bulletTrajectorySummary(history, currentBullet = null, frameTick = null) {
   const observations = Array.isArray(history?.observations) ? history.observations : [];
+  let explicitObservationCount = 0;
+  let projectedObservationCount = 0;
   let residualCm = 0;
   let largestGapTicks = 1;
+  for (const observation of observations) {
+    if (observation?.positionSource === 'explicit') explicitObservationCount += 1;
+    else if (observation?.positionSource === 'server-projection') projectedObservationCount += 1;
+  }
   for (let index = 1; index < observations.length; index += 1) {
     const previous = observations[index - 1];
     const current = observations[index];
     const tickGap = Math.max(1, Number(current.tick) - Number(previous.tick));
     largestGapTicks = Math.max(largestGapTicks, tickGap);
-    if ([previous.x, previous.y, current.x, current.y, current.dx, current.dy, current.speed].every(Number.isFinite)) {
+    if (previous.positionSource === 'explicit'
+      && current.positionSource === 'explicit'
+      && [previous.x, previous.y, current.x, current.y, current.dx, current.dy, current.speed].every(Number.isFinite)) {
       const predictedX = Number(previous.x) + Number(current.dx) * Number(current.speed) * tickGap;
       const predictedY = Number(previous.y) + Number(current.dy) * Number(current.speed) * tickGap;
       residualCm = Math.max(
@@ -212,18 +266,32 @@ function bulletTrajectorySummary(history) {
       );
     }
   }
-  const insufficientObservation = observations.length < 3;
+  const currentSample = currentBullet ? bulletTrajectorySample(currentBullet, frameTick) : null;
+  const completeServerKinematics = history?.completeServerKinematics === true
+    || currentSample?.completeServerKinematics === true;
+  const gapPenaltyCm = Math.max(0, largestGapTicks - 1) * 50;
+  const baseUncertaintyCm = Math.max(residualCm, gapPenaltyCm);
   const uncertaintyCm = Math.min(260, Math.max(
-    residualCm,
-    insufficientObservation ? 180 : 0,
-    Math.max(0, largestGapTicks - 1) * 50
+    baseUncertaintyCm,
+    completeServerKinematics ? 0 : 180
   ));
+  const positionSource = explicitObservationCount && projectedObservationCount
+    ? 'mixed'
+    : (explicitObservationCount ? 'explicit' : (projectedObservationCount ? 'server-projection' : 'insufficient'));
+  const confidence = completeServerKinematics && explicitObservationCount > 0
+    ? 'projection-plus-explicit'
+    : (completeServerKinematics
+        ? 'server-kinematics'
+        : (explicitObservationCount >= 3 ? 'explicit-bounded' : 'insufficient-kinematics'));
   return {
     trajectoryObservationCount: observations.length,
+    trajectoryExplicitObservationCount: explicitObservationCount,
+    trajectoryProjectedObservationCount: projectedObservationCount,
+    trajectoryPositionSource: positionSource,
     trajectoryResidualCm: Math.round(residualCm),
     trajectoryUncertaintyCm: Math.round(uncertaintyCm),
     trajectoryFrameGapTicks: largestGapTicks,
-    trajectoryConfidence: insufficientObservation ? 'insufficient-observation' : 'bounded-history'
+    trajectoryConfidence: confidence
   };
 }
 
@@ -887,17 +955,19 @@ function createBrowserlessStateStore(options = {}) {
       const key = bulletKey(bullet);
       if (!key) continue;
       const current = state.realtime.bulletTrajectories[key] || { observations: [] };
-      const x = numericOrNull(bullet.x ?? bullet.current_x ?? bullet.currentX);
-      const y = numericOrNull(bullet.y ?? bullet.current_y ?? bullet.currentY);
-      const direction = bulletDirectionAndSpeed(bullet);
-      if (x !== null && y !== null && meta.tick !== null) {
-        current.observations.push({
-          tick: meta.tick,
-          atMs: meta.receivedAtMs,
-          x,
-          y,
-          ...direction
-        });
+      const sample = bulletTrajectorySample(bullet, meta.tick);
+      if (sample) {
+        current.completeServerKinematics = sample.completeServerKinematics === true;
+        const previous = current.observations.at(-1) || null;
+        const observation = {
+          ...sample,
+          atMs: meta.receivedAtMs
+        };
+        if (!previous || Number(sample.tick) > Number(previous.tick)) {
+          current.observations.push(observation);
+        } else if (Number(sample.tick) === Number(previous.tick)) {
+          current.observations[current.observations.length - 1] = observation;
+        }
         if (current.observations.length > 5) {
           current.observations.splice(0, current.observations.length - 5);
         }
@@ -922,9 +992,10 @@ function createBrowserlessStateStore(options = {}) {
       const normalized = normalizeBullet(bullet, frameMeta, reuseRealtimeFrameObjects);
       if (!normalized) continue;
       const history = state.realtime.bulletTrajectories[bulletKey(bullet)];
-      if (history && reuseRealtimeFrameObjects) Object.assign(normalized, bulletTrajectorySummary(history));
-      const outputBullet = history && !reuseRealtimeFrameObjects
-        ? { ...normalized, ...bulletTrajectorySummary(history) }
+      const summary = bulletTrajectorySummary(history, bullet, meta.tick);
+      if (reuseRealtimeFrameObjects) Object.assign(normalized, summary);
+      const outputBullet = !reuseRealtimeFrameObjects
+        ? { ...normalized, ...summary }
         : normalized;
       if (reuseRealtimeFrameObjects) normalizedBullets[normalizedBulletCount] = outputBullet;
       else normalizedBullets.push(outputBullet);

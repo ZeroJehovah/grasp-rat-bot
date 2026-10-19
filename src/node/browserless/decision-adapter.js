@@ -83,6 +83,14 @@ const {
   recordCombatShotLearning
 } = require('./combat-adapter');
 const {
+  candidateWithinBoundaryCore
+} = require('../../strategy/combat-movement');
+const {
+  movementSafetyOverrideCore,
+  safestTierCandidateCore,
+  selectDodgeCandidateCore
+} = require('../../strategy/combat-dodge-selection');
+const {
   buildLeavePendingCover,
   filterNormalizedIncomingBullets,
   normalizedIncomingBullets
@@ -2939,30 +2947,24 @@ function safeLootDodgeDirection(combat, self, coin, incomingAssessment = null) {
   const coinDx = Number(coin.x) - Number(self.x);
   const coinDy = Number(coin.y) - Number(self.y);
   const coinDistance = Math.hypot(coinDx, coinDy);
-  if (!(coinDistance > 0)) return null;
-  let best = null;
-  let bestProgress = 0;
-  let bestMinCpa = -Infinity;
-  for (const item of threatField) {
-    if (Number(item?.directHits || 0) !== 0
-      || Number(item?.avoidableHits || 0) !== 0
-      || Number(item?.unavoidableHits || 0) !== 0) continue;
+  const hitRadius = Math.max(1, Number(threatField[0]?.hitRadiusCm ?? 90));
+  const scored = threatField.map(item => {
     const dx = Number(item?.dx || 0);
     const dy = Number(item?.dy || 0);
     const magnitude = Math.hypot(dx, dy);
-    if (!(magnitude > 0)) continue;
-    const progress = (dx * coinDx + dy * coinDy) / (magnitude * coinDistance);
-    if (!(progress > 0)) continue;
-    const minCpa = Number(item?.minCPA ?? -Infinity);
-    if (!best || progress > bestProgress || (progress === bestProgress && minCpa > bestMinCpa)) {
-      best = item;
-      bestProgress = progress;
-      bestMinCpa = minCpa;
-    }
-  }
+    const progress = magnitude > 0 && coinDistance > 0
+      ? (dx * coinDx + dy * coinDy) / (magnitude * coinDistance)
+      : 0;
+    return { ...item, lootProgress: progress };
+  });
+  const best = safestTierCandidateCore(scored, {
+    hitRadius,
+    scoreWithinSafeTier: true,
+    scoreCandidate: item => Number(item.lootProgress || 0)
+  });
   return best ? {
     ...best,
-    lootProgress: Math.round(bestProgress * 1000) / 1000,
+    lootProgress: Math.round(Number(best.lootProgress || 0) * 1000) / 1000,
     lootThreatFieldSource: threatFieldSource
   } : null;
 }
@@ -10729,6 +10731,108 @@ function applyPostKillSettlementMovementToCombat(combat, action) {
   return combat;
 }
 
+function applyFinalMovementSafetyOverride(combat, action, self, options = {}) {
+  const movement = combat?.dryRun?.movement || null;
+  const threatField = Array.isArray(movement?.dodge?.threatField)
+    ? movement.dodge.threatField
+    : [];
+  const kind = String(action?.kind || '');
+  const ordinaryMovementKinds = new Set([
+    'combat-live',
+    'combat-candidate',
+    'patrol',
+    'coin',
+    'seek-coin',
+    'seek-enemy',
+    'seek-remote-player',
+    'profit-candidate',
+    'profit-attack',
+    'return-block-scan',
+    'move-to-target'
+  ]);
+  if (!movement || !threatField.length
+    || !ordinaryMovementKinds.has(kind)) {
+    return { combat, action, applied: false, reason: 'not-ordinary-combat-movement' };
+  }
+  const hardGateReason = action?.shouldLeave === true || String(action?.band || '') === 'exit'
+    ? 'combat-hard-exit'
+    : (String(action?.band || '') === 'safety'
+        ? 'safety-movement'
+        : (kind === 'recover' || String(action?.reason || '').includes('recover')
+            ? 'recovery-navigation'
+            : (options.recoveryNavigationPaused === true ? 'recovery-navigation' : '')));
+  const hitRadius = Math.max(1, Number(
+    movement.dodge?.hitRadiusCm ?? threatField[0]?.hitRadiusCm
+      ?? options.combatBulletHitRadiusCm ?? 90
+  ));
+  const result = movementSafetyOverrideCore({
+    threatField,
+    currentDirection: kind === 'combat-live'
+      ? movement
+      : { dx: action?.dx || 0, dy: action?.dy || 0 },
+    hardGate: Boolean(hardGateReason),
+    hardGateReason
+  }, {
+    hitRadius,
+    candidateAllowed: candidate => candidateWithinBoundaryCore(self, candidate, {
+      boundary: options.combatBoundary || options.boundary || null,
+      boundaryMarginCm: options.combatBoundaryMarginCm ?? options.boundaryMarginCm,
+      moveSpeedPerTick: options.combatMoveSpeedPerTick || 50
+    })
+  });
+  if (!result.applied || !result.direction) {
+    return { combat, action, applied: false, result };
+  }
+  const originalOwner = String(movement.ownership?.owner || 'combat-movement');
+  const originalDirection = kind === 'combat-live'
+    ? { dx: Number(movement.dx || 0), dy: Number(movement.dy || 0) }
+    : { dx: Number(action?.dx || 0), dy: Number(action?.dy || 0) };
+  const selectedDirection = { dx: Number(result.direction.dx || 0), dy: Number(result.direction.dy || 0) };
+  const nextMovement = {
+    ...movement,
+    dx: selectedDirection.dx,
+    dy: selectedDirection.dy,
+    reason: 'movement-safety-override',
+    modifiers: Array.from(new Set([...(movement.modifiers || []), 'dodge', 'movement-safety-override'])),
+    dodge: {
+      ...(movement.dodge || {}),
+      dx: selectedDirection.dx,
+      dy: selectedDirection.dy,
+      reason: 'movement-safety-override',
+      applied: true
+    },
+    ownership: {
+      ...(movement.ownership || {}),
+      owner: 'movement-safety-override',
+      reason: 'physical-collision-to-safe-direction'
+    },
+    movementSafetyOverride: {
+      enabled: true,
+      applied: true,
+      reason: result.reason,
+      threatFieldSource: 'movement-dodge',
+      originalOwner,
+      overrideOwner: 'movement-safety-override',
+      originalDirection,
+      selectedDirection,
+      originalRisk: result.current,
+      selectedRisk: result.selected
+    }
+  };
+  const nextCombat = {
+    ...combat,
+    dryRun: { ...combat.dryRun, movement: nextMovement }
+  };
+  const nextAction = {
+    ...action,
+    dx: selectedDirection.dx,
+    dy: selectedDirection.dy,
+    reason: 'movement-safety-override',
+    movementSafetyOverride: nextMovement.movementSafetyOverride
+  };
+  return { combat: nextCombat, action: nextAction, applied: true, result: nextMovement.movementSafetyOverride };
+}
+
 function safePostAttackCoinCandidates(input, maxDistance, options = {}) {
   if (!input?.self) return [];
   const threats = postAttackThreats(input);
@@ -11794,7 +11898,7 @@ function compactLeaveCover(cover) {
       dy: Number(selected.dy || 0),
       directHits: Number(selected.directHits || 0),
       unavoidableHits: Number(selected.unavoidableHits || 0),
-      minCPA: numberOrNull(selected.minCPA),
+      minCPA: nullableNumberOrNull(selected.minCPA),
       minTTI: numberOrNull(selected.minTTI),
       commandDelayTicks: numberOrNull(selected.commandDelayTicks),
       pendingVelocityCommand: cloneJson(selected.pendingVelocityCommand || null),
@@ -11862,30 +11966,28 @@ function recentCombatResidualThreatContinuityCore(input = {}) {
 
 function selectExecutableIncomingCover(cover) {
   if (!cover) return null;
-  if (Number(cover.dx || 0) || Number(cover.dy || 0)) return cover;
-  const selected = (cover.threatField || []).find(item => (
-    Number(item?.dx || 0) === Number(cover.dx || 0)
-      && Number(item?.dy || 0) === Number(cover.dy || 0)
-  )) || null;
-  const moving = (cover.threatField || [])
-    .filter(item => Number(item?.dx || 0) || Number(item?.dy || 0))
-    .filter(item => !selected
-      || (Number(item.directHits || 0) <= Number(selected.directHits || 0)
-        && Number(item.unavoidableHits || 0) <= Number(selected.unavoidableHits || 0)))
-    .sort((left, right) => Number(left.directHits || 0) - Number(right.directHits || 0)
-      || Number(left.unavoidableHits || 0) - Number(right.unavoidableHits || 0)
-      || Number(right.minCPA || 0) - Number(left.minCPA || 0))[0] || null;
-  if (!moving) return cover;
+  const field = Array.isArray(cover.threatField) ? cover.threatField : [];
+  if (!field.length) return cover;
+  const selected = selectDodgeCandidateCore(field, {
+    hitRadius: Number(cover.hitRadiusCm ?? field[0]?.hitRadiusCm ?? 90),
+    preferredDirection: { dx: cover.dx || 0, dy: cover.dy || 0 }
+  });
+  if (!selected) return cover;
   return {
     ...cover,
-    dx: Number(moving.dx || 0),
-    dy: Number(moving.dy || 0),
+    dx: Number(selected.dx || 0),
+    dy: Number(selected.dy || 0),
     reason: 'incoming-bullet-safe-moving-cover',
-    directHits: Number(moving.directHits || 0),
-    avoidableHits: Number(moving.avoidableHits || 0),
-    unavoidableHits: Number(moving.unavoidableHits || 0),
-    minCPA: numberOrNull(moving.minCPA),
-    minTTI: numberOrNull(moving.minTTI)
+    directHits: Number(selected.directHits || 0),
+    physicalHits: Number(selected.physicalHits || 0),
+    robustHits: Number(selected.robustHits ?? selected.directHits ?? 0),
+    avoidableHits: Number(selected.avoidableHits || 0),
+    unavoidableHits: Number(selected.unavoidableHits || 0),
+    minCPA: nullableNumberOrNull(selected.minCPA),
+    minRawCpaCm: nullableNumberOrNull(selected.minRawCpaCm),
+    minRawClearanceCm: nullableNumberOrNull(selected.minRawClearanceCm),
+    minClearanceBulletId: String(selected.minClearanceBulletId || ''),
+    minTTI: numberOrNull(selected.minTTI)
   };
 }
 
@@ -15213,7 +15315,7 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   const previousCombatTarget = cloneJson(stateful.combatTarget || null);
   const previousCombatMetrics = cloneJson(stateful.combatMetrics || null);
   const previousCombatTargetId = targetIdForAttackHistory(previousCombatTarget);
-  const combat = buildCombatDecision(input, stateful, {
+  let combat = buildCombatDecision(input, stateful, {
     ...options,
     easyKillPreferredTargetId,
     recoveryOwnsCurrentOpportunity,
@@ -16048,6 +16150,22 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     reason = action.reason || reason || 'no-profitable-candidate';
   }
   applyPostKillSettlementMovementToCombat(combat, action);
+  const finalMovementSafety = applyFinalMovementSafetyOverride(combat, action, input.self, options);
+  if (finalMovementSafety.applied) {
+    combat = finalMovementSafety.combat;
+    action = finalMovementSafety.action;
+    stateful.dodgeOwnership = {
+      ...(stateful.dodgeOwnership || {}),
+      active: true,
+      currentThreat: true,
+      owner: 'emergency-dodge',
+      direction: { dx: Number(action.dx || 0), dy: Number(action.dy || 0) },
+      reason: 'movement-safety-override'
+    };
+    kind = action.kind || kind;
+    band = action.band || band;
+    reason = action.reason || reason;
+  }
   const ignoredActionCoinId = action?.ignoredCoin?.id || '';
   const rememberedOpportunityKey = coinDecisionKey(opportunity.opportunityChoice?.sourceCoin || opportunity.opportunityChoice);
   const selectedProfitTargetId = action?.finalCandidate?.priorityBand === 'profit'
@@ -16754,6 +16872,7 @@ module.exports = {
   buildPostKillSettlementWaitDecision,
   postKillSettlementMovement,
   applyPostKillSettlementMovementToCombat,
+  applyFinalMovementSafetyOverride,
   buildBrowserlessCombatStrategyInput,
   buildBrowserlessRealtimeControlDecision,
   buildBrowserlessRuntimeDefaults,
@@ -16773,6 +16892,7 @@ module.exports = {
   lowHpRecoveryThreatRadiusForHp,
   opportunityEnemyStaminaCost,
   scoreEnemyOpportunity,
+  safeLootDodgeDirection,
   normalizeCoinForDecision,
   normalizeEntityForDecision,
   observeBrowserlessCoinPickups,

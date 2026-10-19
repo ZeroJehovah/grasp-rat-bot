@@ -104,7 +104,12 @@ function compactBullet(bullet = {}) {
     expectedHit: bullet.expectedHit === true,
     trajectoryUncertaintyCm: numberOrNull(
       bullet.trajectoryUncertaintyCm ?? bullet.trajectory_uncertainty_cm
-    )
+    ),
+    trajectoryObservationCount: numberOrNull(bullet.trajectoryObservationCount),
+    trajectoryExplicitObservationCount: numberOrNull(bullet.trajectoryExplicitObservationCount),
+    trajectoryProjectedObservationCount: numberOrNull(bullet.trajectoryProjectedObservationCount),
+    trajectoryPositionSource: String(bullet.trajectoryPositionSource || ''),
+    trajectoryConfidence: String(bullet.trajectoryConfidence || '')
   };
 }
 
@@ -113,9 +118,18 @@ function compactThreat(threat = {}) {
     dx: normalizedDirection(threat).dx,
     dy: normalizedDirection(threat).dy,
     directHits: Math.max(0, Number(threat.directHits || 0)),
+    physicalHits: Math.max(0, Number(threat.physicalHits ?? threat.directHits ?? 0)),
+    robustHits: Math.max(0, Number(threat.robustHits ?? threat.directHits ?? 0)),
     unavoidableHits: Math.max(0, Number(threat.unavoidableHits || 0)),
     avoidableHits: Math.max(0, Number(threat.avoidableHits || 0)),
     minCPA: numberOrNull(threat.minCPA ?? threat.worstCaseCpaCm),
+    minRawCpaCm: numberOrNull(threat.minRawCpaCm ?? threat.rawMinCPA),
+    minRobustCpaCm: numberOrNull(threat.minRobustCpaCm),
+    minRawClearanceCm: numberOrNull(threat.minRawClearanceCm),
+    minRobustClearanceCm: numberOrNull(threat.minRobustClearanceCm),
+    firstPhysicalCollisionTtiMs: numberOrNull(threat.firstPhysicalCollisionTtiMs),
+    firstPhysicalCollisionBulletId: String(threat.firstPhysicalCollisionBulletId || ''),
+    minClearanceBulletId: String(threat.minClearanceBulletId || ''),
     worstCaseCpaCm: numberOrNull(threat.worstCaseCpaCm ?? threat.minCPA),
     minTTI: numberOrNull(threat.minTTI),
     scheduleRobust: threat.scheduleRobust !== false
@@ -233,9 +247,17 @@ function directionSummary(threatField, selectedDirection) {
       selected: directionKey(direction) === directionKey(selectedDirection),
       evidence: Boolean(threat),
       directHits: threat?.directHits ?? null,
+      physicalHits: threat?.physicalHits ?? null,
+      robustHits: threat?.robustHits ?? null,
       unavoidableHits: threat?.unavoidableHits ?? null,
       avoidableHits: threat?.avoidableHits ?? null,
       minCPA: threat?.minCPA ?? null,
+      minRawCpaCm: threat?.minRawCpaCm ?? null,
+      minRobustCpaCm: threat?.minRobustCpaCm ?? null,
+      minRawClearanceCm: threat?.minRawClearanceCm ?? null,
+      minRobustClearanceCm: threat?.minRobustClearanceCm ?? null,
+      firstPhysicalCollisionBulletId: threat?.firstPhysicalCollisionBulletId ?? null,
+      minClearanceBulletId: threat?.minClearanceBulletId ?? null,
       worstCaseCpaCm: threat?.worstCaseCpaCm ?? null,
       minTTI: threat?.minTTI ?? null,
       scheduleRobust: threat?.scheduleRobust ?? null
@@ -260,7 +282,12 @@ function candidateBulletSummary(bullet) {
     predictedHit: bullet.predictedHit,
     currentHoldHit: bullet.currentHoldHit,
     expectedHit: bullet.expectedHit,
-    trajectoryUncertaintyCm: bullet.trajectoryUncertaintyCm
+    trajectoryUncertaintyCm: bullet.trajectoryUncertaintyCm,
+    trajectoryObservationCount: bullet.trajectoryObservationCount,
+    trajectoryExplicitObservationCount: bullet.trajectoryExplicitObservationCount,
+    trajectoryProjectedObservationCount: bullet.trajectoryProjectedObservationCount,
+    trajectoryPositionSource: bullet.trajectoryPositionSource,
+    trajectoryConfidence: bullet.trajectoryConfidence
   };
 }
 

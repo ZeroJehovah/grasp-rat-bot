@@ -48,6 +48,14 @@ function runSecondaryDodgeSelfTest() {
   assert.strictEqual(selected.directHits, reversal.directHits, 'the comparison has equal total collision risk');
   assert.strictEqual(selected.unavoidableHits, 0, 'a time-budget label cannot justify entering an avoidable near shot');
   assert.strictEqual(reversal.unavoidableHits, 1);
+  assert.strictEqual(selected.physicalHits, 0,
+    'a raw-safe lane outranks every lane that physically intersects a projectile');
+  assert(selected.robustHits <= reversal.robustHits,
+    'equal raw safety must not worsen the complete robust collision key');
+  assert(selected.minRobustClearanceCm > reversal.minRobustClearanceCm,
+    'equal collision counts must still order by signed robust clearance');
+  assert(selected.minRawClearanceCm > reversal.minRawClearanceCm,
+    'the selected lane retains more physical clearance');
   assert(selected.dangerousBullets.find(item => item.bulletId === 'near').cpa > 380);
   assert(reversal.dangerousBullets.find(item => item.bulletId === 'near').cpa < 90);
   assert(crossingDodge.threatField.every(row => selected.directHits <= row.directHits),
@@ -78,6 +86,22 @@ function runSecondaryDodgeSelfTest() {
     assert(!resolveDistanceAwareDodgeCore({ ...closeInput, ...extra }, { rng: () => 0 }).applied,
       'budget, safety, and a distant late shot cannot authorize close tangents');
   }
+  const improvedAllCollision = resolveDistanceAwareDodgeCore({
+    ...closeInput,
+    reactionSlack: { ...closeInput.reactionSlack, prospectiveReactionSlackMs: 900 },
+    dodge: { threatField: [
+      { dx: 1, dy: 0, directHits: 2, physicalHits: 2, robustHits: 2, minCPA: 20,
+        minRawCpaCm: 20, minRobustCpaCm: 20 },
+      { dx: 0, dy: -1, directHits: 1, physicalHits: 1, robustHits: 1, minCPA: 80,
+        minRawCpaCm: 80, minRobustCpaCm: 80 },
+      { dx: 0, dy: 1, directHits: 1, physicalHits: 1, robustHits: 1, minCPA: 80,
+        minRawCpaCm: 80, minRobustCpaCm: 80 }
+    ] }
+  }, { rng: () => 0 });
+  assert(improvedAllCollision.applied
+    && improvedAllCollision.blockedReason === 'unavoidable-best-risk-fallback'
+    && improvedAllCollision.direction.dy === -1,
+  'all-collision fallback uses the complete risk key beyond the close budget');
   const unavoidablePlan = buildCombatMovementPlan({ ...self, stamina_5s_remaining_milli: 10000 }, target,
     [{ ...bullet, remainingTicks: 10 }], { ...options, movementExecutionTiming: { sampleCount: 10, medianTicks: 5, p90Ticks: 5 } });
   assert.strictEqual(unavoidablePlan.distanceAwareDodge.preDodgeReason, 'unavoidable-close-tangent');
@@ -111,14 +135,33 @@ function runSecondaryDodgeSelfTest() {
   assert.strictEqual(JSON.stringify(owned), originalOwned, 'the pure gate cannot mutate a previous lease');
   for (const field of [[], [baselineRisk], [candidateRisk],
     [baselineRisk, { ...candidateRisk, directHits: 2 }],
-    [{ ...baselineRisk, unavoidableHits: 0 }, candidateRisk],
-    [baselineRisk, { ...candidateRisk, unavoidableHits: undefined }],
+    [{ ...baselineRisk, minRawCpaCm: 300, minRawClearanceCm: 210,
+      minRobustCpaCm: 300, minRobustClearanceCm: 210 }, {
+      ...candidateRisk,
+      minRawCpaCm: 120,
+      minRawClearanceCm: 30,
+      minRobustCpaCm: 120,
+      minRobustClearanceCm: 30
+    }],
     [baselineRisk, { ...candidateRisk, directHits: null }]]) {
     const denied = execute({ threatField: field });
     assert(!denied.accepted);
     assert.deepStrictEqual(denied.direction, owned.direction,
       'missing evidence or increased total/imminent risk must preserve emergency ownership');
   }
+  const explanatoryTie = execute({
+    threatField: [
+      { ...baselineRisk, unavoidableHits: 0 },
+      { ...candidateRisk, unavoidableHits: 1 }
+    ]
+  });
+  assert(explanatoryTie.accepted,
+    'unavoidableHits is explanatory and cannot deny an otherwise equal complete risk key');
+  const missingExplanatoryField = execute({
+    threatField: [baselineRisk, { ...candidateRisk, unavoidableHits: undefined }]
+  });
+  assert(missingExplanatoryField.accepted,
+    'a missing explanatory field cannot substitute for collision risk evidence');
   assert(!execute({ evaluated: false }).accepted, 'a budget-blocked candidate has no execution authority');
   const safe = execute({ threatField: [baselineRisk, { ...candidateRisk, directHits: 0, unavoidableHits: 0 }] });
   assert(safe.accepted, 'strictly safer current trajectories remain eligible');
@@ -166,11 +209,21 @@ function runSecondaryDodgeSelfTest() {
   for (const extra of [{ defensiveEscort: false }, { baseDistanceBand: 'approach' },
     { currentDirection: { dx: 0, dy: 0 } }, { currentDirection: { dx: -1, dy: -1 } },
     { lowStamina: true }, { exitActive: true }, { collisionRisk: true },
-    { reactionSlack: { ...closeInput.reactionSlack, prospectiveReactionSlackMs: 900 } },
-    { dodge: { threatField: tangentField.map(row => row.dx === -1 ? { ...row, directHits: 2 } : row) } }]) {
+    { reactionSlack: { ...closeInput.reactionSlack, prospectiveReactionSlackMs: 900 } }]) {
     assert(!resolveDistanceAwareDodgeCore({ ...escortInput, ...extra }, { rng: () => 0.5 }).applied,
       'the exception requires a defensive escort, close current risk and unchanged safety/reserves');
   }
+  const changedTangentFallback = resolveDistanceAwareDodgeCore({ ...escortInput,
+    dodge: { threatField: [
+      ...tangentField.map(row => row.dx === -1 ? { ...row, directHits: 2 } : row),
+      { dx: -1, dy: 1, directHits: 1, unavoidableHits: 1, minCPA: 0 }
+    ] }
+  }, { rng: () => 0.5 });
+  assert(changedTangentFallback.applied
+    && changedTangentFallback.blockedReason === 'unavoidable-best-risk-fallback'
+    && changedTangentFallback.direction.dx === -1
+    && changedTangentFallback.direction.dy === 1,
+  'when every direction still collides, an equally safe navigation-compatible lane replaces the old one');
   assert(!resolveDistanceAwareDodgeCore(escortInput, { rng: () => 0.5, boundaryMarginCm: 0,
     boundary: { minX: 0, maxX: 10000, minY: -10000, maxY: 10000 } }).applied,
   'a forward tangent outside the boundary cannot authorize a reverse tangent');

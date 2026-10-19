@@ -1,5 +1,12 @@
 'use strict';
 
+const {
+  collapsedDodgeCandidatesCore,
+  compareDodgeCandidateRiskCore,
+  directionKey,
+  normalizeDodgeRiskCandidate
+} = require('./combat-dodge-selection');
+
 const DEFAULT_DODGE_OWNERSHIP_HOLD_MS = 500;
 
 function directionOf(value) {
@@ -84,15 +91,22 @@ function resolveDodgeExecutionDirectionCore(input = {}) {
     accepted = true;
     reason = 'evaluated-prospective-dodge';
   } else if (candidate) {
-    const field = Array.isArray(input.threatField) ? input.threatField : [];
-    const risk = direction => field.find(row => row.dx === direction.dx && row.dy === direction.dy);
+    const suppliedField = Array.isArray(input.threatField) ? input.threatField : [];
+    const field = collapsedDodgeCandidatesCore(suppliedField);
+    const suppliedRisk = direction => suppliedField
+      .find(row => directionKey(row) === directionKey(direction));
+    const suppliedCandidateRisk = suppliedRisk(candidate);
+    const suppliedBaselineRisk = suppliedRisk(baseline);
+    const complete = [suppliedCandidateRisk, suppliedBaselineRisk].every(row => row
+      && row.directHits !== null && row.directHits !== undefined
+      && Number.isFinite(Number(row.directHits)) && Number(row.directHits) >= 0
+    );
+    const risk = direction => field.find(row => directionKey(row) === directionKey(direction));
     const candidateRisk = risk(candidate), baselineRisk = risk(baseline);
-    const complete = [candidateRisk, baselineRisk].every(row => row
-      && Number.isFinite(row.directHits) && row.directHits >= 0
-      && Number.isFinite(row.unavoidableHits) && row.unavoidableHits >= 0);
+    const candidateNormalized = complete ? normalizeDodgeRiskCandidate(candidateRisk) : null;
+    const baselineNormalized = complete ? normalizeDodgeRiskCandidate(baselineRisk) : null;
     accepted = Boolean(complete
-      && candidateRisk.directHits <= baselineRisk.directHits
-      && candidateRisk.unavoidableHits <= baselineRisk.unavoidableHits);
+      && compareDodgeCandidateRiskCore(candidateNormalized, baselineNormalized) <= 0);
     reason = accepted ? 'current-risk-verified-dodge'
       : (complete ? 'candidate-increases-current-risk' : 'current-risk-evidence-missing');
   }

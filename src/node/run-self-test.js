@@ -8399,7 +8399,7 @@ async function runSelfTest() {
           expired.bullets[0]?.trajectoryConfidence
         ].join('|');
       })(),
-      want: '3|0|0|bounded-history|false|1|180|insufficient-observation'
+      want: '3|0|180|explicit-bounded|false|1|180|insufficient-kinematics'
     },
     {
       name: 'browserless state store keeps snapshot fallback out of combat state',
@@ -14007,7 +14007,7 @@ async function runSelfTest() {
           bullet.dodge?.applied
         ].join('|');
       })(),
-      want: 'close-pressure-deterministic-strafe|5000|false|true|true|true|combat-close-pressure-separate|-1|true|true|true|false|0|tangent-dodge|strategic-safe|true'
+      want: 'close-pressure-deterministic-strafe|5000|false|true|true|true|combat-close-pressure-separate|-1|true|true|true|false|0|safe-dodge|strategic-safe|true'
     },
     {
       name: 'browserless close pressure keeps Eason-shaped exchange but preserves hard hp exit',
@@ -20437,7 +20437,7 @@ async function runSelfTest() {
           dead.contactEntryGuard.reason
         ].join('|');
       })(),
-      want: 'true|direct-closing-entry|contact-entry-pre-dodge|0,1|false|0,1|true|contact-not-rearmed|true|direct-closing-entry|true|no-contact-entry-target'
+      want: 'true|direct-closing-entry|contact-entry-pre-dodge|-1,1|false|-1,1|true|contact-not-rearmed|true|direct-closing-entry|true|no-contact-entry-target'
     },
     {
       name: 'browserless first-contact guard keeps trusted target passive until realtime firing evidence',
