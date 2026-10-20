@@ -16226,6 +16226,11 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
   }
   action = preserveIncomingLaneBeforeProfitAction(action, input, incomingThreatAssessment,
     { ...options, healthyLootPriority });
+  if (action?.reason === 'incoming-bullet-dodge') {
+    kind = action.kind;
+    band = action.band;
+    reason = action.reason;
+  }
   applyPostKillSettlementMovementToCombat(combat, action);
   const finalMovementSafety = applyFinalMovementSafetyOverride(combat, action, input.self, options);
   if (finalMovementSafety.applied) {

@@ -167,6 +167,9 @@ function runPreTargetIncomingSelfTest() {
     safe.state.realtime.coinDropsObserved = true;
     const turn = buildBrowserlessDecision(safe.state, {}, safe.options);
     assert.equal(turn.action.reason, 'incoming-bullet-dodge');
+    assert.equal(turn.kind, turn.action.kind);
+    assert.equal(turn.band, turn.action.band);
+    assert.equal(turn.reason, turn.action.reason);
     assert.deepEqual([turn.action.dx, turn.action.dy], [0, -1]);
   });
   return { ok: true, cases };
