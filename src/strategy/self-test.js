@@ -1013,8 +1013,8 @@ function runStrategyModuleSelfTests() {
     primaryPhysicalEligible: true,
     primaryCompetitionAllowed: true,
     primaryTargetFresh: true,
-    primaryNormalAuthorized: false,
-    normalFireBlocker: 'fire-state:dodge-reserve',
+    primaryNormalAuthorized: true,
+    normalFireBlocker: 'none',
     closePressure: { active: false },
     pressureEvidence: outsideClosePressureEvidence,
     rewardRace: dualOwnerFinishRace,
@@ -1072,8 +1072,8 @@ function runStrategyModuleSelfTests() {
     primaryPhysicalEligible: true,
     primaryCompetitionAllowed: true,
     primaryTargetFresh: true,
-    primaryNormalAuthorized: false,
-    normalFireBlocker: 'fire-state:dodge-reserve',
+    primaryNormalAuthorized: true,
+    normalFireBlocker: 'none',
     closePressure: { active: true },
     rewardRace: finishRaceReward,
     stamina5s: 3000,
@@ -1119,8 +1119,8 @@ function runStrategyModuleSelfTests() {
     primaryPhysicalEligible: true,
     primaryCompetitionAllowed: true,
     primaryTargetFresh: true,
-    primaryNormalAuthorized: false,
-    normalFireBlocker: 'fire-state:dodge-reserve',
+    primaryNormalAuthorized: true,
+    normalFireBlocker: 'none',
     closePressure: { active: true },
     rewardRace: finishRaceReward,
     stamina5s: 2299,
@@ -1136,17 +1136,17 @@ function runStrategyModuleSelfTests() {
     rewardRace: finishRaceReward
   });
   results.push({
-    name: 'primary-finish-race-requires-realtime-physical-eligibility-and-keeps-hard-hp-stamina-gates',
+    name: 'primary-finish-race-requires-realtime-physical-eligibility-and-keeps-hard-hp-evidence-gates',
     passed: finishRaceReward.continuePrimary === true
       && finishRaceSoftReserve.eligible === true
-      && finishRaceSoftReserve.reason === 'primary-finish-race-soft-reserve-override'
+      && finishRaceSoftReserve.reason === 'primary-finish-race-window'
       && finishRaceArbitration.mode === 'primary-finish-race'
       && finishRaceAtFifty.eligible === false
       && finishRaceAtFifty.hardBlockers.includes('self-hp-at-or-below-50')
       && finishRaceMissingEvidence.eligible === false
       && finishRaceMissingEvidence.hardBlockers.includes('primary-race-rate-evidence-insufficient')
-      && finishRaceHardReserve.eligible === false
-      && finishRaceHardReserve.hardBlockers.includes('below-hard-reserve')
+      && finishRaceHardReserve.eligible === true
+      && finishRaceHardReserve.hardBlockers.length === 0
   });
 
   const coverHold = evaluateCoverCandidateCore({
@@ -2213,13 +2213,13 @@ function runStrategyModuleSelfTests() {
     aim: { fireReachability: { reachable: false, reason: 'intercept-beyond-bullet-range' } }
   });
   results.push({
-    name: 'established-combat-fire-ignores-statistical-gates-but-preserves-dodge-stamina-reserve',
+    name: 'established-combat-fire-ignores-statistical-gates-and-legacy-stamina-classifications',
     passed: standardCombatFire.wouldShoot === true
       && standardCombatFire.finalFireBlocker === 'none'
       && standardCombatFire.fireAuthorizationClass === 'standard-combat-fire'
-      && dodgeReserveBlockedFire.wouldShoot === false
-      && dodgeReserveBlockedFire.finalFireBlocker === 'fire-state:close-pressure-movement-reserve'
-      && dodgeReserveBlockedFire.fireAuthorizationClass === 'stamina-reserve-blocked'
+      && dodgeReserveBlockedFire.wouldShoot === true
+      && dodgeReserveBlockedFire.finalFireBlocker === 'none'
+      && dodgeReserveBlockedFire.fireAuthorizationClass === 'standard-combat-fire'
       && physicallyUnreachableFire.wouldShoot === false
       && physicallyUnreachableFire.finalFireBlocker === 'aim-unreachable:intercept-beyond-bullet-range'
   });
@@ -2635,7 +2635,7 @@ function runStrategyModuleSelfTests() {
       && movingContactRisk.blockedReason === 'self-already-moving'
       && tangentialContactRisk.blockedReason === 'no-direct-closing-evidence'
       && retreatingContactRisk.blockedReason === 'no-direct-closing-evidence'
-      && lowStaminaContactRisk.blockedReason === 'stamina-insufficient'
+      && lowStaminaContactRisk.eligible === true
       && recoveryContactRisk.blockedReason === 'recovery-policy-owned'
       && trustedContactRisk.blockedReason === 'trusted-target-no-fire'
       && trustedFiringRisk.eligible === true
@@ -2955,7 +2955,7 @@ function runStrategyModuleSelfTests() {
   results.push({ name: 'distance-aware-equivalent-safe-motion-cannot-return-unsafe-base-stop',
     passed: retainedSafeMotion.applied && retainedSafeMotion.direction.dy === 1
       && retainedSafeMotion.preDodgeReason === 'preserve-safe-current-motion'
-      && !staminaBlockedMotion.applied && !exitBlockedMotion.applied && !safeStopMotion.applied });
+      && staminaBlockedMotion.applied && staminaBlockedMotion.direction.dy === 1 && !exitBlockedMotion.applied && !safeStopMotion.applied });
   const reactionBudget = deriveCombatReactionBudgetCore({
     nowMs: 1000,
     realtimeStateObservedAtMs: 900,
@@ -4802,9 +4802,9 @@ function runStrategyModuleSelfTests() {
     boundedPressureVolley: true
   });
   results.push({
-    name: 'combat-pressure-attack-bypasses-probe-budget-only-above-post-shot-movement-reserve',
-    passed: pressureAttackPaused.state === 'paused'
-      && pressureAttackPaused.reason === 'close-pressure-movement-reserve'
+    name: 'combat-pressure-attack-and-movement-have-independent-authority',
+    passed: pressureAttackPaused.state === 'pressure'
+      && pressureAttackPaused.reason === 'close-pressure-full-attack'
       && pressureAttackReady.state === 'pressure'
       && pressureAttackReady.cadenceMs === COMBAT_CONSTANTS.SHOOT_EVERY_MS
       && pressureAttackBudget.suppressFire === false
@@ -4816,13 +4816,8 @@ function runStrategyModuleSelfTests() {
       && boundedPressureAttackBudget.suppressionReason === 'budget-state-invalid'
   });
 
-  // A target that is shooting at us resolves the lower pressure reserve, so the
-  // same stamina that authorizes defensive fire authorizes fire at a profit
-  // primary under fire too. Before this, the primary's fire state asserted no
-  // pressure and carried the ordinary dodge reserve, leaving a stamina band
-  // (4100-5300ms at a 1000ms dodge cost) where only the secondary could fire —
-  // the 2026-09-01 00:06 fight sat in that band for 76 of 162 frames. The hard
-  // reserve floor is unchanged and still refuses fire on its own.
+  // Old non-zero options are deliberate regression controls. They cannot
+  // change either primary or secondary firing affordability.
   const pressureReserveContext = {
     hardReserveMs: 1800,
     dodgeReserveMs: 3800,
@@ -4850,29 +4845,20 @@ function runStrategyModuleSelfTests() {
     { user_id: 8 },
     { ...pressureReserveContext, targetPressureFire: true }
   );
-  // Without pressure the ordinary dodge reserve still governs, so a target that
-  // is not shooting at us gains nothing from this change.
   const quietTargetOrdinaryReserve = determineCombatFireState(
     { stamina_5s_remaining_milli: 5300 },
     { user_id: 8 },
     { ...pressureReserveContext, targetPressureFire: false }
   );
   results.push({
-    name: 'target-under-fire-resolves-pressure-reserve-while-hard-reserve-stays-absolute',
+    name: 'target-under-fire-and-quiet-fire-ignore-legacy-reserves',
     passed: primaryUnderFireReady.state === 'pressure'
-      && primaryUnderFireReady.reason === 'target-pressure-fire'
-      && primaryUnderFireReady.reserve === 2600
-      && primaryUnderFireReady.requiredStaminaMs === 4100
-      && primaryWithoutPressurePaused.state === 'paused'
-      && primaryWithoutPressurePaused.reason === 'dodge-reserve'
-      && primaryWithoutPressurePaused.reserve === 3800
-      && primaryWithoutPressurePaused.requiredStaminaMs === 5300
-      && primaryUnderFireBelowPressureReserve.state === 'paused'
-      && primaryUnderFireBelowPressureReserve.reason === 'pressure-dodge-reserve'
-      && primaryUnderFireBelowHardReserve.state === 'disabled'
-      && primaryUnderFireBelowHardReserve.reason === 'below-hard-reserve'
-      && quietTargetOrdinaryReserve.state !== 'paused'
-      && quietTargetOrdinaryReserve.reserve === 3800
+      && primaryUnderFireReady.requiredStaminaMs === 500
+      && primaryWithoutPressurePaused.state === 'normal'
+      && primaryWithoutPressurePaused.requiredStaminaMs === 500
+      && primaryUnderFireBelowPressureReserve.state === 'pressure'
+      && primaryUnderFireBelowHardReserve.state === 'pressure'
+      && quietTargetOrdinaryReserve.state === 'normal'
   });
   const economicObserve = evaluateNonThreatCombatEconomicStopLossCore({
     nowMs: 59000,
@@ -9297,13 +9283,13 @@ function runStrategyModuleSelfTests() {
     opportunityStaminaBudget: 200000
   });
   results.push({
-    name: 'combat-proactive-active-respects-recent-afk-shot-and-immediate-stamina',
+    name: 'combat-proactive-active-respects-recent-afk-shot-without-future-stamina-gates',
     passed: recentAfkCommitment?.reason === 'recent-afk-attack-commitment'
       && recentAfkCommitment.targetId === '31265'
       && recentAfkCommitment.ageMs === 1446
       && expiredAfkCommitment === null
-      && lowStaminaProactive.allowed === false
-      && lowStaminaProactive.reason === 'insufficient-immediate-stamina'
+      && lowStaminaProactive.allowed === true
+      && lowStaminaProactive.reason === 'proactive-gates-satisfied'
       && lowStaminaProfitCandidate === true
       && lowStaminaDefensive.allowed === true
   });

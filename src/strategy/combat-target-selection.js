@@ -255,21 +255,11 @@ function proactiveActiveCombatBudgetBlocked(context = {}) {
   return Number.isFinite(budget) && budget < required;
 }
 
-function proactiveActiveCombatImmediateStaminaBlocked(context = {}) {
-  const required = Number(context.proactiveActiveCombatMinimumStamina5s);
-  const remaining = Number(context.selfStamina5s);
-  return Number.isFinite(required)
-    && required > 0
-    && Number.isFinite(remaining)
-    && remaining < required;
-}
-
 function activeCombatRequiresThreatEvidence(entity, context = {}) {
   if (!isActiveCombatMode(entity)) return false;
   if (isPreferredEasyKillTarget(entity, context)) return false;
   return combatDropValue(entity) <= lowValueActiveDropMax(context)
-    || proactiveActiveCombatBudgetBlocked(context)
-    || proactiveActiveCombatImmediateStaminaBlocked(context);
+    || proactiveActiveCombatBudgetBlocked(context);
 }
 
 function proactiveActiveProfitEligible(entity, context = {}) {
@@ -568,12 +558,6 @@ function checkProactiveActiveCombatGates(self, target, context = {}) {
   if (proactiveActiveCombatBudgetBlocked(context)) {
     if (!combatTargetThreatensSelf(target, context)) {
       return { allowed: false, reason: 'insufficient-stamina-budget' };
-    }
-  }
-
-  if (proactiveActiveCombatImmediateStaminaBlocked(context)) {
-    if (!combatTargetThreatensSelf(target, context)) {
-      return { allowed: false, reason: 'insufficient-immediate-stamina' };
     }
   }
 
@@ -1196,7 +1180,6 @@ module.exports = {
   isFiringCombatEntity,
   pickEngagedCombatTargetCore,
   proactiveActiveProfitEligible,
-  proactiveActiveCombatImmediateStaminaBlocked,
   recentAfkAttackCommitmentCore,
   selectBestCombatTarget,
   isIdleInvulnerable

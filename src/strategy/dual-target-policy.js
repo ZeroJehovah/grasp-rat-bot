@@ -482,20 +482,10 @@ function uniqueStrings(values = []) {
   return Array.from(new Set((values || []).map(value => String(value || '')).filter(Boolean)));
 }
 
-function isSoftReserveBlocker(value) {
-  const blocker = String(value || '');
-  return blocker === 'fire-state:dodge-reserve'
-    || blocker === 'fire-state:pressure-dodge-reserve'
-    || blocker === 'fire-state:close-pressure-movement-reserve'
-    || blocker === 'fire-state:close-pressure-reserve-band'
-    || blocker === 'fire-state:reserve-band'
-    || blocker === 'fire-state:finish-reserve';
-}
-
 /**
  * Decide whether a low-HP primary may use a bounded finish burst while a
  * defensive secondary is applying pressure. This sits below
- * physical/realtime gates and above the ordinary Dodge reserve. It never
+ * physical/realtime gates. It never
  * changes the secondary shot quota; that quota is owned by secondary
  * dispatches only.
  */
@@ -503,7 +493,6 @@ function primaryFinishRaceAuthorization(input = {}, options = {}) {
   const nowMs = Number.isFinite(Number(input.nowMs)) ? Number(input.nowMs) : Date.now();
   const selfHp = Number(input.selfHp ?? input.self?.hp);
   const primaryHp = Number(input.primaryHp ?? input.primaryTarget?.hp);
-  const stamina5s = Number(input.stamina5s ?? input.self?.stamina5s ?? input.self?.stamina_5s_remaining_milli);
   const targetId = idOf(input.primaryTarget);
   const targetAlive = input.primaryTarget?.alive !== false && (!Number.isFinite(primaryHp) || primaryHp > 0);
   const targetInvulnerable = input.primaryTarget?.invulnerable === true || input.targetInvulnerable === true;
@@ -552,20 +541,8 @@ function primaryFinishRaceAuthorization(input = {}, options = {}) {
   if (rewardRace.evaluated !== true) hardBlockers.push('primary-race-rate-evidence-insufficient');
   else if (rewardRace.continuePrimary !== true) hardBlockers.push('primary-reward-race-failed');
 
-  const hardReserveMs = Math.max(0, Number(
-    input.hardReserveMs ?? options.combatShootHardReserveMs ?? 1800
-  ));
-  const shotCostMs = Math.max(0, Number(input.shotCostMs ?? options.combatShotStaminaCostMs ?? 500));
-  const dodgeActionCostMs = Math.max(0, Number(input.dodgeActionCostMs || 0));
-  const requiredHardStaminaMs = hardReserveMs + shotCostMs + dodgeActionCostMs;
-  if (!Number.isFinite(stamina5s)) hardBlockers.push('stamina-unknown');
-  else if (stamina5s < requiredHardStaminaMs) hardBlockers.push('below-hard-reserve');
-
   const normalBlocker = String(input.normalFireBlocker || '');
-  if (input.primaryNormalAuthorized !== true && isSoftReserveBlocker(normalBlocker)) {
-    softBlockers.push(normalBlocker);
-  }
-  if (input.primaryNormalAuthorized !== true && !isSoftReserveBlocker(normalBlocker)) {
+  if (input.primaryNormalAuthorized !== true) {
     hardBlockers.push(normalBlocker || 'primary-normal-fire-not-authorized');
   }
   const uniqueHardBlockers = uniqueStrings(hardBlockers);
@@ -586,7 +563,7 @@ function primaryFinishRaceAuthorization(input = {}, options = {}) {
       );
   const active = eligible && windowExpiresAt !== null && nowMs < windowExpiresAt;
   const reason = active
-    ? (input.primaryNormalAuthorized === true ? 'primary-finish-race-window' : 'primary-finish-race-soft-reserve-override')
+    ? 'primary-finish-race-window'
     : (uniqueHardBlockers[0] || uniqueSoftBlockers[0] || 'primary-finish-race-not-authorized');
   return {
     eligible: active,
@@ -603,11 +580,6 @@ function primaryFinishRaceAuthorization(input = {}, options = {}) {
     pressureEvidence: { ...pressureEvidence },
     rewardRaceEvaluated: rewardRace.evaluated === true,
     rewardRaceContinuePrimary: rewardRace.continuePrimary === true,
-    hardReserveMs,
-    shotCostMs,
-    dodgeActionCostMs,
-    requiredHardStaminaMs,
-    stamina5s: Number.isFinite(stamina5s) ? stamina5s : null,
     maxShots,
     dispatchCount: previousShots,
     windowMs,

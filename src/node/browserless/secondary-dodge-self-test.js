@@ -81,10 +81,11 @@ function runSecondaryDodgeSelfTest() {
   const changedRisk = resolveDistanceAwareDodgeCore({ ...closeInput, nowMs: 10100, previousState: left.state,
     dodge: { threatField: [{ ...allHit[0], directHits: 2 }, allHit[1]] } }, { rng: () => 0 });
   assert.strictEqual(changedRisk.direction.dy, 1, 'new collision risk immediately invalidates latch');
-  for (const extra of [{ lowStamina: true }, { exitActive: true }, { collisionRisk: true },
+  assert(resolveDistanceAwareDodgeCore({ ...closeInput, lowStamina: true }, { rng: () => 0 }).applied);
+  for (const extra of [{ exitActive: true }, { collisionRisk: true },
     { reactionSlack: { ...closeInput.reactionSlack, prospectiveReactionSlackMs: 900 } }]) {
     assert(!resolveDistanceAwareDodgeCore({ ...closeInput, ...extra }, { rng: () => 0 }).applied,
-      'budget, safety, and a distant late shot cannot authorize close tangents');
+      'safety and a distant late shot cannot authorize close tangents');
   }
   const improvedAllCollision = resolveDistanceAwareDodgeCore({
     ...closeInput,
@@ -208,10 +209,10 @@ function runSecondaryDodgeSelfTest() {
     'random choice cannot select the tangent opposing the primary heading');
   for (const extra of [{ defensiveEscort: false }, { baseDistanceBand: 'approach' },
     { currentDirection: { dx: 0, dy: 0 } }, { currentDirection: { dx: -1, dy: -1 } },
-    { lowStamina: true }, { exitActive: true }, { collisionRisk: true },
+    { exitActive: true }, { collisionRisk: true },
     { reactionSlack: { ...closeInput.reactionSlack, prospectiveReactionSlackMs: 900 } }]) {
     assert(!resolveDistanceAwareDodgeCore({ ...escortInput, ...extra }, { rng: () => 0.5 }).applied,
-      'the exception requires a defensive escort, close current risk and unchanged safety/reserves');
+      'the exception requires a defensive escort, close current risk and unchanged safety gates');
   }
   const changedTangentFallback = resolveDistanceAwareDodgeCore({ ...escortInput,
     dodge: { threatField: [

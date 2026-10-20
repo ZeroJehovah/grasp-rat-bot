@@ -11298,6 +11298,8 @@ async function runBrowserlessRunnerSelfTest() {
     const secondaryDodge = require('./secondary-dodge-self-test').runSecondaryDodgeSelfTest();
     const dodgeLaneArbitration = require('./dodge-lane-arbitration-self-test')
       .runDodgeLaneArbitrationSelfTest();
+    const staminaReserveCleanup = require('./stamina-reserve-cleanup-self-test').runStaminaReserveCleanupSelfTest();
+    const preTargetIncoming = require('./pre-target-incoming-self-test').runPreTargetIncomingSelfTest();
     const combatStaminaWindow = require('./combat-stamina-window-self-test').runCombatStaminaWindowSelfTest();
     const rewardFinishSpacing = require('./reward-finish-spacing-self-test').runRewardFinishSpacingSelfTest();
     const combatSearchRegression = require('./combat-search-regression-self-test').runCombatSearchRegressionSelfTest();
@@ -11424,6 +11426,8 @@ async function runBrowserlessRunnerSelfTest() {
         && secondaryDodge.ok
         && dodgeLaneArbitration.ok
         && combatStaminaWindow.ok
+        && staminaReserveCleanup.ok
+        && preTargetIncoming.ok
         && rewardFinishSpacing.ok
         && combatSearchRegression.ok
         && recoveryContact.ok
@@ -11539,6 +11543,8 @@ async function runBrowserlessRunnerSelfTest() {
       secondaryDodge,
       dodgeLaneArbitration,
       combatStaminaWindow,
+      staminaReserveCleanup,
+      preTargetIncoming,
       rewardFinishSpacing,
       combatSearchRegression,
       recoveryContact,

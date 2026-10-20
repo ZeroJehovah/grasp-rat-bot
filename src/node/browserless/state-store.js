@@ -1,5 +1,8 @@
 'use strict';
 
+const { observeIncomingThreatLifecycle, recordIncomingThreatAssessment,
+  recordIncomingDodgeCommand, recordIncomingImpact, incomingLifecycleSummary } = require('./incoming-threat-lifecycle');
+
 const { summarizeGrzShotAck } = require('../../shared/grz-frame');
 const { COMBAT_FIRE_WINDOW_MS, shotStaminaCostMilli } = require('../../strategy/combat-stamina-window');
 const {
@@ -588,6 +591,7 @@ function createInitialState(userId = 0, controlGeneration = '') {
       entitiesByUserId: {},
       bullets: [],
       bulletTrajectories: {},
+      incomingThreatLifecycles: {},
       coinDrops: [],
       coinDropsObserved: false
     },
@@ -954,7 +958,9 @@ function createBrowserlessStateStore(options = {}) {
     for (const bullet of bullets) {
       const key = bulletKey(bullet);
       if (!key) continue;
-      const current = state.realtime.bulletTrajectories[key] || { observations: [] };
+      const current = state.realtime.bulletTrajectories[key] || { observations: [],
+        firstReceivedTick: meta.tick, firstRetainedTick: meta.tick,
+        firstShotEventTick: optionalNumericOrNull(bullet.created_tick ?? bullet.createdTick) };
       const sample = bulletTrajectorySample(bullet, meta.tick);
       if (sample) {
         current.completeServerKinematics = sample.completeServerKinematics === true;
@@ -992,7 +998,11 @@ function createBrowserlessStateStore(options = {}) {
       const normalized = normalizeBullet(bullet, frameMeta, reuseRealtimeFrameObjects);
       if (!normalized) continue;
       const history = state.realtime.bulletTrajectories[bulletKey(bullet)];
-      const summary = bulletTrajectorySummary(history, bullet, meta.tick);
+      const summary = { ...bulletTrajectorySummary(history, bullet, meta.tick),
+        firstReceivedTick: history?.firstReceivedTick ?? null,
+        firstRetainedTick: history?.firstRetainedTick ?? null,
+        firstShotEventTick: history?.firstShotEventTick ?? null };
+
       if (reuseRealtimeFrameObjects) Object.assign(normalized, summary);
       const outputBullet = !reuseRealtimeFrameObjects
         ? { ...normalized, ...summary }
@@ -1003,6 +1013,12 @@ function createBrowserlessStateStore(options = {}) {
     }
     if (reuseRealtimeFrameObjects && normalizedBulletCount !== normalizedBullets.length) {
       normalizedBullets.length = normalizedBulletCount;
+    }
+    observeIncomingThreatLifecycle(state.realtime.incomingThreatLifecycles, normalizedBullets, meta.tick, meta.receivedAtMs);
+    for (const bullet of normalizedBullets) {
+      const id = String(bullet.bullet_id ?? bullet.bulletId ?? bullet.id ?? '');
+      const record = state.realtime.incomingThreatLifecycles[id];
+      if (record) Object.assign(bullet, record);
     }
     state.realtime.bullets = normalizedBullets;
     const normalizedCoinDrops = reuseRealtimeFrameObjects && coinDrops !== EMPTY_ARRAY ? coinDrops : [];
@@ -1473,6 +1489,19 @@ function createBrowserlessStateStore(options = {}) {
     return optionsForRecord.returnInternal === true ? shot : cloneJson(shot);
   }
 
+  function recordIncomingSafetyExecution(assessment, command = null, attribution = null) {
+    const records = state.realtime.incomingThreatLifecycles;
+    recordIncomingThreatAssessment(records, assessment);
+    recordIncomingDodgeCommand(records, assessment, command);
+    recordIncomingImpact(records, attribution);
+    const bullets = [...(assessment?.bullets || [])];
+    if (attribution?.matched && records[String(attribution.bulletId)]
+      && !bullets.some(bullet => String(bullet.id) === String(attribution.bulletId))) {
+      bullets.push({ id: String(attribution.bulletId) });
+    }
+    return incomingLifecycleSummary(records, bullets);
+  }
+
   function recordVelocityRequest(request = {}, optionsForRecord = {}) {
     const movement = state.command.movement;
     const requestedAtMs = Number(request.requestedAtMs || now());
@@ -1774,6 +1803,7 @@ function createBrowserlessStateStore(options = {}) {
     recordShootExecution,
     recordShootRequest,
     recordVelocityRequest,
+    recordIncomingSafetyExecution,
     tryClaimShootSlot(request = {}) {
       return claimShootSlot(shootingFrame, request);
     },

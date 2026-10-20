@@ -1,6 +1,6 @@
 'use strict';
 
-const { calculateDodgeDirection } = require('../../strategy/combat-movement');
+const { calculateDodgeDirection, directionThreatCore } = require('../../strategy/combat-movement');
 const {
   collapsedDodgeCandidatesCore,
   compareDodgeCandidateRiskCore,
@@ -59,6 +59,8 @@ function appendIncomingBullet(incoming, normalized, selfId, maximumDistance) {
   if (!Number.isFinite(distance) || distance >= maximumDistance) return;
   const timeToImpact = Number(normalized.timeToImpact);
   if (!Number.isFinite(timeToImpact) || timeToImpact <= 0) return;
+  if (normalized.remainingTicks !== null && normalized.remainingTicks !== undefined
+    && Number(normalized.remainingTicks) <= 0) return;
   incoming.push(normalized);
 }
 
@@ -69,7 +71,8 @@ function filterNormalizedIncomingBullets(bullets, self, options = {}) {
   for (const normalized of bullets || []) {
     appendIncomingBullet(incoming, normalized, selfId, maximumDistance);
   }
-  return incoming;
+  return incoming.sort((a, b) => Number(a.timeToImpact) - Number(b.timeToImpact)
+    || Number(a.distance) - Number(b.distance)).slice(0, 32);
 }
 
 function normalizedIncomingBullets(state, self, options = {}) {
@@ -82,7 +85,8 @@ function normalizedIncomingBullets(state, self, options = {}) {
     const normalized = normalizeCombatBullet(raw, self, bulletOptions);
     appendIncomingBullet(incoming, normalized, selfId, maximumDistance);
   }
-  return incoming;
+  return incoming.sort((a, b) => Number(a.timeToImpact) - Number(b.timeToImpact)
+    || Number(a.distance) - Number(b.distance)).slice(0, 32);
 }
 
 function triggerMovement(pending = {}) {
@@ -248,7 +252,16 @@ function buildLeavePendingCover(state = {}, pending = {}, options = {}) {
         reactionSafetyMarginMs: options.combatReactionSafetyMarginMs ?? 100
       })
     : null;
-  if (bullets.length) dodge = preferMovingCover(dodge);
+  if (bullets.length && pending.preTarget === true) {
+    const currentDirection = { dx: Math.sign(Number(self.vx || 0)), dy: Math.sign(Number(self.vy || 0)) };
+    const pendingCommand = state?.command?.movement?.pendingVelocityCommands?.at(-1);
+    const direction = pendingCommand ? { dx: Math.sign(Number(pendingCommand.dx || 0)),
+      dy: Math.sign(Number(pendingCommand.dy || 0)) } : currentDirection;
+    const current = directionThreatCore(dodge?.threatField, direction);
+    const safe = current && Number(current.physicalHits ?? current.directHits) === 0
+      && Number(current.robustHits ?? current.directHits) === 0;
+    if (safe) dodge = { ...dodge, ...direction, reason: 'pre-target-current-lane-safe', currentLaneSafe: true };
+  } else if (bullets.length) dodge = preferMovingCover(dodge);
   const movement = dodge || noBulletCover(self, target, pending);
   const dx = Math.max(-1, Math.min(1, Math.round(Number(movement.dx || 0))));
   const dy = Math.max(-1, Math.min(1, Math.round(Number(movement.dy || 0))));
@@ -264,6 +277,7 @@ function buildLeavePendingCover(state = {}, pending = {}, options = {}) {
     dy,
     reason,
     changed,
+    currentLaneSafe: dodge?.currentLaneSafe === true,
     target: targetSummary,
     targetLocked: Boolean(pendingTargetId(pending)),
     incomingBulletCount: bullets.length,

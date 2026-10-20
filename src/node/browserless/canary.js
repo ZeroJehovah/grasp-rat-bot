@@ -2621,6 +2621,19 @@ async function runReadOnlyCanary(config, options = {}) {
       actionStageStarted = completedAt;
     };
     const atMs = Number(context.atMs || 0) || now();
+    const incoming = context.decision?.action?.incomingSafety || context.summary?.action?.incomingSafety
+      || context.decision?.whitelistSafety?.incoming || context.summary?.whitelistSafety?.incoming;
+    const decision = context.decision || context.summary;
+    const impact = decision?.combat?.hitAttribution?.last;
+    if ((incoming || impact?.matched) && typeof stateStore.recordIncomingSafetyExecution === 'function') {
+      const movement = decision?.combat?.movement || decision?.combat?.dryRun?.movement;
+      const dodgeSelected = decision?.action?.reason === 'incoming-bullet-dodge'
+        || movement?.dodge?.applied === true || movement?.movementSafetyOverride?.applied === true;
+      const execution = actionResult.movement || actionResult;
+      const dodgeCommand = dodgeSelected && execution.ok !== false
+        && execution.skipped !== true ? execution.command : null;
+      actionResult.incomingThreatLifecycles = stateStore.recordIncomingSafetyExecution(incoming, dodgeCommand, impact);
+    }
     result.actions.last = actionResult;
     const publication = actionPublicationGate.evaluate(actionResult, context, atMs);
     markActionStage('publication-gate');

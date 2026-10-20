@@ -117,19 +117,19 @@ function runAfkCompetitionApproachSelfTest() {
     const h = harness();
     const low = h.adapter.applyDecision(h.frame({ x: -100, y: 0, stamina: 3299 }), h.decision());
     assert.equal(low.profitKillRace.fireAllowed, true);
-    assert.equal(low.shoot.reason, 'afk-shoot-stamina-reserve');
-    assert.equal(low.shoot.requiredStaminaMs, 3300);
+    assert.equal(low.shoot.skipped, false);
+    assert.equal(low.shoot.requiredStaminaMs, 500);
     h.setNow(2000);
     const recovered = h.adapter.applyDecision(h.frame({ x: -100, y: 0, stamina: 10000 }), h.decision());
     assert.equal(recovered.shoot.skipped, false);
     h.setNow(2450);
     h.adapter.observeState(h.frame({ x: -100, y: 0, stamina: 9500 }));
-    assert.equal(h.shots.length, 1);
+    assert.equal(h.shots.length, 2);
     assert.equal(h.adapter.getState().shootRepeatWaitReason, 'shoot-frame:frame-not-on-grid');
     h.setNow(2500);
     h.adapter.observeState(h.frame({ x: -100, y: 0, stamina: 9500 }));
-    assert.equal(h.shots.length, 2);
-    assert.equal(h.shots[1].at - h.shots[0].at, 500);
+    assert.equal(h.shots.length, 3);
+    assert.equal(h.shots[2].at - h.shots[1].at, 500);
     h.adapter.sealTransport(); cases++;
   }
   {

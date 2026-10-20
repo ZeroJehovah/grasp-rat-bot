@@ -5632,7 +5632,7 @@ async function runSelfTest() {
           switched.sharedBudgetUsed
         ].join('|');
       })(),
-      want: 'false|3|false|true||2|true|true|coverage-no-marginal-gain|true|shared-fire-budget-exhausted|0|false|target-b|0'
+      want: 'false|3|true|true||2|true|true|coverage-no-marginal-gain|true|shared-fire-budget-exhausted|0|false|target-b|0'
     },
     {
       name: 'browserless committed pressure attack fires at full cadence while preserving post-shot movement stamina',
@@ -5665,7 +5665,7 @@ async function runSelfTest() {
           budget.authorizationSource
         ].join('|');
       })(),
-      want: 'paused|close-pressure-movement-reserve|pressure|500|2600|false|close-pressure-full-attack'
+      want: 'pressure|close-pressure-full-attack|pressure|500||false|close-pressure-full-attack'
     },
     {
       name: 'browserless stable close range overrides exhausted high-entropy fire gates without coverage',
@@ -10710,7 +10710,7 @@ async function runSelfTest() {
           browserless.attackEngageRange
         ].join('|');
       })(),
-      want: 'true|true|true|true|true|5000|4200|11000'
+      want: 'true|true|true|true|true|||11000'
     },
     {
       name: 'browserless profit live ranks a closer coin above costlier high-drop AFK',
@@ -13479,7 +13479,7 @@ async function runSelfTest() {
       want: 'true|false|false|combat-live|19677'
     },
     {
-      name: 'browserless recent AFK attack and immediate stamina block proactive active takeover',
+      name: 'browserless recent AFK commitment blocks takeover while five-second stamina does not',
       got: (() => {
         const nowMs = 2446;
         const self = fullStamina5s({
@@ -13601,7 +13601,7 @@ async function runSelfTest() {
           syncedDecision.combat?.contactEntryGuard?.movementOnly === true
         ].join('|');
       })(),
-      want: 'true|recent-afk-attack-commitment||true|0|19677|defensive|false|true|true'
+      want: 'true|recent-afk-attack-commitment||false|1|19677|defensive|false|true|true'
     },
     {
       name: 'browserless established close pressure keeps combat priority over realtime high-value loot',
@@ -20239,7 +20239,7 @@ async function runSelfTest() {
         const active = browserlessOpportunityEnemyStaminaCost({ user_id: 8, hp: 100, distance: 5000, active: true }, {});
         return [passive, passiveWithoutMovement, active, active > passive * 2].join('|');
       })(),
-      want: '36700|22250|74450|true'
+      want: '36700|22250|73250|false'
     },
     {
       name: 'browserless quadratic combat aim enters motion probe after no target damage',
@@ -21025,7 +21025,7 @@ async function runSelfTest() {
           unaffordable.fireRiskClassification?.affordabilityDegraded === true
         ].join('|');
       })(),
-      want: 'dynamic-behavior-weighted-zigzag-strafe|true|weighted-sample,weighted-sample,bounded-exploration,weighted-sample|0|true|true|dynamic-behavior-weighted-retreat-kite|true|weighted-sample,weighted-sample,bounded-exploration,weighted-sample|true|false|false|false|true'
+      want: 'dynamic-behavior-weighted-zigzag-strafe|true|weighted-sample,weighted-sample,bounded-exploration,weighted-sample|0|true|true|dynamic-behavior-weighted-retreat-kite|true|weighted-sample,weighted-sample,bounded-exploration,weighted-sample|true|false|false|false|false'
     },
     {
       name: 'browserless trajectory coverage stays shadow and rejects unqualified live aim without changing fire',
@@ -21164,7 +21164,7 @@ async function runSelfTest() {
       want: 'shadow|false|continue|live-single|false|false|live-single-insufficient-aim-improvement|true|true|false|coverage-evidence-not-ready|true|true'
     },
     {
-      name: 'browserless fire-risk classification survives unaffordable route coverage',
+      name: 'browserless fire-risk classification ignores future volley reserve',
       got: (() => {
         const self = { user_id: 7, x: 0, y: 0, hp: 100, stamina_5s_remaining_milli: 2000 };
         const target = { user_id: 8, x: 8000, y: 0, vx: 50, vy: 0, hp: 80, active: true };
@@ -21199,7 +21199,7 @@ async function runSelfTest() {
           aim.fireRiskClassification.evidence.join(',')
         ].join('|');
       })(),
-      want: 'false|true|true|human-like-control'
+      want: 'false|true|false|human-like-control'
     },
     {
       name: 'browserless parallel movement marks physically unreachable intercept and stops probe fire',
@@ -21412,7 +21412,7 @@ async function runSelfTest() {
       want: 'induce-hold|400|true'
     },
     {
-      name: 'browserless pre-dodge uses burst cadence and keeps command stamina irregular and target-switch gates',
+      name: 'browserless pre-dodge uses burst cadence and keeps command irregular and target-switch gates',
       got: (() => {
         const behaviorFor = (ticks, currentTick) => {
           let behavior = null;
@@ -21475,7 +21475,7 @@ async function runSelfTest() {
           switchedTarget.preDodgeBlockedReason
         ].join('|');
       })(),
-      want: 'induce-hold|5|3|command-delay-too-high|stamina-insufficient|true|shooting-phase-not-preparing'
+      want: 'induce-hold|5|3|command-delay-too-high||true|shooting-phase-not-preparing'
     },
     {
       name: 'browserless pre-dodge reports dynamic phase blockers instead of requiring an empty bullet field',
@@ -23695,7 +23695,7 @@ async function runSelfTest() {
       want: 'true|finish|finish-low-threat|true|true'
     },
     {
-      name: 'browserless combat dry-run computes quadratic intercept while hard stamina reserve blocks fire',
+      name: 'browserless combat dry-run computes quadratic intercept without future stamina blocking fire',
       got: (() => {
         const aim = estimateAim(
           { user_id: 7, x: 0, y: 0 },
@@ -23738,7 +23738,7 @@ async function runSelfTest() {
           combat.shooting.commandSuppressed
         ].join('|');
       })(),
-      want: 'quadratic-intercept|1875|true|quadratic-intercept|unavoidable-current-shot|disabled|below-hard-reserve|false|true'
+      want: 'quadratic-intercept|1875|true|quadratic-intercept|unavoidable-current-shot|pressure|target-pressure-fire|false|true'
     },
     {
       name: 'browserless combat fire treats unknown self stamina as unknown not zero',
@@ -23809,7 +23809,7 @@ async function runSelfTest() {
           decision.combat.shooting.wouldShoot
         ].join('|');
       })(),
-      want: 'true|500|500|snapshot|disabled|below-hard-reserve|false'
+      want: 'true|500|500|snapshot|normal|normal-fire|false'
     },
     {
       name: 'browserless decision adapter exposes combat dry-run action without firing',
@@ -26995,7 +26995,7 @@ async function runSelfTest() {
       want: 'false|dispatch|0|1|shoot 1000 0 0 0'
     },
     {
-      name: 'browserless AFK attack allows zero stamina in full-attack range',
+      name: 'browserless AFK attack defers the actually unpayable shot and keeps movement',
       got: (() => {
         const commands = [];
         const target = realtimePassiveAfk({ type: 'enemy', userId: 8, user_id: 8, x: 1000, y: 0, active: false });
@@ -27035,10 +27035,10 @@ async function runSelfTest() {
           commands.join(',')
         ].join('|');
       })(),
-      want: 'true|false|0|0|full-attack|500|vel 0 0,shoot 1000 0 0 0'
+      want: 'true|true|0|500|actual-shot-only|500|vel 0 0'
     },
     {
-      name: 'browserless AFK attack reserves only approach movement stamina',
+      name: 'browserless AFK attack ignores future approach movement cost',
       got: (() => {
         const target = realtimePassiveAfk({ type: 'enemy', userId: 8, user_id: 8, x: 4900, y: 0, active: false });
         const makeAdapter = () => {
@@ -27092,10 +27092,10 @@ async function runSelfTest() {
           blocked.commands.join(',')
         ].join('|');
       })(),
-      want: 'true|3900|3900|3900|afk-shoot-stamina-reserve|3900|vel 1 0,shoot 4900 0 0 0|vel 1 0'
+      want: 'true|3900|500|||500|vel 1 0,shoot 4900 0 0 0|vel 1 0,shoot 4900 0 0 0'
     },
     {
-      name: 'browserless AFK attack caps approach reserve to the rolling movement window',
+      name: 'browserless AFK attack ignores retired rolling approach reserve',
       got: (() => {
         const target = realtimePassiveAfk({ type: 'enemy', userId: 8, user_id: 8, x: 12801, y: 0, active: false });
         const makeAdapter = () => {
@@ -27145,7 +27145,7 @@ async function runSelfTest() {
           blocked.commands.join(',')
         ].join('|');
       })(),
-      want: 'true|false|5568|5000|11801|5000|true|afk-shoot-stamina-reserve|5000|vel 1 0,shoot 12801 0 0 0|vel 1 0'
+      want: 'true|false|5568|500|||||500|vel 1 0,shoot 12801 0 0 0|vel 1 0,shoot 12801 0 0 0'
     },
     {
       name: 'browserless shoot repeat pauses at websocket high water and resumes without catch-up burst',
@@ -48297,7 +48297,7 @@ async function runSelfTest() {
 	          browserlessOpportunityEnemyStaminaCost({ user_id: 8, active: true, hp: 30, distance: 30000 })
 	        ].join('|');
 	      })(),
-	      want: 'profit-candidate|seek-enemy|easy-kill-active-profit|true|51450|51450'
+	      want: 'profit-candidate|seek-enemy|easy-kill-active-profit|true|50250|50250'
 	    },
 	    {
       name: 'browserless easy-kill proactive seek range keeps score-one boundary and removes score-specific caps',

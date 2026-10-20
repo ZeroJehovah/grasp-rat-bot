@@ -1741,9 +1741,7 @@ function resolveDistanceAwareDodgeCore(input = {}, options = {}) {
     && Number(reactionSlack.observationAgeMs) > Number(options.maximumRealtimeStateAgeMs ?? 500);
   const blockedReason = input.exitActive
     ? 'leave-active'
-    : input.lowStamina
-      ? 'stamina-insufficient'
-      : staleRealtimeState
+    : staleRealtimeState
         ? 'stale-realtime-state'
         : (input.boundaryRisk || input.collisionRisk)
           ? (input.collisionRisk ? 'collision-risk' : 'boundary-risk')
@@ -2182,8 +2180,6 @@ function contactEntryRiskCore(self, target, previous = null, options = {}) {
     || (Number.isFinite(selfHp) && Number.isFinite(selfMaxHp) && selfHp < selfMaxHp);
   const trustedWithoutFire = Boolean(target?.easyKillThreatExempt && !strongEvidence && options.recentDanger !== true);
   const stamina5s = Number(self?.stamina_5s_remaining_milli ?? self?.stamina5sRemainingMilli);
-  const minimumStamina5s = Math.max(0, Number(options.minimumStamina5s ?? COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS + 1000));
-  const staminaBlocked = Number.isFinite(stamina5s) && stamina5s < minimumStamina5s && !realBullet;
   const armed = options.armed !== false;
   const withinGuard = Number.isFinite(distance) && distance <= guardRange;
   const previousDistance = Number(previous?.distance);
@@ -2197,7 +2193,6 @@ function contactEntryRiskCore(self, target, previous = null, options = {}) {
   else if (!strongEvidence && !directApproach) blockedReason = selfStationary
     ? 'no-direct-closing-evidence'
     : 'self-already-moving';
-  else if (staminaBlocked) blockedReason = 'stamina-insufficient';
   else if (!armed && !strongEvidence) blockedReason = 'contact-not-rearmed';
   return {
     eligible: !blockedReason,
@@ -2225,7 +2220,6 @@ function contactEntryRiskCore(self, target, previous = null, options = {}) {
     closingSpeed: Math.round(closingSpeed * 100) / 100,
     closingAlignment: Math.round(closingAlignment * 1000) / 1000,
     stamina5s: Number.isFinite(stamina5s) ? stamina5s : null,
-    minimumStamina5s,
     armed
   };
 }

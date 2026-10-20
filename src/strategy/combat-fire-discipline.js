@@ -3,8 +3,7 @@
 /**
  * Combat Fire Discipline
  *
- * Determines when and how to shoot during combat based on stamina, reserves,
- * and tactical context.
+ * Determines when and how to shoot during combat from realtime tactical context. Physical affordability belongs to wire dispatch.
  */
 
 const { COMBAT_CONSTANTS } = require('./combat-constants');
@@ -14,8 +13,6 @@ const { COMBAT_CONSTANTS } = require('./combat-constants');
  */
 const FIRE_STATE = {
   DISABLED: 'disabled',           // Cannot fire
-  PAUSED: 'paused',              // Pausing to recover dodge stamina
-  RESERVE_BAND: 'reserve-band',  // Reserve band throttled fire
   NORMAL: 'normal',              // Normal fire cadence
   PROBE: 'probe',                // Opponent probe fire
   FINISH: 'finish',              // Finishing low threat
@@ -39,146 +36,33 @@ function stamina5sRemaining(self) {
 }
 
 /**
- * Determine combat fire state based on stamina and context
+ * Determine combat fire state from tactical context
  *
  * @param {Object} self - Self entity
  * @param {Object} target - Combat target
  * @param {Object} context - Combat context
- * @returns {Object} { state, cadenceMs, reserve, reason }
+ * @returns {Object} { state, cadenceMs, reason }
  */
 function determineCombatFireState(self, target, context = {}) {
-  const stamina5s = stamina5sRemaining(self);
-  // The shared epoch/tick slot is the only fire-rate authorization. The old
-  // rolling stamina window remains a diagnostic and classification input, but
-  // may not bypass target pressure, reserve, or Dodge decisions here.
-  const hardReserve = Math.max(
-    0,
-    Number(context.hardReserveMs ?? COMBAT_CONSTANTS.SHOOT_HARD_RESERVE_MS)
-  );
-  const dodgeReserve = Math.max(
-    hardReserve,
-    Number(context.dodgeReserveMs ?? COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS)
-  );
   const shotCostMs = Math.max(0, Number(context.shotCostMs ?? 500));
-  const dodgeActionCostMs = Math.max(0, Number(context.dodgeActionCostMs ?? 0));
-  const requiredForShot = reserve => Math.max(0, Number(reserve || 0))
-    + shotCostMs
-    + dodgeActionCostMs;
-  const requiredForReserve = reserve => Math.max(0, Number(reserve || 0)) + dodgeActionCostMs;
-  const result = (state, cadenceMs, reserve, reason) => ({
+  const result = (state, reason) => ({
     state,
-    cadenceMs,
-    reserve,
+    cadenceMs: COMBAT_CONSTANTS.SHOOT_EVERY_MS,
     reason,
-    stamina5s,
-    hardReserve,
-    dodgeReserve,
+    stamina5s: stamina5sRemaining(self),
     shotCostMs,
-    dodgeActionCostMs,
-    requiredStaminaMs: requiredForShot(reserve)
+    requiredStaminaMs: shotCostMs,
+    staminaAuthority: 'actual-shot-only'
   });
-
-  // Hard floor - never fire below this
-  if (stamina5s !== null && stamina5s < hardReserve) {
-    return result(FIRE_STATE.DISABLED, Infinity, hardReserve, 'below-hard-reserve');
-  }
-
-  // Check guarded fire windows
-
-  // Opponent probe (early engagement without target bullet evidence)
-  if (context.opponentProbe) {
-    const probeReserve = Math.max(
-      hardReserve,
-      Number(context.opponentProbeReserveMs ?? COMBAT_CONSTANTS.OPPONENT_PROBE_RESERVE_MS)
-    );
-    if (stamina5s !== null && stamina5s < requiredForShot(probeReserve)) {
-      return result(FIRE_STATE.PAUSED, Infinity, probeReserve, 'probe-reserve');
-    }
-    return result(
-      FIRE_STATE.PROBE,
-      Number(context.opponentProbeEveryMs ?? COMBAT_CONSTANTS.OPPONENT_PROBE_EVERY_MS),
-      probeReserve,
-      'opponent-probe'
-    );
-  }
-
-  // Finish low threat (low HP target, high HP self, no pressure)
-  if (context.finishLowThreat) {
-    const finishReserve = Math.max(
-      hardReserve,
-      Number(context.finishReserveMs ?? COMBAT_CONSTANTS.FINISH_LOW_THREAT_RESERVE_MS)
-    );
-    if (stamina5s !== null && stamina5s < requiredForShot(finishReserve)) {
-      return result(FIRE_STATE.PAUSED, Infinity, finishReserve, 'finish-reserve');
-    }
-    return result(FIRE_STATE.FINISH, COMBAT_CONSTANTS.SHOOT_EVERY_MS, finishReserve, 'finish-low-threat');
-  }
-
-  // Close pressure resolves cadence and stamina reserve. Stable close-range
-  // ownership may bypass ordinary probe/coverage shot-count gates later.
-  if (context.closePressure) {
-    const closePressureReserve = Math.max(
-      hardReserve,
-      Number(context.closePressureReserveMs ?? COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS)
-    );
-    if (context.closePressureAttack) {
-      if (stamina5s !== null && stamina5s < requiredForShot(closePressureReserve)) {
-        return result(FIRE_STATE.PAUSED, Infinity, closePressureReserve, 'close-pressure-movement-reserve');
-      }
-      return result(FIRE_STATE.PRESSURE, COMBAT_CONSTANTS.SHOOT_EVERY_MS, closePressureReserve, 'close-pressure-full-attack');
-    }
-    const closePressureCadence = Math.max(
-      COMBAT_CONSTANTS.SHOOT_EVERY_MS,
-      Number(context.closePressureCadenceMs ?? COMBAT_CONSTANTS.SHOOT_RESERVE_BAND_MS)
-    );
-    if (stamina5s !== null && stamina5s < requiredForReserve(closePressureReserve)) {
-      return result(
-        FIRE_STATE.RESERVE_BAND,
-        Math.max(closePressureCadence, COMBAT_CONSTANTS.SHOOT_RESERVE_BAND_MS),
-        closePressureReserve,
-        'close-pressure-reserve-band'
-      );
-    }
-    return result(FIRE_STATE.PRESSURE, closePressureCadence, closePressureReserve, 'close-pressure-fire');
-  }
-
-  // Passive runner (no threat, safe to fire)
-  if (context.passiveRunner) {
-    const passiveReserve = Math.max(
-      hardReserve,
-      Number(context.passiveReserveMs ?? COMBAT_CONSTANTS.PASSIVE_RUNNER_DODGE_RESERVE_MS)
-    );
-    if (stamina5s !== null && stamina5s < requiredForShot(passiveReserve)) {
-      return result(FIRE_STATE.PAUSED, Infinity, passiveReserve, 'passive-reserve');
-    }
-    return result(FIRE_STATE.NORMAL, COMBAT_CONSTANTS.SHOOT_EVERY_MS, passiveReserve, 'passive-runner');
-  }
-
-  // Target pressure fire (real incoming bullets, but winning fight)
-  if (context.targetPressureFire) {
-    const pressureReserve = Math.max(
-      hardReserve,
-      Number(context.pressureReserveMs ?? dodgeReserve)
-    );
-    if (stamina5s !== null && stamina5s < requiredForShot(pressureReserve)) {
-      return result(FIRE_STATE.PAUSED, Infinity, pressureReserve, 'pressure-dodge-reserve');
-    }
-    return result(FIRE_STATE.PRESSURE, COMBAT_CONSTANTS.SHOOT_EVERY_MS, pressureReserve, 'target-pressure-fire');
-  }
-
-  // Normal combat fire discipline
-  if (stamina5s !== null && stamina5s < requiredForShot(dodgeReserve)) {
-    return result(FIRE_STATE.PAUSED, Infinity, dodgeReserve, 'dodge-reserve');
-  }
-
-  // Reserve band (low stamina, throttled fire)
-  const reserveBandThreshold = dodgeReserve + 1000;
-  if (stamina5s !== null && stamina5s < reserveBandThreshold) {
-    return result(FIRE_STATE.RESERVE_BAND, COMBAT_CONSTANTS.SHOOT_RESERVE_BAND_MS, dodgeReserve, 'reserve-band');
-  }
-
-  // Normal fire
-  return result(FIRE_STATE.NORMAL, COMBAT_CONSTANTS.SHOOT_EVERY_MS, dodgeReserve, 'normal-fire');
+  // Ten-frame slots and the physical dispatch ledger own sending. Neither a
+  // movement command nor its Dodge modifier adds a separate server charge.
+  if (context.opponentProbe) return result(FIRE_STATE.PROBE, 'opponent-probe');
+  if (context.finishLowThreat) return result(FIRE_STATE.FINISH, 'finish-low-threat');
+  if (context.closePressure) return result(FIRE_STATE.PRESSURE,
+    context.closePressureAttack ? 'close-pressure-full-attack' : 'close-pressure-fire');
+  if (context.passiveRunner) return result(FIRE_STATE.NORMAL, 'passive-runner');
+  if (context.targetPressureFire) return result(FIRE_STATE.PRESSURE, 'target-pressure-fire');
+  return result(FIRE_STATE.NORMAL, 'normal-fire');
 }
 
 /**
@@ -202,7 +86,6 @@ function resolveEstablishedCombatFireAuthorizationCore(input = {}) {
   const fireState = input.fireState && typeof input.fireState === 'object'
     ? input.fireState
     : {};
-  const staminaBlocked = fireState.state === FIRE_STATE.DISABLED || fireState.state === FIRE_STATE.PAUSED;
   const fireReachability = input.aim?.fireReachability || null;
   const reachabilityChecked = fireReachability && typeof fireReachability === 'object';
   let finalFireBlocker = 'none';
@@ -213,14 +96,13 @@ function resolveEstablishedCombatFireAuthorizationCore(input = {}) {
     finalFireBlocker = `aim-unreachable:${String(fireReachability.reason || 'creation-oracle-rejected')}`;
   }
   else if (!inRange) finalFireBlocker = 'target-out-of-range';
-  else if (staminaBlocked) finalFireBlocker = `fire-state:${String(fireState.reason || fireState.state)}`;
   else if (input.contactEntryOnly === true) finalFireBlocker = 'movement-only-contact-entry';
   return {
     wouldShoot: finalFireBlocker === 'none',
     finalFireBlocker,
     fireAuthorizationClass: finalFireBlocker === 'none'
       ? 'standard-combat-fire'
-      : (staminaBlocked ? 'stamina-reserve-blocked' : 'hard-gate-blocked')
+      : 'hard-gate-blocked'
   };
 }
 
@@ -524,13 +406,7 @@ function evaluateCombatFireBudgetCore(input = {}, options = {}) {
       && marginalCoverage !== null
       && marginalCoverage >= minimumMarginalCoverage
   );
-  const resolvedReserveMs = Math.max(0, Number(input.resolvedReserveMs || 0));
-  const plannedCoverageShots = Math.max(1, Math.round(Number(options.plannedCoverageShots || 3)));
-  const shotCostMs = Math.max(1, Number(options.shotCostMs || 500));
-  const controlMarginMs = Math.max(0, Number(options.controlMarginMs || 500));
-  const coverageVolleyRequiredStamina = resolvedReserveMs
-    + plannedCoverageShots * shotCostMs
-    + controlMarginMs;
+  const coverageVolleyRequiredStamina = Math.max(1, Number(options.shotCostMs || 500));
   const stamina5s = numberOrNull(input.stamina5s);
   const finishProtected = Boolean(gate.finishProtected || input.finishProtected);
   const pressureAttack = Boolean(input.pressureAttack);
@@ -638,7 +514,6 @@ function evaluateCombatFireBudgetCore(input = {}, options = {}) {
     marginalCoverage,
     minimumMarginalCoverage,
     coverageQualified,
-    resolvedReserveMs,
     coverageVolleyRequiredStamina,
     coverageVolleyStaminaReady: stamina5s === null ? null : stamina5s >= coverageVolleyRequiredStamina,
     suppressionReason,

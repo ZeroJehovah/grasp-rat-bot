@@ -2623,9 +2623,8 @@ function assertAfkProfitIgnoresOffLaneActiveBystander() {
   const applied = actionAdapter.applyDecision(firstState, first.action);
   assert.strictEqual(applied.shoot?.ok, true);
   assert.strictEqual(applied.shoot?.skipped, false);
-  assert.strictEqual(applied.shoot?.requiredStaminaMs, 5000);
-  assert.strictEqual(applied.shoot?.staminaPlan?.uncappedMovementReserveMs, 11801);
-  assert.strictEqual(applied.shoot?.staminaPlan?.movementReserveCapped, true);
+  assert.strictEqual(applied.shoot?.requiredStaminaMs, 500);
+  assert.strictEqual(applied.shoot?.staminaPlan?.source, 'actual-shot-only');
   assert(commands.some(command => command.startsWith('shoot 12801 0 ')));
   decisionAdapter.observeActionResult(applied, first, { nowMs: 1000 });
   assert.strictEqual(decisionAdapter.getState().attackHistory?.length, 1);

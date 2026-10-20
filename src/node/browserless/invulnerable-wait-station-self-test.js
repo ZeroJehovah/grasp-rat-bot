@@ -212,20 +212,12 @@ function runInvulnerableWaitStationSelfTest() {
   assert.ok(latched.triggerRemainingMs < latched.remainingMs);
   assert.strictEqual(latch[latch.length - 1].reason, 'close-in');
 
-  // The latch is not a commitment to an unaffordable exchange: the risk budget
-  // still parks a confirmed approach back at the station.
+  // Low five-second stamina cannot revoke a safe latched approach.
   const latchedRiskHold = plan({ distance: 11000, invulnerableRemainingMs: 3000 }, 3,
-    (frame, target, self) => {
-      if (frame >= 2) self.stamina_5s_remaining_milli = 2000;
-    });
-  assert.strictEqual(latchedRiskHold.invulnerableWindow.phase, 'wait');
+    (frame, target, self) => { if (frame >= 2) self.stamina_5s_remaining_milli = 2000; });
+  assert.strictEqual(latchedRiskHold.invulnerableWindow.phase, 'closing');
   assert.strictEqual(latchedRiskHold.invulnerableWindow.closingLatched, true);
-  assert.strictEqual(
-    latchedRiskHold.invulnerableWindow.reason,
-    'invulnerable-close-risk-budget-hold'
-  );
-  assert.strictEqual(latchedRiskHold.reason, 'combat-invulnerable-wait-hold');
-  assert.strictEqual(latchedRiskHold.spacing, 11000);
+  assert.strictEqual(latchedRiskHold.reason, 'close-in');
 
   // A countdown that rises is a fresh protection period, so the smoothing, the
   // confirmation, and the latch all start again instead of inheriting a closing
@@ -262,17 +254,9 @@ function runInvulnerableWaitStationSelfTest() {
     invulnerableRemainingMs: 3000,
     stamina5sRemainingMilli: 2000
   }, 2);
-  assert.strictEqual(staminaHold.reason, 'combat-invulnerable-wait-hold');
-  assert.strictEqual(staminaHold.spacing, 11000);
-  assert.strictEqual(staminaHold.invulnerableWindow.phase, 'wait');
-  assert.strictEqual(
-    staminaHold.invulnerableWindow.reason,
-    'invulnerable-close-risk-budget-hold'
-  );
-  assert.deepStrictEqual(
-    staminaHold.invulnerableWindow.riskBudget.reasons,
-    ['stamina-5s-below-approach-reserve']
-  );
+  assert.strictEqual(staminaHold.reason, 'close-in');
+  assert.strictEqual(staminaHold.invulnerableWindow.phase, 'closing');
+  assert.deepStrictEqual(staminaHold.invulnerableWindow.riskBudget.reasons, []);
 
   const hpHold = plan({
     distance: 11000,

@@ -18,6 +18,7 @@ const { isInvulnerableEntity } = require('../../strategy/combat-target-selection
 const { stamina5sRemaining } = require('../../strategy/combat-fire-discipline');
 const {
   COMBAT_FIRE_WINDOW_MS,
+  actualShotAffordabilityCore,
   shotStaminaCostMilli
 } = require('../../strategy/combat-stamina-window');
 const {
@@ -59,33 +60,14 @@ const DEFAULT_AFK_SHOOT_ACK_RECOVERY_MS = 6500;
 const DEFAULT_AFK_SHOOT_CORRELATION_OFFSET_CM = 24;
 const DEFAULT_SHOOT_PENDING_TRACKING_LIMIT = 64;
 const AFK_SHOOT_ACK_MATCH_TOLERANCE_CM = 5;
-const DEFAULT_AFK_SHOOT_DODGE_RESERVE_MS = Math.max(
-  0,
-  Number(BROWSER_RUNTIME_DEFAULTS.combatShootPassiveRunnerDodgeReserveMs || 1800)
-);
 const DEFAULT_AFK_SHOOT_STAMINA_COST_MS = Math.max(
   0,
   Number(BROWSER_RUNTIME_DEFAULTS.opportunityShotStaminaCostMs || 500)
-);
-// An AFK profit target that is already inside combat handoff range hands the
-// same stamina pool to the combat fire path, which requires
-// hardReserve + shotCost + dodgeActionCost before it may fire at all. The AFK
-// approach reserve only budgets travel, so at full-attack range it floors at
-// zero and can legally drain the pool to the point where the successor cannot
-// take the finish shot. Keep enough for the successor's first shot plus its
-// Dodge reserve whenever a handoff is actually reachable.
-const DEFAULT_AFK_ATTACK_COMBAT_HANDOFF_RESERVE_MS = Math.max(
-  0,
-  Number(BROWSER_RUNTIME_DEFAULTS.afkAttackCombatHandoffReserveMs || 3300)
 );
 const DEFAULT_REPEAT_MAX_DRIFT_MS = 125;
 const DEFAULT_TRANSPORT_HIGH_WATER_BYTES = 64 * 1024;
 const DEFAULT_ATTACK_RANGE_CM = BROWSER_RUNTIME_DEFAULTS.attackRange;
 const DEFAULT_AFK_ATTACK_FULL_RANGE_CM = BROWSER_RUNTIME_DEFAULTS.afkAttackFullRangeCm;
-const DEFAULT_AFK_ATTACK_APPROACH_RESERVE_MAX_MS = Math.max(
-  0,
-  Number(BROWSER_RUNTIME_DEFAULTS.afkAttackApproachReserveMaxMs || 5000)
-);
 const DEFAULT_COIN_FEEDBACK_MIN_TIMEOUT_MS = 250;
 const DEFAULT_COIN_FEEDBACK_MAX_TIMEOUT_MS = 800;
 const DEFAULT_COIN_FEEDBACK_DELAY_SLACK_MS = 125;
@@ -472,15 +454,6 @@ function afkAttackFullRangeCm(options = {}) {
   return Number.isFinite(value) ? Math.max(0, value) : DEFAULT_AFK_ATTACK_FULL_RANGE_CM;
 }
 
-function afkAttackCombatHandoffReserveMs(options = {}) {
-  const value = Number(options.afkAttackCombatHandoffReserveMs
-    ?? BROWSER_RUNTIME_DEFAULTS.afkAttackCombatHandoffReserveMs
-    ?? DEFAULT_AFK_ATTACK_COMBAT_HANDOFF_RESERVE_MS);
-  return Number.isFinite(value)
-    ? Math.max(0, value)
-    : DEFAULT_AFK_ATTACK_COMBAT_HANDOFF_RESERVE_MS;
-}
-
 function afkAttackFireMaxRangeCm(options = {}) {
   const value = Number(options.afkAttackFireMaxRangeCm
     ?? options.afkAttackFireMaxRange
@@ -828,17 +801,11 @@ function createBrowserlessActionAdapter(options = {}) {
     combatShootMinIntervalMs,
     Number(options.afkShootMinIntervalMs ?? DEFAULT_AFK_SHOOT_MIN_INTERVAL_MS)
   );
-  const afkShootDodgeReserveMs = Math.max(0, Number(
-    options.afkShootDodgeReserveMs
-      ?? options.combatShootPassiveRunnerDodgeReserveMs
-      ?? DEFAULT_AFK_SHOOT_DODGE_RESERVE_MS
-  ));
   const afkShootStaminaCostMs = Math.max(0, Number(
     options.afkShootStaminaCostMs
       ?? options.opportunityShotStaminaCostMs
       ?? DEFAULT_AFK_SHOOT_STAMINA_COST_MS
   ));
-  const afkShootRequiredStaminaMs = afkShootDodgeReserveMs + afkShootStaminaCostMs;
   // ACKs confirm ownership and damage; they must not throttle the normal fire
   // cadence. Keep only a bounded local correlation ledger for diagnostics and
   // late-ACK matching while allowing the wire request stream to continue.
@@ -2587,97 +2554,10 @@ function createBrowserlessActionAdapter(options = {}) {
     };
   }
 
-  function afkShootStaminaPlan(self, target, staminaMode = 'configured-reserve', handoffReachable = false) {
-    const mode = staminaMode === 'afk-attack' ? 'afk-attack' : 'configured-reserve';
+  function afkShootStaminaPlan(self, target, staminaMode = 'configured-reserve') {
     const shotCostMs = Math.ceil(afkShootStaminaCostMs);
-    const fallback = {
-      mode,
-      source: 'configured-dodge-reserve',
-      distanceCm: null,
-      fullAttackRangeCm: null,
-      movementReserveMs: mode === 'afk-attack' ? null : 0,
-      uncappedMovementReserveMs: mode === 'afk-attack' ? null : 0,
-      movementReserveMaxMs: mode === 'afk-attack' ? null : 0,
-      movementReserveCapped: false,
-      combatHandoffRangeCm: null,
-      combatHandoffReachable: false,
-      combatHandoffReserveMs: 0,
-      combatHandoffReserveApplied: false,
-      shotCostMs,
-      requiredStaminaMs: Math.ceil(afkShootRequiredStaminaMs)
-    };
-    if (mode !== 'afk-attack') return fallback;
-
-    const selfX = numberOrNull(self?.x);
-    const selfY = numberOrNull(self?.y);
-    const targetX = numberOrNull(target?.x);
-    const targetY = numberOrNull(target?.y);
-    if (selfX === null || selfY === null || targetX === null || targetY === null) return fallback;
-
-    const attackRange = Math.max(0, Number(
-      options.attackRangeCm ?? options.attackRange ?? DEFAULT_ATTACK_RANGE_CM
-    ));
-    const shootRange = Math.min(attackRange, afkAttackFireMaxRangeCm(options));
-    const fullAttackRange = afkAttackFullRangeCm(options);
-    const distance = Math.hypot(targetX - selfX, targetY - selfY);
-    const movementStaminaPerCm = Math.max(0, Number(
-      options.afkShootMoveStaminaPerCm
-        ?? options.opportunityMoveStaminaPerCm
-        ?? BROWSER_RUNTIME_DEFAULTS.opportunityMoveStaminaPerCm
-        ?? 1
-    ));
-    const configuredReserveMaxMs = Number(
-      options.afkAttackApproachReserveMaxMs
-        ?? options.afkShootApproachReserveMaxMs
-        ?? BROWSER_RUNTIME_DEFAULTS.afkAttackApproachReserveMaxMs
-        ?? DEFAULT_AFK_ATTACK_APPROACH_RESERVE_MAX_MS
-    );
-    const movementReserveMaxMs = Number.isFinite(configuredReserveMaxMs)
-      ? Math.max(0, configuredReserveMaxMs)
-      : DEFAULT_AFK_ATTACK_APPROACH_RESERVE_MAX_MS;
-    const uncappedMovementReserveMs = Math.max(0, distance - fullAttackRange) * movementStaminaPerCm;
-    const movementReserveMs = Math.min(uncappedMovementReserveMs, movementReserveMaxMs);
-    // The combat fire path takes over once the target is inside combat attack
-    // range. It cannot fire below hardReserve + shotCost + dodgeActionCost, so
-    // draining the shared pool to the travel-only floor strands the successor's
-    // first shot. Hold the successor's floor while a handoff is reachable.
-    const combatHandoffRangeCm = Math.max(0, Number(
-      options.combatAttackRange ?? options.attackRangeCm ?? options.attackRange ?? DEFAULT_ATTACK_RANGE_CM
-    ));
-    const combatHandoffReachable = handoffReachable === true
-      && Number.isFinite(distance)
-      && distance <= combatHandoffRangeCm;
-    const combatHandoffReserveMs = combatHandoffReachable
-      ? afkAttackCombatHandoffReserveMs(options)
-      : 0;
-    const requiredStaminaMs = Math.max(movementReserveMs, combatHandoffReserveMs);
-    return {
-      mode,
-      source: distance <= fullAttackRange ? 'full-attack' : 'approach',
-      distanceCm: Math.round(distance),
-      fullAttackRangeCm: Math.round(fullAttackRange),
-      movementReserveMs: Math.ceil(movementReserveMs),
-      uncappedMovementReserveMs: Math.ceil(uncappedMovementReserveMs),
-      movementReserveMaxMs: Math.ceil(movementReserveMaxMs),
-      movementReserveCapped: uncappedMovementReserveMs > movementReserveMs,
-      combatHandoffRangeCm: Math.round(combatHandoffRangeCm),
-      combatHandoffReachable,
-      combatHandoffReserveMs: Math.ceil(combatHandoffReserveMs),
-      combatHandoffReserveApplied: combatHandoffReserveMs > movementReserveMs,
-      shotCostMs,
-      requiredStaminaMs: Math.ceil(requiredStaminaMs)
-    };
-  }
-
-  // A combat handoff becomes reachable when some other realtime actor can pull
-  // this AFK engagement into the combat fire path: an observed nearby active
-  // competitor for the same target, or an external bullet owner near us. With
-  // no such actor the AFK target cannot fight back and no successor needs the
-  // pool, so ordinary AFK output keeps its travel-only floor.
-  function afkCombatHandoffReachable(stateSnapshot, self, target, profitKillRace = null) {
-    if (Math.round(Number(profitKillRace?.competitorCount || 0)) > 0) return true;
-    const evidence = externalAfkDamageEvidence(stateSnapshot, self, target);
-    return Math.round(Number(evidence?.bulletEvidenceCount || 0)) > 0;
+    return { mode: staminaMode === 'afk-attack' ? 'afk-attack' : 'configured-reserve',
+      source: 'actual-shot-only', shotCostMs, requiredStaminaMs: shotCostMs };
   }
 
   function afkShootGate(self, target, commandShooting = null, gateOptions = {}) {
@@ -2717,8 +2597,7 @@ function createBrowserlessActionAdapter(options = {}) {
     const staminaPlan = afkShootStaminaPlan(
       self,
       target,
-      gateOptions.staminaMode,
-      afkCombatHandoffReachable(gateOptions.stateSnapshot, self, target, profitKillRace)
+      gateOptions.staminaMode
     );
     const requiredStaminaMs = staminaPlan.requiredStaminaMs;
     const outstanding = afkOutstandingShot(target, commandShooting);
@@ -2777,10 +2656,10 @@ function createBrowserlessActionAdapter(options = {}) {
         }
       }
     }
-    if (stamina5s !== null && stamina5s < requiredStaminaMs) {
+    if (!actualShotAffordabilityCore(self, [], null, requiredStaminaMs).allowed) {
       return {
         ok: false,
-        reason: 'afk-shoot-stamina-reserve',
+        reason: 'actual-stamina-unaffordable',
         stamina5s,
         requiredStaminaMs,
         staminaPlan,
@@ -2834,7 +2713,7 @@ function createBrowserlessActionAdapter(options = {}) {
             executionClass: SHOOT_EXECUTION_CLASSES.PROFIT_OPPORTUNITY,
             outcome: String(gate.reason || '').startsWith('afk-fire-')
               ? 'dynamic-fire-delay'
-              : 'stamina-reserve'
+              : 'actual-stamina-unaffordable'
           })
         : null
     };
@@ -3262,7 +3141,7 @@ function createBrowserlessActionAdapter(options = {}) {
         || gate.reason === 'afk-fire-delay-external-kill-before-near'
         || gate.reason === 'afk-fire-approach-range'
         || gate.reason === 'profit-target-competition-position-blocked'
-        || gate.reason === 'afk-shoot-stamina-reserve') {
+        || gate.reason === 'actual-stamina-unaffordable') {
         state.shootRepeatWaitReason = gate.reason;
         armShootRepeatTimer(repeatWakeDelay(repeat));
       } else {
@@ -3348,8 +3227,7 @@ function createBrowserlessActionAdapter(options = {}) {
     const staminaPlan = afkShootStaminaPlan(
       self,
       target,
-      staminaMode,
-      afkCombatHandoffReachable(stateSnapshot, self, target, repeatOptions.profitKillRace || null)
+      staminaMode
     );
     return {
       repeatMs: repeatCadenceMs,
@@ -3775,6 +3653,14 @@ function createBrowserlessActionAdapter(options = {}) {
     }
     state.staminaDispatches = Array.from(dispatchesById.values())
       .sort((a, b) => a.requestedAtMs - b.requestedAtMs);
+    const physical = actualShotAffordabilityCore(shotMeta.stateSnapshot?.realtime?.self,
+      state.staminaDispatches, shotMeta.stateSnapshot?.realtime?.receivedAtMs, shotCostMilli);
+    if (!physical.allowed) {
+      state.skippedCount += 1;
+      return { ok: true, skipped: true, reason: physical.reason, physical,
+        execution: emitShootExecution({ ...executionContext, type: 'shoot-skip',
+          skipReason: physical.reason, outcome: 'actual-stamina-unaffordable', physical }) };
+    }
     const frameClaim = claimShootFrame(shotMeta);
     if (!frameClaim.ok) {
       state.skippedCount += 1;
@@ -4341,7 +4227,7 @@ function createBrowserlessActionAdapter(options = {}) {
     return Boolean(shoot?.ok && (
       shoot.command
       || String(shoot.reason || '').startsWith('shoot-frame:')
-      || shoot.reason === 'afk-shoot-stamina-reserve'
+      || shoot.reason === 'actual-stamina-unaffordable'
       || shoot.reason === 'afk-shoot-correlation-slots-exhausted'
       || shoot.reason === 'afk-fire-delay-own-kill-before-near'
       || shoot.reason === 'afk-fire-delay-external-kill-before-near'
@@ -4554,7 +4440,6 @@ function createBrowserlessActionAdapter(options = {}) {
         remainingMs: invulnerableRemainingWallMs(target),
         waitDistanceCm: target?.invulnerableApproachDistanceCm,
         selfHp: Number(self?.hp),
-        stamina5sRemainingMilli: self?.stamina_5s_remaining_milli ?? self?.stamina5sRemainingMilli,
         // Same retained window as the combat movement layer, so navigation and
         // combat spacing cannot disagree about the phase for the same target.
         stateTracked: true,

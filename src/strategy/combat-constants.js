@@ -31,22 +31,16 @@ const COMBAT_CONSTANTS = {
 
   // Fire discipline and stamina
   SHOOT_EVERY_MS: 500,                    // normal ten-frame grid estimate
-  SHOOT_RESERVE_BAND_MS: 360,             // combatShootReserveBandMs - reserve band fire cadence
-  SHOOT_HARD_RESERVE_MS: 1200,            // combatShootHardReserveMs - hard floor for shooting
-  SHOOT_DODGE_RESERVE_MS: 2400,           // combatShootDodgeReserveMs - normal dodge reserve
 
   // Passive runner handling
   PASSIVE_RUNNER_CONFIRM_MS: 2500,        // combatPassiveRunnerConfirmMs
-  PASSIVE_RUNNER_DODGE_RESERVE_MS: 1800,  // combatShootPassiveRunnerDodgeReserveMs
 
   // Opponent probe (early engagement)
   OPPONENT_PROBE_MS: 6000,                // combatOpponentProbeMs
-  OPPONENT_PROBE_RESERVE_MS: 5600,        // combatOpponentProbeReserveMs
   OPPONENT_PROBE_EVERY_MS: 500,           // combatOpponentProbeEveryMs
 
   // Finish pressure
   FINISH_LOW_THREAT_HP: 75,               // combatFinishLowThreatHp - target HP for finish
-  FINISH_LOW_THREAT_RESERVE_MS: 1800,     // combatFinishLowThreatReserveMs
   FINISH_PRESSURE_RANGE: 11000,           // combatFinishPressureRange
   FINISH_REENGAGE_RANGE: 16000,           // combatFinishReengageRange
 

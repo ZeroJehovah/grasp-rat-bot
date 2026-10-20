@@ -1,5 +1,8 @@
 'use strict';
 
+const { observeIncomingThreatLifecycle, recordIncomingThreatAssessment,
+  recordIncomingImpact, incomingLifecycleSummary } = require('./incoming-threat-lifecycle');
+
 const { coinMotionCoreOptions } = require('./coin-motion-options');
 const { coinDirectionToCore } = require('../../strategy/coin-motion');
 const { SEARCH_COOLDOWN_MS } = require('./easy-kill-player-tracker');
@@ -83,7 +86,9 @@ const {
   recordCombatShotLearning
 } = require('./combat-adapter');
 const {
-  candidateWithinBoundaryCore
+  candidateWithinBoundaryCore,
+  directionThreatCore,
+  stabilizeCombatMovementDirectionCore
 } = require('../../strategy/combat-movement');
 const {
   movementSafetyOverrideCore,
@@ -5400,14 +5405,10 @@ function opportunityEnemyStaminaCost(target, options = {}) {
     ? 0
     : expectedShots * Math.max(0, Number(options.opportunityAfkCombatMovementStaminaPerShotMs
       ?? DEFAULT_AFK_COMBAT_MOVEMENT_STAMINA_PER_SHOT_MS));
-  const expectedDodgeCost = target?.active
-    ? Math.max(0, Number(options.opportunityExpectedDodgeCostMs ?? 1200)) * Math.max(0.5, riskScale)
-    : 0;
   const expectedSwitchCost = Math.max(0, Number(options.opportunityExpectedSwitchCostMs ?? 250));
   return (moveCost
     + shotCost
     + expectedCombatMovementCost
-    + expectedDodgeCost
     + expectedSwitchCost) * riskScale;
 }
 
@@ -7120,9 +7121,6 @@ function fieldMigrationBlockedByNearbyCoin(self, coins, activeThreats, fieldCoin
 function pickFieldMigrationCoin(input, activeThreats, thresholdContext, options = {}) {
   const self = input?.self || null;
   if (!self) return null;
-  const stamina5s = Number(input?.stamina?.stamina5sRemainingMilli ?? self.stamina_5s_remaining_milli ?? Infinity);
-  const threshold = Math.max(0, Number(options.fieldMigrationStaminaThreshold ?? BROWSER_RUNTIME_DEFAULTS.fieldMigrationStaminaThreshold));
-  if (Number.isFinite(stamina5s) && stamina5s < threshold) return null;
   const minDistance = Math.max(0, Number(options.fieldMigrationMinDistance ?? BROWSER_RUNTIME_DEFAULTS.fieldMigrationMinDistance));
   const maxDistance = Math.max(minDistance, Number(options.fieldMigrationMaxDistance ?? BROWSER_RUNTIME_DEFAULTS.fieldMigrationMaxDistance));
   const clusterRadius = Math.max(0, Number(options.fieldMigrationClusterRadius ?? BROWSER_RUNTIME_DEFAULTS.fieldMigrationClusterRadius));
@@ -11441,6 +11439,7 @@ function attributeBrowserlessHpDropToBullet(input, stateful, hpDrop, nowMs, opti
   const actualEffectiveTick = numberOrNull(actualTransition?.tick);
   const attribution = {
     classification,
+    matched: Boolean(matched),
     hpDrop: Math.round(Number(hpDrop || 0) * 10) / 10,
     bulletId: matched?.observation?.id || '',
     ownerId: matched?.observation?.ownerId || '',
@@ -11448,6 +11447,7 @@ function attributeBrowserlessHpDropToBullet(input, stateful, hpDrop, nowMs, opti
     expireTick: numberOrNull(matched?.observation?.expireTick),
     observedTick: numberOrNull(matched?.observation?.observedTick),
     damageTick: currentTick,
+    impactTick: currentTick,
     observedAt: numberOrNull(matched?.observation?.at),
     expectedImpactAt: Number.isFinite(Number(matched?.expectedImpactAt)) ? Number(matched.expectedImpactAt) : null,
     timingErrorMs: Number.isFinite(Number(matched?.timingErrorMs)) ? Math.round(Number(matched.timingErrorMs)) : null,
@@ -11472,6 +11472,7 @@ function attributeBrowserlessHpDropToBullet(input, stateful, hpDrop, nowMs, opti
       dy: Number(matched.prediction.dy || 0)
     } : null
   };
+  recordIncomingImpact(stateful.incomingThreatLifecycles || {}, attribution);
   stateful.combatHitAttributionHistory = [
     ...(Array.isArray(stateful.combatHitAttributionHistory) ? stateful.combatHitAttributionHistory : []),
     attribution
@@ -11998,6 +11999,7 @@ function buildBrowserlessIncomingThreatAssessment(state, input, combat, options 
   const normalizedBullets = Array.isArray(combatBullets)
     ? filterNormalizedIncomingBullets(combatBullets, input.self, options)
     : normalizedIncomingBullets(state, input.self, options);
+  const activeThreatBullets = normalizedBullets;
   const collisionBullets = normalizedBullets
     .filter(bullet => incomingBulletHasCollisionRiskCore(bullet, options));
   const combatMovement = combat?.dryRun?.movement || combat?.movement || null;
@@ -12020,7 +12022,6 @@ function buildBrowserlessIncomingThreatAssessment(state, input, combat, options 
       && combatMovement
       && Array.isArray(combatMovement.dodge?.threatField)
       && combatMovement.dodge.threatField.length > 0
-      && collisionBullets.length > 0
   );
   const pending = {
     triggerDecision: combatMovementCovered ? {
@@ -12029,26 +12030,45 @@ function buildBrowserlessIncomingThreatAssessment(state, input, combat, options 
     } : null,
     target: combat?.target || null,
     lastCover: null,
-    normalizedIncomingBullets: collisionBullets
+    preTarget: true,
+    normalizedIncomingBullets: activeThreatBullets
   };
-  const coverResult = collisionBullets.length
+  const coverResult = activeThreatBullets.length
     ? buildLeavePendingCover(state, pending, {
         ...options,
         preferTriggerCover: combatMovementCovered,
         nowMs
       })
     : null;
-  const cover = selectExecutableIncomingCover(coverResult?.cover || null);
+  let cover = coverResult?.cover?.currentLaneSafe
+    ? coverResult.cover : selectExecutableIncomingCover(coverResult?.cover || null);
+  const decisionState = options.decisionState || options.stateful;
+  const threatGeneration = activeThreatBullets.map(leaveRiskBulletId).sort().join('|');
+  if (decisionState && activeThreatBullets.length && cover && !combatMovementCovered) {
+    const stability = stabilizeCombatMovementDirectionCore({ nowMs, tick: input.realtime?.tick,
+      targetId: 'incoming-threat-field', engagementId: threatGeneration,
+      candidateDirection: cover, threatField: cover.threatField,
+      movementTiming: state?.command?.movement?.timing,
+      previousState: decisionState.preTargetMovementStability || null });
+    decisionState.preTargetMovementStability = stability.state;
+    if (stability.held) {
+      const chosen = directionThreatCore(cover.threatField, stability.direction);
+      if (chosen) cover = { ...cover, ...stability.direction, ...chosen,
+        threatField: cover.threatField, reason: stability.reason };
+    }
+  } else if (decisionState && !activeThreatBullets.length) decisionState.preTargetMovementStability = null;
   const ownerIds = Array.from(new Set(collisionBullets
     .map(bullet => String(bullet?.ownerId ?? ''))
     .filter(Boolean)));
   const ownerTargets = ownerIds
     .map(ownerId => (input.visibleTargets || []).find(target => targetKey(target) === ownerId) || null)
     .filter(Boolean);
-  return {
+  const assessment = {
     at: nowMs,
     tick: input.realtime?.tick ?? null,
     normalizedBullets,
+    activeThreatBullets,
+    threatGeneration,
     collisionBullets,
     ownerIds,
     ownerTargets,
@@ -12057,23 +12077,43 @@ function buildBrowserlessIncomingThreatAssessment(state, input, combat, options 
     combatWasEstablished,
     combatTargetId,
     preexistingCombatTargetId: preexistingCombatTargetId || null,
-    bullets: collisionBullets.slice(0, 8).map(bullet => ({
+    bullets: activeThreatBullets.slice(0, 32).map(bullet => ({
       id: leaveRiskBulletId(bullet),
       ownerId: String(bullet?.ownerId ?? ''),
       cpa: numberOrNull(bullet?.cpa),
       timeToImpact: numberOrNull(bullet?.timeToImpact),
       distance: numberOrNull(bullet?.distance),
       createdTick: numberOrNull(bullet?.createdTick),
-      expireTick: numberOrNull(bullet?.expireTick)
+      expireTick: numberOrNull(bullet?.expireTick),
+      firstReceivedTick: numberOrNull(bullet?.firstReceivedTick),
+      firstRetainedTick: numberOrNull(bullet?.firstRetainedTick),
+      firstShotEventTick: numberOrNull(bullet?.firstShotEventTick)
     }))
   };
+  if (decisionState) {
+    const records = decisionState.incomingThreatLifecycles ||= {};
+    observeIncomingThreatLifecycle(records, normalizedBullets, assessment.tick, nowMs);
+    // Copy actual command evidence from the main process, never infer dispatch
+    // merely because a Worker selected a direction.
+    for (const bullet of normalizedBullets) {
+      const record = records[leaveRiskBulletId(bullet)];
+      if (!record) continue;
+      if (bullet.firstDodgeCommandTick !== undefined) {
+        record.firstDodgeCommandTick = bullet.firstDodgeCommandTick;
+        record.expectedEffectiveTick = bullet.expectedEffectiveTick;
+      }
+    }
+    recordIncomingThreatAssessment(records, assessment);
+    assessment.bullets = incomingLifecycleSummary(records, assessment.bullets);
+  }
+  return assessment;
 }
 
 function buildBrowserlessPreTargetIncomingSafetyDecision(input, assessment, options = {}) {
-  if (options.preTargetIncomingDodgeEnabled === false || !input?.self || !assessment?.collisionBullets?.length) {
+  if (options.preTargetIncomingDodgeEnabled === false || !input?.self || !assessment?.activeThreatBullets?.length) {
     return null;
   }
-  if (assessment.combatMovementCovered) return null;
+  if (assessment.combatMovementCovered || assessment.cover?.currentLaneSafe) return null;
   const cover = assessment.cover || null;
   const dx = Number(cover?.dx || 0);
   const dy = Number(cover?.dy || 0);
@@ -12084,13 +12124,21 @@ function buildBrowserlessPreTargetIncomingSafetyDecision(input, assessment, opti
     .slice(0, 8)
     .map(summarizeTarget);
   const incomingSafety = {
+    at: assessment.at,
+    tick: assessment.tick,
+    activeThreatBulletCount: assessment.activeThreatBullets.length,
+    threatGeneration: assessment.threatGeneration,
     collisionBulletCount: assessment.collisionBullets.length,
     ownerIds: assessment.ownerIds.slice(0, 8),
     whitelistOwners,
     combatMovementCovered: false,
     dodgeDirection: { dx, dy },
     cover: compactLeaveCover(cover),
-    bullets: assessment.bullets
+    bullets: assessment.bullets,
+    firstNoSafeTick: assessment.bullets.map(bullet => bullet.firstNoSafeTick)
+      .filter(Number.isFinite).sort((a, b) => a - b)[0] ?? null,
+    lastSafeTick: assessment.bullets.map(bullet => bullet.lastSafeTick)
+      .filter(Number.isFinite).sort((a, b) => b - a)[0] ?? null
   };
   if (criticalExit?.rule === 'critical-hp') {
     return {
@@ -12126,6 +12174,27 @@ function buildBrowserlessPreTargetIncomingSafetyDecision(input, assessment, opti
   };
 }
 
+function preserveIncomingLaneBeforeProfitAction(action, input, assessment, options = {}) {
+  if (!action || !assessment?.cover?.currentLaneSafe || options.healthyLootPriority
+    || action.shouldLeave || action.band === 'exit' || action.band === 'safety'
+    || !['coin', 'seek-coin', 'seek-enemy', 'seek-remote-player', 'profit-candidate',
+      'move-to-target', 'patrol'].includes(action.kind)) return action;
+  const target = action.target;
+  const direction = Number.isFinite(action.dx) && Number.isFinite(action.dy)
+    ? { dx: action.dx, dy: action.dy }
+    : (Number.isFinite(target?.x) && Number.isFinite(target?.y)
+      ? { dx: Math.sign(target.x - input.self.x), dy: Math.sign(target.y - input.self.y) } : null);
+  if (!direction) return action;
+  const risk = directionThreatCore(assessment.cover.threatField, direction);
+  if (!risk || (Number(risk.physicalHits) === 0 && Number(risk.robustHits) === 0)) return action;
+  return {
+    ...buildBrowserlessPreTargetIncomingSafetyDecision(input, {
+      ...assessment, cover: { ...assessment.cover, currentLaneSafe: false }
+    }, options),
+    blockedAction: { kind: action.kind, reason: action.reason, target: action.target }
+  };
+}
+
 function attachIncomingCoverToLeaveDecision(action, assessment) {
   if (!action?.shouldLeave || !assessment?.collisionBullets?.length) return action;
   const cover = assessment.cover || null;
@@ -12138,6 +12207,8 @@ function attachIncomingCoverToLeaveDecision(action, assessment) {
     dx,
     dy,
     incomingSafety: action.incomingSafety || {
+      at: assessment.at,
+      tick: assessment.tick,
       collisionBulletCount: assessment.collisionBullets.length,
       ownerIds: assessment.ownerIds.slice(0, 8),
       combatMovementCovered: Boolean(assessment.combatMovementCovered),
@@ -12161,6 +12232,8 @@ function summarizeIncomingThreatAssessment(assessment) {
   return {
     at: numberOrNull(assessment.at),
     tick: numberOrNull(assessment.tick),
+    activeThreatBulletCount: Number(assessment.activeThreatBullets?.length || 0),
+    threatGeneration: assessment.threatGeneration,
     collisionBulletCount: Number(assessment.collisionBullets?.length || 0),
     ownerIds: (assessment.ownerIds || []).slice(0, 8),
     combatMovementCovered: Boolean(assessment.combatMovementCovered),
@@ -12168,7 +12241,7 @@ function summarizeIncomingThreatAssessment(assessment) {
     combatTargetId: assessment.combatTargetId || null,
     preexistingCombatTargetId: assessment.preexistingCombatTargetId || null,
     cover: compactLeaveCover(assessment.cover),
-    bullets: (assessment.bullets || []).slice(0, 8)
+    bullets: (assessment.bullets || []).slice(0, 32)
   };
 }
 
@@ -12184,7 +12257,7 @@ function summarizeWhitelistSafetyState(input, assessment, options = {}) {
       target: summarizeTarget(target),
       policy: summarizeWhitelistContactPolicy(target.whitelistContactPolicy)
     }));
-  if (!targets.length && !assessment?.collisionBullets?.length) return null;
+  if (!targets.length && !assessment?.activeThreatBullets?.length) return null;
   return {
     dynamicWhitelistProximitySafetyEnabled: options.dynamicWhitelistProximitySafetyEnabled !== false,
     preTargetIncomingDodgeEnabled: options.preTargetIncomingDodgeEnabled !== false,
@@ -13013,11 +13086,13 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     : {
         ...options,
         combatActionEligible,
-        preexistingCombatTarget: previousCombatTarget
+        preexistingCombatTarget: previousCombatTarget,
+        decisionState: stateful
       };
   if (reuseSafetyContextOptions) {
     safetyContextOptions.combatActionEligible = combatActionEligible;
     safetyContextOptions.preexistingCombatTarget = previousCombatTarget;
+    safetyContextOptions.decisionState = stateful;
   }
   const incomingThreatAssessment = buildBrowserlessIncomingThreatAssessment(
     state,
@@ -13205,6 +13280,8 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     centerHardBoundary = applyCenterActivityHardBoundary(input, highValueCoinAction, options);
   }
   if (centerHardBoundary.applied) action = centerHardBoundary.action;
+  action = preserveIncomingLaneBeforeProfitAction(action, input, incomingThreatAssessment,
+    { ...options, healthyLootPriority });
   applyPostKillSettlementMovementToCombat(combat, action);
   let dangerousCombatExit = selectedCombatExitAction
     ? rememberDangerousCombatExitTarget(input, combat, stateful, options)
@@ -14509,9 +14586,6 @@ function evaluateProactiveCombatMarginalRoi(input, combatDecision, opportunity =
   const approachStamina = Number.isFinite(distance)
     ? Math.max(0, distance - 7500) * Math.max(0, Number(options.movementCostMsPerCm ?? 1))
     : 0;
-  const preDodgeStamina = ['burst', 'sustained', 'preparing'].includes(String(
-    combatDecision?.dryRun?.behavior?.dimensions?.shootingPhase?.state || ''
-  )) ? Math.max(0, Number(options.combatShootDodgeReserveMs || 1800)) : 0;
   const shootingStamina = remainingAcceptedShots === null
     ? Infinity
     : remainingAcceptedShots * Math.max(1, Number(options.combatShotStaminaCostMs ?? 500));
@@ -14527,7 +14601,7 @@ function evaluateProactiveCombatMarginalRoi(input, combatDecision, opportunity =
   const completion = activeTargetCompletionEstimate(target, completionOptions);
   const completionProbability = Math.max(0.03, Math.min(0.95, Number(completion.probability || 0)));
   const escapeHazard = Math.max(0, Math.min(0.97, 1 - completionProbability));
-  const expectedRemainingStamina = shootingStamina + approachStamina + preDodgeStamina + switchCost;
+  const expectedRemainingStamina = shootingStamina + approachStamina + switchCost;
   const effectiveReward = effectiveProfitReward(target, {
     ...completionOptions,
     staminaCostOverride: expectedRemainingStamina
@@ -15478,7 +15552,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     recentCombatTarget: previousCombatTarget,
     recentCombatMetrics: stateful.combatMetrics || previousCombatMetrics,
     postKillSettlement,
-    preexistingCombatTarget: previousCombatTarget
+    preexistingCombatTarget: previousCombatTarget,
+    decisionState: stateful
   };
   rememberBrowserlessInjury(input, stateful, safetyContextOptions);
   const incomingThreatAssessment = input.self && !realtimeStale
@@ -16149,6 +16224,8 @@ function buildBrowserlessDecision(state, stateful = {}, options = {}) {
     band = action.band || band || 'wait';
     reason = action.reason || reason || 'no-profitable-candidate';
   }
+  action = preserveIncomingLaneBeforeProfitAction(action, input, incomingThreatAssessment,
+    { ...options, healthyLootPriority });
   applyPostKillSettlementMovementToCombat(combat, action);
   const finalMovementSafety = applyFinalMovementSafetyOverride(combat, action, input.self, options);
   if (finalMovementSafety.applied) {
@@ -16858,6 +16935,8 @@ function createBrowserlessDecisionAdapter(options = {}) {
 }
 
 module.exports = {
+  buildBrowserlessIncomingThreatAssessment,
+  buildBrowserlessPreTargetIncomingSafetyDecision,
   BROWSER_RUNTIME_DEFAULTS,
   activeTargetCompletionEstimate,
   activeTargetExpectedReward,

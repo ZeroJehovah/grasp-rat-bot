@@ -300,7 +300,7 @@ function runIncomingPressureSelfTest() {
   assert.strictEqual(result.shooting.primaryRewardSurvivalRace.evaluated, true);
   assert.strictEqual(result.shooting.primaryRewardSurvivalRace.continuePrimary, true);
   assert.strictEqual(result.shooting.primaryFinishRace.eligible, true);
-  assert.strictEqual(result.shooting.primaryFinishRace.reason, 'primary-finish-race-soft-reserve-override');
+  assert.strictEqual(result.shooting.primaryFinishRace.reason, 'primary-finish-race-window');
   assert.strictEqual(result.fireTargetRole, 'primary');
   assert.strictEqual(result.shooting.wouldShoot, true);
   assert.strictEqual(result.exit, null);

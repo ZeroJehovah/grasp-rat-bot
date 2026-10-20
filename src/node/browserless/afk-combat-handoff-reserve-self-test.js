@@ -3,11 +3,7 @@
 const assert = require('assert');
 const { createBrowserlessActionAdapter } = require('./action-adapter');
 
-// An AFK profit target that is already inside combat handoff range hands the
-// shared 5s stamina pool to the combat fire path. That successor cannot fire
-// below hardReserve + shotCost + dodgeActionCost, so the AFK travel-only floor
-// (zero at full-attack range) must not be allowed to drain the pool below the
-// successor's entry requirement while a handoff is actually reachable.
+// Non-zero historical reserves are regression controls and confer no authority.
 
 function makeAdapter(overrides = {}) {
   const commands = [];
@@ -105,151 +101,24 @@ function apply(adapter, target, stamina5s, entities = []) {
 
 function runAfkCombatHandoffReserveSelfTest() {
   const cases = [];
-
-  // Lone AFK target: nothing can pull this into combat, so ordinary AFK output
-  // keeps the travel-only floor and still fires at a nearly drained pool.
-  {
-    const { adapter, commands } = makeAdapter();
-    const result = apply(adapter, afkTarget(), 296);
-    cases.push({
-      name: 'lone AFK target keeps travel-only floor at full-attack range',
-      ok: result.shoot.ok === true
-        && result.shoot.staminaPlan.combatHandoffReachable === false
-        && result.shoot.staminaPlan.combatHandoffReserveMs === 0
-        && result.shoot.staminaPlan.requiredStaminaMs === 0
-        && commands.some(entry => entry.startsWith('shoot ')),
-      requiredStaminaMs: result.shoot.staminaPlan.requiredStaminaMs,
-      reachable: result.shoot.staminaPlan.combatHandoffReachable
-    });
+  for (const stamina of [499, 500, 2960, 3300]) {
+    for (const bystanders of [[], [competitor()], [competitor({ active: false, current_join_mode: 'Passive' })]]) {
+      const { adapter, commands } = makeAdapter();
+      const result = apply(adapter, afkTarget(), stamina, bystanders);
+      assert.strictEqual(result.shoot.requiredStaminaMs, 500);
+      assert.strictEqual(result.shoot.staminaPlan.source, 'actual-shot-only');
+      assert.strictEqual(commands.some(entry => entry.startsWith('shoot ')), stamina >= 500);
+      if (stamina < 500) assert.strictEqual(result.shoot.reason, 'actual-stamina-unaffordable');
+      cases.push({ stamina, bystanders: bystanders.length });
+      adapter.sealTransport();
+    }
   }
-
-  // Competitor observed near the same target while inside combat handoff range:
-  // hold the successor's floor instead of draining the pool to zero.
-  {
-    const { adapter, commands } = makeAdapter();
-    const result = apply(adapter, afkTarget(), 296, [competitor()]);
-    cases.push({
-      name: 'observed competitor holds the combat handoff reserve',
-      ok: result.shoot.skipped === true
-        && result.shoot.reason === 'afk-shoot-stamina-reserve'
-        && result.shoot.staminaPlan.combatHandoffReachable === true
-        && result.shoot.staminaPlan.combatHandoffReserveMs === 3300
-        && result.shoot.staminaPlan.combatHandoffReserveApplied === true
-        && result.shoot.staminaPlan.requiredStaminaMs === 3300
-        && !commands.some(entry => entry.startsWith('shoot ')),
-      reason: result.shoot.reason,
-      requiredStaminaMs: result.shoot.staminaPlan.requiredStaminaMs
-    });
-  }
-
-  // The reserve is a floor, not a permanent block: once the pool has recovered
-  // past the successor's entry requirement, AFK fire resumes normally.
-  {
-    const { adapter, commands } = makeAdapter();
-    const result = apply(adapter, afkTarget(), 3300, [competitor()]);
-    cases.push({
-      name: 'recovered stamina resumes AFK fire above the handoff reserve',
-      ok: result.shoot.ok === true
-        && result.shoot.staminaPlan.combatHandoffReachable === true
-        && result.shoot.staminaPlan.requiredStaminaMs === 3300
-        && commands.some(entry => entry.startsWith('shoot ')),
-      requiredStaminaMs: result.shoot.staminaPlan.requiredStaminaMs
-    });
-  }
-
-  // Travel budget still wins when it is the larger of the two floors, so the
-  // approach reserve behavior is unchanged.
-  {
-    const { adapter } = makeAdapter();
-    // Keep self strictly closer so UC-005's competition position gate stays open
-    // and the stamina plan is the decision under test.
-    const result = apply(adapter, afkTarget({ x: 9000 }), 9000, [competitor({ x: 9000, y: 12000 })]);
-    cases.push({
-      name: 'larger approach travel reserve still governs',
-      ok: result.shoot.staminaPlan.requiredStaminaMs === 5000
-        && result.shoot.staminaPlan.movementReserveCapped === true
-        && result.shoot.staminaPlan.combatHandoffReserveApplied === false,
-      requiredStaminaMs: result.shoot.staminaPlan.requiredStaminaMs
-    });
-  }
-
-  // A passive bystander is not a handoff signal: only an observed active
-  // competitor or an external bullet owner can pull this into combat.
-  {
-    const { adapter, commands } = makeAdapter();
-    const result = apply(adapter, afkTarget(), 296, [competitor({
-      userId: 11,
-      user_id: 11,
-      entity_id: 11,
-      current_join_mode: 'Passive',
-      vx: 0,
-      vy: 0,
-      firing: false,
-      active: false
-    })]);
-    cases.push({
-      name: 'passive bystander does not raise the AFK floor',
-      ok: result.shoot.ok === true
-        && result.shoot.staminaPlan.combatHandoffReachable === false
-        && result.shoot.staminaPlan.requiredStaminaMs === 0
-        && commands.some(entry => entry.startsWith('shoot ')),
-      reachable: result.shoot.staminaPlan.combatHandoffReachable
-    });
-  }
-
-  // An external bullet owner near us is the second generalized handoff signal,
-  // independent of the competition observer.
-  {
-    const { adapter } = makeAdapter();
-    const self = {
-      entity_id: 1,
-      user_id: 7,
-      x: 0,
-      y: 0,
-      hp: 100,
-      stamina5s: 296,
-      stamina_5s_remaining_milli: 296
-    };
-    const target = afkTarget();
-    const result = adapter.applyDecision({
-      realtime: {
-        tick: 10,
-        receivedAtMs: 1000,
-        self,
-        entities: [self, target],
-        bullets: [{
-          owner_id: 21,
-          owner_entity_id: 21,
-          x: 400,
-          y: 0,
-          start_x: 400,
-          start_y: 0,
-          target_x: 0,
-          target_y: 0,
-          created_tick: 1
-        }]
-      },
-      command: { shooting: { pendingShots: [], expiredShots: [] } }
-    }, {
-      kind: 'profit-candidate',
-      band: 'profit',
-      input: { self: { x: 0, y: 0, stamina5s: 296 } },
-      action: { kind: 'attack', band: 'profit', target }
-    });
-    cases.push({
-      name: 'external bullet owner raises the AFK floor',
-      ok: result.shoot.staminaPlan.combatHandoffReachable === true
-        && result.shoot.staminaPlan.requiredStaminaMs === 3300,
-      reachable: result.shoot.staminaPlan.combatHandoffReachable,
-      requiredStaminaMs: result.shoot.staminaPlan.requiredStaminaMs
-    });
-  }
-
-  const failed = cases.filter(entry => entry.ok !== true);
-  for (const entry of failed) {
-    assert.fail(`${entry.name}: ${JSON.stringify(entry)}`);
-  }
-  return { ok: failed.length === 0, cases };
+  const { adapter } = makeAdapter();
+  const distant = apply(adapter, afkTarget({ x: 9000 }), 500,
+    [competitor({ x: 9000, y: 12000 })]);
+  assert.strictEqual(distant.shoot.staminaPlan.requiredStaminaMs, 500);
+  adapter.sealTransport();
+  return { ok: true, cases: [...cases, { distance: 9000 }] };
 }
 
 if (require.main === module) {

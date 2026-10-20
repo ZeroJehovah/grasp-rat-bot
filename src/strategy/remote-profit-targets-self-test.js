@@ -129,10 +129,9 @@ function assertInvulnerableApproachWindow() {
     remainingMs: 7000,
     stamina5sRemainingMilli: 2000
   });
-  assert.strictEqual(staminaHold.phase, 'wait');
-  assert.strictEqual(staminaHold.riskBudget.ok, false);
-  assert(staminaHold.riskBudget.reasons.includes('stamina-5s-below-approach-reserve'));
-  assert.strictEqual(staminaHold.reason, 'invulnerable-close-risk-budget-hold');
+  assert.strictEqual(staminaHold.phase, 'closing');
+  assert.strictEqual(staminaHold.riskBudget.ok, true);
+  assert.deepStrictEqual(staminaHold.riskBudget.reasons, []);
 
   const hpHold = invulnerableApproachWindowCore({
     self, target: stationary, invulnerable: true, targetActive: true, distanceCm: 11000, remainingMs: 7000, selfHp: 50

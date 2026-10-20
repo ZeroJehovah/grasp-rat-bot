@@ -2970,8 +2970,7 @@ function replayBurstCadence(rows) {
     let blockedReason = '';
     const self = detail.self || {};
     const stamina5s = Number(self.stamina5s ?? self.stamina_5s_remaining_milli);
-    if (Number.isFinite(stamina5s) && stamina5s < 3400) blockedReason = 'stamina-insufficient';
-    else if (!(Number(self.vx || 0) || Number(self.vy || 0))) blockedReason = 'self-stationary';
+    if (!(Number(self.vx || 0) || Number(self.vy || 0))) blockedReason = 'self-stationary';
     else if (detail.movement?.preDodgeBlockedReason === 'old-bullet-threat') blockedReason = 'old-bullet-threat';
     else {
       const latestSafeCommandTick = lastCreatedTick + intervalMedianTicks + flightTicks - commandDelayP90Ticks - 3;
@@ -4048,8 +4047,7 @@ function replayContactEntryDodge(rows, options = {}) {
     const risk = contactEntryRiskCore(self, { ...target, distance, easyKillThreatExempt: false }, previous, {
       armed,
       attackRange: 14500,
-      guardBufferCm: 1000,
-      minimumStamina5s: 3400
+      guardBufferCm: 1000
     });
     if (distance > risk.guardRange) armed = true;
     if (!risk.eligible) {
@@ -5602,7 +5600,6 @@ function replayAfkCombatHandoff(options) {
       const self = row.detail?.combat?.self || row.detail?.input?.self || null;
       const readiness = checkProactiveActiveCombatGates(self, combatTarget, {
         selfStamina5s: self?.stamina5s ?? self?.stamina5sRemainingMilli ?? self?.stamina_5s_remaining_milli,
-        proactiveActiveCombatMinimumStamina5s: 5600,
         opportunityStaminaBudget: 200000
       });
       takeover = {
@@ -7486,8 +7483,6 @@ function replayDistanceAwareDodge(rows, options = {}) {
         ?? detail.behavior?.metrics?.burstSampleCount
         ?? 0
     ));
-    const lowStamina = optionalNumberOrNull(detail.self?.stamina5s) !== null
-      && Number(detail.self.stamina5s) < 3400;
     const resolved = resolveDistanceAwareDodgeCore({
       nowMs: atMs,
       targetId: String(detail.target?.userId ?? ''),
@@ -7509,7 +7504,6 @@ function replayDistanceAwareDodge(rows, options = {}) {
       reactionSlack,
       activeOpponent: detail.target?.active === true,
       recentDirectedThreat: bullets.length > 0 || shotSampleCount >= 2,
-      lowStamina,
       exitActive: Boolean(detail.exit),
       boundaryRisk: false,
       collisionRisk: false,
@@ -8452,7 +8446,7 @@ function runDistanceAwareReplaySelfTest() {
     passed: first.applied === true
       && first.closeSubmode === 'stochastic'
       && second.randomChoice?.unit === first.randomChoice?.unit
-      && lowStamina.preDodgeReason === 'stamina-insufficient'
+      && lowStamina.preDodgeReason !== 'stamina-insufficient'
       && leave.preDodgeReason === 'leave-active'
       && staleDodge.preDodgeReason === 'stale-realtime-state'
       && receding.preDodgeReason === 'receding-without-threat-evidence'

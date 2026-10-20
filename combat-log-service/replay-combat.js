@@ -18,6 +18,7 @@ const { recoveryEngagedThreatPolicy } = require('../src/strategy/recovery-contac
 const { rewardFinishBackAwaySuppressionPolicy } = require('../src/strategy/combat-movement');
 const { COMBAT_CONSTANTS } = require('../src/strategy/combat-constants');
 const { runCombatOpportunityReplay, runCombatOpportunityReplaySelfTest } = require('./combat-opportunity-replay');
+const { runStaminaReserveCleanupReplay, runStaminaReserveReplaySelfTest } = require('./stamina-reserve-replay');
 
 const DEFAULTS = {
   hitRadiusCm: 90,
@@ -659,6 +660,7 @@ function normalizeBrowserlessCombatLiveEntry(entry, state = {}) {
   return {
     type: 'combat-frame',
     sourceType: 'combat-live',
+    reserveCleanupReplay: { tick: detail.tick, finalAction, aim, shooting, self, target },
     at,
     self,
     target,
@@ -846,7 +848,9 @@ function loadFrames(options) {
         detail: {
           type: String(detail.type || ''),
           targetId: String(detail.targetId ?? ''),
-          outcome: String(detail.outcome || '')
+          outcome: String(detail.outcome || ''),
+          observedTick: numberOrNull(detail.observedTick),
+          shootingTick: numberOrNull(detail.shootingTick)
         }
       });
     }
@@ -3200,6 +3204,7 @@ function replay(options) {
     selfHp: [frames[0].selfHp, frames[frames.length - 1].selfHp],
     targetHpValues,
     dualTargetFire,
+    staminaReserveCleanup: runStaminaReserveCleanupReplay(frames, loaded.sourceEvents),
     invulnerableAvoidance,
     secondaryOwnDamageRetention,
     combatOpportunity: runCombatOpportunityReplay(frames, shots, loaded.sourceEvents, options, {
@@ -3314,6 +3319,7 @@ function printReport(result) {
 }
 
 function selfTest() {
+  runStaminaReserveReplaySelfTest();
   runCombatOpportunityReplaySelfTest();
   const loader = runLoadFramesSelfTest();
   if (!loader.ok) throw new Error(loader.error || 'browserless replay loader self-test failed');

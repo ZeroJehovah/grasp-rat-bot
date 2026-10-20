@@ -2322,8 +2322,7 @@ function estimateAim(self, target, options = {}) {
   let routeCoverage = null;
   const targetSpeed = Math.max(1, Math.hypot(vx, vy));
   const stamina5s = numberOrNull(self.stamina_5s_remaining_milli ?? self.stamina5sRemainingMilli);
-  const dodgeReserve = Math.max(1200, Number(options.combatShootDodgeReserveMs || COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS));
-  const coverageAffordable = stamina5s === null || stamina5s >= dodgeReserve + 1500;
+  const coverageAffordable = stamina5s === null || stamina5s >= Number(options.combatShotStaminaCostMs ?? 500);
   const controlStyle = behavior?.dimensions?.controlStyle?.state || 'unknown';
   const controlStyleConfidence = Number(behavior?.dimensions?.controlStyle?.confidence || 0);
   const highEntropyCoverage = (controlStyle === 'human-like'
@@ -2862,7 +2861,7 @@ function estimateAim(self, target, options = {}) {
   }, options);
   // A long no-damage window with no valid trajectory proof is evidence that
   // the predictive point is stale for this realtime target. Reacquire the
-  // current native point while keeping fire cadence and all safety reserves.
+  // current native point while keeping fire cadence and safety gates.
   // This does not apply to snapshot/navigation targets or a proven route.
   const fallbackPrecisionEligible = Boolean(
     moving
@@ -3376,27 +3375,6 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   const reactionRange = closePressureState?.range || combatPressureTargetRangeCore(options);
   const closePressureRange = closePressureState ? reactionRange : null;
   const closePressureActive = Boolean(closePressureState?.active !== false && closePressureRange);
-  const combatHardReserveMs = Math.max(
-    0,
-    Number(options.combatShootHardReserveMs ?? COMBAT_CONSTANTS.SHOOT_HARD_RESERVE_MS)
-  );
-  const normalDodgeReserveMs = Math.max(
-    combatHardReserveMs,
-    Number(options.combatShootDodgeReserveMs ?? COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS)
-  );
-  const pressureDodgeReserveMs = Math.max(
-    combatHardReserveMs,
-    Number(options.combatClosePressureReserveMs
-      ?? options.combatShootPressureDodgeReserveMs
-      ?? normalDodgeReserveMs)
-  );
-  const activeDodgeReserveMs = closePressureActive && closePressureState?.pressureAttackCommitted
-    ? pressureDodgeReserveMs
-    : normalDodgeReserveMs;
-  const preDodgeStaminaCostMs = Math.max(
-    0,
-    Number(options.combatPreDodgeStaminaCostMs ?? 1000)
-  );
   const targetPressure = (bullets || []).some(bullet => Number(bullet.ownerId) === Number(target.user_id));
   const attackRange = Math.max(0, Number(options.combatAttackRange || options.attackRange || COMBAT_CONSTANTS.ATTACK_RANGE));
   const outOfRange = Number(target.distance || Infinity) > attackRange;
@@ -3511,7 +3489,6 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     distanceCm: target.distance,
     remainingMs: target.invulnerableRemainingMs ?? target.invulnerableProtectionRemainingMs,
     selfHp: hpValue(self),
-    stamina5sRemainingMilli: self?.stamina_5s_remaining_milli ?? self?.stamina5sRemainingMilli,
     unavoidableCurrentShot: dodge?.unavoidableCurrentShot === true || recentSelfDamage,
     // The 50ms combat cadence sees every jink, so this layer keeps the smoothed
     // estimate, close confirmation, and approach latch across frames instead of
@@ -3605,7 +3582,6 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   let preDodgeBlockedReason = '';
   if (shootingPhaseState !== 'preparing') preDodgeBlockedReason = 'shooting-phase-not-preparing';
   else if (!lowVariationCadence) preDodgeBlockedReason = 'cycle-unstable';
-  else if (!independentCombatMovement && selfStamina5s !== null && selfStamina5s < activeDodgeReserveMs + preDodgeStaminaCostMs) preDodgeBlockedReason = 'stamina-insufficient';
   else if (!moving) preDodgeBlockedReason = 'self-stationary';
   else if (urgentOldBulletThreat) preDodgeBlockedReason = 'old-bullet-threat';
   else if (latestSafeCommandTick !== null && currentTick !== null && currentTick > latestSafeCommandTick) preDodgeBlockedReason = 'flight-time-insufficient';
@@ -3615,7 +3591,6 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     !preDodgeBlockedReason
       && nextShotInMs !== null
   );
-  const preDodgeStaminaCost = preDodgeStaminaCostMs;
   const preDodgeDirectionThreat = directionThreatCore(dodge?.threatField || [], currentDirection);
   const ordinaryDodgeThreat = (dodge?.threatField || []).find(item =>
     Number(item?.dx) === Number(dodge?.dx) && Number(item?.dy) === Number(dodge?.dy)) || null;
@@ -3628,9 +3603,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     latestSafeCommandTick,
     currentTick,
     currentStamina5s: selfStamina5s,
-    projectedStamina5s: selfStamina5s === null ? null : Math.max(0, selfStamina5s - preDodgeStaminaCost),
-    staminaCost: preDodgeStaminaCost,
-    reserveMs: activeDodgeReserveMs,
+    projectedStamina5s: selfStamina5s === null ? null : selfStamina5s,
     direction: currentDirection,
     predictedMinimumCpaCm: numberOrNull(preDodgeDirectionThreat?.minCPA),
     predictedDirectHits: numberOrNull(preDodgeDirectionThreat?.directHits),
@@ -4220,8 +4193,6 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
             || opponentBehavior?.metrics?.realBulletPressure
             || burstSampleCount >= 2
         ),
-        lowStamina: !independentCombatMovement && selfStamina5s !== null
-          && selfStamina5s < activeDodgeReserveMs + preDodgeStaminaCostMs,
         exitActive: options.leaveActive === true,
         collisionRisk: options.collisionRisk === true,
         boundary: options.combatBoundary || options.boundary,
@@ -4690,7 +4661,6 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       phase: 'induce-hold',
       nextShotInMs: Math.round(nextShotInMs),
       shotIntervalCv,
-      reserveMs: activeDodgeReserveMs,
       predictedCreatedTick,
       latestSafeCommandTick,
       burstSampleCount,
@@ -4699,15 +4669,7 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
     } : null,
     preDodgeCandidate,
     preDodgeBlockedReason: preDodge ? '' : preDodgeBlockedReason,
-    combatStaminaBudget: {
-      movementIndependent: independentCombatMovement,
-      hardReserveMs: combatHardReserveMs,
-      normalDodgeReserveMs,
-      pressureDodgeReserveMs,
-      activeDodgeReserveMs,
-      preDodgeStaminaCostMs,
-      distanceAwareLowStaminaThresholdMs: independentCombatMovement ? 0 : activeDodgeReserveMs + preDodgeStaminaCostMs
-    },
+    combatStaminaBudget: { movementIndependent: true, staminaAuthority: 'actual-shot-only' },
     contactEntryGuard: options.contactEntryGuard || null,
     shootingPhaseSource: shootingPhase?.shootingPhaseSource || '',
     oldBulletPressure: Boolean((bullets || []).length)
@@ -5626,11 +5588,6 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
         && previousActionWasRecoveryCore(stateful?.lastDecisionAction)
     ),
     selfStamina5s,
-    proactiveActiveCombatMinimumStamina5s: Number(
-      options.combatProactiveActiveMinStamina5s
-        ?? options.combatOpponentProbeReserveMs
-        ?? 5600
-    ),
     whitelistCheck: target => Boolean(
       target?.whitelisted === true
         || configuredWhitelistCheck?.(target)
@@ -6572,7 +6529,8 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
         pendingDirection: latestPendingVelocity,
         threatField: movement?.dodge?.threatField || [],
         movementTiming,
-        previousState: stateful?.combatMovementStability || null,
+        previousState: stateful?.combatMovementStability
+          || (stateful?.preTargetMovementStability ? { ...stateful.preTargetMovementStability, targetId, engagementId } : null),
         hardGateChanged: Boolean(
           exitDecision
             || contactEntryOnly
@@ -6722,27 +6680,6 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     (Array.isArray(movement?.modifiers) && movement.modifiers.includes('dodge'))
       && (Number(movement?.dx || 0) || Number(movement?.dy || 0))
   );
-  const dodgeActionCostMs = movementDodgeApplied
-    ? Math.max(0, Number(options.combatPreDodgeStaminaCostMs ?? 1000))
-    : 0;
-  const runtimeHardReserveMs = Math.max(
-    0,
-    Number(options.combatShootHardReserveMs ?? COMBAT_CONSTANTS.SHOOT_HARD_RESERVE_MS)
-  );
-  const runtimeDodgeReserveMs = Math.max(
-    runtimeHardReserveMs,
-    Number(options.combatShootDodgeReserveMs ?? COMBAT_CONSTANTS.SHOOT_DODGE_RESERVE_MS)
-  );
-  const runtimePressureReserveMs = Math.max(
-    runtimeHardReserveMs,
-    Number(options.combatShootPressureDodgeReserveMs ?? runtimeDodgeReserveMs)
-  );
-  const fireDodgeReserveMs = closePressureActive && pressureAttackActive
-    ? Math.max(
-        runtimeHardReserveMs,
-        Number(options.combatClosePressureReserveMs ?? runtimePressureReserveMs)
-      )
-    : runtimeDodgeReserveMs;
   const combatShootingBudget = combatStaminaWindowCore(
     state?.command?.shooting?.staminaDispatches || [],
     Number(options.nowMs || Date.now()),
@@ -6753,16 +6690,8 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     closePressure: closePressureActive,
     closePressureAttack: pressureAttackActive,
     closePressureCadenceMs: options.combatClosePressureShootEveryMs ?? 500,
-    closePressureReserveMs: options.combatClosePressureReserveMs ?? 2600,
-    hardReserveMs: runtimeHardReserveMs,
-    dodgeReserveMs: fireDodgeReserveMs,
-    pressureReserveMs: runtimePressureReserveMs,
-    opponentProbeReserveMs: options.combatOpponentProbeReserveMs ?? COMBAT_CONSTANTS.OPPONENT_PROBE_RESERVE_MS,
     opponentProbeEveryMs: options.combatOpponentProbeEveryMs ?? COMBAT_CONSTANTS.OPPONENT_PROBE_EVERY_MS,
-    finishReserveMs: options.combatShootFinishLowThreatDodgeReserveMs ?? COMBAT_CONSTANTS.FINISH_LOW_THREAT_RESERVE_MS,
-    passiveReserveMs: options.combatShootPassiveRunnerDodgeReserveMs ?? COMBAT_CONSTANTS.PASSIVE_RUNNER_DODGE_RESERVE_MS,
     shotCostMs: options.combatShotStaminaCostMs ?? 500,
-    dodgeActionCostMs,
     passiveRunner: Boolean(movement.passiveRunner?.active),
     finishLowThreat: Boolean(
       target
@@ -6909,7 +6838,6 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
         && !baseHighEntropyFireGate.finishProtected
     ),
     finishProtected: baseHighEntropyFireGate.finishProtected,
-    resolvedReserveMs: fireState.reserve,
     stamina5s: fireState.stamina5s
   }, {
     minimumMarginalCoverage: 0.02,
@@ -7027,14 +6955,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     },
     contactEntryOnly: false
   });
-  // The primary's pressure reserve is resolved from its own realtime bullet
-  // ownership, exactly as the current combat target's is at the fireState call
-  // above. A hardcoded `false` here asserted that a profit primary can never
-  // apply pressure, so the primary carried the ordinary dodge reserve while a
-  // defensive secondary carried the lower pressure reserve. With both under
-  // fire that asymmetry left a stamina band that authorized fire only at the
-  // secondary. The reserve stays a hard gate either way; only its value now
-  // follows observed pressure.
+  // Primary and secondary fire share tactical classification and wire accounting.
   const primaryTargetPressureFire = bullets.some(
     bullet => Number(bullet.ownerId) === Number(primaryFireTarget?.user_id ?? primaryFireTarget?.userId)
   );
@@ -7042,15 +6963,8 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     targetPressureFire: primaryTargetPressureFire,
     closePressure: false,
     closePressureAttack: false,
-    hardReserveMs: runtimeHardReserveMs,
-    dodgeReserveMs: runtimeDodgeReserveMs,
-    pressureReserveMs: runtimePressureReserveMs,
-    opponentProbeReserveMs: options.combatOpponentProbeReserveMs ?? COMBAT_CONSTANTS.OPPONENT_PROBE_RESERVE_MS,
     opponentProbeEveryMs: options.combatOpponentProbeEveryMs ?? COMBAT_CONSTANTS.OPPONENT_PROBE_EVERY_MS,
-    finishReserveMs: options.combatShootFinishLowThreatDodgeReserveMs ?? COMBAT_CONSTANTS.FINISH_LOW_THREAT_RESERVE_MS,
-    passiveReserveMs: options.combatShootPassiveRunnerDodgeReserveMs ?? COMBAT_CONSTANTS.PASSIVE_RUNNER_DODGE_RESERVE_MS,
     shotCostMs: options.combatShotStaminaCostMs ?? 500,
-    dodgeActionCostMs,
     passiveRunner: false,
     finishLowThreat: false
   }) : { state: 'disabled', cadenceMs: Infinity, reserve: null, reason: 'no-primary-target' };
@@ -7102,8 +7016,8 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     ? null
     : Math.max(behaviorBoundedCadenceMs, Math.max(0, Number(highEntropyFireGate.minimumCadenceMs || 0)));
   // Once realtime combat is established, behavioral and statistical fire
-  // policies stay diagnostic-only. Only physical target/aim/range checks and
-  // the dodge-stamina reserve may block or slow an otherwise valid shot.
+  // policies stay diagnostic-only. Target, aim, range and physical dispatch
+  // affordability remain hard gates. Safe movement keeps independent ownership.
   const behaviorSuppressFire = Boolean(!closePressureActive && behaviorPolicy?.suppressFire);
   const advisoryFireSuppressionReasons = [
     behaviorSuppressFire ? `response-policy:${String(behaviorPolicy?.reason || behaviorPolicy?.name || 'suppressed')}` : '',
@@ -7228,9 +7142,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     stamina5s: hpValue(self) === null
       ? null
       : (self?.stamina_5s_remaining_milli ?? self?.stamina5sRemainingMilli ?? self?.stamina5s),
-    hardReserveMs: runtimeHardReserveMs,
     shotCostMs: options.combatShotStaminaCostMs ?? 500,
-    dodgeActionCostMs
   }, options);
   if (stateful?.combatTarget) stateful.combatTarget.primaryFinishRace = primaryFinishRace;
   const dualTargetArbitration = dualTargetFireArbitration({
@@ -7256,7 +7168,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     : fireAuthorization.wouldShoot;
   let resolvedFinalFireBlocker = primarySelected
     ? (primaryFinishRace.eligible === true && !primaryAuthorized
-      ? 'primary-finish-race-soft-reserve-override'
+      ? 'primary-finish-race-window'
       : primaryFinalFireBlocker)
     : fireAuthorization.finalFireBlocker;
   let resolvedFireAuthorizationClass = primarySelected
@@ -7593,13 +7505,10 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       state: selectedFireState.state,
       reason: selectedFireState.reason,
       cadenceMs: Number.isFinite(Number(selectedFireState.cadenceMs)) ? Number(selectedFireState.cadenceMs) : null,
-      reserve: numberOrNull(selectedFireState.reserve),
+      staminaAuthority: 'actual-shot-only',
       stamina5s: selectedFireState.stamina5s === null ? null : numberOrNull(selectedFireState.stamina5s),
       requiredStaminaMs: numberOrNull(selectedFireState.requiredStaminaMs),
-      hardReserveMs: numberOrNull(selectedFireState.hardReserve),
-      dodgeReserveMs: numberOrNull(selectedFireState.dodgeReserve),
       shotCostMs: numberOrNull(selectedFireState.shotCostMs),
-      dodgeActionCostMs: numberOrNull(selectedFireState.dodgeActionCostMs),
       movementDodgeApplied,
       staminaWindow: usesCombatStaminaWindow(selectedFireTarget, fireTargetRole)
         ? combatShootingBudget : null,

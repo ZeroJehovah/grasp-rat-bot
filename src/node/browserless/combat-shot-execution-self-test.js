@@ -744,13 +744,13 @@ function runCombatShotExecutionSelfTest() {
       shooting: {
         wouldShoot: false,
         commandSuppressed: true,
-        reason: 'dodge-reserve',
-        finalFireBlocker: 'dodge-reserve'
+        reason: 'target-out-of-range',
+        finalFireBlocker: 'target-out-of-range'
       }
     }
   ));
-  check('Dodge reserve remains an explicit hard fire-state boundary', reserveBlocked.shoot?.skipped === true
-    && reserveBlocked.shoot?.reason === 'dodge-reserve'
+  check('target range remains an explicit hard fire-state boundary', reserveBlocked.shoot?.skipped === true
+    && reserveBlocked.shoot?.reason === 'target-out-of-range'
     && wireDispatches === modes.length + 3);
 
   const safetyStop = adapter.sealShooting('safety-trigger:test-exit', {

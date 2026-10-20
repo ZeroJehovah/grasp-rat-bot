@@ -124,7 +124,6 @@ const DEFAULTS = {
   combatFrameJitterMs: 50,
   combatClosePressureHysteresisCm: 300,
   combatClosePressureShootEveryMs: 500,
-  combatClosePressureReserveMs: 2600,
   combatClosePressureMinSelfHp: 60,
   combatClosePressureMaxHpGap: 20,
   primaryFinishRaceWindowMs: 1800,
@@ -186,8 +185,6 @@ const DEFAULTS = {
   invulnerableProfitAxisSpeedCmPerSec: 950,
   invulnerableProfitDiagonalSpeedCmPerSec: 940,
   invulnerableProfitRouteSegmentOverheadMs: 120,
-  afkAttackApproachReserveMaxMs: 5000,
-  afkAttackCombatHandoffReserveMs: 3300,
   afkAttackFireMaxRangeCm: 14500,
   afkAttackDynamicFireEnabled: true,
   afkAttackOwnDamageRateHpPerSec: 3,
@@ -390,7 +387,6 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     combatFrameJitterMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_FRAME_JITTER_MS, DEFAULTS.combatFrameJitterMs),
     combatClosePressureHysteresisCm: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_HYSTERESIS_CM, DEFAULTS.combatClosePressureHysteresisCm),
     combatClosePressureShootEveryMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_SHOOT_EVERY_MS, DEFAULTS.combatClosePressureShootEveryMs),
-    combatClosePressureReserveMs: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_RESERVE_MS, DEFAULTS.combatClosePressureReserveMs),
     combatClosePressureMinSelfHp: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_MIN_SELF_HP, DEFAULTS.combatClosePressureMinSelfHp),
     combatClosePressureMaxHpGap: numberEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_PRESSURE_MAX_HP_GAP, DEFAULTS.combatClosePressureMaxHpGap),
     primaryFinishRaceWindowMs: numberEnv(
@@ -617,8 +613,6 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     invulnerableProfitAxisSpeedCmPerSec: numberEnv(env.GRASP_RAT_BROWSERLESS_INVULNERABLE_PROFIT_AXIS_SPEED_CM_PER_SEC, DEFAULTS.invulnerableProfitAxisSpeedCmPerSec),
     invulnerableProfitDiagonalSpeedCmPerSec: numberEnv(env.GRASP_RAT_BROWSERLESS_INVULNERABLE_PROFIT_DIAGONAL_SPEED_CM_PER_SEC, DEFAULTS.invulnerableProfitDiagonalSpeedCmPerSec),
     invulnerableProfitRouteSegmentOverheadMs: numberEnv(env.GRASP_RAT_BROWSERLESS_INVULNERABLE_PROFIT_ROUTE_SEGMENT_OVERHEAD_MS, DEFAULTS.invulnerableProfitRouteSegmentOverheadMs),
-    afkAttackApproachReserveMaxMs: numberEnv(env.GRASP_RAT_BROWSERLESS_AFK_ATTACK_APPROACH_RESERVE_MAX_MS, DEFAULTS.afkAttackApproachReserveMaxMs),
-    afkAttackCombatHandoffReserveMs: numberEnv(env.GRASP_RAT_BROWSERLESS_AFK_ATTACK_COMBAT_HANDOFF_RESERVE_MS, DEFAULTS.afkAttackCombatHandoffReserveMs),
     afkAttackFireMaxRangeCm: numberEnv(env.GRASP_RAT_BROWSERLESS_AFK_ATTACK_FIRE_MAX_RANGE_CM, DEFAULTS.afkAttackFireMaxRangeCm),
     afkAttackDynamicFireEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_AFK_ATTACK_DYNAMIC_FIRE_ENABLED, DEFAULTS.afkAttackDynamicFireEnabled),
     afkAttackOwnDamageRateHpPerSec: numberEnv(env.GRASP_RAT_BROWSERLESS_AFK_ATTACK_OWN_DAMAGE_RATE_HP_PER_SEC, DEFAULTS.afkAttackOwnDamageRateHpPerSec),
@@ -860,7 +854,8 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     } else if (arg === '--combat-close-pressure-shoot-every-ms') {
       config.combatClosePressureShootEveryMs = numberEnv(argv[++i], config.combatClosePressureShootEveryMs);
     } else if (arg === '--combat-close-pressure-reserve-ms') {
-      config.combatClosePressureReserveMs = numberEnv(argv[++i], config.combatClosePressureReserveMs);
+      // Retired CLI accepted for compatibility; no runtime authority.
+      i += 1;
     } else if (arg === '--combat-close-pressure-min-self-hp') {
       config.combatClosePressureMinSelfHp = numberEnv(argv[++i], config.combatClosePressureMinSelfHp);
     } else if (arg === '--combat-close-pressure-max-hp-gap') {
@@ -1092,7 +1087,7 @@ function usage() {
     '  --combat-frame-jitter-ms <ms>  Realtime frame jitter included in pressure range budget. Default: 50',
     '  --combat-close-pressure-hysteresis-cm <cm>  Distance hysteresis around pressure range. Default: 300',
     '  --combat-close-pressure-shoot-every-ms <ms>  Close-pressure cadence forecast. Default: 500',
-    '  --combat-close-pressure-reserve-ms <ms>  Close-pressure stamina reserve. Default: 2600',
+    '  --combat-close-pressure-reserve-ms <ms>  Retired compatibility option; ignored',
     '  --combat-close-pressure-min-self-hp <hp>  Minimum HP for exchange continuation. Default: 60',
     '  --combat-close-pressure-max-hp-gap <hp>  Maximum target HP lead for continuation. Default: 20',
     '  --[no-]combat-loot-race-positioning  Enable low-HP high-Drop competitor positioning. Default: enabled',

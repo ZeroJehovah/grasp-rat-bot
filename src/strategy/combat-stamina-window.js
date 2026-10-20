@@ -65,8 +65,32 @@ function combatStaminaWindowCore(dispatches = [], nowMs = Date.now(), nextCost =
   };
 }
 
+// Only authoritative observed remaining stamina and already sent costs count.
+// Snapshot metadata and hypothetical later movement cannot veto native fire.
+function actualShotAffordabilityCore(self, dispatches = [], observedAtMs = null, nextCost = 500) {
+  const cost = shotStaminaCostMilli(nextCost);
+  const raw = self?.stamina_5s_remaining_milli ?? self?.stamina5sRemainingMilli ?? self?.stamina5s;
+  const known = raw !== undefined && raw !== null && raw !== ''
+    && Number.isFinite(Number(raw)) && self?.authority !== 'snapshot'
+    && self?.staminaMetadataAuthority !== 'snapshot';
+  let unobservedShotCostMilli = 0;
+  if (known && Number.isFinite(observedAtMs)) {
+    for (const dispatch of dispatches) {
+      if (Number(dispatch.requestedAtMs) >= observedAtMs) {
+        unobservedShotCostMilli += shotStaminaCostMilli(dispatch.shotCostMilli);
+      }
+    }
+  }
+  const remainingMilli = known ? Math.max(0, Number(raw) - unobservedShotCostMilli) : null;
+  return { allowed: remainingMilli === null || remainingMilli >= cost,
+    reason: remainingMilli !== null && remainingMilli < cost ? 'actual-stamina-unaffordable' : 'actual-shot-payable',
+    remainingMilli, unobservedShotCostMilli, shotCostMilli: cost,
+    authority: known ? 'realtime-physical-ledger' : 'stamina-unknown' };
+}
+
 module.exports = {
   COMBAT_FIRE_WINDOW_MS,
+  actualShotAffordabilityCore,
   shotStaminaCostMilli,
   usesCombatStaminaWindow,
   combatStaminaWindowCore

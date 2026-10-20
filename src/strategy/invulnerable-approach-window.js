@@ -36,7 +36,6 @@ const DEFAULT_INVULNERABLE_APPROACH_WINDOW = Object.freeze({
   closingSpeedFloorCmPerSec: 200,
   closeMarginMs: 1500,
   serverTickMs: 50,
-  riskMinStamina5sMilli: 3000,
   riskMinSelfHp: 60,
   riskMaxUnavoidableShotFrames: 2,
   radialSmoothingMs: 2000,
@@ -142,13 +141,10 @@ function resolvePreviousState(input, options = {}) {
 
 function resolveRiskBudget(input, options = {}) {
   const reasons = [];
-  const minStamina = configNumber(options, 'riskMinStamina5sMilli');
   const minSelfHp = configNumber(options, 'riskMinSelfHp');
   const maxUnavoidable = configNumber(options, 'riskMaxUnavoidableShotFrames');
-  const stamina = finiteNumber(input?.stamina5sRemainingMilli);
   const selfHp = finiteNumber(input?.selfHp);
   const unavoidableFrames = Math.max(0, finiteNumber(input?.unavoidableShotFrames) ?? 0);
-  if (stamina !== null && stamina < minStamina) reasons.push('stamina-5s-below-approach-reserve');
   if (selfHp !== null && selfHp < minSelfHp) reasons.push('self-hp-below-approach-floor');
   if (input?.unavoidableCurrentShot === true) reasons.push('unavoidable-current-shot');
   else if (unavoidableFrames > maxUnavoidable) reasons.push('recent-unavoidable-shots');

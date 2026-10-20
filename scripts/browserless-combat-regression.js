@@ -158,9 +158,9 @@ function run() {
       dodgeActionCostMs: 1000
     }
   );
-  assert.strictEqual(dodgePriorityFire.state, FIRE_STATE.PAUSED, 'shot must yield to the same-frame dodge reserve');
-  assert.strictEqual(dodgePriorityFire.reason, 'close-pressure-movement-reserve');
-  assert.strictEqual(dodgePriorityFire.requiredStaminaMs, 4100);
+  assert.strictEqual(dodgePriorityFire.state, FIRE_STATE.PRESSURE, 'Dodge movement must not block a payable shot');
+  assert.strictEqual(dodgePriorityFire.reason, 'close-pressure-full-attack');
+  assert.strictEqual(dodgePriorityFire.requiredStaminaMs, 500);
 
   return {
     accepted: true,

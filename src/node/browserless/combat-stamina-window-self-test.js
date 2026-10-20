@@ -92,14 +92,13 @@ function runCombatStaminaWindowSelfTest() {
   assert.strictEqual(usesCombatStaminaWindow({ active: false }, 'primary'), false);
   assert.strictEqual(usesCombatStaminaWindow({ active: false }, 'secondary'), true);
 
-  // The legacy window cannot override independent hard reserve or Dodge
-  // reserve classification.
+  // Old non-zero options cannot veto tactical fire authorization.
   const hardBlocked = determineCombatFireState({ stamina5s: 1 }, target, {
     hardReserveMs: 9999,
     dodgeActionCostMs: 9999
   });
-  assert.strictEqual(hardBlocked.state, 'disabled');
-  assert.strictEqual(hardBlocked.reason, 'below-hard-reserve');
+  assert.strictEqual(hardBlocked.state, 'normal');
+  assert.strictEqual(hardBlocked.reason, 'normal-fire');
   const normal = determineCombatFireState({ stamina5s: 10000 }, target, {
     hardReserveMs: 1000,
     dodgeReserveMs: 2400,
