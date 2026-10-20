@@ -1,6 +1,7 @@
 'use strict';
 
 const { COMBAT_CONSTANTS } = require('./combat-constants');
+const { DEFAULT_SECONDARY_CLOSE_DISTANCE_CM } = require('./dual-target-policy');
 const {
   incomingBulletHasCollisionRiskCore,
   incomingBulletReachabilityCore
@@ -360,9 +361,8 @@ function combatTargetAdmissionCore(entity, context = {}) {
   const lowHp = selfHp !== null && selfHp <= lowHpThreshold;
   const mediumHp = selfHp !== null && selfHp > lowHpThreshold && selfHp <= healthySecondaryMaxHp;
   const realtimeActive = isActiveCombatMode(entity);
-  // Distance-only defensive admission is for an actually active ordinary
-  // player. Passive/AFK ordinary players remain profit/navigation candidates;
-  // current attack evidence below can still establish a defensive secondary.
+  // Ordinary distance-only admission requires Active state. The narrow
+  // same-day injury exception below also admits a quiet player inside 20m.
   const ordinaryProximity = Boolean(
     !whitelisted
       && realtimeActive
@@ -376,7 +376,22 @@ function combatTargetAdmissionCore(entity, context = {}) {
       && (dynamicPolicy?.proactiveCombatEligible === true
         || (lowHp && dynamicPolicy?.lowHpSafetyExit === true))
   );
-  const proximityEvidence = Boolean(ordinaryProximity || dynamicProximity);
+  const dailyDamageCloseDistanceCm = Math.max(1, Number(
+    context.secondaryTargetCloseDistanceCm ?? DEFAULT_SECONDARY_CLOSE_DISTANCE_CM
+  ));
+  const dailyDamageCloseEvidence = Boolean(
+    entity.dailyDamageActor === true
+      && (mediumHp || lowHp)
+      && (!whitelisted || dynamicProximity)
+      && !creatorProtected
+      && !legacyWhitelistProtected
+      && distance !== null
+      && distance >= 0
+      && distance <= Math.min(attackRange, dailyDamageCloseDistanceCm)
+      // At low HP this is exit evidence only, including an invulnerable opponent.
+      && (lowHp || !isInvulnerableEntity(entity))
+  );
+  const proximityEvidence = Boolean(ordinaryProximity || dynamicProximity || dailyDamageCloseEvidence);
   const secondaryEligible = Boolean(!profitEligible && (attackEvidence || proximityEvidence));
   const lowHpSecondaryExit = Boolean(lowHp && secondaryEligible);
   const eligible = Boolean(profitEligible || secondaryEligible);
@@ -388,7 +403,8 @@ function combatTargetAdmissionCore(entity, context = {}) {
           ? 'low-hp-secondary-exit'
           : (attackEvidence
               ? 'secondary-attack-evidence'
-              : (proximityEvidence ? 'secondary-proximity-evidence' : 'non-primary-without-defensive-evidence'))),
+              : (dailyDamageCloseEvidence ? 'secondary-daily-damage-close'
+                  : (proximityEvidence ? 'secondary-proximity-evidence' : 'non-primary-without-defensive-evidence')))),
     entityId,
     primaryTargetId,
     missionPrimaryTargetId,
@@ -402,6 +418,7 @@ function combatTargetAdmissionCore(entity, context = {}) {
     proximityEvidence,
     ordinaryProximity,
     dynamicProximity,
+    dailyDamageCloseEvidence,
     whitelisted,
     dynamicWhitelistMember,
     creatorProtected,
@@ -630,7 +647,9 @@ function selectBestCombatTarget(self, candidates, context = {}) {
       ? 'defensive'
       : (admission.dynamicProximity
           ? 'whitelist-proximity'
-          : (admission.proximityEvidence ? 'secondary-proximity' : 'profit'))
+          : (admission.dailyDamageCloseEvidence
+              ? 'secondary-daily-damage-close'
+              : (admission.proximityEvidence ? 'secondary-proximity' : 'profit')))
   };
 }
 

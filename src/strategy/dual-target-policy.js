@@ -683,7 +683,13 @@ function secondaryFirePolicy(input = {}, options = {}) {
   const quotaAvailable = ownShots < opponentShots;
   const invulnerable = input.invulnerable === true || target.invulnerable === true;
   const closePressure = secondaryClosePressurePolicy(input, options);
-  const throttleExempt = closePressure.active;
+  // History exempts only the quota. Keep sustained pressure separate because
+  // primary reward/survival arbitration consumes closePressure.active.
+  const dailyDamageCloseExemption = closePressure.close && target.dailyDamageActor === true;
+  const throttleExempt = closePressure.active || dailyDamageCloseExemption;
+  const quotaExemptionReason = closePressure.active
+    ? (dailyDamageCloseExemption ? 'sustained-close-fire+daily-damage-close' : 'sustained-close-fire')
+    : (dailyDamageCloseExemption ? 'daily-damage-close' : '');
   // Cadence is a forecast for the shared 10-frame grid, never an independent
   // transmission gate. The rolling quota may still make a legal frame slower.
   const allowed = !invulnerable && (throttleExempt || quotaAvailable);
@@ -696,14 +702,18 @@ function secondaryFirePolicy(input = {}, options = {}) {
     cadenceMs,
     quotaAvailable,
     throttleExempt,
+    dailyDamageCloseExemption,
+    quotaExemptionReason,
     closePressure,
     reason: invulnerable
       ? 'secondary-invulnerable-dodge-only'
-      : throttleExempt
+      : closePressure.active
         ? 'secondary-close-pressure-normal-fire'
-        : !quotaAvailable
-          ? 'secondary-five-second-shot-quota'
-          : 'secondary-defensive-fire'
+        : dailyDamageCloseExemption
+          ? 'secondary-daily-damage-close-normal-fire'
+          : !quotaAvailable
+            ? 'secondary-five-second-shot-quota'
+            : 'secondary-defensive-fire'
   };
 }
 

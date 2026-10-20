@@ -1947,6 +1947,7 @@ function summarizeCombatTarget(target) {
     dynamicWhitelistMember: Boolean(target.dynamicWhitelistMember),
     dynamicWhitelistEnabled: Boolean(target.dynamicWhitelistEnabled),
     damagedSelfToday: Boolean(target.damagedSelfToday),
+    dailyDamageActor: Boolean(target.dailyDamageActor),
     legacyWhitelistProtected: Boolean(target.legacyWhitelistProtected),
     profitProtected: Boolean(target.profitProtected),
     whitelistContactPolicy: target.whitelistContactPolicy ? {
@@ -5575,6 +5576,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
     selfHp,
     lowHpThreshold,
     healthySecondaryMaxHp: Number(options.combatHealthySecondaryMaxHp ?? 80),
+    secondaryTargetCloseDistanceCm: options.secondaryTargetCloseDistanceCm,
     combatAttackRange,
     recoveringSelf: Boolean(
       self

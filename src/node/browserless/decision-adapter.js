@@ -847,6 +847,9 @@ function refreshDecisionEntityActivity(entity, options = {}, self = null, whitel
       damagedSelfToday = Boolean(identityContext.damagedCheck(annotated));
     } catch (_) {}
   }
+  // Same-day injury history is independent of whitelist/easy-kill membership.
+  // Recompute on each native observation so the UTC+8 reset clears authority.
+  annotated.dailyDamageActor = Boolean(damagedSelfToday);
   annotated.highHpUndamagedInvulnerableIgnored = Boolean(
     identityContext.damageHistoryAuthoritative
       && hpValue(self) > 80
@@ -3179,6 +3182,7 @@ function summarizeTarget(target) {
     dynamicWhitelistMember: Boolean(target.dynamicWhitelistMember),
     dynamicWhitelistEnabled: Boolean(target.dynamicWhitelistEnabled),
     damagedSelfToday: Boolean(target.damagedSelfToday),
+    dailyDamageActor: Boolean(target.dailyDamageActor),
     legacyWhitelistProtected: Boolean(target.legacyWhitelistProtected),
     profitProtected: Boolean(target.profitProtected),
     whitelistContactPolicy: summarizeWhitelistContactPolicy(target.whitelistContactPolicy),
@@ -4833,6 +4837,9 @@ function buildBrowserlessCombatStrategyInput(state, options = {}, stateful = {})
   const rawRealtimeEntities = (Array.isArray(realtime.entities) ? realtime.entities : []).filter(entity => {
     const userId = entity?.user_id ?? entity?.userId;
     if (userId !== null && userId !== undefined && priorityUserIds.has(String(userId))) return true;
+    if (userId !== null && userId !== undefined
+      && (whitelistIdentityContext.damagedIds.has(String(userId))
+        || whitelistIdentityContext.damagedCheck?.(entity))) return true;
     // 用原始成员身份保留实体: 体力豁免后仍要保留在决策输入里, 否则被豁免的挂机成员会在这一步被裁掉。
     if (whitelistSafetyIdentityForEntity(entity, whitelistIdentityContext, options).dynamicWhitelistRawMember) return true;
     if (entity?.firing || entity?.shooting || entity?.is_firing) return true;
@@ -13901,6 +13908,7 @@ function isCombatActionEligibleForDecision(combatDecision, options = {}) {
   if (target.combatIntent === 'defensive') return true;
   if (target.combatIntent === 'recovery-contact') return true;
   if (target.combatIntent === 'whitelist-proximity') return true;
+  if (target.combatIntent === 'secondary-daily-damage-close') return true;
   if (target.whitelistContactPolicy?.proactiveCombatEligible === true) return true;
   return Boolean(target.active || target.firing);
 }

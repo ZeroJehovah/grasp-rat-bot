@@ -19,6 +19,7 @@ const { rewardFinishBackAwaySuppressionPolicy } = require('../src/strategy/comba
 const { COMBAT_CONSTANTS } = require('../src/strategy/combat-constants');
 const { runCombatOpportunityReplay, runCombatOpportunityReplaySelfTest } = require('./combat-opportunity-replay');
 const { runStaminaReserveCleanupReplay, runStaminaReserveReplaySelfTest } = require('./stamina-reserve-replay');
+const { runDailyDamageSecondaryReplay, runDailyDamageSecondaryReplaySelfTest } = require('./daily-damage-secondary-replay');
 
 const DEFAULTS = {
   hitRadiusCm: 90,
@@ -3205,6 +3206,7 @@ function replay(options) {
     targetHpValues,
     dualTargetFire,
     staminaReserveCleanup: runStaminaReserveCleanupReplay(frames, loaded.sourceEvents),
+    dailyDamageSecondary: runDailyDamageSecondaryReplay(frames, loaded.sourceEvents),
     invulnerableAvoidance,
     secondaryOwnDamageRetention,
     combatOpportunity: runCombatOpportunityReplay(frames, shots, loaded.sourceEvents, options, {
@@ -3243,6 +3245,9 @@ function replay(options) {
 }
 
 function printReport(result) {
+  if (result.dailyDamageSecondary?.blockedFrames) {
+    console.log(`Daily-damage secondary quota replay: ${JSON.stringify(result.dailyDamageSecondary)}`);
+  }
   if (result.combatOpportunity) console.log(`Combat opportunity replay: ${JSON.stringify(result.combatOpportunity)}`);
   console.log(`Replay ${path.relative(process.cwd(), result.file)} lines ${result.lineRange[0]}-${result.lineRange[1]}`);
   console.log(`Target ${result.targetName || '-'} (${result.targetId || '-'}) ${result.timeRange[0]}-${result.timeRange[1]}, frames=${result.frames}, shots=${result.shots}, finishPressureShots=${result.finishPressureShots}`);
@@ -3320,6 +3325,7 @@ function printReport(result) {
 
 function selfTest() {
   runStaminaReserveReplaySelfTest();
+  runDailyDamageSecondaryReplaySelfTest();
   runCombatOpportunityReplaySelfTest();
   const loader = runLoadFramesSelfTest();
   if (!loader.ok) throw new Error(loader.error || 'browserless replay loader self-test failed');
