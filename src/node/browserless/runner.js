@@ -322,6 +322,7 @@ function publicConfig(config) {
     combatDistanceAwareDodgeEnabled: config.combatDistanceAwareDodgeEnabled !== false,
     combatCloseBandReserveEnabled: config.combatCloseBandReserveEnabled !== false,
     combatMovementStabilityEnabled: config.combatMovementStabilityEnabled === true,
+    combatSafeLaneLatchEnabled: config.combatSafeLaneLatchEnabled !== false,
     combatSafeRetreatInterceptEnabled: config.combatSafeRetreatInterceptEnabled === true,
     combatTargetSwitchUrgentReversalGuardEnabled: config.combatTargetSwitchUrgentReversalGuardEnabled === true,
     combatShootMinIntervalMs: Number(config.combatShootMinIntervalMs || 0),

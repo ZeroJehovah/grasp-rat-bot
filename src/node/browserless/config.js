@@ -114,6 +114,7 @@ const DEFAULTS = {
   combatDistanceAwareDodgeEnabled: true,
   combatCloseBandReserveEnabled: true,
   combatMovementStabilityEnabled: false,
+  combatSafeLaneLatchEnabled: true,
   combatSafeRetreatInterceptEnabled: false,
   combatTargetSwitchUrgentReversalGuardEnabled: false,
   combatShootMinIntervalMs: 500,
@@ -370,6 +371,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
     ),
     combatCloseBandReserveEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_CLOSE_BAND_RESERVE_ENABLED, DEFAULTS.combatCloseBandReserveEnabled),
     combatMovementStabilityEnabled: boolEnv(env.GRASP_RAT_BROWSERLESS_COMBAT_MOVEMENT_STABILITY_ENABLED, DEFAULTS.combatMovementStabilityEnabled),
+    combatSafeLaneLatchEnabled: boolEnv(
+      env.GRASP_RAT_BROWSERLESS_COMBAT_SAFE_LANE_LATCH_ENABLED,
+      DEFAULTS.combatSafeLaneLatchEnabled
+    ),
     combatSafeRetreatInterceptEnabled: boolEnv(
       env.GRASP_RAT_BROWSERLESS_COMBAT_SAFE_RETREAT_INTERCEPT_ENABLED,
       DEFAULTS.combatSafeRetreatInterceptEnabled
@@ -834,6 +839,10 @@ function parseBrowserlessRunnerArgs(argv = [], env = process.env) {
       config.combatMovementStabilityEnabled = true;
     } else if (arg === '--no-combat-movement-stability') {
       config.combatMovementStabilityEnabled = false;
+    } else if (arg === '--combat-safe-lane-latch') {
+      config.combatSafeLaneLatchEnabled = true;
+    } else if (arg === '--no-combat-safe-lane-latch') {
+      config.combatSafeLaneLatchEnabled = false;
     } else if (arg === '--combat-safe-retreat-intercept') {
       config.combatSafeRetreatInterceptEnabled = true;
     } else if (arg === '--no-combat-safe-retreat-intercept') {
@@ -1064,6 +1073,7 @@ function usage() {
     '  --movement-settlement-stall-ms <ms>  Reconnect when nonzero movement makes no coordinate progress. Default: 5000',
     '  --movement-settlement-min-distance-cm <cm>  Coordinate progress needed to reset the stall timer. Default: 80',
     '  --[no-]combat-movement-stability  Apply threat-aware short combat direction settlement. Default: disabled',
+    '  --[no-]combat-safe-lane-latch  Retain a robust-safe Dodge lane while the same in-flight threat field remains active. Default: enabled',
     '  --center-activity-radius-cm <cm>  Start the outside-center no-profit timer beyond this origin radius. Default: 100000',
     '  --outside-center-idle-exit-ms <ms>  Leave after waiting outside the center without profit. Default: 180000',
     '  --profit-pursuit-max-ms <ms>  Legacy no-damage pursuit diagnostic threshold. Default: 60000',

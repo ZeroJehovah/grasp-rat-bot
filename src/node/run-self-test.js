@@ -24371,6 +24371,147 @@ async function runSelfTest() {
       want: 'true|true|movement-stability-a-b-a-suppressed|1'
     },
     {
+      name: 'combat safe lane latch treats material CPA gain as settlement-only evidence',
+      got: (() => {
+        const result = stabilizeCombatMovementDirectionCore({
+          nowMs: 1100,
+          tick: 101,
+          targetId: '8',
+          engagementId: '8:1000',
+          candidateDirection: { dx: -1, dy: -1 },
+          threatField: [
+            { dx: 1, dy: 1, directHits: 0, unavoidableHits: 0, worstCaseCpaCm: 302, scheduleRobust: true },
+            { dx: -1, dy: -1, directHits: 0, unavoidableHits: 0, worstCaseCpaCm: 500, scheduleRobust: true }
+          ],
+          movementTiming: { exactReady: true, sampleCount: 8, medianTicks: 3 },
+          previousState: {
+            targetId: '8', engagementId: '8:1000', direction: { dx: 1, dy: 1 }, previousDirection: null,
+            generation: 1, selectedAtMs: 1000, selectedTick: 100, expiresAtMs: 2500,
+            counters: { candidateSwitches: 0, appliedSwitches: 0, suppressedSwitches: 0, rapidReversalSuppressed: 0, hardReleases: 0 }
+          }
+        }, { minimumCpaCm: 200, materialCpaGainCm: 75 });
+        return [
+          result.held,
+          result.direction.dx,
+          result.direction.dy,
+          result.reason,
+          result.materialCpaGain,
+          result.state.generation,
+          result.state.counters.hardReleases
+        ].join('|');
+      })(),
+      want: 'true|1|1|movement-stability-safe-settlement-hold|true|1|0'
+    },
+    {
+      name: 'combat safe lane latch absorbs a long-flight alternating candidate sequence',
+      got: (() => {
+        // 2026-10-20 battle 29650_1792427898003, bullet #6878: the logged
+        // candidate alternated 1,1 -> -1,-1 -> 1,1 -> -1,-1 while 1,1 stayed
+        // robust-safe. Keep the safe lane instead of spending commands on each
+        // opposite proposal.
+        const proposals = [
+          { dx: 1, dy: 1, cpa: 700 },
+          { dx: -1, dy: -1, cpa: 500 },
+          { dx: 1, dy: 1, cpa: 590 },
+          { dx: -1, dy: -1, cpa: 500 },
+          { dx: 1, dy: 1, cpa: 494 },
+          { dx: -1, dy: -1, cpa: 302 }
+        ];
+        let state = null;
+        const selected = [];
+        for (let index = 0; index < proposals.length; index += 1) {
+          const candidate = proposals[index];
+          const result = stabilizeCombatMovementDirectionCore({
+            nowMs: 1000 + index * 50,
+            tick: 100 + index,
+            targetId: '8',
+            engagementId: '8:1000',
+            candidateDirection: candidate,
+            threatField: [
+              { dx: 1, dy: 1, directHits: 0, unavoidableHits: 0, worstCaseCpaCm: 302, scheduleRobust: true },
+              { dx: -1, dy: -1, directHits: 0, unavoidableHits: 0, worstCaseCpaCm: candidate.cpa, scheduleRobust: true }
+            ],
+            movementTiming: { exactReady: true, sampleCount: 8, medianTicks: 3 },
+            previousState: state
+          }, { minimumCpaCm: 200, materialCpaGainCm: 75 });
+          state = result.state;
+          selected.push(`${result.direction.dx},${result.direction.dy}`);
+        }
+        return [selected.join('>'), state.counters.suppressedSwitches, state.counters.appliedSwitches].join('|');
+      })(),
+      want: '1,1>1,1>1,1>1,1>1,1>1,1|3|0'
+    },
+    {
+      name: 'combat safe lane latch never leaves a safe lane for a worse candidate',
+      got: (() => {
+        const result = stabilizeCombatMovementDirectionCore({
+          nowMs: 1500,
+          tick: 110,
+          targetId: '8',
+          engagementId: '8:1000',
+          candidateDirection: { dx: -1, dy: -1 },
+          threatField: [
+            { dx: 1, dy: 1, directHits: 0, unavoidableHits: 0, worstCaseCpaCm: 320, scheduleRobust: true },
+            { dx: -1, dy: -1, directHits: 0, unavoidableHits: 0, worstCaseCpaCm: 120, scheduleRobust: false }
+          ],
+          movementTiming: { exactReady: true, sampleCount: 8, medianTicks: 3 },
+          previousState: {
+            targetId: '8', engagementId: '8:1000', direction: { dx: 1, dy: 1 }, previousDirection: null,
+            generation: 1, selectedAtMs: 1000, selectedTick: 90, expiresAtMs: 2500,
+            counters: { candidateSwitches: 0, appliedSwitches: 0, suppressedSwitches: 0, rapidReversalSuppressed: 0, hardReleases: 0 }
+          }
+        }, { minimumCpaCm: 200 });
+        return [result.held, result.direction.dx, result.direction.dy, result.reason, result.state.generation].join('|');
+      })(),
+      want: 'true|1|1|movement-stability-safe-lane-retained|1'
+    },
+    {
+      name: 'combat safe lane latch still accepts a sustained better safe lane',
+      got: (() => {
+        const base = {
+          targetId: '8',
+          engagementId: '8:1000',
+          candidateDirection: { dx: 0, dy: 1 },
+          threatField: [
+            { dx: 1, dy: 0, directHits: 0, unavoidableHits: 0, worstCaseCpaCm: 300, scheduleRobust: true },
+            { dx: 0, dy: 1, directHits: 0, unavoidableHits: 0, worstCaseCpaCm: 400, scheduleRobust: true }
+          ],
+          movementTiming: { exactReady: true, sampleCount: 8, medianTicks: 3 }
+        };
+        const previousState = {
+          targetId: '8', engagementId: '8:1000', direction: { dx: 1, dy: 0 }, previousDirection: null,
+          generation: 1, selectedAtMs: 1000, selectedTick: 100, expiresAtMs: 2500,
+          counters: { candidateSwitches: 0, appliedSwitches: 0, suppressedSwitches: 0, rapidReversalSuppressed: 0, hardReleases: 0 }
+        };
+        const first = stabilizeCombatMovementDirectionCore({ ...base, nowMs: 1050, tick: 101, previousState }, { minimumCpaCm: 200 });
+        const second = stabilizeCombatMovementDirectionCore({ ...base, nowMs: 1100, tick: 102, previousState: first.state }, { minimumCpaCm: 200 });
+        const third = stabilizeCombatMovementDirectionCore({ ...base, nowMs: 1150, tick: 103, previousState: second.state }, { minimumCpaCm: 200 });
+        const fourth = stabilizeCombatMovementDirectionCore({ ...base, nowMs: 1200, tick: 104, previousState: third.state }, { minimumCpaCm: 200 });
+        return [first.held, second.held, third.held, fourth.held, fourth.direction.dx, fourth.direction.dy, fourth.reason].join('|');
+      })(),
+      want: 'true|true|true|false|0|1|movement-stability-window-expired'
+    },
+    {
+      name: 'combat safe lane latch clears immediately when visible threat evidence ends',
+      got: (() => {
+        const result = stabilizeCombatMovementDirectionCore({
+          nowMs: 1100,
+          tick: 101,
+          targetId: '8',
+          engagementId: '8:1000',
+          candidateDirection: { dx: 0, dy: 1 },
+          threatField: [],
+          previousState: {
+            targetId: '8', engagementId: '8:1000', direction: { dx: 1, dy: 0 }, previousDirection: null,
+            generation: 1, selectedAtMs: 1000, selectedTick: 100, expiresAtMs: 2500,
+            counters: { candidateSwitches: 0, appliedSwitches: 0, suppressedSwitches: 0, rapidReversalSuppressed: 0, hardReleases: 0 }
+          }
+        });
+        return [result.held, String(result.state), result.direction.dx, result.direction.dy, result.reason].join('|');
+      })(),
+      want: 'false|null|0|1|movement-stability-threat-clear'
+    },
+    {
       name: 'browserless combat clears movement stability without realtime self or target',
       got: (() => {
         const stateful = {
@@ -24440,10 +24581,13 @@ async function runSelfTest() {
         return [
           Array.isArray(combat.movement?.dodge?.threatField),
           combat.movement?.dodge?.threatField?.length > 0,
-          combat.metrics?.lastDodgeThreatField === null
+          combat.metrics?.lastDodgeThreatField === null,
+          combat.movement?.movementStability?.enabled,
+          combat.movement?.movementStability?.legacyStabilityEnabled,
+          combat.movement?.movementStability?.safeLaneLatchEnabled
         ].join('|');
       })(),
-      want: 'true|true|false'
+      want: 'true|true|false|true|false|true'
     },
     {
       name: 'browserless action adapter maps seek-coin target to velocity',
@@ -32411,6 +32555,23 @@ async function runSelfTest() {
         ].join('|');
       })(),
       want: 'true|true|false|false|false|true|false|false|true|false|false|true'
+    },
+    {
+      name: 'browserless safe lane latch exposes the enabled default and opt-out controls',
+      got: (() => {
+        const defaults = parseBrowserlessRunnerArgs([], {});
+        const envConfig = parseBrowserlessRunnerArgs([], {
+          GRASP_RAT_BROWSERLESS_COMBAT_SAFE_LANE_LATCH_ENABLED: 'false'
+        });
+        const cliConfig = parseBrowserlessRunnerArgs(['--no-combat-safe-lane-latch'], {});
+        return [
+          defaults.combatSafeLaneLatchEnabled,
+          envConfig.combatSafeLaneLatchEnabled,
+          cliConfig.combatSafeLaneLatchEnabled,
+          publicConfig(defaults).combatSafeLaneLatchEnabled
+        ].join('|');
+      })(),
+      want: 'true|false|false|true'
     },
     {
       name: 'browserless runner config exposes dynamic profit threshold env cli and public values',

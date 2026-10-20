@@ -133,6 +133,8 @@ function stabilizeCombatMovementDirectionCore(input = {}, options = {}) {
   const tick = Number.isFinite(Number(input.tick)) ? Number(input.tick) : null;
   const targetId = String(input.targetId ?? '');
   const engagementId = String(input.engagementId ?? targetId);
+  const threatField = Array.isArray(input.threatField) ? input.threatField : [];
+  const hasThreatEvidence = threatField.length > 0;
   const candidateDirection = normalizedDirection(input.candidateDirection);
   const candidateKey = movementDirectionKeyCore(candidateDirection);
   const minimumCpaCm = Math.max(1, Number(options.minimumCpaCm ?? input.minimumCpaCm ?? 200));
@@ -199,6 +201,28 @@ function stabilizeCombatMovementDirectionCore(input = {}, options = {}) {
     };
   }
 
+  // A movement latch is scoped to active incoming-threat evidence. Once the
+  // last visible projectile leaves the field, navigation must immediately
+  // regain ownership instead of inheriting a stale Dodge direction.
+  if (!hasThreatEvidence) {
+    return {
+      direction: candidateDirection,
+      state: null,
+      held: false,
+      switched: candidateKey !== movementDirectionKeyCore(previous.direction),
+      reason: 'movement-stability-threat-clear',
+      settlementWindowTicks,
+      maximumGenerationHoldTicks,
+      generationAgeTicks: 0,
+      elapsedTicks: null,
+      candidateThreat: null,
+      heldThreat: null,
+      newDirectHits: 0,
+      newUnavoidableHits: 0,
+      worstCaseCpaCm: null
+    };
+  }
+
   const heldDirection = normalizedDirection(previous.direction);
   const heldKey = movementDirectionKeyCore(heldDirection);
   const candidateThreat = directionThreatCore(input.threatField, candidateDirection);
@@ -236,8 +260,10 @@ function stabilizeCombatMovementDirectionCore(input = {}, options = {}) {
     ? compareDodgeCandidateRiskCore(candidateThreat, heldThreat)
     : null;
   // Direction stability only yields immediately to a safer collision tier.
-  // Smaller clearance gains remain eligible for the normal settlement hold;
-  // materialCpaGainCm below still handles a large, lane-level improvement.
+  // A larger single-frame CPA gain is diagnostic, not switch authority: the
+  // alternative must remain safe and survive the normal settlement window.
+  // This prevents long-flight threats from causing a safe lane to be abandoned
+  // on a one-frame ranking change and then reversed on the next frame.
   const reducedHits = Boolean(candidateThreat && heldThreat
     && (candidateThreat.physicalHits < heldThreat.physicalHits
       || candidateThreat.robustHits < heldThreat.robustHits));
@@ -253,16 +279,19 @@ function stabilizeCombatMovementDirectionCore(input = {}, options = {}) {
       || !heldSafe
       || reducedHits
       || restoredSafety
-      || materialCpaGain
   );
   const withinWindow = elapsedTicks < settlementWindowTicks
     && selectedElapsedTicks < maximumGenerationHoldTicks;
+  const candidateNoWorse = riskComparison === null || riskComparison <= 0;
+  // While the held lane is safe, never voluntarily switch to a lane that is
+  // unsafe or demonstrably worse. A better/equal alternative is still allowed
+  // after a continuous settlement window, so genuine lane improvements are not
+  // frozen for the whole engagement.
+  const retainSafeLane = !candidateSafe || !candidateNoWorse;
   const canHold = candidateChanged
     && !hardRelease
-    && withinWindow
     && heldSafe
-    && candidateSafe
-    && (riskComparison === null || riskComparison <= 0);
+    && (retainSafeLane || (withinWindow && candidateNoWorse));
 
   if (canHold) {
     const newProposal = !proposedMatchesCandidate;
@@ -288,7 +317,11 @@ function stabilizeCombatMovementDirectionCore(input = {}, options = {}) {
       held: true,
       switched: false,
       rapidReversal,
-      reason: rapidReversal ? 'movement-stability-a-b-a-suppressed' : 'movement-stability-safe-settlement-hold',
+      reason: rapidReversal
+        ? 'movement-stability-a-b-a-suppressed'
+        : (retainSafeLane
+            ? 'movement-stability-safe-lane-retained'
+            : 'movement-stability-safe-settlement-hold'),
       settlementWindowTicks,
       maximumGenerationHoldTicks,
       generationAgeTicks: selectedElapsedTicks,
@@ -297,6 +330,7 @@ function stabilizeCombatMovementDirectionCore(input = {}, options = {}) {
       heldThreat,
       newDirectHits: Math.max(0, heldDirectHits - candidateDirectHits),
       newUnavoidableHits: Math.max(0, heldUnavoidableHits - candidateUnavoidableHits),
+      materialCpaGain,
       worstCaseCpaCm: Number.isFinite(heldCpa) ? heldCpa : null
     };
   }

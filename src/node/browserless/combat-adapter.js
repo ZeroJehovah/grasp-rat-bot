@@ -6611,7 +6611,9 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
         release: null
       };
   if (stateful) stateful.combatMovementStability = hasCombatMovementSubject ? stabilityDecision.state : null;
-  const stabilityEnabled = options.combatMovementStabilityEnabled === true;
+  const legacyStabilityEnabled = options.combatMovementStabilityEnabled === true;
+  const safeLaneLatchEnabled = options.combatSafeLaneLatchEnabled !== false;
+  const stabilityEnabled = legacyStabilityEnabled || safeLaneLatchEnabled;
   const originalMovementDirection = { dx: Number(movement.dx || 0), dy: Number(movement.dy || 0) };
   const stabilityApplied = Boolean(
     stabilityEnabled
@@ -6620,16 +6622,25 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
         || Number(stabilityDecision.direction.dy) !== originalMovementDirection.dy)
   );
   if (stabilityApplied) {
+    const heldDirection = {
+      dx: Number(stabilityDecision.direction.dx || 0),
+      dy: Number(stabilityDecision.direction.dy || 0)
+    };
     movement = {
       ...movement,
-      dx: Number(stabilityDecision.direction.dx || 0),
-      dy: Number(stabilityDecision.direction.dy || 0),
+      dx: heldDirection.dx,
+      dy: heldDirection.dy,
       reason: stabilityDecision.reason,
-      modifiers: [...new Set([...(movement.modifiers || []), 'movement-stability-hold'])]
+      modifiers: [...new Set([...(movement.modifiers || []), 'dodge', 'movement-stability-hold'])],
+      dodge: movement.dodge
+        ? { ...movement.dodge, ...heldDirection, stabilityHeld: true }
+        : movement.dodge
     };
   }
   movement.movementStability = {
     enabled: stabilityEnabled,
+    legacyStabilityEnabled,
+    safeLaneLatchEnabled,
     applied: stabilityApplied,
     shadowHeld: Boolean(stabilityDecision.held),
     reason: stabilityDecision.reason,
