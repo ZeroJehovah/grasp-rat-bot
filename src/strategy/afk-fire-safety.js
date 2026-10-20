@@ -81,13 +81,23 @@ function evidenceMap(input = {}, options = {}) {
     }
   }
   if (options.includeDailyDamage !== false) {
-    for (const id of Array.isArray(input.damagingPlayerIds) ? input.damagingPlayerIds : []) {
+    for (const rawId of Array.isArray(input.damagingPlayerIds) ? input.damagingPlayerIds : []) {
+      const id = rawId === null || rawId === undefined ? '' : String(rawId);
+      if (!id) continue;
+      if (id === '__damage-evidence-unavailable__') {
+        add(id, 'daily-damage-evidence-unavailable');
+        continue;
+      }
+      // The daily-damage ledger persists until the UTC+8 day changes, while
+      // `entities` is the current realtime player set. An absent historical
+      // actor has no current nearby position, so it must not become a
+      // synthetic danger target that disables the five-frame grid all day.
+      const entity = entities.find(candidate => idOf(candidate) === id) || null;
+      if (!entity) continue;
       add(id, 'daily-damage');
       const item = evidence.get(id);
-      if (item && !item.entity) {
-        item.entity = entities.find(entity => idOf(entity) === id) || null;
-        item.fresh = Boolean(item.entity);
-      }
+      item.entity = entity;
+      item.fresh = true;
     }
   }
   return evidence;

@@ -423,13 +423,37 @@ function runStrategyModuleSelfTests() {
     ...safetyBase,
     entities: [safetySelf, safetyTarget, dangerPlayer]
   }, { fullRangeCm: 1000, attackRangeCm: 14500, dodgeRangeBufferCm: 1000 });
-  const missingDangerPosition = evaluateAfkFiveFrameSafety({
+  const absentDailyDamage = evaluateAfkFiveFrameSafety({
     ...safetyBase,
     damagingPlayerIds: [3]
+  }, { fullRangeCm: 1000, attackRangeCm: 14500, dodgeRangeBufferCm: 1000 });
+  const dailyDamagePlayer = { user_id: 4, x: 14000, y: 0, active: false };
+  const presentDailyDamage = evaluateAfkFiveFrameSafety({
+    ...safetyBase,
+    entities: [safetySelf, safetyTarget, dailyDamagePlayer],
+    damagingPlayerIds: [4]
+  }, { fullRangeCm: 1000, attackRangeCm: 14500, dodgeRangeBufferCm: 1000 });
+  const outsideDailyDamage = evaluateAfkFiveFrameSafety({
+    ...safetyBase,
+    entities: [safetySelf, safetyTarget, { ...dailyDamagePlayer, x: 16001 }],
+    damagingPlayerIds: [4]
+  }, { fullRangeCm: 1000, attackRangeCm: 14500, dodgeRangeBufferCm: 1000 });
+  const presentDailyDamageWithoutPosition = evaluateAfkFiveFrameSafety({
+    ...safetyBase,
+    entities: [safetySelf, safetyTarget, { user_id: 4 }],
+    damagingPlayerIds: [4]
   }, { fullRangeCm: 1000, attackRangeCm: 14500, dodgeRangeBufferCm: 1000 });
   const unknownBullet = evaluateAfkFiveFrameSafety({
     ...safetyBase,
     bullets: [{ bullet_id: 9 }]
+  }, { fullRangeCm: 1000, attackRangeCm: 14500, dodgeRangeBufferCm: 1000 });
+  const missingBulletOwnerPosition = evaluateAfkFiveFrameSafety({
+    ...safetyBase,
+    bullets: [{ bullet_id: 10, owner_user_id: 5 }]
+  }, { fullRangeCm: 1000, attackRangeCm: 14500, dodgeRangeBufferCm: 1000 });
+  const unavailableDailyDamage = evaluateAfkFiveFrameSafety({
+    ...safetyBase,
+    damagingPlayerIds: ['__damage-evidence-unavailable__']
   }, { fullRangeCm: 1000, attackRangeCm: 14500, dodgeRangeBufferCm: 1000 });
   const activeTarget = evaluateAfkFiveFrameSafety({
     ...safetyBase,
@@ -445,15 +469,24 @@ function runStrategyModuleSelfTests() {
     nowMs: 1600
   }, { freshMs: 500, fullRangeCm: 1000, attackRangeCm: 14500, dodgeRangeBufferCm: 1000 });
   results.push({
-    name: 'afk-five-frame-grid-fails-closed-on-danger-position-and-target-activity',
+    name: 'afk-five-frame-grid-uses-current-danger-positions-and-fails-closed-on-live-evidence-gaps',
     passed: safeFive.allowed === true
       && safeFive.gridStep === 5
       && safeFive.dangerPlayers.length === 0
       && dangerFive.allowed === false
       && dangerFive.blockers.includes('danger-player-in-radius')
       && dangerFive.gridStep === 10
-      && missingDangerPosition.blockers.includes('danger-position-missing:3')
+      && absentDailyDamage.allowed === true
+      && absentDailyDamage.gridStep === 5
+      && presentDailyDamage.blockers.includes('danger-player-in-radius')
+      && presentDailyDamage.gridStep === 10
+      && outsideDailyDamage.allowed === true
+      && outsideDailyDamage.gridStep === 5
+      && presentDailyDamageWithoutPosition.blockers.includes('danger-position-missing:4')
+      && presentDailyDamageWithoutPosition.gridStep === 10
       && unknownBullet.blockers.includes('ambiguous-bullet-owner')
+      && missingBulletOwnerPosition.blockers.includes('danger-position-missing:5')
+      && unavailableDailyDamage.blockers.includes('danger-position-missing:__damage-evidence-unavailable__')
       && activeTarget.blockers.includes('target-no-longer-afk')
       && movingAction.blockers.includes('final-action-still-moves')
       && staleFrame.blockers.includes('realtime-position-not-fresh')
