@@ -74,6 +74,7 @@ const {
   secondaryCombatExitPolicy,
   secondaryClosePressurePolicy,
   secondaryFirePolicy,
+  secondaryRangeGateBlocksFire,
   secondaryRetentionPolicy
 } = require('./dual-target-policy');
 const { evaluateCoverCandidateCore } = require('./dual-target-cover');
@@ -712,11 +713,97 @@ function runStrategyModuleSelfTests() {
     target: { distance: 1000 },
     combatTargetState: { motionSamples: [{ at: 9900, newBulletCount: 1 }] }
   });
+  // 最后发射 793ms: 被 750ms 判成已停火会让 1.1km 交战回落成对远处挂机目标的
+  // 射击(2026-10-20 16:06Z 日志)。1200ms 内仍算持续, 超过则不算。
+  const secondaryCloseLateShotSustained = secondaryClosePressurePolicy({
+    nowMs: 10000,
+    target: { distance: 1182 },
+    combatTargetState: {
+      motionSamples: [
+        { at: 9000, newBulletCount: 2 },
+        { at: 9207, newBulletCount: 2 }
+      ]
+    }
+  });
+  const secondaryCloseExpiredShot = secondaryClosePressurePolicy({
+    nowMs: 10000,
+    target: { distance: 1182 },
+    combatTargetState: {
+      motionSamples: [
+        { at: 8600, newBulletCount: 2 },
+        { at: 8799, newBulletCount: 2 }
+      ]
+    }
+  });
   const secondaryInvulnerableBlocked = secondaryFirePolicy({
     nowMs: 10000,
     target: { invulnerable: true },
     combatTargetState: { motionSamples: secondarySamples },
     dispatchTimes: []
+  });
+  // 6km 外仍在闪避的副目标只保持交战, 不逐格开火: 两日日志里 6km 内每档都有
+  // 稳定命中 (近身 58%、3-4km 13%、4-6km 1.3%), 6km 外合计 2,029 发只换来 1 次
+  // 掉血。站桩目标保留配额内的还击, 边界 6000/6001cm 与速度 29/30cm/s 都要区分。
+  const secondaryFarMovingSamples = [
+    { at: 9000, newBulletCount: 1, vx: 45, vy: 40 },
+    { at: 9500, newBulletCount: 1, vx: 45, vy: 40 }
+  ];
+  const secondaryFarMoving = secondaryFirePolicy({
+    nowMs: 10000,
+    target: { distance: 7200 },
+    combatTargetState: { motionSamples: secondaryFarMovingSamples },
+    dispatchTimes: [6000]
+  });
+  const secondaryFarStationary = secondaryFirePolicy({
+    nowMs: 10000,
+    target: { distance: 7200 },
+    combatTargetState: {
+      motionSamples: [
+        { at: 9000, newBulletCount: 1, vx: 0, vy: 0 },
+        { at: 9500, newBulletCount: 1, vx: 0, vy: 0 }
+      ]
+    },
+    dispatchTimes: [6000]
+  });
+  const secondaryRangeEdgeMoving = secondaryFirePolicy({
+    nowMs: 10000,
+    target: { distance: 6000 },
+    combatTargetState: { motionSamples: secondaryFarMovingSamples },
+    dispatchTimes: [6000]
+  });
+  const secondaryBeyondRangeEdgeMoving = secondaryFirePolicy({
+    nowMs: 10000,
+    target: { distance: 6001 },
+    combatTargetState: { motionSamples: secondaryFarMovingSamples },
+    dispatchTimes: [6000]
+  });
+  const secondaryFarSlowEdge = secondaryFirePolicy({
+    nowMs: 10000,
+    target: { distance: 7200 },
+    combatTargetState: {
+      motionSamples: [
+        { at: 9000, newBulletCount: 1, vx: 29, vy: 0 },
+        { at: 9500, newBulletCount: 1, vx: 29, vy: 0 }
+      ]
+    },
+    dispatchTimes: [6000]
+  });
+  const secondaryFarEvasiveEdge = secondaryFirePolicy({
+    nowMs: 10000,
+    target: { distance: 7200 },
+    combatTargetState: {
+      motionSamples: [
+        { at: 9000, newBulletCount: 1, vx: 30, vy: 0 },
+        { at: 9500, newBulletCount: 1, vx: 30, vy: 0 }
+      ]
+    },
+    dispatchTimes: [6000]
+  });
+  const secondaryFarMovingQuotaSpent = secondaryFirePolicy({
+    nowMs: 10000,
+    target: { distance: 7200 },
+    combatTargetState: { motionSamples: secondaryFarMovingSamples },
+    dispatchTimes: [9600, 9700, 9800, 9900]
   });
   const retainedSecondaryThreat = secondaryRetentionPolicy({
     combatRole: 'secondary',
@@ -756,7 +843,38 @@ function runStrategyModuleSelfTests() {
       && secondaryCloseExempt.reason === 'secondary-close-pressure-normal-fire'
       && secondaryCloseNotSustained.active === false
       && secondaryCloseNotSustained.sustainedAttack === false
+      && secondaryCloseLateShotSustained.sustainedAttack === true
+      && secondaryCloseLateShotSustained.active === true
+      && secondaryCloseLateShotSustained.latestShotAgeMs === 793
+      && secondaryCloseLateShotSustained.maxLastShotAgeMs === 1200
+      && secondaryCloseExpiredShot.sustainedAttack === false
+      && secondaryCloseExpiredShot.active === false
       && secondaryInvulnerableBlocked.reason === 'secondary-invulnerable-dodge-only'
+      && secondaryFarMoving.allowed === false
+      && secondaryFarMoving.rangeSuppressed === true
+      && secondaryFarMoving.evasive === true
+      && secondaryFarMoving.fireRangeCm === 6000
+      && Math.abs(secondaryFarMoving.targetSpeedCmPerSec - Math.hypot(45, 40)) < 1e-9
+      && secondaryFarMoving.reason === 'secondary-out-of-fire-range'
+      && secondaryFarStationary.allowed === true
+      && secondaryFarStationary.rangeSuppressed === false
+      && secondaryFarStationary.reason === 'secondary-defensive-fire'
+      && secondaryRangeEdgeMoving.rangeSuppressed === false
+      && secondaryRangeEdgeMoving.allowed === true
+      && secondaryBeyondRangeEdgeMoving.rangeSuppressed === true
+      && secondaryBeyondRangeEdgeMoving.allowed === false
+      && secondaryFarSlowEdge.evasive === false
+      && secondaryFarSlowEdge.allowed === true
+      && secondaryFarEvasiveEdge.evasive === true
+      && secondaryFarEvasiveEdge.allowed === false
+      && secondaryFarMovingQuotaSpent.allowed === false
+      && secondaryFarMovingQuotaSpent.reason === 'secondary-out-of-fire-range'
+      // 门槛只裁剪“打不中的逐格发射”, 不能覆盖收益/生存竞速已经决定的转火。
+      && secondaryRangeGateBlocksFire({ rangeSuppressed: true }) === true
+      && secondaryRangeGateBlocksFire({ rangeSuppressed: true, secondaryFocusActive: true }) === false
+      && secondaryRangeGateBlocksFire({ rangeSuppressed: false, secondaryFocusActive: true }) === false
+      && secondaryRangeGateBlocksFire({ rangeSuppressed: false }) === false
+      && secondaryRangeGateBlocksFire() === false
       && retainedSecondaryThreat.retained === true
       && retainedSecondaryThreat.ageMs === 5000
       && retainedSecondaryThreat.windowMs === 5000

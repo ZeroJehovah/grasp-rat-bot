@@ -123,6 +123,7 @@ function parseArgs(argv) {
     targetName: '',
     json: false,
     selfTest: false,
+    secondaryPressureMaxLastShotAgeMs: null,
     ...DEFAULTS
   };
   for (let i = 0; i < argv.length; i += 1) {
@@ -134,6 +135,9 @@ function parseArgs(argv) {
     else if (arg === '--target-id') options.targetId = String(argv[++i] || '');
     else if (arg === '--target-name') options.targetName = String(argv[++i] || '');
     else if (arg === '--hit-radius') options.hitRadiusCm = Number(argv[++i] || options.hitRadiusCm);
+    else if (arg === '--secondary-pressure-max-last-shot-age-ms') {
+      options.secondaryPressureMaxLastShotAgeMs = Number(argv[++i] || 0) || null;
+    }
     else if (arg === '--json') options.json = true;
     else if (arg === '--self-test') options.selfTest = true;
     else if (arg === '--help' || arg === '-h') {
@@ -154,6 +158,10 @@ Options:
   --target-id <id>     Enemy user id.
   --target-name <name> Enemy name fallback when id is unavailable.
   --hit-radius <cm>    Bullet hit radius estimate. Default: ${DEFAULTS.hitRadiusCm}
+  --secondary-pressure-max-last-shot-age-ms <ms>
+                       Counterfactual: recompute the logged close-pressure "latest
+                       shot age" ceiling and report how many frames the arbitration
+                       would have kept firing the secondary instead of the primary.
   --json               Print JSON instead of a compact text report.
   --self-test          Replay available historical reference fights and require improvement.
 `);
@@ -162,6 +170,26 @@ Options:
 function numberOrNull(value) {
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
+}
+
+// Re-evaluates the logged close-pressure verdict at another "latest shot age"
+// ceiling. Every other term of secondaryClosePressurePolicy is already in the
+// row, so no motion samples are needed.
+function closePressureAtMaxLastShotAge(closePressure, maxLastShotAgeMs) {
+  const latestShotAgeMs = numberOrNull(closePressure?.latestShotAgeMs);
+  const minimumShots = Math.max(1, Number(closePressure?.minimumShots || 2));
+  const attackSampleCount = Math.max(0, Number(closePressure?.attackSampleCount || 0));
+  const opponentShots = Math.max(0, Number(closePressure?.opponentShots || 0));
+  const sustainedAttack = opponentShots >= minimumShots
+    && attackSampleCount >= Math.min(2, minimumShots)
+    && latestShotAgeMs !== null
+    && latestShotAgeMs <= maxLastShotAgeMs;
+  return {
+    ...closePressure,
+    sustainedAttack,
+    active: closePressure?.close === true && sustainedAttack,
+    maxLastShotAgeMs
+  };
 }
 
 function pointOf(value) {
@@ -2671,7 +2699,7 @@ function formatTime(ms) {
   return new Date(ms).toLocaleTimeString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' });
 }
 
-function runDualTargetFireArbitrationReplay(frames = [], sourceEvents = []) {
+function runDualTargetFireArbitrationReplay(frames = [], sourceEvents = [], options = {}) {
   const candidates = frames.filter(frame => {
     const replay = frame.entry?.dualTargetReplay;
     const primaryId = String(replay?.primaryTarget?.user_id ?? '');
@@ -2700,14 +2728,30 @@ function runDualTargetFireArbitrationReplay(frames = [], sourceEvents = []) {
   let replayDerivedPressureEvidenceFrames = 0;
   let reachablePrimaryFinishDispatches = 0;
   let aimProofPrimaryFinishDispatches = 0;
+  let closePressureAgeFlips = 0;
+  let closePressureAgeFlipSecondaryDispatches = 0;
+  const closePressureAgeFlipLines = [];
 
   for (const frame of candidates) {
     const replay = frame.entry.dualTargetReplay;
     const primaryNormalAuthorized = replay.primaryNormalAuthorized === true;
     const pressureEvidence = replay.pressureEvidence || null;
-    const rewardRace = replay.rewardRace || {};
+    const loggedRewardRace = replay.rewardRace || {};
+    const rewardRace = loggedRewardRace;
     if (pressureEvidence?.active === true) pressureEvidenceFrames += 1;
     if (replay.replayDerivedPressureEvidence === true) replayDerivedPressureEvidenceFrames += 1;
+    // Counterfactual: the logged closePressure already carries every term of the
+    // policy except the "latest shot age" ceiling, so the same sustained-attack
+    // rule can be re-evaluated at another ceiling without motion samples. Only
+    // frames the new ceiling revives are counted, so a lower ceiling is a no-op.
+    const ageOverrideMs = numberOrNull(options.secondaryPressureMaxLastShotAgeMs ?? NaN);
+    const loggedClosePressure = replay.closePressure || null;
+    const ageCounterfactual = ageOverrideMs === null || !loggedClosePressure
+      ? null
+      : closePressureAtMaxLastShotAge(loggedClosePressure, ageOverrideMs);
+    const closePressure = ageCounterfactual && ageCounterfactual.active !== loggedClosePressure.active
+      ? ageCounterfactual
+      : replay.closePressure;
     let hypotheticalDispatchAdded = false;
     const finishRace = primaryFinishRaceAuthorization({
       nowMs: frame.at,
@@ -2769,10 +2813,35 @@ function runDualTargetFireArbitrationReplay(frames = [], sourceEvents = []) {
       primaryNormalAuthorized,
       primaryPhysicalEligible: replay.primaryPhysicalEligible === true,
       primaryFinishAuthorized: finishRace.eligible === true,
-      closePressure: replay.closePressure,
+      closePressure,
       pressureEvidence,
       rewardRace
     });
+    if (ageCounterfactual) {
+      const wasPrimary = dualTargetFireArbitration({
+        secondaryActive: true,
+        primaryAuthorized: primaryNormalAuthorized,
+        primaryNormalAuthorized,
+        primaryPhysicalEligible: replay.primaryPhysicalEligible === true,
+        primaryFinishAuthorized: finishRace.eligible === true,
+        closePressure: replay.closePressure,
+        pressureEvidence,
+        rewardRace
+      }).primarySelected === true;
+      if (wasPrimary && arbitration.primarySelected !== true) {
+        closePressureAgeFlips += 1;
+        if (replay.wouldShoot === true) closePressureAgeFlipSecondaryDispatches += 1;
+        if (closePressureAgeFlipLines.length < 20) {
+          closePressureAgeFlipLines.push({
+            line: frame.lineNo,
+            time: formatTime(frame.at),
+            latestShotAgeMs: numberOrNull(loggedClosePressure?.latestShotAgeMs),
+            secondaryDistanceCm: replay.secondaryDistanceCm ?? null,
+            primaryDistanceCm: replay.primaryTarget?.distance ?? null
+          });
+        }
+      }
+    }
     if (!primaryNormalAuthorized && finishRace.eligible !== true
       && arbitration.fireTargetRole === 'secondary') {
       preservedSecondarySelectionFrames += 1;
@@ -2822,6 +2891,10 @@ function runDualTargetFireArbitrationReplay(frames = [], sourceEvents = []) {
     reachablePrimaryFinishDispatches,
     aimProofPrimaryFinishDispatches,
     finishRaceCandidateFrames,
+    closePressureAgeCounterfactualMs: numberOrNull(options.secondaryPressureMaxLastShotAgeMs ?? NaN),
+    closePressureAgeFlips,
+    closePressureAgeFlipSecondaryDispatches,
+    closePressureAgeFlipLines,
     firstFinishRaceAuthorization: firstFinishRaceAuthorization ? {
       line: firstFinishRaceAuthorization.lineNo,
       time: formatTime(firstFinishRaceAuthorization.at),
@@ -2854,14 +2927,19 @@ function runDualTargetFireArbitrationReplay(frames = [], sourceEvents = []) {
     improved: (hypotheticalFinishDispatches.length > loggedPrimaryDispatchesDuringFinishWindow
       && aimProofPrimaryFinishDispatches > 0
       && correctedPrimarySelectionFrames > 0)
-      || (loggedPrimaryDispatches === 0 && correctedPrimarySelectionFrames > 0),
+      || (loggedPrimaryDispatches === 0 && correctedPrimarySelectionFrames > 0)
+      // The age counterfactual keeps the in-range attacker as the fire target on
+      // frames the logged ceiling had handed back to the distant primary.
+      || closePressureAgeFlips > 0,
     reason: hypotheticalFinishDispatches.length > loggedPrimaryDispatchesDuringFinishWindow
       && aimProofPrimaryFinishDispatches > 0
       && correctedPrimarySelectionFrames > 0
       ? 'bounded-primary-finish-race-adds-aim-proof-wire-fire-opportunity'
-      : (loggedPrimaryDispatches === 0 && correctedPrimarySelectionFrames > 0
-          ? 'restored-primary-fire-selection-after-authorization'
-          : 'no-demonstrated-primary-selection-improvement')
+      : closePressureAgeFlips > 0
+        ? 'close-pressure-age-ceiling-retains-secondary-fire-on-attacker'
+        : (loggedPrimaryDispatches === 0 && correctedPrimarySelectionFrames > 0
+            ? 'restored-primary-fire-selection-after-authorization'
+            : 'no-demonstrated-primary-selection-improvement')
   };
 }
 
@@ -3189,7 +3267,7 @@ function replay(options) {
     .filter(Number.isFinite)
     .sort((a, b) => a - b);
   const targetHpValues = Array.from(new Set(frames.map(frame => frame.targetHp).filter(Number.isFinite))).sort((a, b) => a - b);
-  const dualTargetFire = runDualTargetFireArbitrationReplay(frames, loaded.sourceEvents);
+  const dualTargetFire = runDualTargetFireArbitrationReplay(frames, loaded.sourceEvents, options);
   const invulnerableAvoidance = runInvulnerableAvoidanceArbitrationReplay(frames);
   const secondaryOwnDamageRetention = runSecondaryOwnDamageRetentionReplay(frames, options);
   return {
@@ -3258,6 +3336,12 @@ function printReport(result) {
     console.log(`Dual-target replay primary ${dual.primaryTargetName || '-'} (${dual.primaryTargetId}) vs secondary ${dual.secondaryTargetId}: logged dispatches primary=${dual.loggedDispatches.primary}, secondary before/after authorization=${dual.loggedDispatches.secondaryBeforePrimaryAuthorization}/${dual.loggedDispatches.secondaryAfterPrimaryAuthorization}`);
     console.log(`Dual-target policy selections preservedSecondary=${dual.preservedSecondarySelectionFrames}, correctedPrimaryOutside${dual.closePressureDistanceCm}cm=${dual.correctedPrimarySelectionFrames}, correctedLoggedNoFire=${dual.loggedNoFireFramesCorrected}, improved=${dual.improved}`);
     console.log(`Pressure evidence frames=${dual.pressureEvidenceFrames}, replayDerived=${dual.replayDerivedPressureEvidenceFrames}, reachableFinishDispatches=${dual.reachablePrimaryFinishDispatches}, aimProofFinishDispatches=${dual.aimProofPrimaryFinishDispatches}`);
+    if (dual.closePressureAgeCounterfactualMs !== null) {
+      console.log(`Close-pressure age counterfactual ${dual.closePressureAgeCounterfactualMs}ms: framesRetainedOnSecondary=${dual.closePressureAgeFlips} (of which the logged frame would fire=${dual.closePressureAgeFlipSecondaryDispatches})`);
+      for (const flip of dual.closePressureAgeFlipLines || []) {
+        console.log(`  line ${flip.line} at ${flip.time}, latestShotAge=${flip.latestShotAgeMs}ms, secondary=${flip.secondaryDistanceCm}cm, primary=${flip.primaryDistanceCm}cm`);
+      }
+    }
     if (dual.firstCorrectedSelection) {
       console.log(`First corrected primary selection line ${dual.firstCorrectedSelection.line} at ${dual.firstCorrectedSelection.time}, HP self/primary=${dual.firstCorrectedSelection.selfHp}/${dual.firstCorrectedSelection.primaryHp}, secondaryDistance=${dual.firstCorrectedSelection.secondaryDistanceCm}cm, loggedBlocker=${dual.firstCorrectedSelection.loggedFinalFireBlocker || '-'}`);
     }

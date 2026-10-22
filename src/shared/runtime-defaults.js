@@ -179,9 +179,14 @@ function buildRuntimeDefaults(config, combatLogEndpointConfigured) {
     secondaryTargetMaxCadenceMs: numberDefault(config.secondaryTargetMaxCadenceMs, 500),
     secondaryTargetNoDamageStepMs: numberDefault(config.secondaryTargetNoDamageStepMs, 0),
     secondaryTargetCloseDistanceCm: numberDefault(config.secondaryTargetCloseDistanceCm, 2000),
+    secondaryTargetFireRangeCm: numberDefault(config.secondaryTargetFireRangeCm, 6000),
+    secondaryTargetFireRangeEvasiveSpeedCmPerSec: numberDefault(
+      config.secondaryTargetFireRangeEvasiveSpeedCmPerSec,
+      30
+    ),
     secondaryTargetPressureWindowMs: numberDefault(config.secondaryTargetPressureWindowMs, 1500),
     secondaryTargetPressureMinShots: numberDefault(config.secondaryTargetPressureMinShots, 2),
-    secondaryTargetPressureMaxLastShotAgeMs: numberDefault(config.secondaryTargetPressureMaxLastShotAgeMs, 750),
+    secondaryTargetPressureMaxLastShotAgeMs: numberDefault(config.secondaryTargetPressureMaxLastShotAgeMs, 1200),
     secondaryTargetRaceDamageWindowMs: numberDefault(config.secondaryTargetRaceDamageWindowMs, 5000),
     secondaryTargetRaceAssumedHitRate: numberDefault(config.secondaryTargetRaceAssumedHitRate, 0.2),
     secondaryTargetRaceShotDamageHp: numberDefault(config.secondaryTargetRaceShotDamageHp, 3),

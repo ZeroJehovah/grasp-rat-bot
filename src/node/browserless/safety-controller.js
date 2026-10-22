@@ -39,6 +39,29 @@ function createSafetyEvent(reason, detail = {}, options = {}) {
   };
 }
 
+// Diagnostics only; no decision reads this. A transport loss is the one exit
+// where the character can keep taking damage with no command in flight, so the
+// safety row records the last controlled frame (tick, HP, Drop, position) next
+// to the event. The runner pairs it with the re-login as
+// `transport-disconnect-recovery`.
+function lastControlDetail(state = {}, nowMs) {
+  const realtime = state?.realtime || {};
+  const self = realtime.self || state?.current?.self || null;
+  const frameAtMs = numberOrNull(realtime.receivedAtMs)
+    ?? numberOrNull(state?.frameAges?.latestFrameAtMs);
+  return {
+    lastFrameAtMs: frameAtMs,
+    lastFrameAgeMs: frameAtMs === null
+      ? numberOrNull(state?.frameAges?.latestFrameAgeMs)
+      : Math.max(0, Number(nowMs) - frameAtMs),
+    tick: numberOrNull(realtime.tick),
+    selfHp: numberOrNull(self?.hp ?? self?.displayHp),
+    selfDrop: numberOrNull(self?.drop),
+    selfX: numberOrNull(self?.x),
+    selfY: numberOrNull(self?.y)
+  };
+}
+
 function selfStaminaRemainingMs(self) {
   if (!self || typeof self !== 'object') return null;
   const candidates = [
@@ -550,7 +573,10 @@ function evaluateBrowserlessSafety(state = {}, context = {}, options = {}) {
   }
 
   if (context.wsClosed) {
-    return createSafetyEvent('ws-closed', context.wsClosed, { nowMs });
+    return createSafetyEvent('ws-closed', {
+      ...context.wsClosed,
+      lastControl: lastControlDetail(state, nowMs)
+    }, { nowMs });
   }
 
   const frameGapMs = numberOrNull(context.frameGapMs)
@@ -559,7 +585,8 @@ function evaluateBrowserlessSafety(state = {}, context = {}, options = {}) {
   if (frameGapMs !== null && frameGapMs > frameGapAlertMs) {
     return createSafetyEvent('frame-gap', {
       frameGapMs,
-      frameGapAlertMs
+      frameGapAlertMs,
+      lastControl: lastControlDetail(state, nowMs)
     }, { nowMs });
   }
 
@@ -771,6 +798,7 @@ function createBrowserlessSafetyController(options = {}) {
             frameGapAlertMs: soft.frameGapAlertMs,
             hardDeadlineMs: soft.hardDeadlineMs,
             risk,
+            lastControl: lastControlDetail(state, nowMs),
             softStop: {
               startedAt: soft.startedAt,
               startTick: soft.startTick,
@@ -808,6 +836,7 @@ function createBrowserlessSafetyController(options = {}) {
             frameGapAlertMs,
             hardDeadlineMs,
             risk,
+            lastControl: lastControlDetail(state, nowMs),
             softStop: soft ? {
               startedAt: soft.startedAt,
               startTick: soft.startTick,

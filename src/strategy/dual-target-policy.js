@@ -9,7 +9,22 @@ const DEFAULT_SECONDARY_NO_DAMAGE_STEP_MS = 0;
 const DEFAULT_SECONDARY_CLOSE_DISTANCE_CM = 2000;
 const DEFAULT_SECONDARY_PRESSURE_WINDOW_MS = 1500;
 const DEFAULT_SECONDARY_PRESSURE_MIN_SHOTS = 2;
-const DEFAULT_SECONDARY_PRESSURE_MAX_LAST_SHOT_AGE_MS = 750;
+// 持续攻击的“最新一次发射”容忍度。1500ms 窗口、至少两次发射观测不变, 但最后
+// 一次发射的年龄上限从 750ms 放宽到 1200ms: 对手按 500-750ms 节奏连发时, 中间
+// 漏掉一次观测就会让 793ms 的样本被判成“已停火”, 1.1km 内的交战因此回落成对
+// 9km 外挂机目标的射击。1200ms 仍然要求最后五分之四的窗口内有弹, 不会把已经
+// 脱离的目标继续当作持续压力。
+const DEFAULT_SECONDARY_PRESSURE_MAX_LAST_SHOT_AGE_MS = 1200;
+// 远距离副目标只在对手站桩时开火。按两日生产日志逐档统计“发射数 / 可归因
+// 掉血帧”, 6km 是唯一的断崖: 6km 内每档都有稳定命中 (近身 58%、3-4km 13%、
+// 4-6km 1.3%), 6km 外两天合计 2,151 发只换来 1 次掉血 (3 点), 约 1,076 体力;
+// 其中 2,093 发属于“>6km 且 >=30cm/s”, 正是本门槛抑制的部分。
+// 所以门槛取 6km 而不是更激进的距离: 它只砍掉实测零收益的那一段, 不触碰仍有
+// 命中的档位。这条门槛只停止“打不中的逐格发射”, 不改变副目标准入、保留、
+// Dodge、退出和配额: 对手仍在开火就继续交战并闪避, 只是把体力留到能命中的
+// 距离。今日伤害近身豁免 (<=2000cm) 与近身持续压力距离上天然在门槛内。
+const DEFAULT_SECONDARY_FIRE_RANGE_CM = 6000;
+const DEFAULT_SECONDARY_FIRE_RANGE_EVASIVE_SPEED_CM_PER_SEC = 30;
 const DEFAULT_INCOMING_PRESSURE_EVIDENCE_LEASE_MS = 2500;
 const DEFAULT_SECONDARY_RETENTION_WINDOW_MS = DEFAULT_INCOMING_PRESSURE_EVIDENCE_LEASE_MS;
 // 已经打出可归因伤害的同一场交战单独用一条更长的租约。对手用横向绕行拉开火力
@@ -127,6 +142,18 @@ function samplesInWindow(samples = [], nowMs = Date.now(), windowMs = DEFAULT_SE
     const at = Number(sample?.at || 0);
     return at >= cutoff && at <= now;
   });
+}
+
+// Mean observed speed over the recent samples. Frame-to-frame vx/vy is noisy for
+// a strafing opponent, so the range gate reads the average instead of one frame.
+function averageSpeedInWindow(samples = [], nowMs = Date.now(), windowMs = DEFAULT_SECONDARY_WINDOW_MS) {
+  const rows = samplesInWindow(samples, nowMs, windowMs);
+  if (!rows.length) return 0;
+  const total = rows.reduce(
+    (sum, sample) => sum + Math.hypot(Number(sample?.vx) || 0, Number(sample?.vy) || 0),
+    0
+  );
+  return total / rows.length;
 }
 
 function hpLossRateInWindow(samples = [], field, nowMs = Date.now(), windowMs = DEFAULT_SECONDARY_WINDOW_MS) {
@@ -312,6 +339,7 @@ function secondaryClosePressurePolicy(input = {}, options = {}) {
     attackSampleCount: shotSamples.length,
     latestShotAt: latestShotAt || null,
     latestShotAgeMs,
+    maxLastShotAgeMs: maximumLastShotAgeMs,
     reason: close && sustainedAttack
       ? 'secondary-close-sustained-fire'
       : (!close ? 'secondary-outside-close-pressure-range' : 'secondary-fire-not-sustained')
@@ -690,9 +718,28 @@ function secondaryFirePolicy(input = {}, options = {}) {
   const quotaExemptionReason = closePressure.active
     ? (dailyDamageCloseExemption ? 'sustained-close-fire+daily-damage-close' : 'sustained-close-fire')
     : (dailyDamageCloseExemption ? 'daily-damage-close' : '');
+  const distanceCm = numberOrNull(input.distanceCm ?? target.distance);
+  const closeDistanceCm = Math.max(1, Number(
+    options.secondaryTargetCloseDistanceCm ?? DEFAULT_SECONDARY_CLOSE_DISTANCE_CM
+  ));
+  // Never let a configured range fall inside the close band: the <=2000cm quota
+  // exemption and the daily-damage exemption are hard entitlements.
+  const fireRangeCm = Math.max(closeDistanceCm, Number(
+    options.secondaryTargetFireRangeCm ?? DEFAULT_SECONDARY_FIRE_RANGE_CM
+  ));
+  const evasiveSpeedCmPerSec = Math.max(1, Number(
+    options.secondaryTargetFireRangeEvasiveSpeedCmPerSec
+      ?? DEFAULT_SECONDARY_FIRE_RANGE_EVASIVE_SPEED_CM_PER_SEC
+  ));
+  const targetSpeedCmPerSec = averageSpeedInWindow(state.motionSamples, nowMs, windowMs);
+  const outOfFireRange = distanceCm !== null && distanceCm > fireRangeCm;
+  const evasive = targetSpeedCmPerSec >= evasiveSpeedCmPerSec;
+  // Out of range and actually moving: keep the engagement, retention and Dodge,
+  // drop only the per-slot dispatch.
+  const rangeSuppressed = outOfFireRange && evasive && !throttleExempt;
   // Cadence is a forecast for the shared 10-frame grid, never an independent
   // transmission gate. The rolling quota may still make a legal frame slower.
-  const allowed = !invulnerable && (throttleExempt || quotaAvailable);
+  const allowed = !invulnerable && !rangeSuppressed && (throttleExempt || quotaAvailable);
   return {
     allowed,
     invulnerable,
@@ -705,15 +752,22 @@ function secondaryFirePolicy(input = {}, options = {}) {
     dailyDamageCloseExemption,
     quotaExemptionReason,
     closePressure,
+    distanceCm,
+    fireRangeCm,
+    targetSpeedCmPerSec,
+    evasive,
+    rangeSuppressed,
     reason: invulnerable
       ? 'secondary-invulnerable-dodge-only'
       : closePressure.active
         ? 'secondary-close-pressure-normal-fire'
         : dailyDamageCloseExemption
           ? 'secondary-daily-damage-close-normal-fire'
-          : !quotaAvailable
-            ? 'secondary-five-second-shot-quota'
-            : 'secondary-defensive-fire'
+          : rangeSuppressed
+            ? 'secondary-out-of-fire-range'
+            : !quotaAvailable
+              ? 'secondary-five-second-shot-quota'
+              : 'secondary-defensive-fire'
   };
 }
 
@@ -807,6 +861,15 @@ function secondaryOwnDamageRetentionEvidence(
   };
 }
 
+// The distance/evasiveness gate only trims unproductive per-slot fire, so it must
+// never override a decision the reward/survival race already made: when
+// `secondary-focus` is active the arbitration owns the shot (UC-005 sustained
+// damaging pressure, which is reachable beyond the close band). Returns true only
+// when the range gate is the reason to withhold fire and nothing outranks it.
+function secondaryRangeGateBlocksFire(input = {}) {
+  return input.rangeSuppressed === true && input.secondaryFocusActive !== true;
+}
+
 function secondaryRetentionPolicy(
   combatTargetState = null,
   nowMs = Date.now(),
@@ -877,6 +940,8 @@ module.exports = {
   DEFAULT_SECONDARY_RETENTION_WINDOW_MS,
   DEFAULT_SECONDARY_BASE_CADENCE_MS,
   DEFAULT_SECONDARY_CLOSE_DISTANCE_CM,
+  DEFAULT_SECONDARY_FIRE_RANGE_CM,
+  DEFAULT_SECONDARY_FIRE_RANGE_EVASIVE_SPEED_CM_PER_SEC,
   DEFAULT_SECONDARY_MAX_CADENCE_MS,
   DEFAULT_SECONDARY_NO_DAMAGE_STEP_MS,
   DEFAULT_SECONDARY_PRESSURE_MAX_LAST_SHOT_AGE_MS,
@@ -901,6 +966,7 @@ module.exports = {
   secondaryCombatExitPolicy,
   secondaryCadenceMs,
   secondaryClosePressurePolicy,
+  secondaryRangeGateBlocksFire,
   secondaryFirePolicy,
   secondaryOwnDamageRetentionEvidence,
   secondaryOwnDamageRetentionWindowMs,

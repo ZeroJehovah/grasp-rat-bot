@@ -1949,6 +1949,63 @@ function runnerResultConfirmedLeave(result) {
   return Boolean(canary.leave?.ok || canary.safety?.exit?.leave?.ok);
 }
 
+// A transport loss is the one exit where the character stays in the world with
+// no command in flight, so its cost is time out of control and any HP lost in
+// that window. These reasons are the ones whose safety event carries
+// `detail.lastControl`; every other exit already has a controlled leave.
+const TRANSPORT_LOSS_EXIT_REASONS = new Set(['ws-closed', 'ws-error', 'frame-gap']);
+const TRANSPORT_DISCONNECT_PAIRING_WINDOW_MS = 30 * 60 * 1000;
+
+function latestTransportLossExit(recentExits, loginAtMs) {
+  const rows = Array.isArray(recentExits) ? recentExits : [];
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const event = rows[index];
+    const reason = String(event?.reason || '');
+    if (!TRANSPORT_LOSS_EXIT_REASONS.has(reason) || event?.shouldLeave !== true) continue;
+    const atMs = Date.parse(String(event?.at || ''));
+    if (!Number.isFinite(atMs) || atMs > loginAtMs) continue;
+    if (loginAtMs - atMs > TRANSPORT_DISCONNECT_PAIRING_WINDOW_MS) return null;
+    return { ...event, reason, atMs, lastControl: event?.detail?.lastControl || null };
+  }
+  return null;
+}
+
+// Diagnostics only: joins the persisted transport-loss safety event with the
+// re-login it caused. Nothing reads this back, so a missing pair costs nothing.
+function transportDisconnectRecoveryDetail(event, entry = {}) {
+  const loginAtMs = Date.parse(String(entry.loginAt || ''));
+  if (!event || !Number.isFinite(loginAtMs)) return null;
+  const lastControl = event.lastControl || {};
+  const firstSelf = entry.firstSelf || entry.entry?.firstSelf || null;
+  const lastFrameAtMs = numberOrNull(lastControl.lastFrameAtMs);
+  const hpBefore = numberOrNull(lastControl.selfHp);
+  const hpAfter = numberOrNull(firstSelf?.hp);
+  // Frame age already measures the stall up to the event; the rest runs from
+  // the event to the first controlled frame after re-login.
+  return {
+    runId: String(entry.runId || ''),
+    reason: event.reason,
+    exitAt: Number.isFinite(event.atMs) ? new Date(event.atMs).toISOString() : '',
+    exitAttemptId: String(
+      event.exitAttemptId || event.detail?.pendingExit?.exitAttemptId || ''
+    ),
+    lastFrameAtMs,
+    lastFrameAgeMs: numberOrNull(lastControl.lastFrameAgeMs),
+    loginAt: String(entry.loginAt || ''),
+    outOfControlMs: lastFrameAtMs === null ? null : Math.max(0, loginAtMs - lastFrameAtMs),
+    tick: numberOrNull(lastControl.tick),
+    hpBefore,
+    hpAfter,
+    hpDelta: hpBefore === null || hpAfter === null ? null : hpAfter - hpBefore,
+    dropBefore: numberOrNull(lastControl.selfDrop),
+    lastX: numberOrNull(lastControl.selfX),
+    lastY: numberOrNull(lastControl.selfY),
+    loginX: numberOrNull(firstSelf?.x),
+    loginY: numberOrNull(firstSelf?.y),
+    sourceIp: String(entry.sourceIp || '')
+  };
+}
+
 function preserveOnlineSessionForLoopWait(result, loopPlan = {}) {
   return Boolean(
     loopPlan?.continue
@@ -2217,6 +2274,7 @@ async function runBrowserlessRunner(config, deps = {}) {
   let liveStatePersistencePending = false;
   let loginSuccessStatePatchGeneration = 0;
   let lastLoginSuccessStatePatchKey = '';
+  let lastTransportDisconnectPairKey = '';
   const pendingLoginSuccessStatePatches = [];
   const pendingDeferredLoginSuccessStateWrites = [];
   if (publishLiveState) {
@@ -3373,6 +3431,22 @@ async function runBrowserlessRunner(config, deps = {}) {
     if (patchKey === lastLoginSuccessStatePatchKey) return false;
     lastLoginSuccessStatePatchKey = patchKey;
     const current = liveState || readBrowserlessStateFile(stateFile) || persisted;
+    const transportLoss = latestTransportLossExit(current.recentExits, Date.parse(String(loginAt)));
+    if (transportLoss) {
+      const pairKey = `${transportLoss.at || ''}\u0000${transportLoss.runId || ''}`;
+      if (pairKey !== lastTransportDisconnectPairKey) {
+        lastTransportDisconnectPairKey = pairKey;
+        const disconnectDetail = transportDisconnectRecoveryDetail(transportLoss, {
+          runId,
+          loginAt,
+          firstSelf: canary?.firstSelf || canary?.entry?.firstSelf || null,
+          sourceIp: canary?.sourceIp || canary?.entry?.sourceIp || current.network?.sourceIp || ''
+        });
+        if (disconnectDetail) {
+          logStore.append('runner', 'transport-disconnect-recovery', disconnectDetail);
+        }
+      }
+    }
     const loginRecoveryAssociation = consumeLoginRecoveryAssociation(
       current.runner?.pendingLoginRecovery
     );
@@ -11576,6 +11650,8 @@ module.exports = {
   confirmedLeaveStateFromResult,
   hydrateConfigFromState,
   isFirstBrowserlessLoginOfDay,
+  latestTransportLossExit,
+  transportDisconnectRecoveryDetail,
   learnedLoginPointFromCanary,
   preLoginSafetyLeadMs,
   sourceIpPreflightAction,

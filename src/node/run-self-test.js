@@ -189,8 +189,10 @@ const {
   browserlessLoopPlan,
   preLoginSafetyLeadMs,
   publicConfig,
+  latestTransportLossExit,
   learnedLoginPointFromCanary,
   persistedReconnectDelayPlan,
+  transportDisconnectRecoveryDetail,
   preserveOnlineSessionForLoopWait,
   runnerResultExitDetail,
   runBrowserlessRunner,
@@ -29276,6 +29278,75 @@ async function runSelfTest() {
         return checks.join('|');
       })(),
       want: 'unsafe-login-point|ws-error|ws-closed|frame-gap|no-self|safe|stale-self|stamina-exhausted|direct-leave-failed|safe'
+    },
+    {
+      // 掉线/掉帧退出时角色仍留在场内且没有指令在途, 所以安全事件要带上最后
+      // 一个受控帧的 tick/HP/Drop/坐标; 重登时再配对成一行
+      // transport-disconnect-recovery, 这段真空就只看两行日志。仅诊断, 不改变
+      // 任何决策。
+      name: 'transport-loss safety events carry last controlled frame and pair with re-login',
+      got: (() => {
+        const lastFrameAtMs = 1792657300000;
+        const lossState = {
+          realtime: {
+            tick: 1170353,
+            receivedAtMs: lastFrameAtMs,
+            self: { user_id: 7, x: 18054, y: 50733, hp: 67, drop: 20080 }
+          },
+          frameAges: { latestFrameAgeMs: 120 }
+        };
+        const closed = evaluateBrowserlessSafety(lossState, {
+          wsClosed: { code: 1006 },
+          nowMs: lastFrameAtMs + 1500
+        });
+        const gap = evaluateBrowserlessSafety(lossState, {
+          frameGapMs: 6000,
+          frameGapAlertMs: 2000,
+          nowMs: lastFrameAtMs + 6000
+        });
+        const recentExits = [
+          { at: '2026-10-22T08:00:00.000Z', reason: 'low-hp-secondary-unconditional', shouldLeave: true },
+          {
+            at: '2026-10-22T08:21:41.500Z',
+            reason: 'ws-closed',
+            shouldLeave: true,
+            detail: { code: 1006, lastControl: closed.detail.lastControl }
+          },
+          { at: '2026-10-22T08:22:00.000Z', reason: 'ws-closed', shouldLeave: false }
+        ];
+        const paired = latestTransportLossExit(recentExits, lastFrameAtMs + 81500);
+        const detached = transportDisconnectRecoveryDetail(paired, {
+          runId: 'profit-live-relogin',
+          loginAt: new Date(lastFrameAtMs + 81500).toISOString(),
+          firstSelf: { x: 5999, y: 66268, hp: 67 },
+          sourceIp: '10.0.0.112'
+        });
+        const stale = latestTransportLossExit(recentExits, lastFrameAtMs + 40 * 60 * 1000);
+        const future = latestTransportLossExit(recentExits, lastFrameAtMs);
+        return [
+          closed.reason,
+          closed.detail.lastControl.tick,
+          closed.detail.lastControl.selfHp,
+          closed.detail.lastControl.selfDrop,
+          closed.detail.lastControl.lastFrameAgeMs,
+          gap.reason,
+          gap.detail.lastControl.selfX,
+          gap.detail.lastControl.lastFrameAgeMs,
+          paired && paired.reason,
+          paired && paired.atMs,
+          detached && detached.outOfControlMs,
+          detached && detached.hpBefore,
+          detached && detached.hpAfter,
+          detached && detached.hpDelta,
+          detached && detached.loginX,
+          detached && detached.loginY,
+          detached && detached.dropBefore,
+          detached && detached.sourceIp,
+          stale === null,
+          future === null
+        ].join('|');
+      })(),
+      want: 'ws-closed|1170353|67|20080|1500|frame-gap|18054|6000|ws-closed|1792657301500|81500|67|67|0|5999|66268|20080|10.0.0.112|true|true'
     },
     {
       name: 'browserless frame-gap uses quiet soft-stop but keeps combat and low-hp hard exits',

@@ -36,7 +36,8 @@ const SHOT_AMENDMENTS_FILE = 'shot-amendments.jsonl';
 const SEGMENT_LIFECYCLE_FILE = 'segment-lifecycle.jsonl';
 const DROP_RACE_FILE = 'drop-race.jsonl';
 const MAX_ORIGIN_RESOLUTION_CANDIDATES = 4;
-const MAX_INDEX_LINE_BYTES = 8192;
+const MAX_INDEX_LINE_BYTES = 12288;
+const MAX_CROSS_TARGET_IDS = 8;
 const BATTLE_INDEX_FORMAT_VERSION = 3;
 const MAX_TRACKED_ENGAGEMENT_SEGMENTS = 256;
 const MAX_TRAJECTORY_COVERAGE_SHOT_EVENTS = 128;
@@ -353,6 +354,53 @@ function recordPhysicalExecution(ledger, event) {
     next.ownershipAnomalies = next.ownershipAnomalies.slice(-8);
   }
   return next;
+}
+
+function createCrossTargetLedger() {
+  return {
+    dispatchCount: 0,
+    acceptedCount: 0,
+    targetCounts: new Map()
+  };
+}
+
+function recordCrossTargetExecution(ledger, event) {
+  const next = ledger || createCrossTargetLedger();
+  const type = String(event?.type || '');
+  if (type !== 'shoot-dispatch' && type !== 'shoot-ack-accepted') return next;
+  if (type === 'shoot-ack-accepted') {
+    next.acceptedCount += 1;
+    return next;
+  }
+  next.dispatchCount += 1;
+  const targetId = String(event?.targetId ?? '');
+  if (targetId) next.targetCounts.set(targetId, Number(next.targetCounts.get(targetId) || 0) + 1);
+  return next;
+}
+
+function crossTargetSummary(ledger, baseline = {}) {
+  const value = ledger || createCrossTargetLedger();
+  const prior = baseline && typeof baseline === 'object' ? baseline : {};
+  const dispatchCount = Math.max(0, Number(value.dispatchCount || 0));
+  const acceptedCount = Math.max(0, Number(value.acceptedCount || 0));
+  const targetCounts = {};
+  let targetSlots = 0;
+  const ranked = [...(value.targetCounts || [])]
+    .map(([id, count]) => [String(id || ''), Math.max(0, Number(count || 0))])
+    .filter(([id, n]) => id && n > 0)
+    .sort((a, b) => b[1] - a[1]);
+  for (const [id, n] of ranked) {
+    if (targetSlots >= MAX_CROSS_TARGET_IDS) break;
+    targetCounts[id] = n;
+    targetSlots += 1;
+  }
+  return {
+    dispatchCount,
+    acceptedCount,
+    targetCounts,
+    cumulativeDispatchCount: Math.max(0, Number(prior.dispatchCount || 0)) + dispatchCount,
+    cumulativeAcceptedCount: Math.max(0, Number(prior.acceptedCount || 0)) + acceptedCount
+  };
 }
 
 function physicalSegmentSummary(ledger, fallbackValues = {}) {
@@ -1145,6 +1193,11 @@ function buildBattleSummary(battle, reason, finalizeMs) {
     : [{
         type: executionCountsMatchAudit ? 'accepted-over-requested' : 'physical-audit-execution-mismatch'
       }];
+  const crossTargetBaseline = battle.engagementCrossTargetBaseline || {};
+  const crossTarget = crossTargetSummary(battle.crossTargetLedger, {
+    dispatchCount: numberOrNull(crossTargetBaseline.dispatchCount) ?? 0,
+    acceptedCount: numberOrNull(crossTargetBaseline.acceptedCount) ?? 0
+  });
   const exitTail = summarizeBattleExitTail(battle.exitTail);
   const engagementTrajectoryCoverage = mergeTrajectoryCoverageShotObservations(
     battle.trajectoryCoverageLedger,
@@ -1179,6 +1232,12 @@ function buildBattleSummary(battle, reason, finalizeMs) {
     segmentMetricSourceFields: physicalSegment.sourceFields,
     segmentInvariant: physicalSegment.invariant,
     physicalSegmentLedger: physicalSegment.raw,
+    segmentCrossTargetDispatchCount: crossTarget.dispatchCount,
+    segmentCrossTargetAcceptedCount: crossTarget.acceptedCount,
+    segmentCrossTargetTargets: crossTarget.targetCounts,
+    segmentAllTargetDispatchCount: segmentRequestedShots + crossTarget.dispatchCount,
+    engagementCumulativeCrossTargetDispatchCount: crossTarget.cumulativeDispatchCount,
+    engagementCumulativeCrossTargetAcceptedCount: crossTarget.cumulativeAcceptedCount,
     ...(([...(physicalSegment.raw.ownershipAnomalies || []), ...shotOwnershipAnomalies].slice(-8).length)
       ? {
           shotOwnershipAnomalies: [
@@ -1448,6 +1507,10 @@ function createCombatBattleLog(options = {}) {
         lastSegmentFile: summary.file,
         lastMetrics: metricSnapshot(battle.lastMetrics),
         cumulativePhysicalMetrics: summary.engagementPhysicalMetrics || null,
+        cumulativeCrossTargetMetrics: {
+          dispatchCount: summary.engagementCumulativeCrossTargetDispatchCount || 0,
+          acceptedCount: summary.engagementCumulativeCrossTargetAcceptedCount || 0
+        },
         trajectoryCoverageLedger: battle.trajectoryCoverageLedger,
         engagementStartedAtMs: battle.engagementStartedAtMs,
         touchedAtMs: atMs
@@ -1493,7 +1556,13 @@ function createCombatBattleLog(options = {}) {
       // segment* metrics additive without relying on a filename suffix.
       segmentMetricBaseline: priorMetrics || zeroMetricBaseline(metrics),
       engagementPhysicalBaseline: previous?.cumulativePhysicalMetrics || {},
+      engagementCrossTargetBaseline: previous?.cumulativeCrossTargetMetrics || {},
       physicalLedger: createPhysicalSegmentLedger(),
+      // Dispatches aimed at a different player while this segment's own target
+      // is active. They stay out of the per-target ledger (damage and hit rate
+      // belong to the segment target only) but must still be countable, or the
+      // day's shot totals silently lose them.
+      crossTargetLedger: createCrossTargetLedger(),
       trajectoryCoverageLedger: previous?.trajectoryCoverageLedger || createTrajectoryCoverageShotObservations(),
       frames: 0,
       firstFrameAtMs: atMs,
@@ -1858,6 +1927,11 @@ function createCombatBattleLog(options = {}) {
       if (eventTargetsActiveBattle) {
         active.physicalLedger = recordPhysicalExecution(active.physicalLedger, event);
         active.combatAudit = observeCombatAuditExecution(active.combatAudit, event);
+      } else {
+        // combatAudit and the physical ledger stay scoped to the segment
+        // target so hit rate and the ownership invariant keep their meaning;
+        // the cross-target counter is the additive accounting channel.
+        active.crossTargetLedger = recordCrossTargetExecution(active.crossTargetLedger, event);
       }
       active.shotExecutionEvents = active.shotExecutionEvents.slice(-256);
       active.frames += 1;
@@ -2350,7 +2424,7 @@ function runCombatBattleLogSelfTest() {
       && first.exitTail?.tailFrames === 5
       && first.exitTail?.terminalOutcome === 'death-observed');
     const firstIndexBytes = Buffer.byteLength(JSON.stringify(first), 'utf8');
-    assert(`index summary remains below eight KiB (${firstIndexBytes} bytes)`, firstIndexBytes <= MAX_INDEX_LINE_BYTES);
+    assert(`index summary remains below twelve KiB (${firstIndexBytes} bytes)`, firstIndexBytes <= MAX_INDEX_LINE_BYTES);
     const second = JSON.parse(indexLines[1]);
     assert('battle observation sets are isolated across targets', second.targetId === '200'
       && second.opponentUniqueBulletCount === 1 && second.opponentShotEventCount === 1);
@@ -2776,7 +2850,7 @@ function runCombatBattleLogSelfTest() {
       && ownershipRows[1].combatAudit.skipEventCount === 3
       && ownershipRows[1].combatAudit.skipCount === 2
       && ownershipRows[1].combatAudit.leaveDispatchCount === 1);
-    assert('combatAudit mismatch summary remains below eight KiB',
+    assert('combatAudit mismatch summary remains below twelve KiB',
       Buffer.byteLength(JSON.stringify(ownershipRows[1]), 'utf8') <= MAX_INDEX_LINE_BYTES);
 
     const crossTargetRoot = path.join(root, 'cross-target');
@@ -2836,6 +2910,13 @@ function runCombatBattleLogSelfTest() {
         && crossTargetEvents.filter(event => event.targetId === '42').length === 2
         && crossTargetEvents.filter(event => event.targetId === '42')
           .every(event => event.crossTargetWithinEngagement === true));
+    assert('cross-target dispatches stay countable without touching the target-scoped ledger',
+      crossTargetRow.segmentCrossTargetDispatchCount === 1
+        && crossTargetRow.segmentCrossTargetAcceptedCount === 1
+        && crossTargetRow.segmentCrossTargetTargets?.['42'] === 1
+        && crossTargetRow.segmentAllTargetDispatchCount === 2
+        && crossTargetRow.engagementCumulativeCrossTargetDispatchCount === 1
+        && crossTargetRow.engagementCumulativeCrossTargetAcceptedCount === 1);
 
     // requestSequence restarts at one for every control generation. A later
     // generation must therefore keep its first dispatch/ACK physical even

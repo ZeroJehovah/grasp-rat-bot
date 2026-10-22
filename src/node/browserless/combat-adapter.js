@@ -121,6 +121,7 @@ const {
   primaryRewardSurvivalRacePolicy,
   secondaryCombatExitPolicy,
   secondaryFirePolicy,
+  secondaryRangeGateBlocksFire,
   secondaryRetentionPolicy
 } = require('../../strategy/dual-target-policy');
 const {
@@ -7178,7 +7179,18 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       ? 'primary-finish-race'
       : primaryFireAuthorizationClass)
     : fireAuthorization.fireAuthorizationClass;
-  if (!primarySelected && resolvedWouldShoot && secondaryPolicy && !secondaryPolicy.allowed) {
+  // The distance/evasiveness gate only trims unproductive per-slot fire. When the
+  // reward/survival race has already decided to focus this secondary (sustained
+  // in-range-damaging pressure, UC-005), that arbitration owns the decision and
+  // the gate stays out of it.
+  const secondaryFocusOverride = dualTargetArbitration.secondaryFocusActive === true;
+  const secondaryRangeGateExempt = secondaryPolicy?.rangeSuppressed === true
+    && !secondaryRangeGateBlocksFire({
+      rangeSuppressed: true,
+      secondaryFocusActive: secondaryFocusOverride
+    });
+  if (!primarySelected && resolvedWouldShoot && secondaryPolicy && !secondaryPolicy.allowed
+    && !secondaryRangeGateExempt) {
     resolvedWouldShoot = false;
     resolvedFinalFireBlocker = `secondary:${secondaryPolicy.reason}`;
     resolvedFireAuthorizationClass = 'secondary-defensive-policy-blocked';
@@ -7543,6 +7555,7 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       incomingPressureEvidence: incomingPressureContext.pressureEvidence,
       residualThreatLease: incomingPressureContext.residualThreatLease,
       secondaryFocusActive: dualTargetArbitration.secondaryFocusActive === true,
+      secondaryFocusRangeOverride: secondaryFocusOverride,
       secondaryPolicy: secondaryPolicy ? {
         ...secondaryPolicy,
         primaryTargetId,
