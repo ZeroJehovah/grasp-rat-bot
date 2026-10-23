@@ -305,7 +305,8 @@ const {
   claimShootSlot,
   tickGridSnapshot,
   countGridSlotsUntil,
-  nextGridDelayMs
+  nextGridDelayMs,
+  REANCHOR_STREAK
 } = require('./tick-grid-shooting');
 const { evaluateAfkFiveFrameSafety, evaluateAfkPrearrivalCompetition } = require('./afk-fire-safety');
 const { evaluateAfkFirePolicyCore } = require('./afk-fire-policy');
@@ -400,6 +401,207 @@ function runStrategyModuleSelfTests() {
       && nextGridDelayMs({ tick: 10, tickMs: 50, gridStep: 10, afterClaim: true }) === 500
       && nextGridDelayMs({ tick: 20, tickMs: 50, gridStep: 10, afterClaim: true }) === 500
       && nextGridDelayMs({ tick: null, tickMs: 50, gridStep: 10 }) === 50
+  });
+
+  // 2026-10-23 regression, replayed in the exact order that locked the day:
+  //   1) midnight rotation clears the learned rate,
+  //   2) the first new-day frame (tick 216) arrives 11s after midnight. It is
+  //      accepted because an empty rate falls back to 1 tick/ms,
+  //   3) the next frame arrives 30s in, counter advanced by one tick only ->
+  //      the learned rate becomes 1/29800 = 0.0000336 ticks/ms,
+  //   4) the day bound then collapses to a few ticks, so every later frame is
+  //      rejected, and rejected frames never update the rate. The watermark
+  //      froze at tick 217 while decisions reached 687416, and all 284728 shot
+  //      claims failed as decision-tick-stale.
+  // The bound is now a constant, so no sample ordering can lock the day.
+  // First-frame arrival gaps 20-200ms are covered because that spread was the
+  // trigger condition; the stalled second sample is what poisons the old rate.
+  const midnightGapCases = [20, 50, 100, 200];
+  const midnightGapResults = midnightGapCases.map(firstGapMs => {
+    const state = createTickGridShootingState();
+    const dayOneStart = 500000;
+    const dayTwoStart = 600000;
+    observeRealtimeTick(state, {
+      tick: 1717306,
+      receivedAtMs: dayOneStart + 86300000
+    }, { dateKey: 'day-1', dayStart: () => dayOneStart });
+    const firstFrame = observeRealtimeTick(state, {
+      tick: 216,
+      receivedAtMs: dayTwoStart + 11000 + firstGapMs
+    }, { dateKey: 'day-2', dayStart: () => dayTwoStart });
+    // Long stall with the counter almost frozen: the sample that pinned the
+    // learned rate and collapsed the bound.
+    const afterStall = observeRealtimeTick(state, {
+      tick: 217,
+      receivedAtMs: dayTwoStart + 30000
+    }, { dateKey: 'day-2', dayStart: () => dayTwoStart });
+    let rejected = 0;
+    let claim = null;
+    let tick = 217;
+    for (let index = 1; index <= 1200; index += 1) {
+      tick += 1;
+      const atMs = dayTwoStart + 30000 + index * 50;
+      const result = observeRealtimeTick(state, {
+        tick,
+        receivedAtMs: atMs
+      }, { dateKey: 'day-2', dayStart: () => dayTwoStart });
+      if (!result.ok) rejected += 1;
+      if (claim === null && tick % 10 === 0) {
+        claim = claimShootSlot(state, {
+          decisionEpoch: state.epoch,
+          decisionTick: tick,
+          gridStep: 10,
+          atMs
+        });
+      }
+    }
+    const snapshot = tickGridSnapshot(state);
+    return firstFrame.ok === true
+      && afterStall.ok === true
+      && rejected === 0
+      && claim !== null
+      && claim.ok === true
+      && snapshot.tick === tick
+      && snapshot.lastClaimedTick === claim.tick
+      && snapshot.staleObservationCount === 0;
+  });
+  results.push({
+    name: 'tick-grid-midnight-rotation-cannot-freeze-on-a-long-first-gap',
+    passed: midnightGapResults.every(Boolean)
+  });
+
+  // A wrong-but-accepted seed must not blockade the day. Without the streak
+  // re-anchor, one too-high watermark rejects every real frame forever, because
+  // the real counter never exceeds it and so can never win by advancing.
+  const seededState = createTickGridShootingState();
+  const seededDayStart = 300000;
+  const seededBaseMs = seededDayStart + 5000;
+  observeRealtimeTick(seededState, {
+    tick: 900,
+    receivedAtMs: seededBaseMs
+  }, { dateKey: 'day-1', dayStart: () => seededDayStart });
+  // Real counter lives far below the seeded watermark and increases normally.
+  // The spacing is realistic for a live session (a few frames per second).
+  const belowResults = [];
+  for (let index = 1; index <= REANCHOR_STREAK + 2; index += 1) {
+    belowResults.push(observeRealtimeTick(seededState, {
+      tick: 100 + index,
+      receivedAtMs: seededBaseMs + index * 4000
+    }, { dateKey: 'day-1', dayStart: () => seededDayStart }));
+  }
+  const reanchored = belowResults.find(item => item.reason === 'watermark-reanchored');
+  const afterReanchorTick = 100 + REANCHOR_STREAK + 3;
+  const afterReanchorAtMs = seededBaseMs + (REANCHOR_STREAK + 3) * 4000;
+  const afterReanchor = observeRealtimeTick(seededState, {
+    tick: afterReanchorTick,
+    receivedAtMs: afterReanchorAtMs
+  }, { dateKey: 'day-1', dayStart: () => seededDayStart });
+  // Advance to the next grid-aligned tick and prove the gate now fires on the
+  // re-anchored watermark instead of the bogus seeded one.
+  const alignedTick = Math.ceil((afterReanchorTick + 1) / 10) * 10;
+  const alignedAtMs = afterReanchorAtMs + (alignedTick - afterReanchorTick) * 50;
+  const alignedFrame = observeRealtimeTick(seededState, {
+    tick: alignedTick,
+    receivedAtMs: alignedAtMs
+  }, { dateKey: 'day-1', dayStart: () => seededDayStart });
+  const seededSnapshot = tickGridSnapshot(seededState);
+  const seededClaim = claimShootSlot(seededState, {
+    decisionEpoch: seededState.epoch,
+    decisionTick: alignedTick,
+    gridStep: 10,
+    atMs: alignedAtMs
+  });
+  results.push({
+    name: 'tick-grid-reanchors-a-watermark-that-was-seeded-too-high',
+    passed: reanchored !== undefined
+      && reanchored.ok === true
+      && reanchored.fromTick === 900
+      && reanchored.tick <= 105
+      && afterReanchor.ok === true
+      && afterReanchor.reason === 'watermark-advanced'
+      && alignedFrame.ok === true
+      && seededSnapshot.lastReanchor !== null
+      && seededSnapshot.lastReanchor.reason === 'watermark-seeded-too-high'
+      && seededSnapshot.tick === alignedTick
+      && seededClaim.ok === true
+      && seededClaim.tick === alignedTick
+  });
+
+  // The re-anchor must not fire on ordinary out-of-order delivery: a couple of
+  // increasing frames below a fresh watermark inside a short window is normal.
+  const reorderState = createTickGridShootingState();
+  const reorderDayStart = 400000;
+  const reorderBaseMs = reorderDayStart + 10000;
+  observeRealtimeTick(reorderState, {
+    tick: 300,
+    receivedAtMs: reorderBaseMs
+  }, { dateKey: 'day-1', dayStart: () => reorderDayStart });
+  const reorderResults = [];
+  for (let index = 1; index <= REANCHOR_STREAK + 2; index += 1) {
+    reorderResults.push(observeRealtimeTick(reorderState, {
+      tick: 288 + index,
+      receivedAtMs: reorderBaseMs + index * 5
+    }, { dateKey: 'day-1', dayStart: () => reorderDayStart }));
+  }
+  const reorderSnapshot = tickGridSnapshot(reorderState);
+  results.push({
+    name: 'tick-grid-does-not-reanchor-on-short-out-of-order-bursts',
+    passed: reorderResults.every(item => item.ok === false)
+      && reorderResults.every(item => item.reason === 'older-watermark-tick')
+      && reorderSnapshot.tick === 300
+      && reorderSnapshot.lastReanchor === null
+  });
+
+  // The watermark must not jump hours ahead inside one day either, and the
+  // rejection must leave the anchor usable so normal frames still advance.
+  const jumpState = createTickGridShootingState();
+  observeRealtimeTick(jumpState, {
+    tick: 200000,
+    receivedAtMs: 900000 + 10000000
+  }, { dateKey: 'day-1', dayStart: () => 900000 });
+  // Still under the day-wide ceiling, but hours ahead of the anchor in 100ms:
+  // the shape a prior-day counter takes when it leaks well after midnight.
+  const jumped = observeRealtimeTick(jumpState, {
+    tick: 400000,
+    receivedAtMs: 900000 + 10000100
+  }, { dateKey: 'day-1', dayStart: () => 900000 });
+  const recovered = observeRealtimeTick(jumpState, {
+    tick: 200001,
+    receivedAtMs: 900000 + 10000150
+  }, { dateKey: 'day-1', dayStart: () => 900000 });
+  const jumpSnapshot = tickGridSnapshot(jumpState);
+  results.push({
+    name: 'tick-grid-rejects-single-frame-watermark-jump-and-keeps-the-anchor',
+    passed: jumped.ok === false
+      && jumped.reason === 'tick-advance-implausible'
+      && recovered.ok === true
+      && jumpSnapshot.tick === 200001
+      && jumpSnapshot.staleObservationCount === 1
+      && jumpSnapshot.lastStaleObservation?.reason === 'tick-advance-implausible'
+  });
+
+  // The constant ceiling must still reject a prior-day counter that leaks past
+  // midnight, and the new diagnostic field must expose why.
+  const leakedState = createTickGridShootingState();
+  observeRealtimeTick(leakedState, {
+    tick: 1717306,
+    receivedAtMs: 700000 + 86300000
+  }, { dateKey: 'day-1', dayStart: () => 700000 });
+  const leakedFrame = observeRealtimeTick(leakedState, {
+    tick: 1717500,
+    receivedAtMs: 800000 + 300
+  }, { dateKey: 'day-2', dayStart: () => 800000 });
+  const leakedSnapshot = tickGridSnapshot(leakedState);
+  results.push({
+    name: 'tick-grid-still-rejects-prior-day-tick-and-reports-last-stale-observation',
+    passed: leakedFrame.ok === false
+      && leakedFrame.reason === 'cross-day-tick-implausible'
+      && leakedSnapshot.tick === 1717306
+      && leakedSnapshot.staleObservationCount === 1
+      && leakedSnapshot.lastStaleObservation !== null
+      && leakedSnapshot.lastStaleObservation?.tick === 1717500
+      && leakedSnapshot.lastStaleObservation?.reason === 'cross-day-tick-implausible'
+      && Number.isFinite(leakedSnapshot.lastStaleObservation?.maximumTick)
   });
 
   const safetySelf = { user_id: 1, x: 0, y: 0 };

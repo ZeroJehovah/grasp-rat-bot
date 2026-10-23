@@ -6,10 +6,36 @@
 const DEFAULT_GRID_STEP = 10;
 const SAFE_AFK_GRID_STEP = 5;
 const DEFAULT_TICK_MS = 50;
-// Physical floor for the cross-day sanity bound: a server frame counter cannot
-// advance faster than one per millisecond. It is only a rejection bound for
-// frames delivered across a midnight rotation, never a shooting cadence.
-const MIN_PLAUSIBLE_TICK_RATE_PER_MS = 1;
+// Fixed ceiling for the cross-day sanity bound. It is only a rejection bound
+// for frames delivered across a midnight rotation, never a shooting cadence.
+// Measured on 2026-10-22/23 over 44580 frames, the sustained cadence is 0.0199
+// ticks/ms (identical over 1m/10m/1h windows), so this leaves about 2.5x
+// headroom while a prior-day counter leaking past midnight is orders of
+// magnitude above it.
+//
+// The bound must stay a constant. It used to be learned from live frames, and
+// one long first inter-frame gap after a midnight rotation pinned the learned
+// rate low; the low bound then rejected every later frame of that day (931265
+// stale observations on 2026-10-23, claimCount frozen at 369 and 281442 shots
+// skipped), and rejected frames could never correct the rate again, so the
+// watermark froze at tick 216 and every shot was refused as
+// decision-tick-stale for the rest of the day.
+const MAX_PLAUSIBLE_TICK_RATE_PER_MS = 0.05;
+const PLAUSIBLE_TICK_MARGIN = 8;
+// Consecutive strictly-increasing frames below the retained watermark that are
+// needed before the watermark is re-anchored downwards. This is the escape
+// hatch for a wrong-but-accepted seed: without it a single too-high frame (a
+// stale prior-day counter accepted in the first seconds of a new day) rejects
+// every real frame for the rest of the day, which is the same class of lock
+// this change exists to remove. The streak only ever moves the watermark down,
+// so a stale high frame can never use it to take the day over.
+const REANCHOR_STREAK = 5;
+// The watermark must also have been stuck for this long before a streak may
+// re-anchor it. Normal out-of-order delivery produces a few increasing frames
+// below a freshly advanced watermark within milliseconds, so a stall window
+// keeps that case from ever triggering a downward re-anchor, while a seeded
+// watermark that blockades the day is frozen for hours.
+const REANCHOR_MIN_STALL_MS = 10000;
 
 function normalizeGameTick(value) {
   const text = typeof value === 'string' ? value.trim() : value;
@@ -37,8 +63,9 @@ function createTickGridShootingState() {
     staleObservationCount: 0,
     rejectedClaimCount: 0,
     lastRejection: null,
-    tickRate: null,
-    maxObservedTickGap: 0
+    lastStaleObservation: null,
+    belowWatermarkStreak: 0,
+    belowWatermarkLastTick: null
   };
 }
 
@@ -51,19 +78,31 @@ function rotateEpoch(state, dateKey, atMs, reason) {
   state.lastClaimedTick = null;
   state.lastClaimedGridStep = null;
   state.lastClaimedAtMs = null;
-  state.tickRate = null;
-  state.maxObservedTickGap = 0;
+  state.belowWatermarkStreak = 0;
+  state.belowWatermarkLastTick = null;
   state.lastRotationReason = String(reason || '');
   return state;
 }
 
-function maximumPlausibleTick(state, elapsedDayMs) {
-  const observedRate = Number(state.tickRate);
-  const rate = Number.isFinite(observedRate) && observedRate > 0
-    ? observedRate
-    : MIN_PLAUSIBLE_TICK_RATE_PER_MS;
-  const expected = Number(elapsedDayMs) * rate;
-  return Math.ceil(expected + Math.max(2, Number(state.maxObservedTickGap || 0)));
+function maximumPlausibleTick(elapsedDayMs) {
+  const elapsed = Number(elapsedDayMs);
+  if (!Number.isFinite(elapsed)) return Number.POSITIVE_INFINITY;
+  return Math.ceil(Math.max(0, elapsed) * MAX_PLAUSIBLE_TICK_RATE_PER_MS + PLAUSIBLE_TICK_MARGIN);
+}
+
+// Second, tighter bound measured from the retained watermark. The day-wide
+// ceiling above is deliberately loose, which means a prior-day counter leaked
+// many hours after midnight could still slip under it and jump the watermark
+// forward. This bound only limits how far one accepted frame may move the
+// watermark, so it closes that hole regardless of the hour.
+//
+// It cannot lock the day either: it is anchored on the last accepted frame and
+// grows with real elapsed time, so a rejected frame leaves the anchor intact
+// and the next normal frame still advances.
+function maximumPlausibleAdvance(elapsedMs) {
+  const elapsed = Number(elapsedMs);
+  if (!Number.isFinite(elapsed) || elapsed <= 0) return null;
+  return Math.ceil(elapsed * MAX_PLAUSIBLE_TICK_RATE_PER_MS + PLAUSIBLE_TICK_MARGIN);
 }
 
 function observeRealtimeTick(state, input = {}, options = {}) {
@@ -91,7 +130,7 @@ function observeRealtimeTick(state, input = {}, options = {}) {
     ? Number(options.dayStart(atMs))
     : null;
   const elapsedDayMs = Number.isFinite(dayStartMs) ? Math.max(0, atMs - dayStartMs) : null;
-  const maximumTick = elapsedDayMs === null ? null : maximumPlausibleTick(state, elapsedDayMs);
+  const maximumTick = elapsedDayMs === null ? null : maximumPlausibleTick(elapsedDayMs);
   if (dateKey !== state.dateKey) {
     // A frame delivered after midnight can still belong to the prior epoch.
     // Reject an implausibly large number instead of letting it seed the new day.
@@ -135,30 +174,68 @@ function observeRealtimeTick(state, input = {}, options = {}) {
     };
   }
   const previousTick = state.tick;
-  const previousAtMs = state.receivedAtMs;
   if (previousTick !== null && tick <= previousTick) {
     state.staleObservationCount += 1;
+    const continuesBelowStreak = state.belowWatermarkLastTick !== null && tick > state.belowWatermarkLastTick;
+    state.belowWatermarkStreak = continuesBelowStreak ? state.belowWatermarkStreak + 1 : 0;
+    state.belowWatermarkLastTick = tick;
     state.lastStaleObservation = {
       tick,
       receivedAtMs: atMs,
       reason: tick === previousTick ? 'duplicate-watermark-tick' : 'older-watermark-tick',
-      watermarkTick: previousTick
+      watermarkTick: previousTick,
+      belowWatermarkStreak: state.belowWatermarkStreak
     };
+    // A watermark that was seeded too high rejects every real frame forever:
+    // the real counter never exceeds it, so it can never win by advancing.
+    // A sustained run of strictly increasing frames underneath the watermark
+    // is the only signature of that state, and it reliably distinguishes it
+    // from isolated reordered or duplicated frames. Re-anchor downwards once.
+    const stalledMs = atMs - Number(state.receivedAtMs);
+    if (state.belowWatermarkStreak + 1 >= REANCHOR_STREAK
+        && Number.isFinite(stalledMs) && stalledMs >= REANCHOR_MIN_STALL_MS) {
+      const fromTick = previousTick;
+      state.tick = tick;
+      state.receivedAtMs = atMs;
+      state.belowWatermarkStreak = 0;
+      state.belowWatermarkLastTick = null;
+      // A claim made against the bogus high watermark must not block the real
+      // counter until it catches up.
+      if (state.lastClaimedTick !== null && state.lastClaimedTick > tick) state.lastClaimedTick = null;
+      state.lastReanchor = { fromTick, toTick: tick, atMs, stalledMs, reason: 'watermark-seeded-too-high' };
+      return { ok: true, reason: 'watermark-reanchored', epoch: state.epoch, tick, fromTick };
+    }
     return {
       ok: false,
       reason: tick === previousTick ? 'duplicate-watermark-tick' : 'older-watermark-tick',
       epoch: state.epoch,
-      tick: previousTick
+      tick: previousTick,
+      belowWatermarkStreak: state.belowWatermarkStreak
     };
   }
-  if (previousTick !== null && previousAtMs !== null && atMs > previousAtMs) {
-    const deltaTicks = tick - previousTick;
-    const deltaMs = atMs - previousAtMs;
-    if (deltaTicks > 0 && deltaMs > 0) {
-      const rate = deltaTicks / deltaMs;
-      state.tickRate = Number.isFinite(state.tickRate) ? Math.max(state.tickRate, rate) : rate;
-      state.maxObservedTickGap = Math.max(Number(state.maxObservedTickGap || 0), deltaTicks);
-    }
+  state.belowWatermarkStreak = 0;
+  state.belowWatermarkLastTick = null;
+  // No rate learning here: both bounds are constants, so a rejected frame
+  // cannot poison later checks, and any monotonic in-day frame under them
+  // re-anchors the watermark by simply advancing it. This is exactly what the
+  // old rejected-frame lock could not do.
+  const maximumAdvance = maximumPlausibleAdvance(atMs - state.receivedAtMs);
+  if (maximumAdvance !== null && tick - previousTick > maximumAdvance) {
+    state.staleObservationCount += 1;
+    state.lastStaleObservation = {
+      tick,
+      receivedAtMs: atMs,
+      reason: 'tick-advance-implausible',
+      watermarkTick: previousTick,
+      maximumAdvance
+    };
+    return {
+      ok: false,
+      reason: 'tick-advance-implausible',
+      epoch: state.epoch,
+      tick: previousTick,
+      maximumAdvance
+    };
   }
   state.tick = tick;
   state.receivedAtMs = atMs;
@@ -222,6 +299,8 @@ function tickGridSnapshot(state) {
     observationCount: state.observationCount,
     staleObservationCount: state.staleObservationCount,
     rejectedClaimCount: state.rejectedClaimCount,
+    lastStaleObservation: state.lastStaleObservation ? { ...state.lastStaleObservation } : null,
+    lastReanchor: state.lastReanchor ? { ...state.lastReanchor } : null,
     lastRejection: state.lastRejection ? { ...state.lastRejection } : null
   };
 }
@@ -255,7 +334,10 @@ module.exports = {
   DEFAULT_GRID_STEP,
   SAFE_AFK_GRID_STEP,
   DEFAULT_TICK_MS,
-  MIN_PLAUSIBLE_TICK_RATE_PER_MS,
+  MAX_PLAUSIBLE_TICK_RATE_PER_MS,
+  PLAUSIBLE_TICK_MARGIN,
+  REANCHOR_STREAK,
+  REANCHOR_MIN_STALL_MS,
   normalizeGameTick,
   createTickGridShootingState,
   observeRealtimeTick,
