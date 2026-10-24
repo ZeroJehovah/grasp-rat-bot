@@ -38848,6 +38848,7 @@ async function runSelfTest() {
             /nearby-players-pane\{border-left:1px solid var\(--line\)/.test(panelText),
             /grid-template-columns:minmax\(170px,.55fr\) minmax\(0,1.45fr\)/.test(panelText),
             /\.player-row\{grid-template-columns:minmax\(150px,2.7fr\)/.test(panelText),
+            panelText.includes('@media (max-width:520px){.player-row{grid-template-columns:minmax(80px,1fr) 42px 48px 56px 52px}'),
             panelText.indexOf('class="stats-grid"') < panelText.indexOf('id="nearbyGrid"'),
             /id="sessionPanelTitle"[^>]*>本次游戏<\/h2>/.test(panelText),
             !/id="refreshBtn"/.test(panelText),
@@ -38883,7 +38884,7 @@ async function runSelfTest() {
           await handle.close();
         }
       })(),
-      want: '401|200|true|true|true|200|true|12|true|true|true|200|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|200|true|1'
+      want: '401|200|true|true|true|200|true|12|true|true|true|200|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|true|200|true|1'
     },
     {
       name: 'browserless web panel presents remote snapshot profit navigation as movement',

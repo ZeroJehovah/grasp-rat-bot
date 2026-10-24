@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.09.26.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.10.24.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -783,7 +783,8 @@ function renderBrowserlessWebPanel() {
     @media (max-width:760px){.layout{grid-template-columns:1fr}.stats-grid{grid-template-columns:1fr}}
     @media (max-width:600px){.player-insights-grid{grid-template-columns:1fr}}
     @media (max-width:600px){.nearby-combined{grid-template-columns:1fr}.nearby-players-pane{border-left:0;border-top:1px solid var(--line);padding-left:0;padding-top:10px}}
-    @media (max-width:520px){.player-row{grid-template-columns:minmax(112px,2fr) minmax(46px,.5fr) minmax(48px,.55fr) minmax(44px,.5fr) minmax(56px,.6fr)}.coin-row{grid-template-columns:minmax(52px,.95fr) minmax(46px,.6fr) minmax(54px,.65fr)}.nearby-cell{padding-left:5px;padding-right:5px}.high-drop-row{grid-template-columns:minmax(0,.98fr) minmax(0,.44fr) minmax(0,.62fr) minmax(0,.8fr);gap:2px}.high-drop-cell{padding-right:5px}.battle-fighters{grid-template-columns:minmax(0,1fr) 26px minmax(0,1fr);column-gap:5px}.battle-meta{gap:5px;font-size:11px}.battle-meta strong{font-size:11px}}
+    /* 手机端把宽度优先留给数值列; Drop 56px 扣掉 10px 内边距后仍可完整显示 5 位数。 */
+    @media (max-width:520px){.player-row{grid-template-columns:minmax(80px,1fr) 42px 48px 56px 52px}.coin-row{grid-template-columns:minmax(52px,.95fr) minmax(46px,.6fr) minmax(54px,.65fr)}.nearby-cell{padding-left:5px;padding-right:5px}.high-drop-row{grid-template-columns:minmax(0,.98fr) minmax(0,.44fr) minmax(0,.62fr) minmax(0,.8fr);gap:2px}.high-drop-cell{padding-right:5px}.battle-fighters{grid-template-columns:minmax(0,1fr) 26px minmax(0,1fr);column-gap:5px}.battle-meta{gap:5px;font-size:11px}.battle-meta strong{font-size:11px}}
     @media (max-width:520px){main{padding:10px}header{align-items:flex-start;flex-direction:column}}
   </style>
 </head>
