@@ -1549,6 +1549,62 @@ function createSeededRandomCore(seed = 1) {
   };
 }
 
+function stochasticRandomSourceCore(options = {}) {
+  return typeof options.rng === 'function'
+    ? options.rng
+    : (typeof options.random === 'function' ? options.random : Math.random);
+}
+
+function boundedRandomUnitCore(randomSource) {
+  return Math.max(0, Math.min(0.999999999, finiteMovementNumber(randomSource(), 0)));
+}
+
+function closeTangentHoldPolicyCore(reactionSlack = {}, options = {}) {
+  const tickMs = Math.max(1, Number(reactionSlack.tickMs ?? options.tickMs ?? 50));
+  const sampleCount = Math.max(0, Number(reactionSlack.sampleCount || 0));
+  const medianTicks = Math.max(0, Number(reactionSlack.medianTicks || 0));
+  const p90Ticks = Math.max(medianTicks, Number(reactionSlack.p90Ticks || 0));
+  const visibleTicks = sampleCount >= 4 ? medianTicks : 5;
+  const conservativeVisibleTicks = sampleCount >= 4 ? p90Ticks : Math.max(5, p90Ticks);
+  const queueTicks = Math.max(0, Number(reactionSlack.decisionQueueDelayTicks || 0))
+    + Math.max(0, Number(reactionSlack.dispatchDelayTicks || 0))
+    + Math.max(0, Number(reactionSlack.pendingQueueTicks || 0));
+  const movementVisibleLatencyMs = (visibleTicks + queueTicks) * tickMs;
+  const movementVisibleLatencyP90Ms = (conservativeVisibleTicks + queueTicks) * tickMs;
+  const minimumHoldMs = Math.max(
+    Math.max(1, Number(options.latchMinimumHoldMs ?? 250)),
+    movementVisibleLatencyMs
+  );
+  const commandBudgetMs = finiteMovementNumber(reactionSlack.commandBudgetMs);
+  const bulletFlightMs = finiteMovementNumber(reactionSlack.bulletTTI);
+  // A new command and the already-unavoidable shot run on parallel clocks.
+  // Hold only until the current projectile resolves or the replacement command
+  // can become visible, whichever comes later; summing both would hold the same
+  // screen lane for roughly twice the physical reaction span.
+  const adaptiveCapMs = bulletFlightMs !== null && bulletFlightMs > 0
+    ? Math.max(bulletFlightMs, movementVisibleLatencyMs)
+    : commandBudgetMs;
+  const commandCapMs = commandBudgetMs !== null && commandBudgetMs > 0
+    ? commandBudgetMs
+    : Infinity;
+  const maximumLaneMs = Math.max(
+    minimumHoldMs,
+    Math.min(commandCapMs, adaptiveCapMs === null ? Infinity : adaptiveCapMs)
+  );
+  return {
+    tickMs,
+    minimumHoldMs,
+    maximumLaneMs,
+    movementVisibleLatencyMs,
+    movementVisibleLatencyP90Ms,
+    bulletFlightMs,
+    commandBudgetMs,
+    source: bulletFlightMs !== null && bulletFlightMs > 0
+      ? 'current-shot-flight-or-visible-latency'
+      : 'movement-command-budget'
+  };
+}
+
 function selectStochasticDodgeCandidateCore(candidates = [], options = {}) {
   const normalized = (Array.isArray(candidates) ? candidates : [])
     .filter(candidate => candidate && candidate.safe !== false)
@@ -1559,10 +1615,8 @@ function selectStochasticDodgeCandidateCore(candidates = [], options = {}) {
     .filter(candidate => candidate.dx || candidate.dy)
     .slice(0, Math.max(1, Math.min(8, Number(options.maxCandidates ?? 8))));
   if (!normalized.length) return { selected: null, randomChoice: null, candidates: [] };
-  const randomSource = typeof options.rng === 'function'
-    ? options.rng
-    : (typeof options.random === 'function' ? options.random : Math.random);
-  const unit = Math.max(0, Math.min(0.999999999, finiteMovementNumber(randomSource(), 0)));
+  const randomSource = stochasticRandomSourceCore(options);
+  const unit = boundedRandomUnitCore(randomSource);
   const index = Math.min(normalized.length - 1, Math.floor(unit * normalized.length));
   return {
     selected: normalized[index],
@@ -1759,6 +1813,9 @@ function resolveDistanceAwareDodgeCore(input = {}, options = {}) {
   let randomHoldUntil = null;
   let suppressCurrentShotDodge = false;
   let completeRiskFallback = false;
+  let closeTangentAxisReversal = false;
+  let closeTangentHoldPolicy = null;
+  let closeTangentLaneStartedAtMs = null;
   let latch = modeDecision.state?.latch || null;
   const currentThreat = reactionSlack.currentShotAvoidability !== 'safe'
     || reactionSlack.threateningBulletCount > 0;
@@ -1838,7 +1895,6 @@ function resolveDistanceAwareDodgeCore(input = {}, options = {}) {
     : null;
   let directionStabilityHeld = false;
   let invalidatePreviousLatch = false;
-  let escortAxisPause = false;
   if (mode === 'close-proactive' && !blockedReason && activeOpponent) {
     if (reactionSlack.currentShotAvoidability === 'unavoidable' && currentThreat) {
       // A late bullet can be unavoidable at any range. Only a NEW shot whose
@@ -1864,16 +1920,18 @@ function resolveDistanceAwareDodgeCore(input = {}, options = {}) {
           && Math.abs((row.dx * tx + row.dy * ty) / (length * distance)) <= Math.SQRT1_2
           && candidateWithinBoundaryCore(input.self, row, options);
       }) : [];
-      let tangents = geometricTangents.filter(row => sameRadialIntentCore(row, radialIntent, { minimumDot: 0 }));
-      // Emergency Dodge may temporarily pause one escort axis while the other
-      // still advances toward the primary. Never reverse either axis or relax
-      // normal spacing, prospective Dodge, current risk, or the stamina gate.
-      const heldDirection = normalizedDirection(input.unavoidableHoldDirection || pendingDirection || currentDirection);
-      const cardinalHold = Math.abs(heldDirection.dx) + Math.abs(heldDirection.dy) === 1;
-      if (!tangents.length && cardinalHold && input.defensiveEscort === true && input.baseDistanceBand === 'escort') {
-        tangents = geometricTangents.filter(row => sameRadialIntentCore(row, radialIntent,
-          { minimumDot: 0, allowAxisPause: true }));
-        escortAxisPause = tangents.length > 0;
+      // A current shot is already unavoidable and the complete prospective
+      // flight has consumed the reaction budget. In that narrow band, preserve
+      // both equally safe geometric tangents even when selecting one reverses a
+      // navigation axis. This is what makes the stochastic choice real instead
+      // of repeatedly sampling the same sole axis-compatible lane.
+      let tangents = geometricTangents;
+      closeTangentAxisReversal = tangents.length > 0;
+      closeTangentHoldPolicy = closeTangentAxisReversal
+        ? closeTangentHoldPolicyCore(reactionSlack, options)
+        : null;
+      if (!tangents.length) {
+        tangents = geometricTangents.filter(row => sameRadialIntentCore(row, radialIntent, { minimumDot: 0 }));
       }
       const retained = previousLatchMatches && previousLatch?.submode === 'stochastic'
         && Number(previousLatch.holdUntilMs) > nowMs
@@ -1887,21 +1945,84 @@ function resolveDistanceAwareDodgeCore(input = {}, options = {}) {
       const fallbackRisk = bestRisk
         ? selectDodgeCandidateCore(boundedField.filter(row => (
           compareDodgeCandidateRiskCore(row, bestRisk) === 0
-          && sameRadialIntentCore(row, radialIntent, {
-            minimumDot: 0,
-            allowAxisPause: escortAxisPause
-          })
+          && sameRadialIntentCore(row, radialIntent, { minimumDot: 0 })
         )), { preferredDirection: radialIntent })
           || (strictRiskImprovement ? bestRisk : null)
         : null;
-      const selection = retained ? { selected: retained, randomChoice: previousLatch.randomChoice }
-        : selectStochasticDodgeCandidateCore(tangents, options);
+      const previousStochasticDirection = previousLatchMatches
+        && previousLatch?.submode === 'stochastic'
+        && (previousLatchDirection.dx || previousLatchDirection.dy)
+        ? previousLatchDirection
+        : null;
+      const previousLaneStartedAtMs = finiteMovementNumber(
+        previousLatch?.laneStartedAtMs,
+        finiteMovementNumber(previousLatch?.createdAtMs, nowMs)
+      );
+      const previousLaneAgeMs = previousStochasticDirection
+        ? Math.max(0, nowMs - previousLaneStartedAtMs)
+        : 0;
+      const laneExpired = Boolean(closeTangentHoldPolicy && previousStochasticDirection
+        && previousLaneAgeMs >= closeTangentHoldPolicy.maximumLaneMs - closeTangentHoldPolicy.tickMs);
+      const alternateTangents = laneExpired && previousStochasticDirection
+        ? tangents.filter(row => row.dx !== previousStochasticDirection.dx || row.dy !== previousStochasticDirection.dy)
+        : tangents;
+      const forcedDirectionChange = Boolean(laneExpired && alternateTangents.length > 0);
+      const selectableTangents = forcedDirectionChange ? alternateTangents : tangents;
+      let selection = retained ? { selected: retained, randomChoice: previousLatch.randomChoice }
+        : selectStochasticDodgeCandidateCore(selectableTangents, options);
+      if (!retained && selection.selected && closeTangentHoldPolicy) {
+        const randomSource = stochasticRandomSourceCore(options);
+        const sampledHoldMs = closeTangentHoldPolicy.minimumHoldMs
+          + (closeTangentHoldPolicy.maximumLaneMs - closeTangentHoldPolicy.minimumHoldMs)
+            * boundedRandomUnitCore(randomSource);
+        const sameDirection = Boolean(previousStochasticDirection
+          && selection.selected.dx === previousStochasticDirection.dx
+          && selection.selected.dy === previousStochasticDirection.dy);
+        const laneStartedAtMs = sameDirection ? previousLaneStartedAtMs : nowMs;
+        randomHoldUntil = Math.min(
+          nowMs + sampledHoldMs,
+          laneStartedAtMs + closeTangentHoldPolicy.maximumLaneMs
+        );
+        const laneCapReachedWithoutAlternate = Boolean(sameDirection
+          && !forcedDirectionChange
+          && randomHoldUntil <= nowMs);
+        if (laneCapReachedWithoutAlternate) {
+          randomHoldUntil = nowMs + Math.max(
+            closeTangentHoldPolicy.tickMs,
+            Math.min(sampledHoldMs, closeTangentHoldPolicy.minimumHoldMs)
+          );
+        }
+        selection = {
+          ...selection,
+          randomChoice: selection.randomChoice ? {
+            ...selection.randomChoice,
+            holdMs: Math.max(closeTangentHoldPolicy.tickMs, randomHoldUntil - nowMs),
+            sampledHoldMs,
+            laneAgeMs: Math.max(0, nowMs - laneStartedAtMs),
+            maximumLaneMs: closeTangentHoldPolicy.maximumLaneMs,
+            movementVisibleLatencyMs: closeTangentHoldPolicy.movementVisibleLatencyMs,
+            movementVisibleLatencyP90Ms: closeTangentHoldPolicy.movementVisibleLatencyP90Ms,
+            bulletFlightMs: closeTangentHoldPolicy.bulletFlightMs,
+            forcedDirectionChange,
+            laneCapReachedWithoutAlternate,
+            axisReversal: closeTangentAxisReversal
+          } : null
+        };
+        selection.laneStartedAtMs = laneStartedAtMs;
+      } else if (retained) {
+        randomHoldUntil = previousLatch.holdUntilMs;
+      }
       if (selection.selected) {
         closeSubmode = 'stochastic';
         selectedDirection = selection.selected;
         randomChoice = selection.randomChoice;
-        randomHoldUntil = retained ? previousLatch.holdUntilMs
-          : nowMs + Math.max(Number(options.latchMinimumHoldMs ?? 250), Number(reactionSlack.commandBudgetMs || 0));
+        closeTangentLaneStartedAtMs = retained
+          ? finiteMovementNumber(previousLatch?.laneStartedAtMs, previousLatch?.createdAtMs ?? nowMs)
+          : finiteMovementNumber(selection.laneStartedAtMs, nowMs);
+        randomHoldUntil = randomHoldUntil ?? (nowMs + Math.max(
+          Number(options.latchMinimumHoldMs ?? 250),
+          Number(reactionSlack.commandBudgetMs || 0)
+        ));
         preDodgeReason = retained ? 'latched-close-tangent' : 'unavoidable-close-tangent';
         preDodgeTrigger = true;
       } else {
@@ -2058,11 +2179,13 @@ function resolveDistanceAwareDodgeCore(input = {}, options = {}) {
           Number(options.latchMinimumHoldMs ?? 250),
           Number(reactionSlack.commandBudgetMs || 0)
         )),
-      createdAtMs: previousLatch?.createdAtMs || nowMs
+      createdAtMs: previousLatch?.createdAtMs || nowMs,
+      laneStartedAtMs: closeTangentLaneStartedAtMs ?? finiteMovementNumber(selectedDirection?.laneStartedAtMs, nowMs)
     };
     latch = nextLatch;
     if (!completeRiskFallback
-      && !sameRadialIntentCore(selectedDirection, radialIntent, { minimumDot: 0, allowAxisPause: escortAxisPause })) {
+      && !(closeTangentAxisReversal && closeSubmode === 'stochastic')
+      && !sameRadialIntentCore(selectedDirection, radialIntent, { minimumDot: 0 })) {
       applied = false;
       selectedDirection = null;
       preDodgeReason = 'radial-intent-preserved';
@@ -2129,7 +2252,12 @@ function resolveDistanceAwareDodgeCore(input = {}, options = {}) {
       source: radialIntent.source || 'base-movement'
     },
     radialOverrideReason: applied
-      ? (escortAxisPause ? 'emergency-escort-axis-pause' : 'distance-aware-lateral-dodge') : '',
+      ? (closeTangentAxisReversal && closeSubmode === 'stochastic'
+          ? 'emergency-close-tangent-reversal'
+          : 'distance-aware-lateral-dodge')
+      : '',
+    closeTangentAxisReversal: Boolean(closeTangentAxisReversal && closeSubmode === 'stochastic'),
+    closeTangentHoldPolicy,
     latchAgeMs: latch
       ? Math.max(0, nowMs - Number(latch.createdAtMs || nowMs))
       : 0,

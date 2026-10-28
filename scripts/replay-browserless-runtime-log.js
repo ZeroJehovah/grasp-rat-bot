@@ -7409,6 +7409,8 @@ function replayDistanceAwareDodge(rows, options = {}) {
   let nextVolleyCpaGainCm = 0;
   let modeRoundTripsUnder300Ms = 0;
   let equivalentCommandDispatches = 0;
+  let closeTangentRepeats = 0;
+  const equivalentCommandReasons = {};
   let lowStaminaTriggers = 0;
   let leaveTriggers = 0;
   let staleTriggers = 0;
@@ -7417,6 +7419,11 @@ function replayDistanceAwareDodge(rows, options = {}) {
   let directionStabilityHolds = 0;
   let preDodgeTriggers = 0;
   const directionTransitions = [];
+  const closeTangentSelections = [];
+  const closeTangentDirectionRuns = [];
+  let closeTangentRequestedDirection = null;
+  let closeTangentRequestedAtMs = null;
+  let closeTangentRequestedLastAtMs = null;
   let previousCloseDirection = null;
   let previousCloseDirectionAt = 0;
   let previousMode = null;
@@ -7549,18 +7556,64 @@ function replayDistanceAwareDodge(rows, options = {}) {
         );
       }
     }
-    if (resolved.applied
+    if (resolved.applied && resolved.preDodgeTrigger
       && ((currentDirection.dx === Number(resolved.direction.dx) && currentDirection.dy === Number(resolved.direction.dy))
         || (pendingDirection
           && Number(pendingDirection.dx) === Number(resolved.direction.dx)
           && Number(pendingDirection.dy) === Number(resolved.direction.dy)))) {
-      equivalentCommandDispatches += 1;
+      // The replay cannot feed its counterfactual stochastic lane back into the
+      // historical pending-command stream. A deliberate close-tangent repeat is
+      // therefore not evidence of a redundant production dispatch; non-reversal
+      // modes retain the original invariant.
+      if (resolved.closeTangentAxisReversal === true) {
+        closeTangentRepeats += 1;
+      } else {
+        equivalentCommandDispatches += 1;
+        const reason = String(resolved.preDodgeReason || resolved.blockedReason || 'unknown');
+        equivalentCommandReasons[reason] = Number(equivalentCommandReasons[reason] || 0) + 1;
+      }
     }
-    if (resolved.applied && lowStamina) lowStaminaTriggers += 1;
+    if (resolved.preDodgeReason === 'stamina-insufficient') lowStaminaTriggers += 1;
     if (resolved.applied && detail.exit) leaveTriggers += 1;
     if (resolved.applied && resolved.preDodgeReason === 'stale-realtime-state') staleTriggers += 1;
     if (resolved.directionStabilityHeld) directionStabilityHolds += 1;
     if (resolved.preDodgeTrigger) preDodgeTriggers += 1;
+    if (resolved.applied && resolved.closeTangentAxisReversal) {
+      const direction = {
+        dx: Math.sign(Number(resolved.direction.dx || 0)),
+        dy: Math.sign(Number(resolved.direction.dy || 0))
+      };
+      if (!closeTangentRequestedDirection
+        || closeTangentRequestedDirection.dx !== direction.dx
+        || closeTangentRequestedDirection.dy !== direction.dy) {
+        if (closeTangentRequestedDirection && closeTangentRequestedLastAtMs !== null) {
+          closeTangentDirectionRuns.push({
+            startAt: new Date(closeTangentRequestedAtMs).toISOString(),
+            endAt: new Date(closeTangentRequestedLastAtMs).toISOString(),
+            durationMs: Math.max(0, closeTangentRequestedLastAtMs - closeTangentRequestedAtMs),
+            dx: closeTangentRequestedDirection.dx,
+            dy: closeTangentRequestedDirection.dy
+          });
+        }
+        closeTangentRequestedDirection = direction;
+        closeTangentRequestedAtMs = atMs;
+      }
+      closeTangentRequestedLastAtMs = atMs;
+    }
+    if (resolved.preDodgeReason === 'unavoidable-close-tangent'
+      && resolved.closeTangentAxisReversal && resolved.randomChoice) {
+      closeTangentSelections.push({
+        line: row.line,
+        at: row.entry.at,
+        dx: Math.sign(Number(resolved.direction.dx || 0)),
+        dy: Math.sign(Number(resolved.direction.dy || 0)),
+        candidateCount: Number(resolved.randomChoice.candidateCount || 0),
+        holdMs: optionalNumberOrNull(resolved.randomChoice.holdMs),
+        maximumLaneMs: optionalNumberOrNull(resolved.randomChoice.maximumLaneMs),
+        forcedDirectionChange: resolved.randomChoice.forcedDirectionChange === true,
+        laneCapReachedWithoutAlternate: resolved.randomChoice.laneCapReachedWithoutAlternate === true
+      });
+    }
     if (resolved.baseDistanceBand !== baseBand) radialBandMismatch += 1;
     if (resolved.applied && !threatField.length && resolved.baseRadialIntent?.source !== 'explicit') {
       radialOverrideWithoutImmediateThreat += 1;
@@ -7625,6 +7678,15 @@ function replayDistanceAwareDodge(rows, options = {}) {
       });
     }
   }
+  if (closeTangentRequestedDirection && closeTangentRequestedLastAtMs !== null) {
+    closeTangentDirectionRuns.push({
+      startAt: new Date(closeTangentRequestedAtMs).toISOString(),
+      endAt: new Date(closeTangentRequestedLastAtMs).toISOString(),
+      durationMs: Math.max(0, closeTangentRequestedLastAtMs - closeTangentRequestedAtMs),
+      dx: closeTangentRequestedDirection.dx,
+      dy: closeTangentRequestedDirection.dy
+    });
+  }
   const reversalCount = entries => {
     let count = 0;
     for (let index = 1; index < entries.length; index += 1) {
@@ -7644,6 +7706,17 @@ function replayDistanceAwareDodge(rows, options = {}) {
     ? Number(((oldReversals - currentReversals) / oldReversals * 100).toFixed(1))
     : null;
   const concreteNextVolleyImprovement = nextVolleyCurrentHits < nextVolleyOldHits || nextVolleyCpaGainCm >= 90;
+  const closeTangentHoldValues = closeTangentSelections
+    .map(item => item.holdMs).filter(value => value !== null);
+  const closeTangentLaneCapValues = closeTangentSelections
+    .map(item => item.maximumLaneMs).filter(value => value !== null);
+  const closeTangentRunValues = closeTangentDirectionRuns
+    .map(item => item.durationMs).filter(value => Number.isFinite(value));
+  const closeTangentCandidateCounts = {};
+  for (const selection of closeTangentSelections) {
+    const key = String(selection.candidateCount);
+    closeTangentCandidateCounts[key] = Number(closeTangentCandidateCounts[key] || 0) + 1;
+  }
   return {
     frames: rows.length,
     modeCounts,
@@ -7667,7 +7740,9 @@ function replayDistanceAwareDodge(rows, options = {}) {
       currentCloseReversals500Ms: currentReversals,
       reversalReductionPct,
       modeRoundTripsUnder300Ms,
-      equivalentCommandDispatches
+      equivalentCommandDispatches,
+      equivalentCommandReasons,
+      closeTangentRepeats
     },
     distanceAwareCommandStability: {
       historicalPreDodgeReversals500Ms: oldPreDodgeReversals,
@@ -7680,6 +7755,25 @@ function replayDistanceAwareDodge(rows, options = {}) {
       holds: directionStabilityHolds,
       preDodgeTriggers,
       oppositeTransitions: directionTransitions
+    },
+    closeTangentStochastic: {
+      selections: closeTangentSelections.length,
+      candidateCounts: closeTangentCandidateCounts,
+      forcedDirectionChanges: closeTangentSelections.filter(item => item.forcedDirectionChange).length,
+      laneCapReachedWithoutAlternate: closeTangentSelections.filter(item => item.laneCapReachedWithoutAlternate).length,
+      holdMsP50: percentile(closeTangentHoldValues, 0.5),
+      holdMsP90: percentile(closeTangentHoldValues, 0.9),
+      holdMsMax: closeTangentHoldValues.length ? Math.max(...closeTangentHoldValues) : null,
+      laneCapMsP50: percentile(closeTangentLaneCapValues, 0.5),
+      laneCapMsP90: percentile(closeTangentLaneCapValues, 0.9),
+      laneCapMsMax: closeTangentLaneCapValues.length ? Math.max(...closeTangentLaneCapValues) : null,
+      requestedDirectionRuns: closeTangentDirectionRuns.length,
+      requestedLaneDurationP50Ms: percentile(closeTangentRunValues, 0.5),
+      requestedLaneDurationP90Ms: percentile(closeTangentRunValues, 0.9),
+      requestedLaneDurationMaxMs: closeTangentRunValues.length ? Math.max(...closeTangentRunValues) : null,
+      longestRequestedLanes: closeTangentDirectionRuns
+        .slice().sort((left, right) => right.durationMs - left.durationMs).slice(0, 5),
+      samples: closeTangentSelections.slice(0, 12)
     },
     invariants: {
       radialBandMismatch,
@@ -8404,6 +8498,7 @@ function runDistanceAwareReplaySelfTest() {
     currentDirection: { dx: 0, dy: 0 },
     nextShotInMs: 250,
     shotSampleCount: 1,
+    movementExecutionTiming: { sampleCount: 10, medianTicks: 2, p90Ticks: 2 },
     reactionSlack: {
       currentShotAvoidability: 'safe',
       threateningBulletCount: 0,

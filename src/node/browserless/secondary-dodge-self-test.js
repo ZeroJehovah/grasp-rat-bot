@@ -81,6 +81,47 @@ function runSecondaryDodgeSelfTest() {
   const changedRisk = resolveDistanceAwareDodgeCore({ ...closeInput, nowMs: 10100, previousState: left.state,
     dodge: { threatField: [{ ...allHit[0], directHits: 2 }, allHit[1]] } }, { rng: () => 0 });
   assert.strictEqual(changedRisk.direction.dy, 1, 'new collision risk immediately invalidates latch');
+  const axisReversalInput = {
+    ...closeInput,
+    radialIntentVector: { dx: 0, dy: -1 }
+  };
+  const axisReversalFirst = resolveDistanceAwareDodgeCore(axisReversalInput, { rng: () => 0 });
+  const axisReversalOther = resolveDistanceAwareDodgeCore(axisReversalInput, { rng: () => 0.99 });
+  assert(axisReversalFirst.applied && axisReversalOther.applied
+    && axisReversalFirst.closeTangentAxisReversal && axisReversalOther.closeTangentAxisReversal
+    && axisReversalFirst.randomChoice?.candidateCount === 2
+    && axisReversalOther.randomChoice?.candidateCount === 2
+    && axisReversalFirst.direction.dy === -1 && axisReversalOther.direction.dy === 1
+    && axisReversalFirst.radialOverrideReason === 'emergency-close-tangent-reversal',
+  'close unavoidable fire exposes both equally safe tangent signs to the random choice');
+  assert(axisReversalFirst.randomChoice?.holdMs >= 250
+    && axisReversalFirst.randomChoice?.holdMs <= 400
+    && axisReversalOther.randomChoice?.holdMs >= 250
+    && axisReversalOther.randomChoice?.holdMs <= 400
+    && axisReversalOther.randomChoice.holdMs > axisReversalFirst.randomChoice.holdMs,
+  'close tangent hold duration is sampled inside the bounded interval');
+  const sameLaneResample = resolveDistanceAwareDodgeCore({
+    ...axisReversalInput,
+    nowMs: 10260,
+    previousState: axisReversalFirst.state
+  }, { rng: () => 0 });
+  assert(sameLaneResample.applied && sameLaneResample.direction.dy === -1
+    && sameLaneResample.randomChoice?.forcedDirectionChange === false,
+  'a random repeat may extend the current lane only up to its hard age cap');
+  const forcedAlternate = resolveDistanceAwareDodgeCore({
+    ...axisReversalInput,
+    nowMs: 10401,
+    previousState: sameLaneResample.state
+  }, { rng: () => 0 });
+  assert(forcedAlternate.applied && forcedAlternate.direction.dy === 1
+    && forcedAlternate.randomChoice?.forcedDirectionChange === true,
+  'the lane age cap forces the other safe tangent instead of resampling the same axis indefinitely');
+  const distantAxisReversal = resolveDistanceAwareDodgeCore({
+    ...axisReversalInput,
+    reactionSlack: { ...axisReversalInput.reactionSlack, prospectiveReactionSlackMs: 900 }
+  }, { rng: () => 0.99 });
+  assert(!distantAxisReversal.applied && !distantAxisReversal.closeTangentAxisReversal,
+  'distant late fire does not receive the close-tangent axis reversal');
   assert(resolveDistanceAwareDodgeCore({ ...closeInput, lowStamina: true }, { rng: () => 0 }).applied);
   for (const extra of [{ exitActive: true }, { collisionRisk: true },
     { reactionSlack: { ...closeInput.reactionSlack, prospectiveReactionSlackMs: 900 } }]) {
@@ -111,7 +152,7 @@ function runSecondaryDodgeSelfTest() {
   const diagonalTangent = buildCombatMovementPlan({ ...self, vy: -50, stamina_5s_remaining_milli: 10000 },
     { ...target, x: -2500, y: -1500, vx: 35, vy: 35, distance: Math.hypot(2500, 1500) },
     [{ ...bullet, bullet_id: 1, ownerId: 2, cpa: 10 }], {
-      ...options, distanceAwareDodgeRng: () => 0.5,
+      ...options, distanceAwareDodgeRng: () => 0.25,
       movementExecutionTiming: { sampleCount: 10, medianTicks: 5, p90Ticks: 5 }
     });
   assert.deepStrictEqual([diagonalTangent.distanceAwareDodge.direction.dx, diagonalTangent.distanceAwareDodge.direction.dy],
@@ -191,7 +232,7 @@ function runSecondaryDodgeSelfTest() {
   const escortPlan = buildCombatMovementPlan(escortSelf, escortTarget, [escortBullet], escortOptions);
   assert.deepStrictEqual([escortPlan.dx, escortPlan.dy], [-1, 0],
     'nearby unavoidable fire permits a forward cardinal tangent during diagonal escort');
-  assert.strictEqual(escortPlan.distanceAwareDodge.radialOverrideReason, 'emergency-escort-axis-pause');
+  assert.strictEqual(escortPlan.distanceAwareDodge.radialOverrideReason, 'emergency-close-tangent-reversal');
   assert.strictEqual(escortPlan.dodgeOwnership.executionDirection.reason, 'current-risk-verified-dodge');
   assert(!sameRadialIntentCore({ dx: -1, dy: 0 }, { dx: -1, dy: 1 }),
     'ordinary pre-dodge must still preserve both navigation axes');
@@ -205,14 +246,18 @@ function runSecondaryDodgeSelfTest() {
     baseDistanceBand: 'escort', defensiveEscort: true,
     radialIntentVector: { dx: -1, dy: 1 }, dodge: { threatField: tangentField } };
   const pausedAxis = resolveDistanceAwareDodgeCore(escortInput, { rng: () => 0.99 });
-  assert(pausedAxis.applied && pausedAxis.direction.dx === -1 && pausedAxis.direction.dy === 0,
-    'random choice cannot select the tangent opposing the primary heading');
+  assert(pausedAxis.applied && pausedAxis.direction.dx === 1 && pausedAxis.direction.dy === 0,
+    'the close emergency may select the safe tangent that reverses the primary heading');
   for (const extra of [{ defensiveEscort: false }, { baseDistanceBand: 'approach' },
-    { currentDirection: { dx: 0, dy: 0 } }, { currentDirection: { dx: -1, dy: -1 } },
-    { exitActive: true }, { collisionRisk: true },
+    { currentDirection: { dx: 0, dy: 0 } }, { currentDirection: { dx: -1, dy: -1 } }]) {
+    const plan = resolveDistanceAwareDodgeCore({ ...escortInput, ...extra }, { rng: () => 0.5 });
+    assert(plan.applied && plan.closeTangentAxisReversal,
+      'the approved close-tangent reversal does not depend on one navigation band');
+  }
+  for (const extra of [{ exitActive: true }, { collisionRisk: true },
     { reactionSlack: { ...closeInput.reactionSlack, prospectiveReactionSlackMs: 900 } }]) {
     assert(!resolveDistanceAwareDodgeCore({ ...escortInput, ...extra }, { rng: () => 0.5 }).applied,
-      'the exception requires a defensive escort, close current risk and unchanged safety gates');
+      'the exception still requires close current risk and unchanged safety gates');
   }
   const changedTangentFallback = resolveDistanceAwareDodgeCore({ ...escortInput,
     dodge: { threatField: [
@@ -221,19 +266,20 @@ function runSecondaryDodgeSelfTest() {
     ] }
   }, { rng: () => 0.5 });
   assert(changedTangentFallback.applied
-    && changedTangentFallback.blockedReason === 'unavoidable-best-risk-fallback'
-    && changedTangentFallback.direction.dx === -1
-    && changedTangentFallback.direction.dy === 1,
-  'when every direction still collides, an equally safe navigation-compatible lane replaces the old one');
-  assert(!resolveDistanceAwareDodgeCore(escortInput, { rng: () => 0.5, boundaryMarginCm: 0,
-    boundary: { minX: 0, maxX: 10000, minY: -10000, maxY: 10000 } }).applied,
-  'a forward tangent outside the boundary cannot authorize a reverse tangent');
+    && changedTangentFallback.blockedReason === 'unavoidable-close-tangent'
+    && changedTangentFallback.direction.dx === 1
+    && changedTangentFallback.direction.dy === 0,
+  'the close tangent pool contains only the best available collision-risk tier');
+  const boundedTangent = resolveDistanceAwareDodgeCore(escortInput, { rng: () => 0,
+    boundaryMarginCm: 0, boundary: { minX: 0, maxX: 10000, minY: -10000, maxY: 10000 } });
+  assert(boundedTangent.applied && boundedTangent.direction.dx === 1 && boundedTangent.direction.dy === 0,
+    'the broadened tangent choice still removes candidates outside the movement boundary');
   const strictAxis = resolveDistanceAwareDodgeCore({ ...escortInput,
     target: { ...escortTarget, x: 0, y: -3000 },
     dodge: { threatField: [...tangentField, { dx: -1, dy: 1, directHits: 1, unavoidableHits: 1, minCPA: 0 }] }
   }, { rng: () => 0.5 });
-  assert.strictEqual(strictAxis.radialOverrideReason, 'distance-aware-lateral-dodge',
-    'an existing valid diagonal retains priority over the axis-pause exception');
+  assert.strictEqual(strictAxis.radialOverrideReason, 'emergency-close-tangent-reversal',
+    'all equally safe geometric tangents remain eligible in the close emergency');
   for (let turns = 0; turns < 4; turns++) {
     const rotate = (x, y) => {
       for (let n = 0; n < turns; n++) [x, y] = [-y, x];
@@ -246,7 +292,7 @@ function runSecondaryDodgeSelfTest() {
       radialIntentVector: vector(escortInput.radialIntentVector), dodge: { threatField: tangentField.map(vector) }
     }, { rng: () => 0.99 });
     assert(rotated.applied);
-    assert.deepStrictEqual([rotated.direction.dx, rotated.direction.dy], rotate(-1, 0),
+    assert.deepStrictEqual([rotated.direction.dx, rotated.direction.dy], rotate(1, 0),
       'the emergency rule must generalize across all map orientations');
   }
   const resumedNavigation = buildCombatMovementPlan(escortSelf, escortTarget, [], {
@@ -257,7 +303,7 @@ function runSecondaryDodgeSelfTest() {
     'a previous axis pause does not authorize a fresh pre-dodge without current attack evidence');
   assert.deepStrictEqual([resumedNavigation.dx, resumedNavigation.dy], [-1, 1],
     'ordinary primary navigation resumes after the emergency');
-  return { ok: true, cases: 54 };
+  return { ok: true, cases: 60 };
 }
 module.exports = { runSecondaryDodgeSelfTest };
 if (require.main === module) console.log(JSON.stringify(runSecondaryDodgeSelfTest()));
