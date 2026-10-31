@@ -264,6 +264,21 @@ function assertRealtimeSupersededMissionContinuity() {
     stamina_1h_remaining_milli: 3000000,
     stamina_1d_remaining_milli: 20000000
   };
+  const pausedRealtimeMango = decide(
+    adapter,
+    advancedState(fullStaminaSelf(), [realtimeMango]),
+    2150,
+    supersededBatch,
+    { controlMode: 'profit-live', combatEnabled: true }
+  );
+  assert.strictEqual(pausedRealtimeMango.profit?.mission?.type, 'remote-player-navigation');
+  assert.strictEqual(pausedRealtimeMango.profit?.mission?.navigationPaused, true);
+  assert.strictEqual(pausedRealtimeMango.profit?.mission?.navigationTarget?.x, 48000);
+  assert.strictEqual(pausedRealtimeMango.profit?.mission?.navigationTarget?.positionSource, 'realtime');
+  assert.strictEqual(pausedRealtimeMango.profit?.remoteProfit?.pausedMissionActionSuppressed, true);
+  assert.notStrictEqual(pausedRealtimeMango.action?.kind, 'seek-remote-player');
+  assert.notStrictEqual(pausedRealtimeMango.action?.kind, 'seek-enemy');
+
   const handoff = decide(
     adapter,
     advancedState(fullStaminaSelf(), [realtimeMango]),
@@ -282,6 +297,9 @@ function assertRealtimeSupersededMissionContinuity() {
   assert.strictEqual(handoff.profit?.mission?.targetId, '99');
   assert.strictEqual(handoff.profit?.mission?.highValue, true);
   assert.strictEqual(handoff.profit?.mission?.lockReason, 'same-target-authority-handoff');
+  assert.strictEqual(handoff.action?.target?.x, 48000);
+  assert.strictEqual(handoff.profit?.mission?.navigationTarget?.x, 48000);
+  assert.strictEqual(handoff.profit?.mission?.navigationAuthority, 'realtime');
 
   const missingWithinHold = decide(
     adapter,
@@ -481,6 +499,77 @@ function assertLowerValuePassiveEnemyDoesNotTakeRemotePrimaryMission() {
     candidate.type === 'remote-player-navigation' && String(candidate.id) === '31361'
   )));
   assert.ok(recovered.profit?.candidates?.some(candidate => String(candidate.id) === '6398'));
+}
+
+// The bounded realtime position memory holds only 64 entries. In a crowded
+// frame a visible mission target can be evicted, and the snapshot coordinate
+// must not replace the coordinate the client can already see.
+function assertVisibleRealtimePositionOverridesEvictedSnapshot() {
+  const adapter = createBrowserlessDecisionAdapter({
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    singleCoinBaitEnabled: false,
+    finalActionArbitrationHoldMs: 0,
+    opportunitySwitchConfirmFrames: 1,
+    opportunitySwitchMargin: 0,
+    opportunitySwitchRelativeMargin: 0
+  });
+  const visibleMango = {
+    entity_id: 2,
+    user_id: 99,
+    name: 'mango',
+    x: 48000,
+    y: 0,
+    vx: -35,
+    vy: 0,
+    hp: 100,
+    max_hp: 100,
+    drop: 134,
+    current_join_mode: 'Active',
+    stamina_5s_remaining_milli: 1000000,
+    stamina_5s_limit_milli: 1000000,
+    stamina_1h_remaining_milli: 3000000,
+    stamina_1d_remaining_milli: 20000000
+  };
+  const crowd = Array.from({ length: 64 }, (_, index) => ({
+    entity_id: 900 + index,
+    user_id: 900 + index,
+    name: `crowd-${index}`,
+    x: 20000 + index * 100,
+    y: 1000,
+    vx: 0,
+    vy: 0,
+    hp: 100,
+    max_hp: 100,
+    drop: 0,
+    current_join_mode: 'AFK',
+    stamina_5s_remaining_milli: 1000000,
+    stamina_5s_limit_milli: 1000000,
+    stamina_1h_remaining_milli: 3000000,
+    stamina_1d_remaining_milli: 20000000
+  }));
+  const decision = decide(
+    adapter,
+    state(fullStaminaSelf(), [visibleMango, ...crowd]),
+    2000,
+    batch(remoteCandidate({
+      name: 'mango',
+      x: 220500,
+      active: true,
+      classification: 'easy-kill-active',
+      easyKillScore: 2,
+      drop: 134,
+      expectedReward: 60,
+      adjustedScore: 300000
+    })),
+    { controlMode: 'profit-live', combatEnabled: true }
+  );
+  assert.strictEqual(decision.action?.kind, 'seek-remote-player');
+  assert.strictEqual(decision.action?.target?.userId, 99);
+  assert.strictEqual(decision.action?.target?.x, 48000);
+  assert.strictEqual(decision.profit?.remoteProfit?.selected?.x, 48000);
+  assert.strictEqual(decision.profit?.mission?.navigationTarget?.x, 48000);
 }
 
 // 2026-10-13 00:12:49Z: one raw realtime frame carried linuxdo_8015's user ID,
@@ -815,6 +904,8 @@ function assertSelfKillReleasesSupersededMission() {
   assert.strictEqual(handoff.profit?.mission?.type, 'enemy');
   assert.strictEqual(handoff.profit?.mission?.targetId, '99');
   assert.strictEqual(handoff.profit?.mission?.highValue, true);
+  assert.strictEqual(handoff.action?.target?.x, 48000);
+  assert.strictEqual(handoff.profit?.mission?.navigationTarget?.x, 48000);
 
   const killedState = state(fullStaminaSelf({ x: 47800 }));
   killedState.realtime.tick = 6268;
@@ -1156,7 +1247,31 @@ function assertTickWatermarkedCompletionRegressions() {
     common
   );
   assert.strictEqual(newerSnapshot.profit?.remoteProfit?.filtered?.['target-drop-observed'], undefined);
-  assert.strictEqual(newerSnapshot.profit?.remoteProfit?.selected?.userId, 31361);
+  assert.strictEqual(newerSnapshot.profit?.remoteProfit?.filtered?.['post-kill-respawn-unconfirmed'], 1);
+  assert.strictEqual(newerSnapshot.profit?.remoteProfit?.postKillRespawnRejections?.length, 1);
+  assert.strictEqual(newerSnapshot.profit?.remoteProfit?.postKillRespawnRejections?.[0]?.targetId, '31361');
+  assert.strictEqual(newerSnapshot.profit?.remoteProfit?.postKillRespawnRejections?.[0]?.deathDrop, 227);
+  assert.strictEqual(newerSnapshot.profit?.remoteProfit?.postKillRespawnRejections?.[0]?.candidateDrop, 227);
+  assert.notStrictEqual(newerSnapshot.action?.kind, 'seek-remote-player');
+
+  const respawnFrame = state(fullStaminaSelf());
+  respawnFrame.realtime.tick = 6300;
+  respawnFrame.fallback.tick = 6300;
+  const respawnSnapshot = decide(
+    sameSnapshotAdapter,
+    respawnFrame,
+    3200,
+    batch({
+      ...mango,
+      drop: 120,
+      expectedReward: 120,
+      invulnerable: true,
+      invulnerableRemainingMs: 120000
+    }, { generation: 5, tick: 6300 }),
+    common
+  );
+  assert.strictEqual(respawnSnapshot.profit?.remoteProfit?.filtered?.['post-kill-respawn-unconfirmed'], undefined);
+  assert.strictEqual(respawnSnapshot.profit?.remoteProfit?.selected?.userId, 31361);
 
   const persistentCoinAdapter = createBrowserlessDecisionAdapter(common);
   const persistentCoinBatch = batch(mango, { generation: 5, tick: 6268 });
@@ -1199,7 +1314,8 @@ function assertTickWatermarkedCompletionRegressions() {
     common
   );
   assert.strictEqual(released.profit?.remoteProfit?.filtered?.['target-drop-observed'], undefined);
-  assert.strictEqual(released.profit?.remoteProfit?.selected?.userId, 31361);
+  assert.strictEqual(released.profit?.remoteProfit?.filtered?.['post-kill-respawn-unconfirmed'], 1);
+  assert.notStrictEqual(released.action?.kind, 'seek-remote-player');
 
   const noTickAdapter = createBrowserlessDecisionAdapter(common);
   const noTickFrame = state(fullStaminaSelf());
@@ -3753,6 +3869,7 @@ function runRemoteProfitDecisionSelfTest() {
   assertImmediateRemoteRelease(remoteBatch, 210900, 211000);
   assertDynamicThresholdLinkedCoinRoute();
   assertRealtimeSupersededMissionContinuity();
+  assertVisibleRealtimePositionOverridesEvictedSnapshot();
   assertBareRealtimeSupersessionDoesNotBlockRemoteMission();
   assertRealtimeSupersessionEndsWithCurrentAuthority();
   assertPassiveRealtimeDamageDoesNotDiscardRemoteMission();
@@ -4190,7 +4307,7 @@ function runRemoteProfitDecisionSelfTest() {
   assert.strictEqual(lowDropDecision.profit?.postKillCoinSuppression?.removedCount, 1);
   assert.strictEqual(lowDropDecision.stateful.profitMission?.targetId, '99');
 
-  return { ok: true, cases: 101 };
+  return { ok: true, cases: 102 };
 }
 
 if (require.main === module) {

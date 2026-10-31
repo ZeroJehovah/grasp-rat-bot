@@ -258,6 +258,7 @@ const DEFAULT_EASY_KILL_APPROACH_WINDOW_MS = BROWSER_RUNTIME_DEFAULTS.browserles
 const DEFAULT_EASY_KILL_APPROACH_MIN_CLOSING_CM = BROWSER_RUNTIME_DEFAULTS.browserlessEasyKillApproachMinClosingCm ?? 1000;
 const DEFAULT_PROFIT_MISSION_TTL_MS = 180000;
 const DEFAULT_COMPLETED_PROFIT_TARGET_TTL_MS = 210000;
+const DEFAULT_PLAYER_RESPAWN_INVULNERABILITY_MS = 120000;
 const DEFAULT_PROFIT_TICK_REGRESSION_TOLERANCE = 5;
 const DEFAULT_ACTIVE_COIN_COMPETITION_MIN_SELF_DISTANCE_CM = BROWSER_RUNTIME_DEFAULTS.activeCoinCompetitionMinSelfDistanceCm ?? 18000;
 const DEFAULT_ACTIVE_COIN_COMPETITION_NEAR_COIN_DISTANCE_CM = BROWSER_RUNTIME_DEFAULTS.activeCoinCompetitionNearCoinDistanceCm ?? 8000;
@@ -2310,6 +2311,25 @@ function compareCompletionRecordRank(left, right) {
   return 0;
 }
 
+function completedProfitTargetDeathDrops(source = {}) {
+  const rows = [
+    ...(Array.isArray(source.postKillSettlements) ? source.postKillSettlements : []),
+    ...Object.values(source.postKillSettlements && !Array.isArray(source.postKillSettlements)
+      ? source.postKillSettlements
+      : {}),
+    ...(source.postKillSettlement ? [source.postKillSettlement] : [])
+  ];
+  const drops = new Map();
+  for (const settlement of rows) {
+    if (!settlement || typeof settlement !== 'object') continue;
+    const targetId = numberOrNull(settlement.targetId ?? settlement.target_user_id ?? settlement.targetUserId);
+    const drop = numberOrNull(settlement.targetDrop ?? settlement.target_drop);
+    if (targetId === null || drop === null || settlement.targetDropKnown === false) continue;
+    drops.set(String(targetId), Math.max(0, drop));
+  }
+  return drops;
+}
+
 function mergeCompletedProfitTargetRecord(previous = {}, next = {}) {
   const preferred = compareCompletionRecordRank(next, previous) >= 0 ? next : previous;
   const merged = {
@@ -2322,6 +2342,13 @@ function mergeCompletedProfitTargetRecord(previous = {}, next = {}) {
   };
   if (next.coinKey && compareCompletionRecordRank(next, previous) >= 0) merged.coinKey = String(next.coinKey);
   if (!merged.reason) merged.reason = String(next.reason || previous.reason || '');
+  if (next.deathDropKnown === true) {
+    merged.deathDrop = numberOrNull(next.deathDrop);
+    merged.deathDropKnown = merged.deathDrop !== null;
+  } else if (previous.deathDropKnown === true && merged.deathDropKnown !== true) {
+    merged.deathDrop = numberOrNull(previous.deathDrop);
+    merged.deathDropKnown = merged.deathDrop !== null;
+  }
   return merged;
 }
 
@@ -2335,6 +2362,40 @@ function completionBlocksRemoteBatch(completed, batchTick, tickEpoch) {
     && completionObservedTick !== null
     && candidateTick !== null
     && candidateTick <= completionObservedTick);
+}
+
+function postKillRespawnEvidence(completed, candidate, batchTick, input = {}, options = {}) {
+  const candidateTick = positiveTick(batchTick);
+  const deathObservedTick = positiveTick(completed?.observedTick);
+  const deathAtMs = Number(completed?.observedAt || 0);
+  const nowMs = Number.isFinite(Number(input?.nowMs)) ? Number(input.nowMs) : Date.now();
+  if (!completed || candidateTick === null || deathObservedTick === null
+    || candidateTick <= deathObservedTick || !(deathAtMs > 0)) {
+    return { blocked: false, reason: 'not-a-post-kill-batch' };
+  }
+  const windowMs = Math.max(0, Number(
+    options.playerRespawnInvulnerabilityMs ?? DEFAULT_PLAYER_RESPAWN_INVULNERABILITY_MS
+  ));
+  const ageMs = Math.max(0, nowMs - deathAtMs);
+  if (ageMs > windowMs) return { blocked: false, reason: 'respawn-window-elapsed', ageMs };
+  const remainingMs = numberOrNull(candidate.invulnerableRemainingMs);
+  const respawnInvulnerable = Boolean(candidate.invulnerable === true
+    || (remainingMs !== null && remainingMs > 0));
+  const deathDrop = completed.deathDropKnown === true ? numberOrNull(completed.deathDrop) : null;
+  const candidateDrop = entityDropKnown(candidate) ? entityDropValue(candidate) : null;
+  const dropDecreased = deathDrop !== null && candidateDrop !== null && candidateDrop < deathDrop;
+  const evidence = respawnInvulnerable
+    ? 'respawn-invulnerability'
+    : (dropDecreased ? 'lower-post-death-drop' : '');
+  return {
+    blocked: !evidence,
+    reason: evidence || 'respawn-unconfirmed',
+    ageMs,
+    windowMs,
+    deathDrop,
+    candidateDrop,
+    respawnInvulnerable
+  };
 }
 
 function ensureCompletedProfitTargets(stateful = {}, nowMs = Date.now(), options = {}) {
@@ -2371,6 +2432,7 @@ function observeCompletedProfitTargets(input = {}, stateful = {}, options = {}) 
       ?? DEFAULT_COMPLETED_PROFIT_TARGET_TTL_MS
   ));
   const epoch = currentProfitTickEpoch(stateful);
+  const settlementDrops = completedProfitTargetDeathDrops(stateful);
   const killEvidence = Array.isArray(input?.selfKillEvidence) ? input.selfKillEvidence : [];
   stateful.completedProfitKillEvidence = stateful.completedProfitKillEvidence
     && typeof stateful.completedProfitKillEvidence === 'object'
@@ -2406,10 +2468,20 @@ function observeCompletedProfitTargets(input = {}, stateful = {}, options = {}) 
         evidenceKey: `kill:${id}:tick:${tick}`,
         reason: 'self-kill-evidence',
         killTick: tick,
+        deathDrop: settlementDrops.get(id),
+        deathDropKnown: settlementDrops.has(id),
         coinKey: String(previous.coinKey || ''),
         amount: Math.max(0, Number(evidence.amount || 0))
       });
     }
+  }
+  for (const [id, deathDrop] of settlementDrops) {
+    const previous = records[id];
+    if (!previous) continue;
+    records[id] = mergeCompletedProfitTargetRecord(previous, {
+      deathDrop,
+      deathDropKnown: true
+    });
   }
   const evidenceEntries = Object.entries(stateful.completedProfitKillEvidence)
     .sort((left, right) => Number(right[1]?.observedAt || 0) - Number(left[1]?.observedAt || 0))
@@ -2431,6 +2503,9 @@ function observeCompletedProfitTargets(input = {}, stateful = {}, options = {}) 
       const id = String(sourceUserId);
       const coinKey = String(coin?.key || profitCoinKey(coin) || coin?.id || coin?.drop_id || '');
       const previous = records[id] || {};
+      const deathDrop = previous.deathDropKnown === true
+        ? previous.deathDrop
+        : amount;
       records[id] = mergeCompletedProfitTargetRecord(previous, {
         observedAt: nowMs,
         lastObservedAt: nowMs,
@@ -2440,6 +2515,8 @@ function observeCompletedProfitTargets(input = {}, stateful = {}, options = {}) 
         observedTick,
         evidenceKey: `coin:${id}:${coinKey || 'unknown'}:tick:${observedTick}`,
         reason: String(previous.reason || 'source-player-drop-observed'),
+        deathDrop,
+        deathDropKnown: Number(deathDrop) >= 0,
         coinKey,
         amount
       });
@@ -7667,6 +7744,7 @@ function remoteProfitCandidateInput(input, options = {}, stateful = {}) {
     realtimeSupersededIds: [],
     missSuppressedIds: [],
     invalidatedIds: [],
+    postKillRespawnRejections: [],
     inputCount: Number(batch?.candidates?.length || 0),
     filtered: {},
     positionSources: {},
@@ -7698,6 +7776,19 @@ function remoteProfitCandidateInput(input, options = {}, stateful = {}) {
     .map(target => easyKillTargetUserId(target))
     .filter(id => id !== null)
     .map(String));
+  // Visible positions are the strongest navigation evidence and must not
+  // depend on the bounded realtime position memory (which can evict a target
+  // in a crowded scene).  Keep one direct map for this decision.
+  const visibleRealtimePositions = new Map();
+  for (const target of input.panelVisibleTargets || input.visibleTargets || []) {
+    const authority = String(target?.authority || '');
+    if (authority !== 'realtime' && authority !== 'native') continue;
+    const targetId = easyKillTargetUserId(target);
+    const x = numberOrNull(target?.x);
+    const y = numberOrNull(target?.y);
+    if (targetId === null || x === null || y === null) continue;
+    visibleRealtimePositions.set(String(targetId), { x, y, observedAtMs: input.nowMs });
+  }
   const candidateIds = new Set((batch.candidates || [])
     .map(candidate => easyKillTargetUserId(candidate))
     .filter(id => id !== null)
@@ -7752,6 +7843,21 @@ function remoteProfitCandidateInput(input, options = {}, stateful = {}) {
       reject('target-drop-observed');
       continue;
     }
+    const postKillRespawn = postKillRespawnEvidence(completed, candidate, batchTick, input, options);
+    if (postKillRespawn.blocked) {
+      result.invalidatedIds.push(id);
+      result.postKillRespawnRejections.push({
+        targetId: id,
+        reason: postKillRespawn.reason,
+        ageMs: postKillRespawn.ageMs,
+        windowMs: postKillRespawn.windowMs,
+        deathDrop: postKillRespawn.deathDrop,
+        candidateDrop: postKillRespawn.candidateDrop,
+        respawnInvulnerable: postKillRespawn.respawnInvulnerable
+      });
+      reject('post-kill-respawn-unconfirmed');
+      continue;
+    }
     if (superseded.has(id) || (visibleIds.has(id) && realtimeAuthorityIds.has(id))) {
       reject('realtime-superseded');
       continue;
@@ -7778,7 +7884,9 @@ function remoteProfitCandidateInput(input, options = {}, stateful = {}) {
       ? null
       : Math.max(0, snapshotRemainingMs - result.ageMs);
     const approachDistanceCm = remoteProfitApproachDistanceCm(classification, options);
-    const realtimePosition = realtimeProfitPositions.get(id) || null;
+    const realtimePosition = visibleRealtimePositions.get(id)
+      || realtimeProfitPositions.get(id)
+      || null;
     const freshestPosition = freshestProfitTargetPositionCore({
       snapshotX: candidate.x,
       snapshotY: candidate.y,
@@ -8308,6 +8416,32 @@ function profitMissionRemoteState(input = {}, mission = {}, nowMs = Date.now(), 
   return state;
 }
 
+function refreshProfitMissionRealtimeNavigationPosition(mission = {}, target = null, nowMs = Date.now()) {
+  if (!mission || !target || !['enemy', 'remote-player-navigation'].includes(String(mission.type || ''))) {
+    return false;
+  }
+  const authority = String(target.authority || '');
+  if (authority !== 'realtime' && authority !== 'native') return false;
+  const x = numberOrNull(target.x);
+  const y = numberOrNull(target.y);
+  if (x === null || y === null) return false;
+  const previous = mission.navigationTarget || {};
+  mission.navigationTarget = {
+    ...previous,
+    userId: easyKillTargetUserId(target) ?? previous.userId,
+    entityId: target.entityId ?? target.entity_id ?? previous.entityId ?? null,
+    x,
+    y,
+    vx: numberOrNull(target.vx) ?? previous.vx ?? null,
+    vy: numberOrNull(target.vy) ?? previous.vy ?? null,
+    positionSource: 'realtime',
+    realtimePositionObservedAtMs: nowMs
+  };
+  mission.navigationPositionAuthority = 'realtime-visible';
+  mission.navigationTargetRealtimeObservedAt = nowMs;
+  return true;
+}
+
 // 玩家收益任务在提交后仍需按当前标注复核保护状态: 体力豁免消失、动态白名单重新生效或创建者保护
 // 出现时, 该玩家立刻不再是合法的收益主目标。硬币/坐标类任务不走这条判定。
 function playerProfitMissionProtectionRestored(mission = null, entity = null) {
@@ -8621,6 +8755,7 @@ function reconcileProfitMissionState(input = {}, stateful = {}, options = {}, re
     clearExpiredRealtimeEnemyMissionState(stateful, mission, 'player-whitelist-protection-restored');
     return null;
   }
+  if (visible) refreshProfitMissionRealtimeNavigationPosition(mission, visible, nowMs);
   const combat = stateful.combatTarget || null;
   if (combat && missionId && String(combat.id || '') === missionId
     && (Number(combat.hp) <= 0 || combat.escapeDecision?.confirmed === true)) {
@@ -8856,7 +8991,7 @@ function updateProfitMissionProgress(input = {}, stateful = {}, options = {}) {
   return reconcileProfitMissionState(input, stateful, options);
 }
 
-function releaseProfitMissionForExplicitSelfKill(stateful = {}) {
+function releaseProfitMissionForExplicitSelfKill(stateful = {}, nowMs = Date.now()) {
   const mission = stateful?.profitMission || null;
   if (!mission || !['enemy', 'remote-player-navigation'].includes(String(mission.type || ''))) {
     return false;
@@ -8875,6 +9010,20 @@ function releaseProfitMissionForExplicitSelfKill(stateful = {}) {
       Number(right[1]?.startedAt || 0) - Number(left[1]?.startedAt || 0)
     ))[0];
   if (!matched) return false;
+  const settlement = matched[1] || {};
+  const missionTarget = mission.navigationTarget
+    || profitMissionChoiceSource(mission.choice)
+    || mission.target
+    || null;
+  const deathDrop = numberOrNull(settlement.targetDrop)
+    ?? (entityDropKnown(missionTarget) ? entityDropValue(missionTarget) : null);
+  if (deathDrop !== null) {
+    const records = ensureCompletedProfitTargets(stateful, nowMs, {});
+    records[missionId] = mergeCompletedProfitTargetRecord(records[missionId] || {}, {
+      deathDrop,
+      deathDropKnown: true
+    });
+  }
   return clearProfitMission(stateful, 'self-kill-confirmed');
 }
 
@@ -9494,11 +9643,19 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     }
   }
   let lockedProfitMission = reconcileProfitMissionState(input, stateful, options, remoteProfit);
+  const pausedRemoteMissionSuppressed = Boolean(
+    lockedProfitMission?.type === 'remote-player-navigation'
+      && lockedProfitMission.navigationPaused === true
+  );
+  if (pausedRemoteMissionSuppressed) {
+    opportunities = opportunities.filter(item => !profitMissionMatchesChoice(lockedProfitMission, item));
+    if (current && profitMissionMatchesChoice(lockedProfitMission, current)) current = null;
+  }
   const missionEscortContinuity = lockedProfitMission
     ? activeProfitEscortContinuityForMission(stateful, lockedProfitMission, input.nowMs)
     : null;
   const missionEstablishedRealtimeActive = profitMissionIsEstablishedRealtimeActive(lockedProfitMission);
-  const remoteMissionReclaimBlocked = false;
+  const remoteMissionReclaimBlocked = pausedRemoteMissionSuppressed;
   if (lockedProfitMission && (lockedProfitMission.highValue || missionEscortContinuity)) {
     let missionOpportunity = opportunities.find(item => profitMissionMatchesChoice(lockedProfitMission, item)) || null;
     if (!missionOpportunity) {
@@ -9683,7 +9840,9 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
       missSuppressedIds: remoteProfit.missSuppressedIds,
       filtered: remoteProfit.filtered,
       invalidatedIds: remoteProfit.invalidatedIds,
+      postKillRespawnRejections: remoteProfit.postKillRespawnRejections,
       remoteMissionReclaimBlocked,
+      pausedMissionActionSuppressed: pausedRemoteMissionSuppressed,
       visibleHighDropGuard,
       selected: chosen?.type === 'remote-player-navigation' ? remoteProfitActionTarget(chosen) : null
     },
@@ -10524,7 +10683,7 @@ function reconcilePostKillSettlement(input, stateful = {}, combat = {}, previous
     };
   }
   stateful.postKillSettlement = result.selected ? settlementSummary(result.selected, input?.nowMs) : null;
-  releaseProfitMissionForExplicitSelfKill(stateful);
+  releaseProfitMissionForExplicitSelfKill(stateful, input?.nowMs);
   return settlementSummary(stateful.postKillSettlement, input?.nowMs);
 }
 
