@@ -7707,14 +7707,16 @@ function remoteProfitCandidateInput(input, options = {}, stateful = {}) {
   const easyKillBlockedIds = new Set((easyKillStatus.blockedUserIds || []).map(String));
   const currentEasyKillPlayers = new Map((easyKillStatus.players || []).map(player => [String(easyKillTargetUserId(player)), player]));
   const realtimeAuthorityIds = realtimeProfitAuthorityIds(input, options);
-  // The worker observes raw realtime entities before the planner has applied
-  // Active/whitelist/range/economic admission. A nearby ID is therefore not
-  // enough to suppress its remote candidate. Keep historical suppression for
-  // targets that are no longer visible, but require current realtime
-  // authority whenever the same ID is still in the nearby projection.
+  // The worker keeps a generation-scoped history of raw realtime sightings.
+  // A sighting is not permanent realtime authority: once that player leaves
+  // the current projection, the still-valid snapshot is again the newest
+  // available evidence for ordinary profit ranking. Suppress the snapshot
+  // candidate only while the same player is currently admitted by the
+  // realtime profit layer; otherwise its visibility, rather than its ROI,
+  // would decide the comparison.
   const superseded = new Set((batch.realtimeSupersededIds || [])
     .map(String)
-    .filter(id => !visibleIds.has(id) || realtimeAuthorityIds.has(id)));
+    .filter(id => realtimeAuthorityIds.has(id)));
   const missSuppressed = new Set((batch.missSuppressedIds || []).map(String));
   const completedProfitTargets = observeCompletedProfitTargets(input, stateful, options);
   const realtimeProfitPositions = observeRealtimeProfitTargetPositions(input, stateful, options);

@@ -533,6 +533,100 @@ function assertBareRealtimeSupersessionDoesNotBlockRemoteMission() {
   assert.strictEqual(retained.action?.target?.userId, 8015);
 }
 
+// A raw realtime sighting is generation history, not permanent authority. If
+// the player leaves the current projection before the snapshot expires, the
+// newest snapshot candidate must return to the ordinary score comparison.
+// 2026-10-31 00:52 CST: a Drop-41 off-screen candidate was kept in the
+// worker's realtimeSupersededIds after leaving view, so it never reached the
+// scorer and a Drop-15 realtime target won by visibility instead of ROI.
+function assertRealtimeSupersessionEndsWithCurrentAuthority() {
+  const common = {
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    dynamicProfitThresholdEnabled: false,
+    singleCoinBaitEnabled: false,
+    finalActionArbitrationHoldMs: 0,
+    opportunitySwitchConfirmFrames: 1,
+    opportunitySwitchMargin: 0,
+    opportunitySwitchRelativeMargin: 0
+  };
+  const highRemote = remoteCandidate({
+    userId: 1636,
+    name: 'snapshot-high-value',
+    x: 49000,
+    y: 0,
+    drop: 41,
+    expectedReward: 41,
+    staminaCost: 100000,
+    distance: 49000,
+    baseScore: 312355.8535,
+    distanceFactor: 1,
+    adjustedScore: 312355.8535
+  });
+  const stickyBatch = batch(highRemote, {
+    generation: 6086,
+    tick: 1,
+    observedAtMs: 1000,
+    expiresAtMs: 91000,
+    realtimeSupersededIds: ['1636']
+  });
+  const lowerValue = ordinaryProfitTarget(7703, 30191, 15, { name: 'realtime-lower-value' });
+
+  const currentAuthorityAdapter = createBrowserlessDecisionAdapter(common);
+  const currentAuthority = decide(
+    currentAuthorityAdapter,
+    state(fullStaminaSelf(), [{
+      ...lowerValue,
+      user_id: 1636,
+      entity_id: 2636,
+      x: 6000,
+      vx: -35,
+      current_join_mode: 'Active',
+      active: true
+    }]),
+    5000,
+    stickyBatch,
+    common
+  );
+  assert.strictEqual(
+    currentAuthority.profit.remoteProfit.filtered['realtime-superseded'],
+    1
+  );
+  assert.strictEqual(currentAuthority.profit.remoteProfit.candidateCount, 0);
+  assert.strictEqual(currentAuthority.action?.target?.userId, 1636);
+  assert.strictEqual(currentAuthority.action?.target?.authority, 'realtime');
+
+  const authorityEndedAdapter = createBrowserlessDecisionAdapter(common);
+  const authorityEnded = decide(
+    authorityEndedAdapter,
+    state(fullStaminaSelf(), [lowerValue]),
+    5000,
+    stickyBatch,
+    common
+  );
+  const remote = authorityEnded.profit.candidates.find(candidate => (
+    candidate.type === 'remote-player-navigation'
+    && String(candidate.sourceTarget?.userId ?? candidate.id) === '1636'
+  ));
+  const realtime = authorityEnded.profit.candidates.find(candidate => String(candidate.id) === '7703');
+  assert(remote, 'snapshot candidate must return once current realtime authority ends');
+  assert(realtime, 'lower-value realtime candidate must still enter the same scoring pool');
+  assert(!authorityEnded.profit.remoteProfit.realtimeSupersededIds.includes('1636'));
+  assert.strictEqual(authorityEnded.profit.remoteProfit.filtered?.['realtime-superseded'] ?? 0, 0);
+  assert(
+    Number(remote.score) > Number(realtime.score),
+    JSON.stringify({
+      remoteScore: remote.score,
+      realtimeScore: realtime.score
+    })
+  );
+  assert.strictEqual(authorityEnded.action?.target?.userId, 1636);
+  assert.strictEqual(authorityEnded.action?.kind, 'seek-remote-player');
+  assert.strictEqual(authorityEnded.profit?.mission?.targetId, '1636');
+  assert.strictEqual(authorityEnded.profit?.mission?.navigationPaused, false);
+}
+
 function assertActivePlayerPickupRadiusCoinCompetition() {
   const common = {
     userId: 7,
@@ -682,7 +776,7 @@ function assertSelfKillReleasesSupersededMission() {
     expectedReward: 61,
     adjustedScore: 300000
   });
-  const remoteBatch = batch(remote);
+  const remoteBatch = batch(remote, { tick: 6260 });
   const first = decide(adapter, state(fullStaminaSelf()), 2000, remoteBatch, {
     controlMode: 'profit-live',
     combatEnabled: true
@@ -762,6 +856,7 @@ function assertSelfKillReleasesSupersededMission() {
   });
   assert.notStrictEqual(settled.action?.target?.userId, 99);
   assert.strictEqual(settled.profit?.mission, null);
+  assert.strictEqual(settled.profit?.remoteProfit?.filtered?.['target-drop-observed'], 1);
   assert.strictEqual(
     settled.input?.postKillSettlements?.find(item => item.targetId === '99')?.phase,
     'settled'
@@ -3659,6 +3754,7 @@ function runRemoteProfitDecisionSelfTest() {
   assertDynamicThresholdLinkedCoinRoute();
   assertRealtimeSupersededMissionContinuity();
   assertBareRealtimeSupersessionDoesNotBlockRemoteMission();
+  assertRealtimeSupersessionEndsWithCurrentAuthority();
   assertPassiveRealtimeDamageDoesNotDiscardRemoteMission();
   assertLowerValuePassiveEnemyDoesNotTakeRemotePrimaryMission();
   assertActivePlayerPickupRadiusCoinCompetition();
@@ -4094,7 +4190,7 @@ function runRemoteProfitDecisionSelfTest() {
   assert.strictEqual(lowDropDecision.profit?.postKillCoinSuppression?.removedCount, 1);
   assert.strictEqual(lowDropDecision.stateful.profitMission?.targetId, '99');
 
-  return { ok: true, cases: 100 };
+  return { ok: true, cases: 101 };
 }
 
 if (require.main === module) {

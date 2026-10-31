@@ -368,6 +368,9 @@ function createRemoteProfitWorker(options = {}) {
   }
 
   function observeRealtimeEntities(entities = []) {
+    // This generation-scoped set is observation history, not lasting planner
+    // authority. The decision layer intersects it with its current realtime
+    // profit admissions so a player who leaves view can return to snapshot ROI.
     if (!batch || !Array.isArray(entities) || entities.length === 0) return 0;
     if (!publishedCandidateIds.size) return 0;
     let added = 0;

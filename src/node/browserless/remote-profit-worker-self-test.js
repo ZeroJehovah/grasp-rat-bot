@@ -52,7 +52,11 @@ async function runRemoteProfitWorkerSelfTest() {
     assert(context && context.candidates.length === 1);
     assert.strictEqual(worker.observeRealtimeEntities([{ user_id: 10 }]), 1);
     assert.strictEqual(worker.observeRealtimeEntities([]), 0);
-    assert.deepStrictEqual(worker.context(Date.now()).realtimeSupersededIds, ['10'], 'realtime takeover remains permanent after disappearance');
+    assert.deepStrictEqual(
+      worker.context(Date.now()).realtimeSupersededIds,
+      ['10'],
+      'worker retains generation history after disappearance; the planner intersects it with current realtime authority'
+    );
     worker.observeDecision({ profit: { remoteProfit: { generation: 1, realtimeSupersededIds: [10], missSuppressedIds: [11] } } });
     const suppressed = worker.context(Date.now());
     assert.deepStrictEqual(suppressed.realtimeSupersededIds, ['10']);
