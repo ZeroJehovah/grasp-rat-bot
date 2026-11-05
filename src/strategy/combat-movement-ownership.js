@@ -85,14 +85,33 @@ function resolveDodgeExecutionDirectionCore(input = {}) {
   const baseline = directionOf((ownership.active ? ownership.direction : null) || input.fallback);
   const candidate = input.evaluated === true && input.evaluatedDirection
     ? directionOf(input.evaluatedDirection) : null;
+  const suppliedField = Array.isArray(input.threatField) ? input.threatField : [];
+  const field = collapsedDodgeCandidatesCore(suppliedField);
+  const risk = direction => field.find(row => directionKey(row) === directionKey(direction));
+  const minimumCpaCm = Math.max(1, Number(input.minimumCpaCm ?? 200));
+  const candidateRisk = candidate ? risk(candidate) : null;
+  const candidateWorstCaseCpaCm = Number(
+    candidateRisk?.worstCaseCpaCm ?? candidateRisk?.minCPA
+  );
+  const candidateSafeProgress = Boolean(
+    input.preferSafeProgress === true
+      && candidateRisk
+      && candidateRisk.physicalHits === 0
+      && candidateRisk.robustHits === 0
+      && candidateRisk.directHits === 0
+      && candidateRisk.scheduleRobust !== false
+      && Number.isFinite(candidateWorstCaseCpaCm)
+      && candidateWorstCaseCpaCm >= minimumCpaCm
+  );
   let accepted = false;
   let reason = 'ownership-direction';
-  if (candidate && !ownership.currentThreat) {
+  if (input.preferSafeProgress === true) {
+    accepted = candidateSafeProgress;
+    reason = accepted ? 'strategic-safe-progress' : 'strategic-progress-not-safe';
+  } else if (candidate && !ownership.currentThreat) {
     accepted = true;
     reason = 'evaluated-prospective-dodge';
   } else if (candidate) {
-    const suppliedField = Array.isArray(input.threatField) ? input.threatField : [];
-    const field = collapsedDodgeCandidatesCore(suppliedField);
     const suppliedRisk = direction => suppliedField
       .find(row => directionKey(row) === directionKey(direction));
     const suppliedCandidateRisk = suppliedRisk(candidate);
@@ -101,7 +120,6 @@ function resolveDodgeExecutionDirectionCore(input = {}) {
       && row.directHits !== null && row.directHits !== undefined
       && Number.isFinite(Number(row.directHits)) && Number(row.directHits) >= 0
     );
-    const risk = direction => field.find(row => directionKey(row) === directionKey(direction));
     const candidateRisk = risk(candidate), baselineRisk = risk(baseline);
     const candidateNormalized = complete ? normalizeDodgeRiskCandidate(candidateRisk) : null;
     const baselineNormalized = complete ? normalizeDodgeRiskCandidate(baselineRisk) : null;

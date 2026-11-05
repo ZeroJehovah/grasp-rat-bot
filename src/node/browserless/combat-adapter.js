@@ -4067,9 +4067,18 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
         pendingDirection,
         unavoidableHoldDirection: pendingDirection || currentDirection,
         pendingActive: Boolean(pendingDirection),
-        preferStrategicProgress: profitKillRace.active,
+        preferStrategicProgress: profitKillRace.active
+          || Boolean(profitEscort?.active && !ballisticCloseActive),
         emergencyDirection: contactEntryDodge || dodge || { dx: 0, dy: 0 }
       }, { minimumCpaCm: movementSafetyCpaCm })
+    : null;
+  const escortSafeProgressDirection = profitEscort?.active
+    && !ballisticCloseActive
+    && ['strategic-safe', 'strategic-safe-progress'].includes(movementArbitration?.source)
+    ? {
+        dx: Number(movementArbitration.dx || 0),
+        dy: Number(movementArbitration.dy || 0)
+      }
     : null;
   let effectiveDodge = contactEntryDodge || dodge;
   let movement;
@@ -4362,15 +4371,19 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   if (movementOwner.owner === 'emergency-dodge') {
     dodgeExecutionDirection = resolveDodgeExecutionDirectionCore({
       ownership: dodgeOwnership,
-      evaluated: distanceAwareDodge.applied,
-      evaluatedDirection: effectiveDodge,
+      evaluated: distanceAwareDodge.applied || Boolean(escortSafeProgressDirection),
+      evaluatedDirection: escortSafeProgressDirection || effectiveDodge,
       threatField: dodge?.threatField,
-      fallback: effectiveDodge || dodge
+      fallback: effectiveDodge || dodge,
+      preferSafeProgress: Boolean(escortSafeProgressDirection),
+      minimumCpaCm: movementSafetyCpaCm
     });
     const emergencyDirection = dodgeExecutionDirection.direction;
     if (dodgeExecutionDirection.accepted) dodgeOwnership.direction = emergencyDirection;
     if (emergencyDirection) {
-      const dodgeReason = effectiveDodge?.reason || dodge?.reason || 'direct-threat-dodge';
+      const dodgeReason = dodgeExecutionDirection.reason === 'strategic-safe-progress'
+        ? 'profit-escort-safe-progress'
+        : (effectiveDodge?.reason || dodge?.reason || 'direct-threat-dodge');
       movement = {
         ...movement,
         ...ownedMovementDirectionCore(emergencyDirection, movement),
@@ -4457,8 +4470,18 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
   if (safeRetreatInterceptApplied) {
     movement.modifiers = Array.from(new Set([...(movement.modifiers || []), 'safe-retreat-intercept']));
   }
+  const escortSafeProgressApplied = Boolean(
+    escortSafeProgressDirection
+      && Number(movement.dx || 0) === Number(escortSafeProgressDirection.dx || 0)
+      && Number(movement.dy || 0) === Number(escortSafeProgressDirection.dy || 0)
+  );
+  const escortSafeProgressOwnsDodge = escortSafeProgressApplied
+    && dodgeOwnership.active === true
+    && dodgeExecutionDirection?.accepted === true
+    && dodgeExecutionDirection.reason === 'strategic-safe-progress';
   if (profitEscort?.active) {
-    if (movement.modifiers.includes('profit-escort')) profitEscort.overrideReason = '';
+    if (escortSafeProgressOwnsDodge) profitEscort.overrideReason = '';
+    else if (movement.modifiers.includes('profit-escort')) profitEscort.overrideReason = '';
     else if (movement.modifiers.includes('dodge')) {
       profitEscort.overrideReason = contactEntryDodge ? 'contact-entry-dodge' : 'emergency-dodge';
     } else if (movementArbitration?.source === 'pending-safe-hold') {
@@ -4648,6 +4671,11 @@ function buildCombatMovementPlan(self, target, bullets = [], options = {}) {
       strategicProgress: numberOrNull(movementArbitration.strategicProgress),
       safeProgressCandidateCount: Number(movementArbitration.safeProgressCandidateCount || 0),
       safeProgressDirection: movementArbitration.safeProgressDirection || null,
+      profitEscortSafeProgress: escortSafeProgressDirection ? {
+        accepted: escortSafeProgressApplied,
+        direction: { ...escortSafeProgressDirection },
+        reason: escortSafeProgressApplied ? 'strategic-safe-progress' : 'strategic-progress-not-applied'
+      } : null,
       competitionApproachPreemptedBy,
       competitionSafeProgressRestored,
       strategicDirection: predictiveDirection,
@@ -6546,6 +6574,9 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
           && pendingAgeTicks > timingUpperTicks),
         commandUnmatched: recentUnmatchedTransition,
         newThreatUrgent,
+        strategicProgressOverride: movement?.movementArbitration?.profitEscortSafeProgress?.accepted === true
+          && Number(movement?.dx || 0) === Number(movement?.movementArbitration?.profitEscortSafeProgress?.direction?.dx || 0)
+          && Number(movement?.dy || 0) === Number(movement?.movementArbitration?.profitEscortSafeProgress?.direction?.dy || 0),
         minimumCpaCm: Math.max(
           Number(movement?.movementArbitration?.minimumCpaCm || 0),
           Number(options.combatMovementSafeCpaCm || 0),

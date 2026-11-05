@@ -270,8 +270,10 @@ function stabilizeCombatMovementDirectionCore(input = {}, options = {}) {
   const restoredSafety = heldCpa < minimumCpaCm && candidateCpa >= minimumCpaCm;
   const materialCpaGain = Number.isFinite(candidateCpa) && Number.isFinite(heldCpa)
     && candidateCpa - heldCpa >= materialCpaGainCm;
+  const strategicProgressOverride = input.strategicProgressOverride === true;
   const hardRelease = Boolean(
-    input.hardGateChanged
+    strategicProgressOverride
+      || input.hardGateChanged
       || input.transportReset
       || input.commandUpperBoundExpired
       || input.commandUnmatched
@@ -390,10 +392,13 @@ function stabilizeCombatMovementDirectionCore(input = {}, options = {}) {
     state,
     held: false,
     switched: true,
-    reason: hardRelease
-      ? 'movement-stability-immediate-safety-release'
-      : 'movement-stability-window-expired',
+    reason: strategicProgressOverride
+      ? 'movement-stability-strategic-progress-release'
+      : (hardRelease
+        ? 'movement-stability-immediate-safety-release'
+        : 'movement-stability-window-expired'),
     release: {
+      strategicProgressOverride,
       hardGateChanged: Boolean(input.hardGateChanged),
       transportReset: Boolean(input.transportReset),
       commandUpperBoundExpired: Boolean(input.commandUpperBoundExpired),

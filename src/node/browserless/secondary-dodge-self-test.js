@@ -1,7 +1,13 @@
 'use strict';
 const assert = require('assert');
 const { buildCombatMovementPlan } = require('./combat-adapter');
-const { calculateDodgeDirection, resolveDistanceAwareDodgeCore, sameRadialIntentCore } = require('../../strategy/combat-movement');
+const {
+  calculateDodgeDirection,
+  resolveDistanceAwareDodgeCore,
+  sameRadialIntentCore,
+  selectCombatMovementArbitrationCore,
+  stabilizeCombatMovementDirectionCore
+} = require('../../strategy/combat-movement');
 const { resolveDodgeExecutionDirectionCore } = require('../../strategy/combat-movement-ownership');
 function runSecondaryDodgeSelfTest() {
   const self = { x: 0, y: 0, vx: 0, vy: 0, hp: 70, stamina_5s_remaining_milli: 5000 };
@@ -207,6 +213,130 @@ function runSecondaryDodgeSelfTest() {
   assert(!execute({ evaluated: false }).accepted, 'a budget-blocked candidate has no execution authority');
   const safe = execute({ threatField: [baselineRisk, { ...candidateRisk, directHits: 0, unavoidableHits: 0 }] });
   assert(safe.accepted, 'strictly safer current trajectories remain eligible');
+  const progressField = [
+    { dx: -1, dy: -1, directHits: 0, physicalHits: 0, robustHits: 0,
+      minRawCpaCm: 518.6264, minRobustCpaCm: 518.6264, worstCaseCpaCm: 518.6264, scheduleRobust: true },
+    { dx: -1, dy: 1, directHits: 0, physicalHits: 0, robustHits: 0,
+      minRawCpaCm: 422.2327, minRobustCpaCm: 422.2327, worstCaseCpaCm: 422.2327, scheduleRobust: true }
+  ];
+  const progressArbitration = selectCombatMovementArbitrationCore({
+    threatField: progressField,
+    strategicDirection: { dx: -1, dy: 1 },
+    currentDirection: { dx: -1, dy: -1 },
+    emergencyDirection: { dx: -1, dy: -1 },
+    preferStrategicProgress: true
+  }, { minimumCpaCm: 200 });
+  const progressExecution = resolveDodgeExecutionDirectionCore({
+    ownership: owned,
+    evaluated: true,
+    evaluatedDirection: progressArbitration,
+    threatField: progressField,
+    preferSafeProgress: true,
+    minimumCpaCm: 200
+  });
+  const unsafeProgressExecution = resolveDodgeExecutionDirectionCore({
+    ownership: owned,
+    evaluated: true,
+    evaluatedDirection: { dx: -1, dy: 1 },
+    threatField: [progressField[0], { ...progressField[1], physicalHits: 1, robustHits: 1,
+      directHits: 1, worstCaseCpaCm: 180, minCPA: 180, minRawCpaCm: 180, minRobustCpaCm: 180 }],
+    preferSafeProgress: true,
+    minimumCpaCm: 200
+  });
+  const missingProgressExecution = resolveDodgeExecutionDirectionCore({
+    ownership: owned,
+    evaluated: true,
+    evaluatedDirection: { dx: -1, dy: 1 },
+    threatField: [progressField[0]],
+    preferSafeProgress: true,
+    minimumCpaCm: 200
+  });
+  assert.strictEqual(progressArbitration.source, 'strategic-safe');
+  assert(progressExecution.accepted
+    && progressExecution.reason === 'strategic-safe-progress'
+    && progressExecution.direction.dx === -1 && progressExecution.direction.dy === 1,
+  'a safe lower-clearance escort direction keeps primary progress over retained emergency ownership');
+  assert(!unsafeProgressExecution.accepted
+    && unsafeProgressExecution.reason === 'strategic-progress-not-safe'
+    && unsafeProgressExecution.direction.dy === -1,
+  'safe-progress preference still rejects a collision or below-threshold candidate');
+  assert(!missingProgressExecution.accepted
+    && missingProgressExecution.reason === 'strategic-progress-not-safe'
+    && missingProgressExecution.direction.dy === -1,
+  'safe-progress preference rejects a candidate absent from the current native risk field');
+  const initialProgressLane = stabilizeCombatMovementDirectionCore({
+    nowMs: 10000,
+    tick: 200,
+    targetId: '2',
+    engagementId: 'escort-progress',
+    candidateDirection: { dx: -1, dy: -1 },
+    currentDirection: { dx: -1, dy: -1 },
+    threatField: progressField,
+    movementTiming: { sampleCount: 10, medianTicks: 2, p90Ticks: 2 }
+  }, { minimumCpaCm: 200 });
+  const policyHeldProgressLane = stabilizeCombatMovementDirectionCore({
+    nowMs: 10050,
+    tick: 201,
+    targetId: '2',
+    engagementId: 'escort-progress',
+    candidateDirection: { dx: -1, dy: 1 },
+    currentDirection: { dx: -1, dy: -1 },
+    threatField: progressField,
+    movementTiming: { sampleCount: 10, medianTicks: 2, p90Ticks: 2 },
+    previousState: initialProgressLane.state
+  }, { minimumCpaCm: 200 });
+  const progressLaneRelease = stabilizeCombatMovementDirectionCore({
+    nowMs: 10050,
+    tick: 201,
+    targetId: '2',
+    engagementId: 'escort-progress',
+    candidateDirection: { dx: -1, dy: 1 },
+    currentDirection: { dx: -1, dy: -1 },
+    threatField: progressField,
+    movementTiming: { sampleCount: 10, medianTicks: 2, p90Ticks: 2 },
+    previousState: initialProgressLane.state,
+    strategicProgressOverride: true
+  }, { minimumCpaCm: 200 });
+  assert(policyHeldProgressLane.held && policyHeldProgressLane.direction.dy === -1,
+    'ordinary stability retains its conservative safe-lane behavior');
+  assert(!progressLaneRelease.held && progressLaneRelease.switched
+    && progressLaneRelease.direction.dy === 1
+    && progressLaneRelease.reason === 'movement-stability-strategic-progress-release',
+  'a fully verified escort progress direction releases the stale safe-lane hold');
+  const escortProgressPlan = buildCombatMovementPlan(
+    { user_id: 1, x: 0, y: 0, vx: 0, vy: 0, hp: 100, stamina_5s_remaining_milli: 10000 },
+    { user_id: 2, x: 0, y: 5000, vx: 0, vy: 0, distance: 5000, hp: 80,
+      active: true, combatRole: 'secondary', secondaryTarget: true },
+    [{ bullet_id: 1, ownerId: 2, x: -4000, y: 2000, distance: 4472,
+      incoming: true, speed: 500, direction: { dx: 1, dy: 0 }, timeToImpact: 800,
+      remainingTicks: 16 }],
+    {
+      nowMs: 10000,
+      profitMission: {
+        active: true, key: 'enemy:3', missionKey: 'enemy:3', type: 'enemy', targetId: '3',
+        navigationTarget: { userId: 3, x: 0, y: 10000, authority: 'realtime' }, expiresAt: 20000
+      },
+      profitEscortContinuity: {
+        active: true, missionKey: 'enemy:3', combatTargetId: '2',
+        engagementGeneration: 'escort-progress', controlGeneration: 'control:1', expiresAt: 20000
+      },
+      engagementGeneration: 'escort-progress',
+      controlGeneration: 'control:1',
+      residualThreatLease: {
+        active: true, currentCollision: false, ageMs: 100, leaseMs: 2500,
+        direction: { dx: 0, dy: -1 }, ownerIds: ['2'], threatGeneration: 'bullet:1'
+      },
+      combatTargetState: { lastThreatAt: 9900 },
+      combatDistanceAwareDodgeEnabled: false,
+      combatMovementSafeCpaCm: 200,
+      combatCoverEnabled: false
+    }
+  );
+  assert.deepStrictEqual([escortProgressPlan.dx, escortProgressPlan.dy], [0, 1]);
+  assert.strictEqual(escortProgressPlan.reason, 'profit-escort-safe-progress');
+  assert.strictEqual(escortProgressPlan.ownership.owner, 'emergency-dodge');
+  assert.strictEqual(escortProgressPlan.dodgeOwnership.executionDirection.reason, 'strategic-safe-progress');
+  assert.strictEqual(escortProgressPlan.profitEscort.overrideReason, '');
   const prospective = execute({ ownership: { ...owned, currentThreat: false }, threatField: [] });
   assert(prospective.accepted, 'a lease without current collision evidence cannot erase an authorized pre-dodge');
   const axisStop = execute({ evaluatedDirection: { dx: 0, dy: 1 },
@@ -303,7 +433,7 @@ function runSecondaryDodgeSelfTest() {
     'a previous axis pause does not authorize a fresh pre-dodge without current attack evidence');
   assert.deepStrictEqual([resumedNavigation.dx, resumedNavigation.dy], [-1, 1],
     'ordinary primary navigation resumes after the emergency');
-  return { ok: true, cases: 60 };
+  return { ok: true, cases: 65 };
 }
 module.exports = { runSecondaryDodgeSelfTest };
 if (require.main === module) console.log(JSON.stringify(runSecondaryDodgeSelfTest()));
