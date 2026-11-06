@@ -278,7 +278,12 @@ async function buildRelease(options) {
       if (found.has('undici') || found.has('@fastify/busboy')) fail(`${output} did not bundle HTTP dependencies`);
     }
 
-    copyFile(path.join(sourceDir, 'src', 'node', 'browserless', 'web-panel.js'), path.join(outputDir, 'web-panel.js'));
+    // The page serializes helper functions into its inline script; preserve
+    // their source alongside the page instead of bundler-renamed functions.
+    const preservedModules = ['web-panel.js', 'panel-presentation.js'];
+    for (const name of preservedModules) {
+      copyFile(path.join(sourceDir, 'src', 'node', 'browserless', name), path.join(outputDir, name));
+    }
     copyFile(path.join(sourceDir, 'dist', 'target-whitelist.json'), path.join(outputDir, 'dist', 'target-whitelist.json'));
     const nativeRoot = path.join(repositoryNodeModules, 'better-sqlite3');
     copyFile(path.join(nativeRoot, 'LICENSE'), path.join(outputDir, 'node_modules', 'better-sqlite3', 'LICENSE'));
@@ -337,7 +342,7 @@ async function buildRelease(options) {
           'file-uri-to-path': packageVersion(path.join(repositoryNodeModules, 'file-uri-to-path', 'package.json'))
         },
         optionalExternalModules: ['bufferutil', 'utf-8-validate'],
-        preservedModules: ['web-panel.js'],
+        preservedModules,
         metafiles
       },
       entries: RELEASE_ENTRYPOINTS,
