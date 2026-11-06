@@ -19,6 +19,7 @@ const {
   normalizePendingLoginRecovery
 } = require('./login-recovery-association');
 const { normalizeLoginAdmission, nullableNumber } = require('./login-admission');
+const { panelTargetRolesCore } = require('./panel-presentation');
 
 const SCHEMA_VERSION = 1;
 const KILL_ACCOUNTING_VERSION = 3;
@@ -2440,6 +2441,11 @@ function compactExitRecoveryStatus(normalized, recentExit, action, nowMs = Date.
 function compactAction(action, nowMs = Date.now()) {
   if (!action || typeof action !== 'object') return null;
   const state = action.actionState && typeof action.actionState === 'object' ? action.actionState : {};
+  const settlement = action.postKillSettlement;
+  const target = compactTarget(action.target);
+  // Unknown Drop used to arrive as zero from the action summary. The settlement
+  // retains whether it was actually observed, so preserve that distinction.
+  if (target?.type === 'post-attack-target' && settlement?.targetDropKnown === false) target.drop = null;
   return {
     ok: compactBoolean(action.ok),
     kind: compactString(action.kind, 48),
@@ -2451,7 +2457,19 @@ function compactAction(action, nowMs = Date.now()) {
     explicitCooldown: compactBoolean(action.explicitCooldown),
     pendingExit: compactPendingExit(action.pendingExit, nowMs),
     explicitDelay: compactBoolean(action.explicitDelay),
-    target: compactTarget(action.target),
+    target,
+    lootTarget: compactTarget(action.lootTarget),
+    postKillSettlement: settlement && typeof settlement === 'object' ? {
+      active: compactBoolean(settlement.active),
+      phase: compactString(settlement.phase, 32),
+      targetDropKnown: compactBoolean(settlement.targetDropKnown),
+      matchedCoinKey: compactString(settlement.matchedCoinKey, 96),
+      pickupEvidence: compactBoolean(settlement.pickupEvidence)
+    } : null,
+    postKillSettlementMovement: action.postKillSettlementMovement ? {
+      arrived: compactBoolean(action.postKillSettlementMovement.arrived),
+      distance: compactNumber(action.postKillSettlementMovement.distance)
+    } : null,
     blockedAction: action.blockedAction && typeof action.blockedAction === 'object'
       ? {
           kind: compactString(action.blockedAction.kind, 48),
@@ -2536,6 +2554,7 @@ function compactCenterActivity(centerActivity) {
 
 function compactDecision(decision, nowMs = Date.now()) {
   if (!decision || typeof decision !== 'object') return null;
+  const action = compactAction(decision.action, nowMs);
   const dataGaps = Array.isArray(decision.input?.dataGaps) ? decision.input.dataGaps : [];
   const kind = String(decision.kind || decision.action?.kind || '');
   const shouldExposeProfitTarget = [
@@ -2554,8 +2573,8 @@ function compactDecision(decision, nowMs = Date.now()) {
     at: compactString(decision.at, 48),
     tick: compactNumber(decision.tick),
     actionKind: compactString(decision.action?.kind, 48),
-    action: compactAction(decision.action, nowMs),
-    target: compactTarget(decision.target || decision.action?.target || (shouldExposeProfitTarget ? (decision.profit?.best?.target || decision.profit?.best?.coin) : null)),
+    action,
+    target: compactTarget(action?.target || decision.target || (shouldExposeProfitTarget ? (decision.profit?.best?.target || decision.profit?.best?.coin) : null)),
     threshold: decision.profit?.threshold && typeof decision.profit.threshold === 'object'
       ? {
           active: compactBoolean(decision.profit.threshold.active),
@@ -2772,7 +2791,6 @@ function compactCombat(combat) {
   const primaryTargetId = String(
     target?.primaryTargetId
       || fireTarget?.primaryTargetId
-      || profitMission?.targetId
       || ''
   );
   const candidatePrimary = primaryTargetId
@@ -2784,10 +2802,16 @@ function compactCombat(combat) {
   const targetIsPrimary = target?.combatRole === 'primary' || target?.sameAsProfitMission === true;
   const fireTargetIsSecondary = fireTarget?.combatRole === 'secondary' || fireTarget?.secondaryTarget === true;
   const hasCombatObservation = Boolean(target || fireTarget);
+  const boundMissionTarget = primaryTargetId && primaryTargetId === profitMission?.targetId
+    ? profitMission?.navigationTarget : null;
+  const projectedPrimary = compactTarget(combat.primaryTarget);
   const primaryTarget = targetIsPrimary
     ? target
-    : (hasCombatObservation
-      ? (compactTarget(candidatePrimary) || profitMission?.navigationTarget || null)
+    : (hasCombatObservation && primaryTargetId
+      ? (compactTarget(candidatePrimary)
+        || (String(projectedPrimary?.userId ?? projectedPrimary?.entityId ?? projectedPrimary?.id ?? '') === primaryTargetId
+          ? projectedPrimary : null)
+        || boundMissionTarget || null)
       : null);
   const secondaryTarget = targetIsSecondary
     ? target
@@ -2847,36 +2871,7 @@ function compactCombat(combat) {
 }
 
 function compactStatusTargets(action, combat, profit) {
-  const actionTarget = compactTarget(action?.target);
-  const actionIsSecondary = actionTarget?.combatRole === 'secondary'
-    || actionTarget?.secondaryTarget === true;
-  const actionKind = String(action?.kind || '');
-  // Recovery and ordinary waits may retain a profit mission for the next
-  // decision, but that retained mission is not a current target. An explicit
-  // action target remains authoritative (for example, a bounded profit hold).
-  const suppressRetainedTargets = ['recover', 'wait', 'loop-wait', 'snapshot-wait'].includes(actionKind);
-  let primary = suppressRetainedTargets
-    ? null
-    : (compactTarget(combat?.primaryTarget)
-      || compactTarget(profit?.mission?.navigationTarget)
-      || null);
-  let secondary = suppressRetainedTargets
-    ? null
-    : (compactTarget(combat?.secondaryTarget) || null);
-  if (!actionIsSecondary && !primary && actionTarget) primary = actionTarget;
-  if (actionIsSecondary && !secondary) secondary = actionTarget;
-
-  const primaryId = String(primary?.userId ?? primary?.entityId ?? primary?.id ?? '');
-  const secondaryId = String(secondary?.userId ?? secondary?.entityId ?? secondary?.id ?? '');
-  if (primaryId && secondaryId && primaryId === secondaryId) {
-    if (actionIsSecondary) primary = null;
-    else secondary = null;
-  }
-  return {
-    mode: primary && secondary ? 'dual' : (primary ? 'primary-only' : (secondary ? 'secondary-only' : 'none')),
-    primary,
-    secondary
-  };
+  return panelTargetRolesCore({ action, combat, profit });
 }
 
 function compactEngagedExitTargets(value) {

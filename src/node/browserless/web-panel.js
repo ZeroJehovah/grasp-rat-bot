@@ -1,7 +1,9 @@
 'use strict';
 
+const { panelTargetRolesCore, postKillPresentationCore } = require('./panel-presentation');
+
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.10.24.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.11.07.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -331,31 +333,6 @@ function panelSessionFlagsCore(status = {}) {
   return {
     online,
     realtimeOnline: Boolean(status?.game?.inGame && online)
-  };
-}
-
-function panelTargetRolesCore(status = {}) {
-  const explicit = status?.targets && typeof status.targets === 'object' ? status.targets : {};
-  const action = status?.action || status?.decision?.action || {};
-  const actionTarget = action?.target || null;
-  const actionKind = String(action?.kind || '');
-  // Recovery/wait can carry a retained profit mission for later arbitration,
-  // but that memory is not a current panel target. Keep an explicit action
-  // target so bounded profit holds still render their real objective.
-  const suppressRetainedTargets = ['recover', 'wait', 'loop-wait', 'snapshot-wait'].includes(actionKind);
-  let primary = suppressRetainedTargets
-    ? null
-    : (explicit.primary || status?.combat?.primaryTarget || status?.profit?.mission?.navigationTarget || null);
-  let secondary = suppressRetainedTargets
-    ? null
-    : (explicit.secondary || status?.combat?.secondaryTarget || null);
-  const actionIsSecondary = actionTarget?.combatRole === 'secondary' || actionTarget?.secondaryTarget === true;
-  if (!primary && actionTarget && !actionIsSecondary) primary = actionTarget;
-  if (!secondary && actionTarget && actionIsSecondary) secondary = actionTarget;
-  return {
-    mode: primary && secondary ? 'dual' : (primary ? 'primary-only' : (secondary ? 'secondary-only' : 'none')),
-    primary,
-    secondary
   };
 }
 
@@ -987,6 +964,7 @@ function renderBrowserlessWebPanel() {
     const formatHighDropBalance = ${formatHighDropBalanceCore.toString()};
     const panelSessionFlags = ${panelSessionFlagsCore.toString()};
     const panelTargetRoles = ${panelTargetRolesCore.toString()};
+    const postKillPresentation = ${postKillPresentationCore.toString()};
     const lastExitPanelVisible = ${lastExitPanelVisibleCore.toString().replace('panelSessionFlagsCore', 'panelSessionFlags')};
     const missCloseExitReasonText = ${missCloseExitReasonTextCore.toString()};
     const recoveryContactExitReasonText = ${recoveryContactExitReasonTextCore.toString()};
@@ -1714,7 +1692,7 @@ function renderBrowserlessWebPanel() {
       'loop-wait': '等待下一轮',
       stop: '停止',
       stopped: '已停止',
-      'post-attack-drop-wait': '等待掉落',
+      'post-attack-drop-wait': '确认击杀收益',
       'return-block-scan': '避开危险',
       'source-ip-preflight': '测试出口 IP',
       'source-ip-preflight-cooldown': '出口不足冷却'
@@ -2261,6 +2239,8 @@ function renderBrowserlessWebPanel() {
       const action = status.action || {};
       const kind = action.kind || decision.kind || 'wait';
       const target = activeTarget(status);
+      const settlement = postKillPresentation(status);
+      if (settlement) return settlement.title;
       if (kind === 'coin') return '捡金币 ' + targetLabel(target);
       if (kind === 'seek-coin') return '去捡金币 ' + targetLabel(target);
       if (kind === 'profit-candidate') return '选择金币目标 ' + targetLabel(target);
@@ -2278,7 +2258,8 @@ function renderBrowserlessWebPanel() {
         return sourceIpPreflightPhaseText(status.network);
       }
       if (reason === 'restart-drain-new-commitment-blocked') return '正在准备重启';
-      if (kind === 'post-attack-drop-wait' || /post-kill-settlement-wait|post-attack-drop-wait/i.test(reason)) return '等待掉落';
+      const settlement = postKillPresentation(status);
+      if (settlement) return settlement.title;
       if (reason === 'single-coin-bait-hold') return '正在等待';
       if (kind === 'coin' || kind === 'seek-coin' || kind === 'profit-candidate') {
         const amount = number(target?.amount);
@@ -2301,6 +2282,8 @@ function renderBrowserlessWebPanel() {
       const action = status.action || status.decision || {};
       const reason = String(action.reason || status.decision?.reason || status.recentExit?.reason || '');
       const kind = String(action.kind || status.decision?.kind || '');
+      const settlement = postKillPresentation(status);
+      if (settlement) return settlement.reason;
       if (reason === 'restart-drain-new-commitment-blocked') {
         return restartDrainBlockedReasonText({
           blockedAction: action.blockedAction || status.decision?.action?.blockedAction || null,
@@ -2309,7 +2292,6 @@ function renderBrowserlessWebPanel() {
       }
       if (reason === 'best-opportunity' || reason === 'best-opportunity-coin' || reason === 'best-opportunity-coin-route' || reason === 'best-eligible-profit') return '综合收益最高';
       if (reason === 'remote-snapshot-profit-target') return '远程快照收益目标';
-      if (reason === 'post-attack-drop-wait-position' || reason === 'post-kill-settlement-wait') return '等待掉落确认';
       if (kind === 'coin' || kind === 'seek-coin' || kind === 'profit-candidate') return reasonText(reason) === actionTitleText(status) ? '综合收益最高' : reasonText(reason);
       return actionReasonText(status);
     }
@@ -2543,7 +2525,7 @@ function renderBrowserlessWebPanel() {
       context.restore();
     }
     function mapTargetMatchesPlayer(target, item) {
-      if (!target) return false;
+      if (!target || ['coin', 'post-attack-target'].includes(String(target.type || ''))) return false;
       const targetId = targetIdentity(target);
       const rowId = item?.[9] === null || item?.[9] === undefined || item?.[9] === '' ? '' : String(item[9]);
       if (targetId && rowId) return targetId === rowId;
@@ -2796,7 +2778,7 @@ function renderBrowserlessWebPanel() {
     function mapTargetDescriptorRole(target) {
       if (!target || typeof target !== 'object') return '';
       const type = String(target.type || '');
-      if (type === 'coin') return 'coin';
+      if (type === 'coin' || type === 'post-attack-target') return 'coin';
       if (type === 'remote-player-navigation'
         || target.remoteNavigationOnly === true
         || String(target.authority || '') === 'snapshot-navigation') return 'remote-snapshot';
@@ -2828,11 +2810,11 @@ function renderBrowserlessWebPanel() {
     }
     function mapTargetPathPoint(target, scene, frame) {
       if (!target) return null;
-      const x = Number(target.x);
-      const y = Number(target.y);
-      const selfX = Number(scene.selfX);
-      const selfY = Number(scene.selfY);
-      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(selfX) || !Number.isFinite(selfY)) return null;
+      const x = number(target.x);
+      const y = number(target.y);
+      const selfX = number(scene.selfX);
+      const selfY = number(scene.selfY);
+      if (x === null || y === null || selfX === null || selfY === null) return null;
       const projected = mapRemoteTargetPosition(x - selfX, y - selfY, scene.visibleRange);
       if (!projected) return null;
       return { px: frame.center + projected.dx * scene.scale, py: frame.center + projected.dy * scene.scale };
@@ -2843,10 +2825,7 @@ function renderBrowserlessWebPanel() {
     function mapTargetLineEntries(status, markers, scene, frame) {
       const entries = [];
       const targetRoles = panelTargetRoles(status);
-      const playerTarget = markers.find(marker => marker.role === 'primary')
-        || markers.find(marker => marker.targetRole === 'combat')
-        || markers.find(marker => marker.targetRole === 'afk')
-        || markers.find(marker => marker.targetRole === 'remote-snapshot');
+      const playerTarget = markers.find(marker => marker.role === 'primary');
       const secondaryTarget = markers.find(marker => marker.role === 'secondary');
       const add = (role, target, marker, fallbackPoint, dashed) => {
         const point = marker || fallbackPoint;
@@ -2865,7 +2844,7 @@ function renderBrowserlessWebPanel() {
         'primary',
         targetRoles?.primary,
         primaryMarker,
-        primaryProjected || (playerTarget?.role !== 'primary' ? playerTarget : null),
+        primaryProjected,
         false
       );
       const secondaryMarker = secondaryTarget?.role === 'secondary' ? secondaryTarget : null;
@@ -2878,6 +2857,31 @@ function renderBrowserlessWebPanel() {
         true
       );
       return entries;
+    }
+    function appendMapTargetDestinations(status, markers, scene, frame) {
+      const roles = panelTargetRoles(status);
+      for (const role of ['primary', 'secondary']) {
+        const target = roles[role];
+        if (!target || markers.some(marker => marker.role === role)) continue;
+        const point = mapTargetPathPoint(target, scene, frame);
+        if (!point) continue;
+        const outside = Math.hypot(Number(target.x) - scene.selfX, Number(target.y) - scene.selfY) > scene.visibleRange;
+        const label = target.type === 'post-attack-target'
+          ? '掉落位置'
+          : ((target.name || (target.type === 'coin' ? '金币' : '目标')) + (outside ? '（视野外）' : '（目标位置）'));
+        markers.push({
+          ...point,
+          mapKey: 'destination:' + role + ':' + String(target.userId ?? target.id ?? ''),
+          radius: 4.5,
+          color: mapTargetPathColor(status, target, null),
+          kind: 'destination',
+          role,
+          selected: true,
+          label,
+          mapCenter: frame.center,
+          tooltip: label + String.fromCharCode(10) + targetLabel(target)
+        });
+      }
     }
     function interpolateMapTargetLinePoint(entry, scene, progress) {
       if (entry.fromMarker) return entry.point;
@@ -3232,6 +3236,7 @@ function renderBrowserlessWebPanel() {
           ].filter(Boolean).join(String.fromCharCode(10))
         });
       }
+      appendMapTargetDestinations(status, markers, { selfX, selfY, visibleRange, scale }, frame);
       const emptyReason = (coinRows.length || playerRows.length) && !markers.length ? '目标缺少坐标' : '';
       mapEmptyReason = emptyReason;
       if (emptyReason) {

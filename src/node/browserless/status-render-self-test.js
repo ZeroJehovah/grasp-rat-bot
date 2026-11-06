@@ -41,8 +41,9 @@ function expectedStatus(base, overlays, config, compact) {
 }
 
 async function runBrowserlessStatusRenderSelfTest() {
+  const presentation = require('./panel-presentation-self-test').runPanelPresentationSelfTest();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'grasp-rat-status-render-'));
-  const checks = {};
+  const checks = { 'panel-presentation': presentation.ok };
   const io = createBrowserlessBackgroundIo();
   const keepAlive = setInterval(() => {}, 1000);
   const nowMs = Date.parse('2026-09-09T04:00:00.000Z');
