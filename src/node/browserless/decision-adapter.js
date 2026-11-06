@@ -10903,6 +10903,9 @@ function applyFinalMovementSafetyOverride(combat, action, self, options = {}) {
     ? movement.dodge.threatField
     : [];
   const kind = String(action?.kind || '');
+  const invulnerableAvoidance = kind === 'flee'
+    && action?.band === 'safety'
+    && action?.reason === 'avoid-invulnerable-target';
   const ordinaryMovementKinds = new Set([
     'combat-live',
     'combat-candidate',
@@ -10917,12 +10920,18 @@ function applyFinalMovementSafetyOverride(combat, action, self, options = {}) {
     'move-to-target'
   ]);
   if (!movement || !threatField.length
-    || !ordinaryMovementKinds.has(kind)) {
+    || (!ordinaryMovementKinds.has(kind) && !invulnerableAvoidance)) {
     return { combat, action, applied: false, reason: 'not-ordinary-combat-movement' };
+  }
+  // Separation is still the safety action. Only a current native collision
+  // may replace its direction; retained pressure alone cannot steer it.
+  if (invulnerableAvoidance && (combat?.dryRun?.authority !== 'realtime'
+    || combat?.dryRun?.incomingPressureEvidence?.currentCollision !== true)) {
+    return { combat, action, applied: false, reason: 'no-current-native-collision' };
   }
   const hardGateReason = action?.shouldLeave === true || String(action?.band || '') === 'exit'
     ? 'combat-hard-exit'
-    : (String(action?.band || '') === 'safety'
+    : (String(action?.band || '') === 'safety' && !invulnerableAvoidance
         ? 'safety-movement'
         : (kind === 'recover' || String(action?.reason || '').includes('recover')
             ? 'recovery-navigation'
@@ -10948,6 +10957,13 @@ function applyFinalMovementSafetyOverride(combat, action, self, options = {}) {
   });
   if (!result.applied || !result.direction) {
     return { combat, action, applied: false, result };
+  }
+  if (invulnerableAvoidance && (result.reason !== 'physical-collision-to-safe-direction'
+    || result.selected?.physicalHits !== 0 || result.selected?.robustHits !== 0
+    || !Number.isFinite(result.selected?.minRawCpaCm)
+    || !Number.isFinite(result.selected?.minRobustCpaCm)
+    || directionThreatCore(threatField, result.direction)?.scheduleRobust === false)) {
+    return { combat, action, applied: false, reason: 'no-verified-safe-avoidance-direction', result };
   }
   const originalOwner = String(movement.ownership?.owner || 'combat-movement');
   const originalDirection = kind === 'combat-live'
@@ -10993,7 +11009,7 @@ function applyFinalMovementSafetyOverride(combat, action, self, options = {}) {
     ...action,
     dx: selectedDirection.dx,
     dy: selectedDirection.dy,
-    reason: 'movement-safety-override',
+    reason: invulnerableAvoidance ? action.reason : 'movement-safety-override',
     movementSafetyOverride: nextMovement.movementSafetyOverride
   };
   return { combat: nextCombat, action: nextAction, applied: true, result: nextMovement.movementSafetyOverride };
@@ -13451,6 +13467,13 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
   action = preserveIncomingLaneBeforeProfitAction(action, input, incomingThreatAssessment,
     { ...options, healthyLootPriority });
   applyPostKillSettlementMovementToCombat(combat, action);
+  const avoidanceMovementSafety = action?.reason === 'avoid-invulnerable-target'
+    ? applyFinalMovementSafetyOverride(combat, action, input.self, options)
+    : null;
+  if (avoidanceMovementSafety?.applied) {
+    combat = avoidanceMovementSafety.combat;
+    action = avoidanceMovementSafety.action;
+  }
   let dangerousCombatExit = selectedCombatExitAction
     ? rememberDangerousCombatExitTarget(input, combat, stateful, options)
     : null;
@@ -13510,7 +13533,7 @@ function buildBrowserlessRealtimeControlDecision(state, stateful = {}, options =
     dropRace: dropRaceEvents[0] || null,
     dropRaceEvents,
     combat: {
-      ...(lootControl.combat || combat.dryRun || {}),
+      ...((avoidanceMovementSafety?.applied ? combat.dryRun : lootControl.combat) || combat.dryRun || {}),
       profitMission: cloneJson(stateful.profitMission || null),
       invulnerableAvoidanceArbitration,
       dangerousTargetCooldown: dangerousCombatExit,

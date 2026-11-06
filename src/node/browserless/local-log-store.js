@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { redactStructuredSecrets } = require('./session-client');
 const { utc8DayKey } = require('./utc8-day');
+const { createJsonlAppender } = require('./jsonl-append');
 
 const DEFAULT_STREAMS = new Set(['runner', 'decisions', 'combat', 'exits', 'ws', 'snapshot-audit']);
 
@@ -22,6 +23,7 @@ function createLocalLogStore(options = {}) {
   const backgroundIo = options.backgroundIo && typeof options.backgroundIo === 'object'
     ? options.backgroundIo
     : null;
+  const appendJsonl = createJsonlAppender();
 
   function dayDirFor(ms = now()) {
     return path.join(logDir, utc8DayKey(ms));
@@ -47,7 +49,7 @@ function createLocalLogStore(options = {}) {
       type: String(type || 'event'),
       detail: redactStructuredSecrets(detail || {})
     };
-    fs.appendFileSync(file, JSON.stringify(entry) + '\n');
+    appendJsonl(file, JSON.stringify(entry) + '\n');
     return { file, entry };
   }
 

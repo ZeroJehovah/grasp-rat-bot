@@ -8374,6 +8374,7 @@ async function runBrowserlessRunnerSelfTest() {
     const wsConnectRecovery = await require('./ws-connect-recovery-self-test').runWsConnectRecoverySelfTest();
     const wsTransport = await require('./ws-transport-self-test').runWsTransportSelfTest();
     const statusRender = await require('./status-render-self-test').runBrowserlessStatusRenderSelfTest();
+    const jsonlAppend = await require('./jsonl-append-self-test').runJsonlAppendSelfTest();
     const snapshotAudit = runSnapshotAuditSelfTest();
     const remoteProfitWorker = await runRemoteProfitWorkerSelfTest();
     const remoteProfitAction = runRemoteProfitActionSelfTest();
@@ -11500,6 +11501,7 @@ async function runBrowserlessRunnerSelfTest() {
         && rankedPlayerDeath.ok
         && secondaryDodge.ok
         && dodgeLaneArbitration.ok
+        && jsonlAppend.ok
         && combatStaminaWindow.ok
         && staminaReserveCleanup.ok
         && dailyDamageSecondary.ok
@@ -11618,6 +11620,7 @@ async function runBrowserlessRunnerSelfTest() {
       rankedPlayerDeath,
       secondaryDodge,
       dodgeLaneArbitration,
+      jsonlAppend,
       combatStaminaWindow,
       staminaReserveCleanup,
       dailyDamageSecondary,

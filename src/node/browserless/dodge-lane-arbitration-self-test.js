@@ -12,8 +12,10 @@ const {
 const { resolveDodgeExecutionDirectionCore } = require('../../strategy/combat-movement-ownership');
 const {
   applyFinalMovementSafetyOverride,
+  createBrowserlessDecisionAdapter,
   safeLootDodgeDirection
 } = require('./decision-adapter');
+const { createBrowserlessActionAdapter } = require('./action-adapter');
 const { summarizeDodgeThreatField } = require('./combat-adapter');
 
 function ingestBullet(store, tick, bullet, atMs) {
@@ -24,6 +26,56 @@ function ingestBullet(store, tick, bullet, atMs) {
     bullets: [bullet]
   }, { receivedAtMs: atMs });
   return store.getRealtimeState(atMs).bullets[0];
+}
+
+function assertInvulnerableAvoidanceExecution() {
+  const options = { userId: 1, controlMode: 'profit-live', combatEnabled: true,
+    dynamicProfitThresholdEnabled: false, singleCoinBaitEnabled: false };
+  const self = { user_id: 1, x: 0, y: 0, vx: -50, vy: 0, hp: 100, max_hp: 100,
+    stamina_5s_remaining_milli: 10000, stamina_1h_remaining_milli: 3000000,
+    stamina_1d_remaining_milli: 20000000 };
+  const target = { user_id: 2, x: 10000, y: 0, hp: 100, max_hp: 100,
+    current_join_mode: 'Active', firing: true, invulnerable: true,
+    invulnerable_remaining_ms: 60000, drop: 100 };
+  const snapshot = tick => ({ userId: 1,
+    realtime: { tick, receivedAtMs: tick * 50, frameAgeMs: 0, self,
+      entities: [self, target], bullets: [{ bullet_id: 'incoming', owner_id: 2,
+        start_x: 10000, start_y: 0, target_x: -5000, target_y: 0,
+        speed: 500, created_tick: 100, expire_tick: 130 }],
+      coinDrops: [], coinDropsObserved: true },
+    fallback: { entities: [], coinDrops: [] },
+    command: { movement: { timing: { sampleCount: 10, medianTicks: 2, p90Ticks: 3 } } }
+  });
+  for (const method of ['decide', 'evaluateRealtime']) {
+    const adapter = createBrowserlessDecisionAdapter(options);
+    adapter[method](snapshot(108), { ...options, nowMs: 5400 });
+    // Established combat owns the bullet assessment on the next frame, so
+    // the standalone pre-target Dodge no longer rescues the final flee.
+    const state = snapshot(109);
+    const decision = adapter[method](state, { ...options, nowMs: 5450 });
+    assert.strictEqual(decision.action.reason, 'avoid-invulnerable-target', method);
+    assert.strictEqual(decision.action.band, 'safety');
+    assert.strictEqual(decision.action.movementSafetyOverride?.applied, true, method);
+    assert.strictEqual(decision.action.movementSafetyOverride.selectedRisk.physicalHits, 0);
+    assert.strictEqual(decision.action.movementSafetyOverride.selectedRisk.robustHits, 0);
+    assert.notStrictEqual(decision.action.dy, 0, 'flee must leave the incoming shot axis');
+    assert.deepStrictEqual([decision.combat.movement.dx, decision.combat.movement.dy],
+      [decision.action.dx, decision.action.dy]);
+    assert.strictEqual(decision.combat.shooting.wouldShoot, false);
+    const velocities = [], shots = [];
+    const executor = createBrowserlessActionAdapter({ ...options, now: () => 5450,
+      commandIntervalMs: 0,
+      transport: {
+        sendVelocity(dx, dy) { velocities.push({ dx, dy }); return { ok: true }; },
+        sendShoot(x, y) { shots.push({ x, y }); return { ok: true }; }
+      }
+    });
+    const execution = executor.applyDecision(state, decision,
+      { source: 'realtime-control', observedTick: 109 });
+    assert.strictEqual(execution.ok, true);
+    assert.deepStrictEqual(velocities.at(-1), { dx: decision.action.dx, dy: decision.action.dy });
+    assert.strictEqual(shots.length, 0, 'invulnerability still forbids firing');
+  }
 }
 
 function runDodgeLaneArbitrationSelfTest() {
@@ -423,6 +475,36 @@ function runDodgeLaneArbitrationSelfTest() {
   );
   assert.strictEqual(safetyAction.applied, false, 'safety movement remains authoritative');
 
+  const avoidanceCombat = { ...finalCombat, dryRun: { ...finalCombat.dryRun,
+    authority: 'realtime', incomingPressureEvidence: { currentCollision: true } } };
+  const avoidanceAction = { ...finalAction, kind: 'flee', band: 'safety',
+    reason: 'avoid-invulnerable-target' };
+  const avoidance = applyFinalMovementSafetyOverride(avoidanceCombat, avoidanceAction, { x: 0, y: 0 });
+  assert.strictEqual(avoidance.applied, true);
+  assert.deepStrictEqual([avoidance.action.dx, avoidance.action.dy], [1, 0]);
+  assert.strictEqual(avoidance.action.reason, avoidanceAction.reason);
+  for (const dryRun of [
+    { ...avoidanceCombat.dryRun, authority: 'snapshot' },
+    { ...avoidanceCombat.dryRun, incomingPressureEvidence: { currentCollision: false } },
+    { ...avoidanceCombat.dryRun, movement: { ...finalCombat.dryRun.movement,
+      dodge: { threatField: allCollide } } },
+    { ...avoidanceCombat.dryRun, movement: { ...finalCombat.dryRun.movement,
+      dodge: { threatField: guardField.map(row => ({ ...row, scheduleRobust: false })) } } }
+  ]) {
+    assert.strictEqual(applyFinalMovementSafetyOverride({ dryRun }, avoidanceAction,
+      { x: 0, y: 0 }).applied, false, 'avoidance requires current native evidence and a safe lane');
+  }
+  for (const action of [
+    { ...avoidanceAction, dx: 1, dy: 0 },
+    { ...avoidanceAction, dx: 0, dy: -1 },
+    { ...avoidanceAction, shouldLeave: true },
+    { ...avoidanceAction, reason: 'recovery-contact-dodge' }
+  ]) {
+    assert.strictEqual(applyFinalMovementSafetyOverride(avoidanceCombat, action,
+      { x: 0, y: 0 }).applied, false, 'safe/unknown directions and other hard safety actions stay authoritative');
+  }
+  assertInvulnerableAvoidanceExecution();
+
   const ownershipBaseline = { dx: 0, dy: 1, directHits: 1, unavoidableHits: 0 };
   const ownershipCandidate = { dx: 1, dy: 0, directHits: 1, unavoidableHits: 0 };
   const ownershipField = [
@@ -439,7 +521,7 @@ function runDodgeLaneArbitrationSelfTest() {
   });
   assert(ownership.accepted, 'equal collision counts must use the complete risk key');
 
-  return { ok: true, cases: 21 };
+  return { ok: true, cases: 32 };
 }
 
 module.exports = { runDodgeLaneArbitrationSelfTest };
