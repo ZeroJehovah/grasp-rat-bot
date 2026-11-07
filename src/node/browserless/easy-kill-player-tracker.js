@@ -566,7 +566,12 @@ function createEasyKillPlayerTracker(options = {}) {
   }
 
   function observeCombatShot(target, detail = {}) {
-    if (!target || target.active !== true) return { ok: false, reason: 'non-active-target' };
+    const selectedEasyKillPrimary = target?.easyKillProfitTarget === true
+      && target?.combatRole === 'primary'
+      && target?.authority === 'realtime';
+    if (!target || (target.active !== true && !selectedEasyKillPrimary)) {
+      return { ok: false, reason: 'non-active-target' };
+    }
     const userId = targetUserId(target);
     if (userId === null) return { ok: false, reason: 'missing-user-id' };
     const atMs = Number.isFinite(Number(detail.atMs)) ? Number(detail.atMs) : now();

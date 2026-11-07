@@ -4418,7 +4418,7 @@ function createBrowserlessActionAdapter(options = {}) {
     if (target?.active || target?.invulnerable || target?.cachedNavigationOnly
       || target?.alive === false || Number(target?.hp) <= 0) clearAfkCompetitionApproach();
     if (target?.invulnerable !== true) clearInvulnerableProfitApproach('vulnerable-profit-target');
-    if (target?.active && target?.easyKillProfitTarget) {
+    if (target?.easyKillProfitTarget === true) {
       clearInvulnerableProfitApproach('active-profit-target');
       // Release the distance hold once the measured close ETA says the
       // remaining travel to combat spacing fits the remaining protection, so

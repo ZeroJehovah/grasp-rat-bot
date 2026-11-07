@@ -577,6 +577,16 @@ function profitActiveTargetEvidence(target) {
   return Boolean(target?.active) || activeJoinModeProfitEvidence(target);
 }
 
+// Recent spending describes activity, not whether a known Active-mode player
+// remains a profit target. Only native mode on a realtime entity can extend
+// easy-kill admission; HTTP profit metadata must not create combat authority.
+function easyKillActiveProfitEvidence(target) {
+  return target?.active === true || Boolean(
+    target?.joinModeActive === true
+      && (target.authority === 'realtime' || target.authority === 'native')
+  );
+}
+
 // `isActiveCombatMode` short-circuits on the derived `active === false` before it
 // ever reads the join mode, and that derived flag is false for an Active-mode
 // player who simply spent nothing in the last five seconds. Once the AFK reward
@@ -1065,7 +1075,7 @@ function refreshEasyKillTargetAnnotations(
       known
         && !suppressed
         && liveProfitEnabled
-        && target.active
+        && easyKillActiveProfitEvidence(target)
         && target.alive !== false
         && !target.whitelisted
         && (!target.invulnerable || invulnerableApproachEligible)
@@ -3423,7 +3433,7 @@ function easyKillCandidateBaseRejectionReason(target, stateful = {}, input = {},
   if (target?.alive === false) return 'not-alive';
   if (target?.whitelisted) return 'whitelisted';
   if (target?.invulnerable) return 'invulnerable';
-  if (!target?.active) return 'not-active';
+  if (!easyKillActiveProfitEvidence(target)) return 'not-active';
   if (options.controlMode !== 'profit-live' || options.combatEnabled !== true) return 'profit-live-disabled';
   const visibleDistance = opportunityVisibleDistance(options);
   if (!Number.isFinite(Number(target?.distance))) return 'distance-unknown';
@@ -7679,7 +7689,7 @@ function realtimeProfitAuthorityIds(input = {}, options = {}) {
     if (target?.joinModeActive !== true || target?.alive === false || target?.invulnerable) continue;
     if (target?.whitelisted || !Number.isFinite(Number(target?.distance))
       || Number(target.distance) > activeProfitRange) continue;
-    if (!proactiveActiveProfitEligible(target, {
+    if (!ordinaryActiveProfitEligible(target, {
       ...options
     })) continue;
     add(target);
@@ -8379,34 +8389,10 @@ function profitMissionRemoteState(input = {}, mission = {}, nowMs = Date.now(), 
   if (missSuppressed) return { ...state, invalidated: true, reason: 'remote-target-miss-suppressed' };
   if (explicitlyInvalidated) return { ...state, invalidated: true, reason: 'remote-target-invalidated' };
   if (realtimeSuperseded) {
-    // The worker accumulates this signal from raw realtime frames, before any
-    // Active/whitelist/range/economic admission, so a bare user ID only proves
-    // the client received a row for that player. Read the same panel
-    // projection the remote candidate filter reads, and keep the remote
-    // mission authoritative unless realtime can genuinely claim the target:
-    // either it is already an admitted realtime profit candidate, or the
-    // decision layer observes it as an active realtime entity that realtime
-    // should handle.
-    const observedTarget = (input.panelVisibleTargets || input.visibleTargets || []).find(target => (
-      String(easyKillTargetUserId(target) ?? '') === id
-    ));
-    const realtimeAuthority = realtimeProfitAuthorityIds(input, options).has(id);
-    // A remote high-value mission may briefly appear in native view while a
-    // third party changes its HP/activity. If that observation is still a
-    // passive, non-profit candidate, keep the remote mission authoritative;
-    // otherwise a lower-value remote candidate can replace it on the next
-    // refresh even though the original target is still alive. The same holds
-    // when the sighting left no usable observation at all: pausing then only
-    // blocks the mission from arbitration for the rest of the snapshot
-    // generation, which let a lower-value realtime target pull the approach
-    // off course on 2026-10-13 00:12:49Z (linuxdo_8015).
-    const passiveObservation = observedTarget
-      && observedTarget.alive !== false
-      && observedTarget.active !== true
-      && observedTarget.joinModeActive !== true
-      && observedTarget.moving !== true
-      && observedTarget.firing !== true;
-    if (!realtimeAuthority && (passiveObservation || !observedTarget)) return state;
+    // Raw sightings are history. Use the same current admission predicate as
+    // the snapshot candidate filter: visibility or Active join mode alone
+    // cannot suspend a mission that the realtime profit pool cannot take over.
+    if (!realtimeProfitAuthorityIds(input, options).has(id)) return state;
     return {
       ...state,
       navigationPaused: true,
@@ -14093,6 +14079,8 @@ function isCombatActionEligibleForDecision(combatDecision, options = {}) {
   if (target.combatIntent === 'recovery-contact') return true;
   if (target.combatIntent === 'whitelist-proximity') return true;
   if (target.combatIntent === 'secondary-daily-damage-close') return true;
+  if (target.combatRole === 'primary' && target.easyKillProfitTarget === true
+    && target.authority === 'realtime') return true;
   if (target.whitelistContactPolicy?.proactiveCombatEligible === true) return true;
   return Boolean(target.active || target.firing);
 }
@@ -15158,7 +15146,7 @@ function reconcileEasyKillApproach(input, stateful = {}, options = {}) {
   approach.y = numberOrNull(target.y);
   const distance = Number(target.distance);
   approach.lastDistance = Number.isFinite(distance) ? distance : approach.lastDistance;
-  if (!target.easyKillKnown || !target.active || target.alive === false) {
+  if (!target.easyKillKnown || !easyKillActiveProfitEvidence(target) || target.alive === false) {
     return recordEasyKillApproachFailure(input, stateful, target, options, 'easy-kill-approach-target-unavailable');
   }
   const combatRange = Math.max(0, Number(options.combatAttackRange || options.attackRange || DEFAULT_ATTACK_RANGE));
@@ -15229,7 +15217,10 @@ function reconcileEasyKillCombatOutcome(decision, input, options = {}) {
   const combatTarget = decision.combat?.target || null;
   const activeCombatEngaged = action.kind === 'combat-live'
     || ((action.kind === 'leave' || action.kind === 'safety-exit' || action.shouldLeave) && decision.combat?.exit);
-  if (activeCombatEngaged && combatTarget?.active === true) {
+  const selectedEasyKillPrimary = combatTarget?.easyKillProfitTarget === true
+    && combatTarget?.combatRole === 'primary'
+    && combatTarget?.authority === 'realtime';
+  if (activeCombatEngaged && (combatTarget?.active === true || selectedEasyKillPrimary)) {
     callEasyKillPlayerTracker(options, 'observeCombatEngagement', combatTarget, {
       atMs: input.nowMs,
       tick: decision.tick ?? decision.combat?.tick ?? null,
@@ -16737,7 +16728,8 @@ function recordAttackHistoryFromActionResult(decisionState, actionResult, decisi
       actualLastShotTick: numberOrNull(decision?.tick ?? decision?.combat?.tick),
       actualShotIntervalMs: previousShotAt > 0 ? Math.max(0, nowMs - previousShotAt) : null
     };
-    if (entry.active) {
+    if (entry.active || (target?.easyKillProfitTarget === true
+      && target?.combatRole === 'primary' && target?.authority === 'realtime')) {
       callEasyKillPlayerTracker(options, 'observeCombatShot', target, {
         atMs: nowMs,
         tick: decision?.tick ?? decision?.combat?.tick ?? null,

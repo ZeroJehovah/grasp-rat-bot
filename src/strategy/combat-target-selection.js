@@ -343,6 +343,9 @@ function combatTargetAdmissionCore(entity, context = {}) {
       && (isActiveCombatMode(entity)
         || entity.active === true
         || isFiringCombatEntity(entity)
+        || (entity.easyKillProfitTarget === true
+          && entity.joinModeActive === true
+          && (entity.authority === 'realtime' || entity.authority === 'native'))
         || establishedPrimary)
   );
   const profitEligible = Boolean(

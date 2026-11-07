@@ -1,7 +1,12 @@
 'use strict';
 
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { createBrowserlessActionAdapter } = require('./action-adapter');
+const { createEasyKillPlayerTracker } = require('./easy-kill-player-tracker');
+const { combatTargetAdmissionCore } = require('../../strategy/combat-target-selection');
 const {
   buildBrowserlessStrategyInput,
   buildPostKillSettlementWaitDecision,
@@ -264,20 +269,21 @@ function assertRealtimeSupersededMissionContinuity() {
     stamina_1h_remaining_milli: 3000000,
     stamina_1d_remaining_milli: 20000000
   };
-  const pausedRealtimeMango = decide(
+  const awaitingRealtimeAdmission = decide(
     adapter,
     advancedState(fullStaminaSelf(), [realtimeMango]),
     2150,
     supersededBatch,
     { controlMode: 'profit-live', combatEnabled: true }
   );
-  assert.strictEqual(pausedRealtimeMango.profit?.mission?.type, 'remote-player-navigation');
-  assert.strictEqual(pausedRealtimeMango.profit?.mission?.navigationPaused, true);
-  assert.strictEqual(pausedRealtimeMango.profit?.mission?.navigationTarget?.x, 48000);
-  assert.strictEqual(pausedRealtimeMango.profit?.mission?.navigationTarget?.positionSource, 'realtime');
-  assert.strictEqual(pausedRealtimeMango.profit?.remoteProfit?.pausedMissionActionSuppressed, true);
-  assert.notStrictEqual(pausedRealtimeMango.action?.kind, 'seek-remote-player');
-  assert.notStrictEqual(pausedRealtimeMango.action?.kind, 'seek-enemy');
+  assert.strictEqual(awaitingRealtimeAdmission.profit?.mission?.type, 'remote-player-navigation');
+  assert.strictEqual(awaitingRealtimeAdmission.profit?.mission?.navigationPaused, false);
+  assert.strictEqual(awaitingRealtimeAdmission.profit?.mission?.navigationTarget?.x, 48000);
+  assert.strictEqual(awaitingRealtimeAdmission.profit?.mission?.navigationTarget?.positionSource, 'realtime');
+  assert.strictEqual(awaitingRealtimeAdmission.profit?.remoteProfit?.pausedMissionActionSuppressed, false);
+  assert.strictEqual(awaitingRealtimeAdmission.action?.kind, 'seek-remote-player');
+  assert.strictEqual(awaitingRealtimeAdmission.action?.target?.x, 48000);
+  assert.strictEqual(awaitingRealtimeAdmission.combat?.target, null);
 
   const handoff = decide(
     adapter,
@@ -714,6 +720,186 @@ function assertRealtimeSupersessionEndsWithCurrentAuthority() {
   assert.strictEqual(authorityEnded.action?.kind, 'seek-remote-player');
   assert.strictEqual(authorityEnded.profit?.mission?.targetId, '1636');
   assert.strictEqual(authorityEnded.profit?.mission?.navigationPaused, false);
+}
+
+// An idle native Active player remains a known player-profit candidate when
+// its five-second stamina crosses the activity threshold. Exercise a real
+// adapter sequence so approach bookkeeping cannot turn the pause into a failed
+// search and a cooldown on the next frame.
+function assertIdleNativeEasyKillProfitContinuity() {
+  const common = {
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    dynamicProfitThresholdEnabled: false,
+    singleCoinBaitEnabled: false,
+    finalActionArbitrationHoldMs: 0,
+    opportunitySwitchConfirmFrames: 1,
+    opportunitySwitchMargin: 0,
+    opportunitySwitchRelativeMargin: 0,
+    easyKillPlayers: [{ userId: 99, score: 9 }]
+  };
+  const adapter = createBrowserlessDecisionAdapter(common);
+  const self = fullStaminaSelf({
+    stamina_5s_remaining_milli: 10000,
+    stamina_5s_limit_milli: 10000
+  });
+  const lower = ordinaryProfitTarget(100, 35000, 82, { name: 'lower-drop' });
+  const remote = batch(remoteCandidate({
+    x: 50000,
+    drop: 181,
+    active: true,
+    classification: 'easy-kill-active',
+    easyKillScore: 9,
+    expectedReward: 162.9,
+    staminaCost: 118250,
+    baseScore: 1360000,
+    adjustedScore: 1360000,
+    distance: 50000,
+    distanceFactor: 1
+  }));
+  const initial = decide(adapter, state(self, [lower]), 2000, remote, common);
+  assert.strictEqual(initial.action?.target?.userId, 99);
+  assert.strictEqual(initial.action?.kind, 'seek-remote-player');
+
+  const observations = [[9750, 45427], [9800, 41586], [10000, 40560], [9700, 40064], [10000, 39000]];
+  for (const [index, [remaining, distance]] of observations.entries()) {
+    const target = ordinaryProfitTarget(99, 50000, 181, {
+      name: 'native-active',
+      current_join_mode: 'Active',
+      vx: 0,
+      vy: 0,
+      stamina_5s_remaining_milli: remaining,
+      stamina_5s_limit_milli: 10000
+    });
+    const current = state({ ...self, x: 50000 - distance }, [target, lower]);
+    current.realtime.tick = 10 + index;
+    const decision = decide(adapter, current, 2100 + index * 100, {
+      ...remote,
+      realtimeSupersededIds: ['99']
+    }, common);
+    assert.strictEqual(decision.action?.target?.userId, 99, `stamina=${remaining}`);
+    assert.strictEqual(decision.action?.kind, 'seek-enemy');
+    assert.strictEqual(decision.action?.target?.authority, 'realtime');
+    assert.strictEqual(decision.action?.target?.active, remaining < 9800);
+    assert.strictEqual(decision.action?.target?.easyKillProfitTarget, true);
+    assert.strictEqual(decision.profit?.mission?.navigationPaused, false);
+    assert.strictEqual(decision.profit?.easyKill?.candidates?.[0]?.eligible, true);
+    assert.strictEqual(decision.profit?.easyKill?.stopLoss, null);
+    assert.strictEqual(decision.profit?.remoteProfit?.filtered?.['easy-kill-search-cooldown'] || 0, 0);
+    assert.strictEqual(decision.combat?.target, null, 'out-of-range profit stays navigation-only');
+    assert.strictEqual(decision.action?.opportunisticShot, undefined);
+    assert.strictEqual(adapter.getState().easyKillTargetSuppressions?.['99'], undefined);
+  }
+}
+
+function assertIdleEasyKillNativeAuthorityBoundaries() {
+  const common = {
+    userId: 7,
+    controlMode: 'profit-live',
+    combatEnabled: true,
+    nowMs: 2000,
+    easyKillPlayers: [{ userId: 99, score: 9 }]
+  };
+  const self = fullStaminaSelf();
+  const target = ordinaryProfitTarget(99, 40000, 181, {
+    current_join_mode: 'Active',
+    vx: 0,
+    vy: 0
+  });
+  const cases = [
+    ['native-active-idle', {}, {}, true],
+    ['passive-idle', { current_join_mode: 'Passive' }, {}, false],
+    ['unknown-mode', { current_join_mode: undefined }, {}, false],
+    ['outside-visible-range', { x: 50001 }, {}, false],
+    ['search-blocked', {}, { easyKillBlockedUserIds: [99] }, false],
+    ['static-whitelist', {}, { targetWhitelistUserIds: [99] }, false],
+    ['disabled-combat', {}, { combatEnabled: false }, false],
+    ['low-drop-invulnerable', { drop: 1, invulnerable: true }, {}, false]
+  ];
+  for (const [label, overrides, optionOverrides, expected] of cases) {
+    const input = buildBrowserlessStrategyInput(state(self, [{ ...target, ...overrides }]), {
+      ...common, ...optionOverrides
+    });
+    assert.strictEqual(input.easyKillTargets.some(row => row.user_id === 99), expected, label);
+  }
+  for (const [source, expected] of [['gap-http', false], ['ws', true]]) {
+    const current = state(self, [{ ...target, current_join_mode: undefined }]);
+    current.fallback.entities = [{ ...target, snapshotSource: source }];
+    const input = buildBrowserlessStrategyInput(current, common);
+    assert.strictEqual(input.easyKillTargets.some(row => row.user_id === 99), expected, source);
+    assert.strictEqual(input.visibleTargets[0].active, false);
+  }
+}
+
+function assertIdleEasyKillCombatHandoff() {
+  const at = Date.parse('2026-11-07T16:15:00Z');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'idle-easy-kill-'));
+  try {
+    const tracker = createEasyKillPlayerTracker({ file: path.join(dir, 'players.json'), now: () => at });
+    tracker.upsertManualPlayer({ userId: 99, name: 'idle-native', score: 9 }, { atMs: at });
+    const options = {
+      userId: 7, controlMode: 'profit-live', combatEnabled: true,
+      dynamicProfitThresholdEnabled: false, singleCoinBaitEnabled: false,
+      easyKillPlayerTracker: tracker, nowMs: at, now: () => at
+    };
+    const self = fullStaminaSelf();
+    const target = ordinaryProfitTarget(99, 6500, 181, { current_join_mode: 'Active' });
+    const current = state(self, [target]);
+    current.realtime.tick = 18000;
+    current.fallback.tick = 18000;
+    const adapter = createBrowserlessDecisionAdapter(options);
+    const decision = adapter.decide(current, options);
+    assert.strictEqual(decision.action?.kind, 'combat-live');
+    assert.strictEqual(decision.combat?.target?.userId, 99);
+    assert.strictEqual(decision.combat?.target?.combatRole, 'primary');
+    assert.strictEqual(decision.combat?.target?.active, false);
+    assert.strictEqual(decision.combat?.shooting?.wouldShoot, true);
+    assert.strictEqual(tracker.status().engagements.length, 1);
+    const shots = [];
+    const actions = createBrowserlessActionAdapter({
+      ...options, shootRepeatEnabled: false, velocityRepeatEnabled: false, commandIntervalMs: 0,
+      transport: {
+        sendVelocity() { return { ok: true }; },
+        sendShoot(x, y) { shots.push({ x, y }); return { ok: true }; }
+      }
+    });
+    const fired = actions.applyDecision(current, decision);
+    assert.strictEqual(fired.shoot?.ok, true);
+    assert.strictEqual(fired.shoot?.skipped, false);
+    assert.strictEqual(shots.length, 1);
+    adapter.observeActionResult(fired, decision, { nowMs: at });
+    assert.strictEqual(tracker.status().engagements[0].shotCount, 1);
+    assert.strictEqual(tracker.observeCombatShot({ ...decision.combat.target, combatRole: 'secondary' }).ok, false);
+    assert.strictEqual(tracker.observeCombatShot({ ...decision.combat.target, authority: 'snapshot-navigation' }).ok, false);
+
+    const realtime = adapter.evaluateRealtime(current, { ...options, nowMs: at + 50 });
+    assert.strictEqual(realtime.action?.kind, 'combat-live');
+    assert.strictEqual(realtime.combat?.target?.userId, 99);
+    assert.strictEqual(realtime.combat?.target?.active, false);
+    assert.strictEqual(realtime.combat?.target?.combatRole, 'primary');
+
+    const normalized = buildBrowserlessStrategyInput(current, options).visibleTargets[0];
+    const context = { selfHp: 80, combatAttackRange: 14500, selectedProfitCombatTargetId: '99' };
+    assert.strictEqual(combatTargetAdmissionCore(normalized, context).profitEligible, true);
+    for (const patch of [{ authority: 'snapshot-navigation' }, { joinModeActive: false }, { easyKillProfitTarget: false }]) {
+      assert.strictEqual(combatTargetAdmissionCore({ ...normalized, ...patch }, context).eligible, false);
+    }
+    assert.strictEqual(combatTargetAdmissionCore(normalized, { ...context, selectedProfitCombatTargetId: '100' }).eligible, false);
+
+    const far = state(self, [{ ...target, x: 40000, current_join_mode: undefined }]);
+    const result = actions.applyDecision(far, {
+      action: { kind: 'seek-enemy', band: 'profit', target: {
+        ...decision.combat.target, type: 'enemy', x: 40000, distance: 40000, active: false
+      } }
+    });
+    assert.strictEqual(result.reason, 'profit-easy-kill-seek');
+    assert.strictEqual(result.easyKillApproach, true);
+    assert.strictEqual(shots.length, 1, 'out-of-range approach cannot fire');
+    actions.stop('test-complete');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 function assertActivePlayerPickupRadiusCoinCompetition() {
@@ -3869,6 +4055,9 @@ function runRemoteProfitDecisionSelfTest() {
   assertImmediateRemoteRelease(remoteBatch, 210900, 211000);
   assertDynamicThresholdLinkedCoinRoute();
   assertRealtimeSupersededMissionContinuity();
+  assertIdleNativeEasyKillProfitContinuity();
+  assertIdleEasyKillNativeAuthorityBoundaries();
+  assertIdleEasyKillCombatHandoff();
   assertVisibleRealtimePositionOverridesEvictedSnapshot();
   assertBareRealtimeSupersessionDoesNotBlockRemoteMission();
   assertRealtimeSupersessionEndsWithCurrentAuthority();
@@ -4307,7 +4496,7 @@ function runRemoteProfitDecisionSelfTest() {
   assert.strictEqual(lowDropDecision.profit?.postKillCoinSuppression?.removedCount, 1);
   assert.strictEqual(lowDropDecision.stateful.profitMission?.targetId, '99');
 
-  return { ok: true, cases: 102 };
+  return { ok: true, cases: 126 };
 }
 
 if (require.main === module) {
