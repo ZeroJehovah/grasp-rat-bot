@@ -14,6 +14,14 @@ function pointRadiusFromOriginCore(point) {
   return x === null || y === null ? null : Math.hypot(x, y);
 }
 
+function pointWithinCenterActivityRadiusCore(point, radiusCm) {
+  if (point?.x === null || point?.x === undefined || point?.x === ''
+    || point?.y === null || point?.y === undefined || point?.y === '') return false;
+  const radius = finiteNumber(radiusCm);
+  const distance = pointRadiusFromOriginCore(point);
+  return radius !== null && radius >= 0 && distance !== null && distance <= radius;
+}
+
 function centerActivityHardBoundaryRadiusCore(value) {
   const configured = finiteNumber(value);
   return configured === null
@@ -55,9 +63,13 @@ function evaluateCenterActivityHardBoundaryCore(input = {}, options = {}) {
       && selfRadiusCm !== null
       && selfRadiusCm > boundaryRadiusCm
   );
-  const highValueCoin = outside
+  let highValueCoin = outside
     ? highValueCoinTargetForActionCore(input.action, options.highValueCoinMinAmount)
     : null;
+  if (highValueCoin && options.coinTargetRadiusCm !== undefined
+    && !pointWithinCenterActivityRadiusCore(highValueCoin.target, options.coinTargetRadiusCm)) {
+    highValueCoin = null;
+  }
   return {
     checked: selfRadiusCm !== null,
     outside,
@@ -75,5 +87,6 @@ module.exports = {
   centerActivityHardBoundaryRadiusCore,
   evaluateCenterActivityHardBoundaryCore,
   highValueCoinTargetForActionCore,
+  pointWithinCenterActivityRadiusCore,
   pointRadiusFromOriginCore
 };

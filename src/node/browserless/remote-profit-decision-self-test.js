@@ -4073,6 +4073,7 @@ function runRemoteProfitDecisionSelfTest() {
   assertHpSegmentedSecondaryEngagementRules();
   assertPostKillSettlementContinuity();
   assertPersistentHighValueCoinAdmission();
+  const coinCenterBoundary = require('./coin-center-boundary-self-test').runCoinCenterBoundarySelfTest();
 
   const ordinaryAdapter = createBrowserlessDecisionAdapter({
     userId: 7,
@@ -4496,7 +4497,7 @@ function runRemoteProfitDecisionSelfTest() {
   assert.strictEqual(lowDropDecision.profit?.postKillCoinSuppression?.removedCount, 1);
   assert.strictEqual(lowDropDecision.stateful.profitMission?.targetId, '99');
 
-  return { ok: true, cases: 126 };
+  return { ok: true, cases: 126 + coinCenterBoundary.cases };
 }
 
 if (require.main === module) {

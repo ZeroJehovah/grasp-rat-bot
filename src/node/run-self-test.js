@@ -11742,7 +11742,7 @@ async function runSelfTest() {
       want: 'seek-remote-player|8|1|'
     },
     {
-      name: 'browserless decision input does not filter profit targets by center coordinate',
+      name: 'browserless decision input filters outside coins without filtering realtime profit players',
       got: (() => {
         const state = {
           userId: 7,
@@ -11778,7 +11778,7 @@ async function runSelfTest() {
           input.dataGaps.includes('center-visible-coin-edge-admitted')
         ].join('|');
       })(),
-      want: '8,9|1,2|0|0||false|false'
+      want: '8,9|1|0|1||false|false'
     },
     {
       name: 'browserless AFK target outside the former center edge remains selectable without return cost',
@@ -11861,10 +11861,10 @@ async function runSelfTest() {
           nearbyEason[10]
         ].join('|');
       })(),
-      want: 'seek-enemy|best-opportunity|19677|Eason|false|52828|false|false|1'
+      want: 'seek-enemy|best-opportunity|19677|Eason|false|52828|true|false|1'
     },
     {
-      name: 'browserless AFK and coin candidates remain available across former center boundaries',
+      name: 'browserless center limit filters coin coordinates while preserving realtime AFK admission',
       got: (() => {
         const inputFor = (selfX, targetX) => buildBrowserlessStrategyInput({
           userId: 7,
@@ -11903,7 +11903,7 @@ async function runSelfTest() {
           selfOutside.centerActivity.filteredAfkTargetDetails[0]?.reason
         ].join('|');
       })(),
-      want: '8|0||1|0|1|0||1|0|'
+      want: '8|0||0|1|1|0||1|0|'
     },
     {
       name: 'browserless AFK target stays in the opportunity set across the 1000m timer radius',
@@ -12387,7 +12387,7 @@ async function runSelfTest() {
       want: '33|safety|avoid-invulnerable-target|0|33|0|'
     },
     {
-      name: 'browserless decision collects visible high-value coin between the 1000m timer and 1300m hard boundary',
+      name: 'browserless decision rejects outside high-value coin between the 1000m timer and 1300m hard boundary',
       got: (() => {
         const decision = buildBrowserlessDecision({
           userId: 7,
@@ -12419,7 +12419,7 @@ async function runSelfTest() {
           decision.input.dataGaps.includes('center-realtime-coins-filtered')
         ].join('|');
       })(),
-      want: 'coin|profit|foot-coin-priority|1|99||false|false'
+      want: 'profit-candidate|profit|best-opportunity||||false|false'
     },
     {
       name: 'browserless decision keeps the 1000m outside-center no-profit timer without a special wait action',
@@ -12640,7 +12640,7 @@ async function runSelfTest() {
       want: 'true|0|true|2026-08-28|3|1756339879527|68184|0|0|true'
     },
     {
-      name: 'browserless center hard boundary permits only large coins beyond 1300m',
+      name: 'browserless center hard boundary permits only large coins inside the target center radius',
       got: (() => {
         const options = {
           controlMode: 'profit-live',
@@ -12653,7 +12653,7 @@ async function runSelfTest() {
           const self = { entity_id: 1, user_id: 7, name: 'self', x: selfX, y: 0, hp: 100, max_hp: 100 };
           return {
             userId: 7,
-            realtime: { tick, frameAgeMs: 0, self, entities: [self], bullets: [], coinDrops: coins },
+            realtime: { tick, frameAgeMs: 0, self, entities: [self], bullets: [], coinDrops: coins, coinDropsObserved: true },
             fallback: { tick, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
           };
         };
@@ -12666,7 +12666,7 @@ async function runSelfTest() {
           nowMs: 2000
         });
         const adapter = createBrowserlessDecisionAdapter(options);
-        const highOutside = adapter.decide(state(3, 130001, [{ drop_id: 'large', amount: 10, x: 130100, y: 0 }]), { nowMs: 3000 });
+        const highOutside = adapter.decide(state(3, 130001, [{ drop_id: 'large', amount: 10, x: 100000, y: 0 }]), { nowMs: 3000 });
         const afterPickup = adapter.decide(state(4, 130001, []), { nowMs: 4000 });
         return [
           inside.action.shouldLeave === true,
@@ -12680,10 +12680,10 @@ async function runSelfTest() {
           afterPickup.action.shouldLeave
         ].join('|');
       })(),
-      want: 'false|outside-drop|outside-center-hard-boundary-leave|true|coin|10|true|profit-mission-lock-hold|'
+      want: 'false||outside-center-hard-boundary-leave|true|seek-coin|10|true|outside-center-hard-boundary-leave|true'
     },
     {
-      name: 'browserless realtime hard boundary exits combat but continues a current visible large coin',
+      name: 'browserless realtime hard boundary exits combat but continues a visible large coin within the center',
       got: (() => {
         const options = {
           controlMode: 'profit-live',
@@ -12710,7 +12710,7 @@ async function runSelfTest() {
         const highStateful = {};
         const high = buildBrowserlessRealtimeControlDecision({
           userId: 7,
-          realtime: { tick: 2, frameAgeMs: 0, self, entities: [self], bullets: [], coinDrops: [{ drop_id: 'large', amount: 10, x: 130500, y: 0 }] },
+          realtime: { tick: 2, frameAgeMs: 0, self, entities: [self], bullets: [], coinDrops: [{ drop_id: 'large', amount: 10, x: 100000, y: 0 }] },
           fallback: { tick: 2, frameAgeMs: 0, entities: [], coinDrops: [], messages: [] }
         }, highStateful, { ...options, nowMs: 2000 });
         const missing = buildBrowserlessRealtimeControlDecision({
@@ -12728,7 +12728,7 @@ async function runSelfTest() {
           missing.action.shouldLeave
         ].join('|');
       })(),
-      want: 'outside-center-hard-boundary-leave|true|coin|10|true|outside-center-hard-boundary-leave|true'
+      want: 'outside-center-hard-boundary-leave|true|seek-coin|10|true|outside-center-hard-boundary-leave|true'
     },
     {
       name: 'browserless profit pursuit is not suppressed by target coordinates outside the former center limit',
@@ -16963,7 +16963,7 @@ async function runSelfTest() {
             fallback: { tick, frameAgeMs: 100, coinDrops }
           };
         };
-        const coin = { drop_id: 'valid-profit', amount: 100, x: 115000, y: 0 };
+        const coin = { drop_id: 'valid-profit', amount: 100, x: 87000, y: 0 };
         const stateful = {};
         const first = buildBrowserlessDecision(makeState(1, [coin]), stateful, { ...options, nowMs: 1000 });
         const shortDropout = buildBrowserlessDecision(makeState(2, [coin]), stateful, {
@@ -17976,7 +17976,7 @@ async function runSelfTest() {
       want: 'wait|no-profitable-candidate|none|false|snapshot-fallback-disabled|true'
     },
     {
-      name: 'browserless profit live picks self-kill snapshot player drops without a center-coordinate exception',
+      name: 'browserless profit live rejects outside-center self-kill drops while retaining kill evidence',
       got: (() => {
         const store = createBrowserlessStateStore({ userId: 7 });
         store.ingestFrame({
@@ -18002,21 +18002,21 @@ async function runSelfTest() {
         return [
           decision.kind,
           decision.action.kind,
-          decision.action.target.type,
-          decision.action.target.id,
-          decision.action.target.amount,
+          decision.action.target?.type,
+          decision.action.target?.id,
+          decision.action.target?.amount,
           decision.input.profitCoinSource,
           decision.input.fallback.selfKilledPlayerDropCount,
           decision.input.selfKillEvidence[0]?.targetUserId,
           decision.input.selfKillEvidence[0]?.tick,
-          decision.action.target.centerActivityEdge?.reason,
+          decision.action.target?.centerActivityEdge?.reason,
           decision.input.centerActivity.edgeAdmittedSnapshotCoins[0]?.centerActivityEdge?.reason,
           decision.input.fallback.snapshotFallbackBlockedReasons.join(','),
           decision.input.dataGaps.includes('self-killed-player-drop-visible'),
           decision.input.dataGaps.includes('center-visible-coin-edge-admitted')
         ].join('|');
       })(),
-      want: 'coin|coin|coin|self-kill-drop|6|snapshot-player-drop|1|8|62||||true|false'
+      want: 'wait|wait||||none|0|8|62||||false|false'
     },
     {
       name: 'browserless nearby panel uses all visible players and profit coin route nodes',

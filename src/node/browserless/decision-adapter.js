@@ -170,6 +170,7 @@ const { secondaryCombatExitPolicy } = require('../../strategy/dual-target-policy
 const {
   DEFAULT_CENTER_ACTIVITY_HARD_BOUNDARY_RADIUS_CM,
   evaluateCenterActivityHardBoundaryCore,
+  pointWithinCenterActivityRadiusCore,
   pointRadiusFromOriginCore
 } = require('../../strategy/center-activity-boundary');
 const {
@@ -382,7 +383,16 @@ function browserlessCenterActivityRadius(options = {}) {
   return Number.isFinite(value) ? Math.max(0, value) : 0;
 }
 
-function centerActivityInputSummary(self, options = {}) {
+function coinTargetWithinCenterActivity(coin, options = {}) {
+  const radiusCm = browserlessCenterActivityRadius(options);
+  if (!pointWithinCenterActivityRadiusCore(coin, radiusCm)) return false;
+  // Retained routes must not restore a leg that candidate filtering removed.
+  const points = coin?.coinRoute?.points || coin?.fieldRoute?.points;
+  return !Array.isArray(points)
+    || points.every(point => pointWithinCenterActivityRadiusCore(point, radiusCm));
+}
+
+function centerActivityInputSummary(self, options = {}, filteredCoins = {}) {
   const radiusCm = browserlessCenterActivityRadius(options);
   const selfRadius = pointRadiusFromOriginCore(self);
   const hardBoundaryRadiusCm = DEFAULT_CENTER_ACTIVITY_HARD_BOUNDARY_RADIUS_CM;
@@ -394,14 +404,13 @@ function centerActivityInputSummary(self, options = {}) {
     selfOutsideHardBoundaryCm: selfRadius === null
       ? null
       : Math.max(0, Math.round(selfRadius - hardBoundaryRadiusCm)),
-    targetPositionRestricted: false,
-    // Retained as zero/empty compatibility telemetry for old status readers;
-    // activity range no longer filters or edge-admits target coordinates.
+    targetPositionRestricted: true,
+    // Only coin navigation is restricted; realtime player admission is unchanged.
     filteredAfkTargets: 0,
     edgeAdmittedAfkTargets: 0,
     edgeContinuedAfkTargets: 0,
-    filteredRealtimeCoins: 0,
-    filteredSnapshotCoins: 0,
+    filteredRealtimeCoins: filteredCoins.realtime || 0,
+    filteredSnapshotCoins: filteredCoins.snapshot || 0,
     edgeAdmittedRealtimeCoins: [],
     edgeAdmittedSnapshotCoins: [],
     edgeAfkTargets: [],
@@ -2850,7 +2859,8 @@ function selectRealtimeLootCandidate(input, stateful = {}, options = {}) {
       pendingSelfKillTargetIds.add(settlementId);
     }
   }
-  const observedCoins = realtimeObservationCoins(observation, input?.self).map(coin => {
+  const observedCoins = realtimeObservationCoins(observation, input?.self)
+    .filter(coin => coinTargetWithinCenterActivity(coin, options)).map(coin => {
     const sourceUserId = coin?.source_user_id ?? coin?.sourceUserId
       ?? coin?.owner_user_id ?? coin?.ownerUserId;
     if (!sourceUserId) return coin;
@@ -4696,7 +4706,9 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     stateful,
     options
   });
-  const realtimeCoins = realtimeCoinsRaw.map(coin => (
+  const realtimeCoinsInCenter = realtimeCoinsRaw.filter(coin => coinTargetWithinCenterActivity(coin, options));
+  const snapshotCoinsInCenter = snapshotCoinsRaw.filter(coin => coinTargetWithinCenterActivity(coin, options));
+  const realtimeCoins = realtimeCoinsInCenter.map(coin => (
     decoratePersistentCoinCandidate(coin, persistentCoinObservation)
   ));
   const snapshotObservedAtMs = snapshotCoinObservationTime(fallback, nowMs);
@@ -4704,7 +4716,7 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     && snapshotObservedAtMs <= nowMs
     && nowMs - snapshotObservedAtMs <= 90000
     && utc8DayKey(snapshotObservedAtMs) === utc8DayKey(nowMs);
-  const snapshotCoins = snapshotNavigationFresh ? snapshotCoinsRaw.map(coin => (
+  const snapshotCoins = snapshotNavigationFresh ? snapshotCoinsInCenter.map(coin => (
     decoratePersistentCoinCandidate(coin, persistentCoinObservation)
   )) : [];
   const snapshotVisibleCoinMaxDistanceRaw = Number(options.snapshotVisibleCoinMaxDistanceCm
@@ -4796,7 +4808,10 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     rawRealtime: realtime,
     command: state?.command || null,
     self,
-    centerActivity: centerActivityInputSummary(self, options),
+    centerActivity: centerActivityInputSummary(self, options, {
+      realtime: realtimeCoinsRaw.length - realtimeCoinsInCenter.length,
+      snapshot: snapshotCoinsRaw.length - snapshotCoinsInCenter.length
+    }),
     stamina: entityStaminaSummary(self || {}),
     frameAges: state?.frameAges || {},
     realtime: {
@@ -6746,6 +6761,9 @@ function actionTargetCurrentValidity(action, input = {}, options = {}) {
   }
 
   const targetId = target.id ?? target.drop_id ?? target.dropId ?? target.coinId ?? target.coin_id;
+  if (!coinTargetWithinCenterActivity(target, options)) {
+    return { valid: false, reason: 'coin-outside-center-radius' };
+  }
   if (targetId === undefined || targetId === null || targetId === '') {
     return { valid: false, reason: 'previous-target-identity-missing' };
   }
@@ -6754,6 +6772,7 @@ function actionTargetCurrentValidity(action, input = {}, options = {}) {
     ...(input.snapshotVisibleCoins || [])
   ]).find(item => String(item.id ?? item.drop_id ?? item.dropId ?? item.coinId ?? item.coin_id ?? '') === String(targetId));
   if (!current || !(Number(current.amount || 0) > 0)) return { valid: false, reason: 'coin-disappeared' };
+  if (!coinTargetWithinCenterActivity(current, options)) return { valid: false, reason: 'coin-outside-center-radius' };
   return { valid: true, reason: 'coin-visible' };
 }
 
@@ -6905,6 +6924,11 @@ function targetSwitchOscillationWindowMs(options = {}) {
 function applyBrowserlessFinalActionArbitration(action, stateful = {}, input = {}, options = {}, opportunity = {}) {
   const arbitration = ensureFinalActionArbitrationState(stateful);
   clearInvalidRemoteFinalActionHold(stateful, opportunity);
+  const previousCoin = arbitration.lastAction?.target;
+  if (previousCoin?.type === 'coin'
+    && actionTargetCurrentValidity(arbitration.lastAction, input, options).reason === 'coin-outside-center-radius') {
+    clearIgnoredCoinDecisionState(stateful, coinDecisionKey(previousCoin));
+  }
   const rememberedThreatCount = Object.keys(stateful.recentInvulnerableThreats || {}).length;
   if (arbitration.lastAction?.target?.safetyMemoryOnly && rememberedThreatCount === 0) {
     arbitration.lastAction = null;
@@ -8620,6 +8644,17 @@ function reconcileProfitMissionState(input = {}, stateful = {}, options = {}, re
   }
   if (mission.type === 'coin') {
     const source = mission.navigationTarget || profitMissionChoiceSource(mission.choice) || mission.target || null;
+    const sourceKey = coinDecisionKey(source);
+    const currentCoin = [input.realtimeObservedCoins, input.snapshotObservedCoins]
+      .flatMap(coins => coins || [])
+      .find(coin => coinDecisionKey(coin) === sourceKey);
+    if (!coinTargetWithinCenterActivity(source, options)
+      || (currentCoin && !coinTargetWithinCenterActivity(currentCoin, options))
+      || !coinTargetWithinCenterActivity(profitMissionChoiceSource(mission.choice) || source, options)) {
+      clearIgnoredCoinDecisionState(stateful, coinDecisionKey(source));
+      clearProfitMission(stateful, 'coin-outside-center-radius', nowMs);
+      return null;
+    }
     if (coinIgnoredUntil(stateful, source) > nowMs) {
       clearProfitMission(stateful, 'coin-ignored', nowMs);
       return null;
@@ -10744,6 +10779,7 @@ function suppressLowValuePostKillCoinForProfitMission(input = {}, stateful = {},
 
 function postKillSettlementMovement(input = {}, settlement = null, options = {}) {
   if (!input?.self || !settlement) return null;
+  if (!coinTargetWithinCenterActivity(settlement, options)) return null;
   const x = coordinateOrNull(settlement.x);
   const y = coordinateOrNull(settlement.y);
   if (x === null || y === null) return null;
@@ -10785,6 +10821,7 @@ function postKillSettlementMovement(input = {}, settlement = null, options = {})
 function buildPostKillSettlementWaitDecision(input, stateful = {}, combat = null, options = {}) {
   const settlement = stateful.postKillSettlement || null;
   if (!input?.self || !settlement) return null;
+  if (!coinTargetWithinCenterActivity(settlement, options)) return null;
   if (settlement.active === false
     || ['settled', 'expired', 'picked-up', 'complete'].includes(String(settlement.phase || ''))) {
     return null;
@@ -11052,6 +11089,7 @@ function buildPostAttackDropWaitDecision(input, stateful = {}, options = {}, com
   if (!input?.self) return null;
   const target = stateful.postAttackSettlement || null;
   if (!target || target.phase !== 'pending') return null;
+  if (!coinTargetWithinCenterActivity(target, options)) return null;
   if (postKillSettlementYieldedToProfitMission(input, stateful, target, options)) return null;
   const minDrop = Math.max(0, Number(options.postAttackDropWaitMinDrop ?? options.attackMinDrop ?? DEFAULT_ATTACK_MIN_DROP) || 0);
   if (Number(target.targetDrop || 0) < minDrop) return null;
@@ -15294,6 +15332,7 @@ function applyCenterActivityHardBoundary(input, action, options = {}) {
     action
   }, {
     boundaryRadiusCm: DEFAULT_CENTER_ACTIVITY_HARD_BOUNDARY_RADIUS_CM,
+    coinTargetRadiusCm: browserlessCenterActivityRadius(options),
     highValueCoinMinAmount: highValueCoinPriorityAmount(options)
   });
   if (!boundary.outside) return { action, boundary, applied: false };
@@ -15361,6 +15400,7 @@ function buildCenterHardBoundaryHighValueCoinAction(state, input, options = {}) 
     .map(drop => normalizeCoinForDecision(drop, input.self, authority))
     .filter(Boolean)
     .filter(coin => Number(coin.amount || 0) >= minAmount)
+    .filter(coin => coinTargetWithinCenterActivity(coin, options))
     .filter(coin => Number.isFinite(Number(coin.distance)))
     .filter(coin => !(maxDistance > 0) || Number(coin.distance) <= maxDistance)
     .filter(coin => opportunityStaminaAffordable(input.self, opportunityCoinStaminaCost(coin, options), options));
