@@ -401,8 +401,11 @@ function recordMainThreadTask(stats, taskName, durationMs, stageDurations = {}, 
     taskAggregate,
     durationMs
   );
-  const cpuWorkMs = Number(detail?.workProfile?.cpuWorkMs);
-  const cpuMeasured = Number.isFinite(cpuWorkMs) && cpuWorkMs >= 0;
+  const cpuWorkMs = detail?.workProfile?.cpuWorkMs;
+  const cpuSource = detail?.workProfile?.cpuUsageSource;
+  const cpuMeasured = typeof cpuWorkMs === 'number' && Number.isFinite(cpuWorkMs) && cpuWorkMs >= 0
+    && (cpuSource === 'linux-main-thread-schedstat'
+      || (process.platform !== 'linux' && ['thread', 'process'].includes(cpuSource)));
   if (cpuMeasured) {
     taskAggregate.cpuCount += 1;
     taskAggregate.totalCpuMs += cpuWorkMs;
@@ -415,6 +418,7 @@ function recordMainThreadTask(stats, taskName, durationMs, stageDurations = {}, 
   } else {
     taskAggregate.cpuMissingCount += 1;
     stats.cpuMeasurementMissingCount += 1;
+    stats.accepted = false;
   }
   for (const stage in (stageDurations || {})) {
     if (!Object.prototype.hasOwnProperty.call(stageDurations, stage)) continue;
@@ -610,7 +614,11 @@ function mainThreadWorkProfile(started, wallMs) {
   let cpuMs;
   if (started?.source === 'linux-main-thread-schedstat') {
     const current = currentMainThreadCpuMs();
-    cpuMs = current === null ? 0 : Math.max(0, current - Number(started.value || 0));
+    if (current === null || !Number.isFinite(started.value) || current < started.value) {
+      return { cpuUsageSource: 'unavailable', cpuWorkMs: null, nonCpuWallMs: null,
+        likelyPauseOrContention: null, classification: 'cpu-sampler-unavailable' };
+    }
+    cpuMs = current - started.value;
   } else {
     const usage = started?.source === 'thread' && typeof process.threadCpuUsage === 'function'
       ? process.threadCpuUsage(started.value)
@@ -3425,7 +3433,9 @@ async function runReadOnlyCanary(config, options = {}) {
         realtimeControlWorkerStatusSummary = workerResult.statusSummary || realtimeControlWorkerStatusSummary;
         realtimeControlWorkerLastPersistenceAtMs = responseAtMs;
       }
-      if (workerError) {
+      if (ending || result.safety.event) {
+        stages['worker-result-ignored'] = performance.now() - taskStarted;
+      } else if (workerError) {
         realtimeControlWorkerDisabled = true;
         log('canary-realtime-control-worker-failed', { error: errorMessage(workerError) });
         stages['worker-error'] = performance.now() - taskStarted;
@@ -3435,7 +3445,7 @@ async function runReadOnlyCanary(config, options = {}) {
           decisionAdapter.patchState?.(realtimeControlWorkerPersistenceState);
         }
         let realtimeStages = null;
-        const fallbackControl = decisionAdapter.evaluateRealtime?.(request.state, {
+        const fallbackControl = decisionAdapter.evaluateRealtime?.(latestState, {
           nowMs: responseAtMs,
           controlMode,
           combatEnabled: config.combatEnabled,
@@ -3443,7 +3453,7 @@ async function runReadOnlyCanary(config, options = {}) {
             realtimeStages = timings;
             lastRealtimeControlScale = scale || null;
           }
-        }) || decisionAdapter.evaluateCombat?.(request.state, {
+        }) || decisionAdapter.evaluateCombat?.(latestState, {
           nowMs: responseAtMs,
           controlMode,
           combatEnabled: config.combatEnabled
@@ -3453,8 +3463,6 @@ async function runReadOnlyCanary(config, options = {}) {
         }
         stages['worker-fallback-evaluate'] = performance.now() - taskStarted;
         publishRealtimeControl(fallbackControl || {}, latestState, responseAtMs, stages);
-      } else if (ending || result.safety.event) {
-        stages['worker-result-ignored'] = performance.now() - taskStarted;
       } else if (requestAgeMs > realtimeControlWorkerMaxAgeMs) {
         log('canary-realtime-control-worker-stale', {
           requestAtMs: request.atMs,
@@ -5315,6 +5323,8 @@ async function runReadOnlyCanary(config, options = {}) {
 }
 
 module.exports = {
+  startMainThreadCpuUsage,
+  mainThreadWorkProfile,
   applySingleBlockerLoginBypass,
   attachConfirmedLeaveEvidence,
   createActionPublicationGate,

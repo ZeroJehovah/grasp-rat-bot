@@ -382,6 +382,7 @@ function createChatService(options = {}) {
     const at = new Date(observedAtMs).toISOString();
     const snapshotTick = numberOrNull(snapshotTickValue);
     const tickAge = tick !== null && snapshotTick !== null ? snapshotTick - tick : null;
+    const occurrenceVerified = tickAge !== null && tickAge >= 0 && tickAge <= MAX_MESSAGE_TICK_AGE;
     const occurredAt = existing?.occurredAt || (
       tickAge !== null && tickAge >= 0 && tickAge <= MAX_MESSAGE_TICK_AGE
         ? new Date(observedAtMs - tickAge * SERVER_TICK_MS).toISOString()
@@ -401,6 +402,7 @@ function createChatService(options = {}) {
       text,
       mine: userId !== null && userId === selfUserId(),
       occurredAt,
+      occurrenceVerified: existing ? existing.occurrenceVerified === true : occurrenceVerified,
       firstObservedAt: existing?.firstObservedAt || at,
       lastObservedAt: at
     };
@@ -491,7 +493,7 @@ function createChatService(options = {}) {
         updated += 1;
         historyMessages.push(message);
       }
-      if (!existing && message.kind === 'kill') newKillKeys.push(message.key);
+      if (!existing && message.kind === 'kill' && message.occurrenceVerified) newKillKeys.push(message.key);
       messages.set(message.key, message);
       normalized.push(message);
     }

@@ -152,7 +152,7 @@ const __graspRatRuntimeStartup = (() => {
     clearPostExitTargetState,
     readPauseReason,
     syncPausedFromPage,
-    getOwnEntity,
+    getOwnEntity: getBotOwnEntity,
     logStatus
   } = createEntryGlueRuntime({
     bot,
@@ -770,7 +770,7 @@ const __graspRatRuntimeStartup = (() => {
     unsafeExitReloginMinDelayMs: (...args) => unsafeExitReloginMinDelayMs(...args),
     getNativeControl: (...args) => getNativeControl(...args),
     getNativeState: (...args) => getNativeState(...args),
-    getOwnEntity: (...args) => getOwnEntity(...args),
+    getOwnEntity: (...args) => getBotOwnEntity(...args),
     getSelf: (...args) => getSelf(...args),
     summarizeSelf: (...args) => summarizeSelf(...args),
     summarizeControl: (...args) => summarizeControl(...args),
@@ -1051,7 +1051,8 @@ const __graspRatRuntimeStartup = (() => {
     getSessionToken: () => getSessionToken(),
     getOwnEntity: () => {
       try {
-        return typeof getOwnEntity === 'function' ? getOwnEntity() : null;
+        const getPageOwnEntity = readPageGlobal('getOwnEntity', null, pageGlobal);
+        return typeof getPageOwnEntity === 'function' ? getPageOwnEntity.call(pageGlobal) : null;
       } catch (_) {
         return null;
       }

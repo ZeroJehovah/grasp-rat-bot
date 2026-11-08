@@ -2,6 +2,7 @@
 'use strict';
 
 const fs = require('fs');
+const { StringDecoder } = require('node:string_decoder');
 const path = require('path');
 const zlib = require('zlib');
 const { combatPressurePhaseCore } = require('../src/strategy/combat-pressure');
@@ -771,6 +772,8 @@ function normalizeBrowserlessCombatLiveEntry(entry, state = {}) {
       evidenceAt: numberOrNull(secondaryRetention.latestEvidenceAt),
       evidenceType: String(secondaryRetention.latestEvidenceType || ''),
       evidenceAgeMs: numberOrNull(secondaryRetention.ageMs),
+      ownDamageFromStart: numberOrNull(metrics.ownTargetDamage),
+      lastOwnDamageAt: numberOrNull(metrics.lastOwnDamageAt),
       distanceCm: numberOrNull(target.distance),
       authority: String(target.authority || ''),
       alive: target.alive !== false,
@@ -935,13 +938,14 @@ function loadFrames(options) {
   } else {
     const fd = fs.openSync(filePath, 'r');
     const buffer = Buffer.allocUnsafe(1024 * 1024);
+    const decoder = new StringDecoder('utf8');
     let carry = '';
     let lineNo = 1;
     try {
       while (lineNo <= end) {
         const bytes = fs.readSync(fd, buffer, 0, buffer.length, null);
         if (!bytes) break;
-        carry += buffer.toString('utf8', 0, bytes);
+        carry += decoder.write(buffer.subarray(0, bytes));
         let newline;
         while ((newline = carry.indexOf('\n')) !== -1) {
           const raw = carry.slice(0, newline).replace(/\r$/, '');
@@ -951,6 +955,7 @@ function loadFrames(options) {
           if (lineNo > end) break;
         }
       }
+      carry += decoder.end();
       if (lineNo <= end && carry) processLine(carry.replace(/\r$/, ''), lineNo);
     } finally {
       fs.closeSync(fd);
@@ -1181,7 +1186,9 @@ function runLoadFramesSelfTest() {
         combatAudit: {
           finalAction: { kind: 'combat-live', band: 'combat', reason: 'combat-live-realtime' }
         },
-        metrics: { engagementId: '8:1', acceptedShots: 0, confirmedHits: 0 }
+        metrics: { engagementId: '8:1', acceptedShots: offsetMs >= 2000 ? 9 : 0, confirmedHits: offsetMs >= 2000 ? 9 : 0,
+          ownTargetDamage: offsetMs >= 2000 ? 27 : 0,
+          lastOwnDamageAt: offsetMs >= 2000 ? Date.parse('2026-08-26T06:39:04.000Z') : 0 }
       }
     });
     const retentionEntries = [
@@ -1823,25 +1830,46 @@ function runCombatEfficiencyDistanceControlScenario(frames, targetId, options) {
   };
 }
 
+// Continuous relative segment CPA. Missing frames never create an invented
+// target path, and neither participant is extrapolated beyond bullet lifetime.
+function continuousShotDistance(origin, velocity, samples, shotAt, options) {
+  let min = Infinity;
+  let minAt = null;
+  const endAt = shotAt + Math.max(0, Number(options.bulletTtlMs || 0));
+  const maxGap = Math.max(1, Number(options.maxTargetFrameGapMs ?? 250));
+  for (let i = 0; i < samples.length; i += 1) {
+    const a = samples[i];
+    if (a.at > endAt) break;
+    if (a.at >= shotAt) {
+      const d = Math.hypot(a.x - origin.x - velocity.x * (a.at - shotAt),
+        a.y - origin.y - velocity.y * (a.at - shotAt));
+      if (d < min) { min = d; minAt = a.at; }
+    }
+    const b = samples[i + 1];
+    if (!b || b.at <= shotAt || b.at - a.at <= 0 || b.at - a.at > maxGap) continue;
+    const lo = Math.max(shotAt, a.at);
+    const hi = Math.min(endAt, b.at);
+    if (hi < lo) continue;
+    const targetVx = (b.x - a.x) / (b.at - a.at);
+    const targetVy = (b.y - a.y) / (b.at - a.at);
+    const rx = a.x + targetVx * (lo - a.at) - origin.x - velocity.x * (lo - shotAt);
+    const ry = a.y + targetVy * (lo - a.at) - origin.y - velocity.y * (lo - shotAt);
+    const vx = targetVx - velocity.x;
+    const vy = targetVy - velocity.y;
+    const vv = vx * vx + vy * vy;
+    const dt = vv > 0 ? Math.max(0, Math.min(hi - lo, -(rx * vx + ry * vy) / vv)) : 0;
+    const d = Math.hypot(rx + vx * dt, ry + vy * dt);
+    if (d < min) { min = d; minAt = lo + dt; }
+  }
+  return { hit: min <= options.hitRadiusCm, min, minAt };
+}
+
 function minDistanceForShot(origin, aim, targetSamples, shotAt, options) {
   if (!origin || !aim || !targetSamples.length) return { hit: false, min: Infinity, minAt: null };
   const dir = unit(sub(aim, origin));
   if (!dir) return { hit: false, min: Infinity, minAt: null };
-  const speedPerMs = options.bulletSpeedPerTick / options.tickMs;
-  let min = Infinity;
-  let minAt = null;
-  for (let dt = 0; dt <= options.bulletTtlMs; dt += 25) {
-    const t = shotAt + dt;
-    const target = interpolate(targetSamples, t);
-    if (!target) continue;
-    const bullet = add(origin, mul(dir, speedPerMs * dt));
-    const d = distance(bullet, target);
-    if (d < min) {
-      min = d;
-      minAt = t;
-    }
-  }
-  return { hit: min <= options.hitRadiusCm, min, minAt };
+  return continuousShotDistance(origin, mul(dir, options.bulletSpeedPerTick / options.tickMs),
+    targetSamples, shotAt, options);
 }
 
 function runAimScenario(label, shots, aimForShot, targetSamples, options, filterShot = () => true) {
@@ -1888,17 +1916,15 @@ function runActualBulletScenario(shots, targetSamples, options) {
     const vx = numberOrNull(shot.bullet.vx);
     const vy = numberOrNull(shot.bullet.vy);
     if (!origin || vx === null || vy === null) continue;
-    let localMin = Infinity;
-    for (let dt = 0; dt <= options.bulletTtlMs; dt += 25) {
-      const target = interpolate(targetSamples, shot.frame.at + dt);
-      if (!target) continue;
-      const bullet = {
-        x: origin.x + (vx / options.tickMs) * dt,
-        y: origin.y + (vy / options.tickMs) * dt
-      };
-      const d = distance(bullet, target);
-      if (d < localMin) localMin = d;
-    }
+    const createdTick = numberOrNull(shot.bullet.created_tick ?? shot.bullet.createdTick);
+    const expireTick = numberOrNull(shot.bullet.expire_tick ?? shot.bullet.expireTick);
+    const observedTick = numberOrNull(shot.frame.entry?.tick ?? shot.frame.entry?.reserveCleanupReplay?.tick);
+    const originTick = observedTick ?? createdTick;
+    const ttlMs = originTick !== null && expireTick !== null
+      ? Math.min(options.bulletTtlMs, Math.max(0, expireTick - originTick) * options.tickMs)
+      : options.bulletTtlMs;
+    const localMin = continuousShotDistance(origin, { x: vx / options.tickMs, y: vy / options.tickMs },
+      targetSamples, shot.frame.at, { ...options, bulletTtlMs: ttlMs }).min;
     considered += 1;
     if (localMin < minDistance) minDistance = localMin;
     if (localMin <= options.hitRadiusCm) {
@@ -3029,10 +3055,10 @@ function runInvulnerableAvoidanceArbitrationReplay(frames = []) {
 }
 
 // 副目标交战因对手火力间歇被释放, 会把一场战斗拆成多段重新接触。这里用日志里的
-// 目标血量序列还原“我们自己的伤害进度”, 对同一批帧分别跑关闭/开启该证据的
+// 已记录的可归因伤害还原自身伤害证据；总掉血不提供该权限。分别跑关闭/开启证据的
 // secondaryRetentionPolicy, 统计被纠正的释放帧, 并强制检查它没有带来追击
 // (超出攻击距离仍维持) 或低血量滞留 (血量到脱离阈值仍维持)。
-function retentionEvidenceState(replay, damage) {
+function retentionEvidenceState(replay) {
   const evidenceAt = Number(replay.evidenceAt || 0);
   const state = {
     combatRole: 'secondary',
@@ -3042,9 +3068,8 @@ function retentionEvidenceState(replay, damage) {
     lastIncomingBulletAt: 0,
     hasDamagedSelf: false,
     lastSelfDamageAt: 0,
-    damageFromStart: Number(damage.damageFromStart || 0),
-    lastDamageAmount: Number(damage.lastDamageAmount || 0),
-    lastDamageAt: Number(damage.lastDamageAt || 0)
+    ownDamageFromStart: Number(replay.ownDamageFromStart || 0),
+    lastOwnDamageAt: Number(replay.lastOwnDamageAt || 0)
   };
   if (!evidenceAt) return state;
   if (replay.evidenceType === 'target-firing') state.lastFiringAt = evidenceAt;
@@ -3067,9 +3092,6 @@ function runSecondaryOwnDamageRetentionReplay(frames = [], options = {}) {
     combatAttackRange: attackRange,
     combatLowHpLeaveThreshold: lowHpThreshold
   };
-  const damage = { damageFromStart: 0, lastDamageAmount: 0, lastDamageAt: 0 };
-  let firstTargetHp = null;
-  let minTargetHp = null;
   let secondaryFrames = 0;
   let loggedAgreementFrames = 0;
   let loggedReleaseFrames = 0;
@@ -3086,20 +3108,9 @@ function runSecondaryOwnDamageRetentionReplay(frames = [], options = {}) {
   for (const frame of candidates) {
     const replay = frame.entry.secondaryRetentionReplay;
     const targetHp = Number.isFinite(frame.targetHp) ? Number(frame.targetHp) : null;
-    if (targetHp !== null) {
-      if (firstTargetHp === null) {
-        firstTargetHp = targetHp;
-        minTargetHp = targetHp;
-      } else if (targetHp < minTargetHp) {
-        damage.lastDamageAmount = minTargetHp - targetHp;
-        minTargetHp = targetHp;
-        damage.lastDamageAt = frame.at;
-      }
-      damage.damageFromStart = Math.max(0, firstTargetHp - minTargetHp);
-    }
     if (!replay.secondary) continue;
     secondaryFrames += 1;
-    const state = retentionEvidenceState(replay, damage);
+    const state = retentionEvidenceState(replay);
     const context = {
       selfHp: frame.selfHp,
       lowHpThreshold,
@@ -3192,7 +3203,7 @@ function runSecondaryOwnDamageRetentionReplay(frames = [], options = {}) {
     recoveryOwnedFrames,
     loggedRecoveryHoldFrames,
     suppressedRecoveryHoldFrames,
-    ownDamageProgress: damage.damageFromStart,
+    ownDamageProgress: Math.max(0, ...candidates.map(frame => Number(frame.entry.secondaryRetentionReplay.ownDamageFromStart || 0))),
     attackRangeCm: attackRange,
     lowHpThreshold,
     firstCorrection,

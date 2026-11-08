@@ -2,6 +2,7 @@
 'use strict';
 
 const fs = require('fs');
+const { StringDecoder } = require('node:string_decoder');
 const os = require('os');
 const path = require('path');
 const zlib = require('zlib');
@@ -175,13 +176,14 @@ function forEachJsonlLine(file, onLine) {
   }
   const fd = fs.openSync(file, 'r');
   const buffer = Buffer.allocUnsafe(JSONL_READ_CHUNK_BYTES);
+  const decoder = new StringDecoder('utf8');
   let remainder = '';
   let lineNumber = 0;
   try {
     while (true) {
       const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
       if (!bytesRead) break;
-      const text = remainder + buffer.toString('utf8', 0, bytesRead);
+      const text = remainder + decoder.write(buffer.subarray(0, bytesRead));
       const lines = text.split(/\n/);
       remainder = lines.pop() || '';
       for (const line of lines) {
@@ -189,6 +191,7 @@ function forEachJsonlLine(file, onLine) {
         onLine(line, lineNumber);
       }
     }
+    remainder += decoder.end();
     if (remainder) {
       lineNumber += 1;
       onLine(remainder, lineNumber);

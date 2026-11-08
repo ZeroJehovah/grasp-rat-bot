@@ -669,12 +669,18 @@ function addTrajectoryCoverageShotObservation(observed, event = {}, options = {}
   if (ordinal !== null && ordinal <= floor) return false;
   let row = observed.events.get(id);
   if (!row) {
+    if (ordinal !== null && ordinal <= Number(observed.evictedOrdinal || 0)) return false;
     if (observed.events.size >= MAX_TRAJECTORY_COVERAGE_SHOT_EVENTS) {
       const oldest = observed.events.keys().next().value;
-      if (oldest) observed.events.delete(oldest);
+      if (oldest) {
+        observed.evictedOrdinal = Math.max(Number(observed.evictedOrdinal || 0),
+          Number(observed.events.get(oldest)?.ordinal || 0));
+        observed.events.delete(oldest);
+      }
     }
     row = {
       id,
+      ordinal,
       confirmedHit: false,
       baselineExpectedMissCm: finiteAttributionNumber(value.baselineExpectedMissCm),
       selectedExpectedMissCm: finiteAttributionNumber(value.selectedExpectedMissCm),
@@ -750,26 +756,6 @@ function summarizeTrajectoryCoverageShots(observed, prefix) {
       pendingOrUnattributedAppliedShots: Math.max(0, appliedAcceptedShots - appliedConfirmedHits)
     }
   };
-}
-
-function mergeTrajectoryCoverageShotObservations(target, source) {
-  const ledger = target || createTrajectoryCoverageShotObservations();
-  const rows = source?.events instanceof Map ? source.events.values() : [];
-  for (const row of rows) {
-    addTrajectoryCoverageShotObservation(ledger, {
-      bulletId: row.id.startsWith('bullet:') ? row.id.slice('bullet:'.length) : '',
-      acceptedShotOrdinal: row.id.startsWith('accepted:') ? Number(row.id.slice('accepted:'.length)) : null,
-      coverageApplied: true,
-      confirmedHit: row.confirmedHit === true,
-      baselineExpectedMissCm: row.baselineExpectedMissCm,
-      selectedExpectedMissCm: row.selectedExpectedMissCm,
-      expectedMissImprovementCm: row.expectedMissImprovementCm,
-      hypothesis: row.hypothesis,
-      variant: row.variant,
-      selectionMode: row.selectionMode
-    }, { acceptedShotFloor: 0 });
-  }
-  return ledger;
 }
 
 function createEvasiveAimShotObservations(acceptedShotFloor = 0) {
@@ -1199,10 +1185,7 @@ function buildBattleSummary(battle, reason, finalizeMs) {
     acceptedCount: numberOrNull(crossTargetBaseline.acceptedCount) ?? 0
   });
   const exitTail = summarizeBattleExitTail(battle.exitTail);
-  const engagementTrajectoryCoverage = mergeTrajectoryCoverageShotObservations(
-    battle.trajectoryCoverageLedger,
-    battle.observations?.trajectoryCoverageShots
-  );
+  const engagementTrajectoryCoverage = battle.trajectoryCoverageLedger;
   return {
     formatVersion: BATTLE_INDEX_FORMAT_VERSION,
     segmentId: battle.segmentId,
@@ -1659,6 +1642,7 @@ function createCombatBattleLog(options = {}) {
       active.combatAudit = observeCombatAudit(active.combatAudit, detail.combatAudit, atMs);
     }
     observeBattleDetail(active.observations, detail, atMs);
+    observeTrajectoryCoverageShots(active.trajectoryCoverageLedger, detail?.metrics || detail?.combat?.metrics || {});
     if (!active.targetName && active.lastMetrics) active.targetName = String(active.lastMetrics.targetName || '');
     framesWritten += 1;
     return { recorded: true, file: active.rawFile, engagementId };

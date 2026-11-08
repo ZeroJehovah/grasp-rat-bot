@@ -299,15 +299,27 @@ function createCombatLogQueueRuntime(runtime = {}) {
     state.sending = true;
     const body = safeStringify(payload);
     let sentOk = false;
-    Promise.resolve()
+    const controller = new AbortController();
+    let timeout;
+    const deadline = new Promise((_, reject) => {
+      timeout = setTimeout(() => {
+        controller.abort();
+        reject(new Error('combat log upload timed out'));
+      }, Math.max(250, Math.min(30000, Number(cfg.combatLogTimeoutMs) || 5000)));
+    });
+    Promise.race([deadline, Promise.resolve()
       .then(() => fetch(state.endpoint, {
         method: 'POST',
+        signal: controller.signal,
         mode: 'cors',
         cache: 'no-store',
         keepalive: body.length < 60000,
         headers: { 'content-type': 'application/json' },
         body
-      }))
+      })).then(async res => {
+        if (res?.body?.cancel) await res.body.cancel();
+        return res;
+      })])
       .then(res => {
         if (!res || !res.ok) throw new Error('combat log POST failed: HTTP ' + (res?.status || 0));
         sentOk = true;
@@ -340,6 +352,7 @@ function createCombatLogQueueRuntime(runtime = {}) {
         persistCombatLogPendingEntries();
       })
       .finally(() => {
+        clearTimeout(timeout);
         if (exitAuditIds.length && Array.isArray(state.sendingExitAuditIds)) {
           state.sendingExitAuditIds = state.sendingExitAuditIds.filter(id => !exitAuditIds.includes(id));
         }

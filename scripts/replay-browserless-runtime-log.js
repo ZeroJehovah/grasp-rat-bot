@@ -7002,25 +7002,40 @@ function replayDistanceAwareAim(allRows, rows, options = {}) {
   let productionIndependentFalseSafe = 0;
   let productionIndependentFalseNegative = 0;
   let currentDispatchOpportunities = 0;
+  let insufficientDispatchEvidence = 0;
+  const decisionSamples = [];
   let currentEstimatedHits = 0;
   let historicalEstimatedHits = 0;
   for (let shotIndex = 0; shotIndex < confirmedShots.length; shotIndex += 1) {
     const shot = confirmedShots[shotIndex];
     const createdTick = Number(shot.ack.created_tick);
-    const rowIndex = Math.max(0, rows.findLastIndex(row => Number(row.detail.tick) <= createdTick));
+    const dispatchTick = optionalNumberOrNull(shot.dispatchObservedTick);
+    const dispatchAt = optionalNumberOrNull(shot.dispatchAt);
+    const rowIndex = dispatchTick === null || dispatchAt === null ? -1 : rows.findLastIndex(row =>
+      Number(row.detail.tick) <= dispatchTick && Date.parse(row.entry.at || '') <= dispatchAt);
     const row = rows[rowIndex];
-    if (!row?.detail?.aim) continue;
+    if (!row?.detail?.aim || ![shot.ack.start_x, shot.ack.start_y,
+      shot.ack.dir_x_micros, shot.ack.dir_y_micros].every(value => optionalNumberOrNull(value) !== null)) {
+      insufficientDispatchEvidence += 1;
+      continue;
+    }
     const causalExecutionTiming = distanceAwareCausalShootTiming(
       confirmedShots,
       Date.parse(row.entry.at || '')
     );
-    const historicalAim = row.detail.aim;
+    const historicalAim = {
+      x: Number(shot.ack.start_x) + Number(shot.ack.dir_x_micros) / 1000000 * 15000,
+      y: Number(shot.ack.start_y) + Number(shot.ack.dir_y_micros) / 1000000 * 15000
+    };
     const currentAim = recomputeDistanceAwareAimForRow(rows, rowIndex, {
       ...options,
       causalExecutionTiming,
       actualShots: currentDispatchOpportunities
     });
-    if (!currentAim.ok) continue;
+    if (!currentAim.ok) { insufficientDispatchEvidence += 1; continue; }
+    if (decisionSamples.length < 80) decisionSamples.push({ requestId: shot.requestId,
+      dispatchObservedTick: dispatchTick, decisionTick: row.detail.tick,
+      aim: { x: currentAim.x, y: currentAim.y } });
     const historicalOracle = distanceAwareIndependentOracleForRow(row, historicalAim, {
       ...options,
       causalExecutionTiming
@@ -7032,7 +7047,7 @@ function replayDistanceAwareAim(allRows, rows, options = {}) {
     const productionReachable = currentAim.fireReachability?.reachable === true;
     const outcomeMinimumMiss = theoreticalShotMinimumMiss(rows, shot.ack);
     const historicalOutcomeReachable = outcomeMinimumMiss <= Number(options.hitRadius || 90);
-    const historicalMiss = bulletCorridorMiss(rows, shot.ack, historicalAim);
+    const historicalMiss = bulletCorridorMiss(rows, shot.ack);
     const currentMiss = bulletCorridorMiss(rows, shot.ack, currentAim);
     const routeCandidateMisses = (currentAim.routeCoverage?.candidates || [])
       .map(candidate => bulletCorridorMiss(rows, shot.ack, { x: candidate.x, y: candidate.y }))
@@ -7138,6 +7153,8 @@ function replayDistanceAwareAim(allRows, rows, options = {}) {
   ]));
   return {
     confirmedShots: confirmedShots.length,
+    insufficientDispatchEvidence,
+    decisionSamples,
     historical,
     current,
     sharedReachableOpportunitySet: {
@@ -7164,6 +7181,7 @@ function replayDistanceAwareAim(allRows, rows, options = {}) {
     positiveControlNoRegression,
     samples,
     accepted: confirmedShots.length > 0
+      && insufficientDispatchEvidence === 0
       && productionIndependentFalseSafe === 0
       && (concreteImprovement || positiveControlNoRegression)
   };
@@ -8653,6 +8671,10 @@ if (require.main === module) {
 }
 
 module.exports = {
+  replayDistanceAwareAim,
+  recomputeDistanceAwareAimForRow,
+  bulletCorridorMiss,
+  executionMatchedConfirmedShots,
   arrivalOccupancyCalibrationSummary,
   independentCreationReachabilityOracleCore,
   parseArgs,

@@ -183,6 +183,8 @@ function engagedSecondaryScenario(nowMs, options = {}) {
         firstHp: 100,
         minHp: 52,
         damageFromStart: 48,
+        ownDamageFromStart: 48,
+        lastOwnDamageAt: nowMs - 494,
         lastDamageAmount: 3,
         lastDamageAt: nowMs - 494,
         distance: target.x,

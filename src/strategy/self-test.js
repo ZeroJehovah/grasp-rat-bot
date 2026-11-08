@@ -1094,9 +1094,9 @@ function runStrategyModuleSelfTests() {
     combatRole: 'secondary',
     lastFiringAt: 9000,
     lastThreatAt: 9000,
-    damageFromStart: 48,
+    ownDamageFromStart: 48,
     lastDamageAmount: 3,
-    lastDamageAt: 11800
+    lastOwnDamageAt: 11800
   };
   const ownDamageContext = {
     selfHp: 94,
@@ -1107,7 +1107,7 @@ function runStrategyModuleSelfTests() {
   };
   const ownDamageRetained = secondaryRetentionPolicy(ownDamageSecondaryState, 12000, {}, ownDamageContext);
   const ownDamageRetainedAtLease = secondaryRetentionPolicy(
-    { ...ownDamageSecondaryState, lastDamageAt: 9500 },
+    { ...ownDamageSecondaryState, lastOwnDamageAt: 9500 },
     12000,
     {},
     ownDamageContext
@@ -1116,19 +1116,19 @@ function runStrategyModuleSelfTests() {
   // 不该因为对手绕行断火而脱战。2501ms 仍然保留, 5000ms 是边界内最后一帧,
   // 5001ms 过期。没有伤害进度的证据仍然严格走 2500/2501ms 基础租约。
   const ownDamageRetainedPastBaseLease = secondaryRetentionPolicy(
-    { ...ownDamageSecondaryState, lastDamageAt: 9499 },
+    { ...ownDamageSecondaryState, lastOwnDamageAt: 9499 },
     12000,
     {},
     ownDamageContext
   );
   const ownDamageRetainedAtOwnDamageLease = secondaryRetentionPolicy(
-    { ...ownDamageSecondaryState, lastDamageAt: 7000 },
+    { ...ownDamageSecondaryState, lastOwnDamageAt: 7000 },
     12000,
     {},
     ownDamageContext
   );
   const ownDamageExpiredAtLease = secondaryRetentionPolicy(
-    { ...ownDamageSecondaryState, lastDamageAt: 6999 },
+    { ...ownDamageSecondaryState, lastOwnDamageAt: 6999 },
     12000,
     {},
     ownDamageContext
@@ -1148,16 +1148,16 @@ function runStrategyModuleSelfTests() {
   const ownDamageWithoutIncomingEvidence = secondaryRetentionPolicy(
     {
       combatRole: 'secondary',
-      damageFromStart: 48,
+      ownDamageFromStart: 48,
       lastDamageAmount: 3,
-      lastDamageAt: 11800
+      lastOwnDamageAt: 11800
     },
     12000,
     {},
     ownDamageContext
   );
   const ownDamageWithoutProgress = secondaryRetentionPolicy(
-    { ...ownDamageSecondaryState, damageFromStart: 0, lastDamageAmount: 0 },
+    { ...ownDamageSecondaryState, ownDamageFromStart: 0, lastDamageAmount: 0 },
     12000,
     {},
     ownDamageContext

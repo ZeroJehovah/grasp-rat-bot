@@ -84,6 +84,7 @@ function localAddressAgentStatus() {
 
 function redactSecrets(value) {
   return String(value || '')
+    .replace(/((?:localStorage|sessionStorage)\s*\.\s*setItem\s*\(\s*(['"])(?:tmpGameSessionToken|sessionToken|session_token|token)\2\s*,\s*)(['"])(?:\\.|(?!\3)[\s\S])*\3/ig, '$1"[redacted]"')
     .replace(/((?:[?&]|&amp;)(?:code|token|session|auth|secret)[^=]*=)[^&"'\\\s]+/ig, '$1[redacted]')
     .replace(/("(?:code|token|sessionToken|auth|secret|cookie|set-cookie)"\s*:\s*")[^"]+/ig, '$1[redacted]')
     .replace(/((?:auth\.session-token|cf_clearance|_cfuvid|__stripe_mid)=)[^;"'\s]+/ig, '$1[redacted]')
@@ -109,7 +110,7 @@ function redactStructuredSecrets(value, depth = 0) {
 }
 
 const JSON_SECRET_KEY_RE = /^(?:code|token|sessionToken|session_token|tmpGameSessionToken|cookie|set-cookie|authorization)$/i;
-const JSON_STRING_SECRET_TRIGGER_RE = /(?:[?&]|&amp;)(?:code|token|session|auth|secret)[^=]*=|(?:auth\.session-token|cf_clearance|_cfuvid|__stripe_mid)=|\bBearer\s+/i;
+const JSON_STRING_SECRET_TRIGGER_RE = /(?:[?&]|&amp;)(?:code|token|session|auth|secret)[^=]*=|(?:auth\.session-token|cf_clearance|_cfuvid|__stripe_mid)=|\bBearer\s+|(?:localStorage|sessionStorage)\s*\.\s*setItem/i;
 
 function redactJsonReplacer(key, item) {
   if (key && JSON_SECRET_KEY_RE.test(key)) return '[redacted]';
@@ -553,7 +554,7 @@ async function submitApproveCurl(rawInput, options = {}) {
     location: redactSecrets(approveLocation),
     contentType: approveResponse.headers.get('content-type') || '',
     textLength: approveBody.text.length,
-    textSample: redactSecrets(approveBody.text.slice(0, 500))
+    textSample: ''
   };
   if (!approveLocation || new URL(approveLocation).origin !== gameOrigin) {
     const err = new Error(`approve request did not redirect to game callback; status=${approveResponse.status}, location=${approveSummary.location || 'none'}`);
@@ -604,7 +605,9 @@ async function submitGameCallbackUrl(url, options = {}) {
     setCookiePresent: Boolean(response.headers.get('set-cookie')),
     jsonKeys: body.json && typeof body.json === 'object' ? Object.keys(body.json).slice(0, 20) : [],
     textLength: body.text.length,
-    textSample: body.json ? '' : redactSecrets(body.text.slice(0, 500))
+    // Authorization bodies can contain executable credential assignments.
+    // Keep metadata only, including on failed/incomplete login responses.
+    textSample: ''
   };
   let login = extractLoginData(body.json || {});
   if (!login.userId || !login.sessionToken) login = extractLoginDataFromText(body.text);
@@ -613,15 +616,15 @@ async function submitGameCallbackUrl(url, options = {}) {
   if (!login.userId || !login.sessionToken) login = extractLoginDataFromUrl(response.url);
   const safeSummary = redactStructuredSecrets(summary);
   if (!response.ok && !summary.redirected) {
-    const err = new Error(`callback HTTP ${response.status}: ${redactSecrets((body.text || '<empty body>').slice(0, 240))}`);
+    const err = new Error(`callback HTTP ${response.status}`);
     err.summary = safeSummary;
     err.status = response.status;
     throw err;
   }
   if (!login.userId || !login.sessionToken) {
-    const err = new Error(`callback response did not expose userId/sessionToken; status=${response.status}, content-type=${summary.contentType || 'unknown'}, location=${summary.location || 'none'}, refresh=${summary.refreshUrl || 'none'}, body=${body.text ? redactSecrets(body.text.slice(0, 240)) : 'empty'}`);
+    const err = new Error(`callback response did not expose userId/sessionToken; status=${response.status}, content-type=${summary.contentType || 'unknown'}, location=${summary.location || 'none'}, refresh=${summary.refreshUrl || 'none'}`);
     err.summary = safeSummary;
-    err.body = body.json || body.text.slice(0, 1000);
+    err.body = body.json ? redactStructuredSecrets(body.json) : '';
     throw err;
   }
   return {

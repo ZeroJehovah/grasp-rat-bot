@@ -50,6 +50,23 @@ function loadStreams(logDir, day) {
   for (const stream of ['runner', 'decisions', 'actions', 'combat', 'exits']) {
     streams[stream] = readJsonlEntries(path.join(dayDir, `${stream}.jsonl`));
   }
+  const battleDir = path.join(dayDir, 'battles');
+  if (fs.existsSync(battleDir)) {
+    const files = fs.readdirSync(battleDir).sort();
+    for (const file of files) {
+      if (!/\.jsonl(?:\.gz)?$/.test(file) || /^(index|shot-amendments|drop-race)\.jsonl/.test(file)) continue;
+      if (file.endsWith('.jsonl') && files.includes(`${file}.gz`)) continue;
+      streams.combat.push(...readJsonlEntries(path.join(battleDir, file))
+        .filter(entry => ['combat-live', 'combat-dry-run'].includes(entry?.type)));
+    }
+    const seen = new Set();
+    streams.combat = streams.combat.filter(entry => {
+      const key = JSON.stringify(entry);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
   return { dayDir, streams };
 }
 

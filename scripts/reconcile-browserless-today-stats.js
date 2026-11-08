@@ -67,10 +67,10 @@ function parseArgs(argv) {
   return options;
 }
 
-function utcLogDays(startMs, endMs) {
+function utc8LogDays(startMs, endMs) {
   const output = [];
-  let current = Math.floor(startMs / DAY_MS) * DAY_MS;
-  const final = Math.floor(endMs / DAY_MS) * DAY_MS;
+  let current = Math.floor((startMs + UTC8_OFFSET_MS) / DAY_MS) * DAY_MS;
+  const final = Math.floor((endMs + UTC8_OFFSET_MS) / DAY_MS) * DAY_MS;
   while (current <= final) {
     output.push(new Date(current).toISOString().slice(0, 10));
     current += DAY_MS;
@@ -131,8 +131,8 @@ async function analyzeDay(options) {
   const startMs = dayStartMs(options.day);
   const endMs = Math.min(startMs + DAY_MS - 1, Number(options.cutoffMs));
   if (endMs < startMs) throw new Error('cutoff is before the selected day');
-  const days = utcLogDays(startMs, endMs);
-  const contextDays = utcLogDays(Math.max(0, startMs - DAY_MS), endMs);
+  const days = utc8LogDays(startMs, endMs);
+  const contextDays = utc8LogDays(Math.max(0, startMs - DAY_MS), endMs);
   const wsFiles = days.map(day => path.join(options.logDir, day, 'ws.jsonl'));
   const contextWsFiles = contextDays.map(day => path.join(options.logDir, day, 'ws.jsonl'));
   const decisionFiles = days.map(day => path.join(options.logDir, day, 'decisions.jsonl'));

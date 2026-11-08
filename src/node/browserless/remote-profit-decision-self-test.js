@@ -1256,7 +1256,7 @@ function assertRemoteMissionDoesNotOverrideRealtimeProfit() {
   const next = decide(
     adapter,
     state(fullStaminaSelf(), [anotherVisible], 3),
-    3200,
+    4200,
     nextSnapshot,
     { controlMode: 'profit-live', combatEnabled: true }
   );

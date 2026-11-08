@@ -168,7 +168,7 @@ async function fetchText(payload = {}) {
       body: payload.body ?? undefined,
       cache: 'no-store',
       credentials: 'omit',
-      redirect: 'follow',
+      redirect: 'error',
       signal: controller.signal
     });
     const text = await res.text();
@@ -283,10 +283,42 @@ async function clashLeaveRescue(payload = {}) {
   };
 }
 
+const PAGE_OPERATIONS = new Set(['contentReady', 'storageGet', 'storageSet', 'fetchText', 'clashLeaveRescue']);
+const PAGE_STORAGE_WRITES = new Set(['cachedManifest', 'cachedSource', 'graspRatBotPaused',
+  'graspRatBotPauseReason', 'graspRatLoginSuppressUntil', 'graspRatLoginSuppressReason']);
+
+function authorizeBridgeRequest(type, payload, sender) {
+  if (sender?.id !== chrome.runtime.id) throw new Error('untrusted extension sender');
+  const extensionOrigin = chrome.runtime.getURL('');
+  if (!sender.tab && sender.url === `${extensionOrigin}popup.html`) return;
+  if (!sender.tab || sender.frameId !== 0 || !isTrackedRuntimeUrl(sender.url)
+    || !PAGE_OPERATIONS.has(type)) throw new Error('operation unavailable to this page');
+  if (type === 'storageSet') {
+    if (!payload.items || Array.isArray(payload.items) || typeof payload.items !== 'object'
+      || Object.keys(payload.items).some(key => !PAGE_STORAGE_WRITES.has(key))) {
+      throw new Error('security settings can only be changed in the extension popup');
+    }
+  }
+  if (type === 'fetchText') {
+    const url = new URL(String(payload.url || ''));
+    const rawPrefix = '/ZeroJehovah/grasp-rat-bot/main/';
+    const cdnPrefix = '/gh/ZeroJehovah/grasp-rat-bot@main/';
+    const prefix = url.hostname === 'raw.githubusercontent.com' ? rawPrefix
+      : url.hostname === 'cdn.jsdelivr.net' ? cdnPrefix : '';
+    const paths = ['dist/manifest.json', 'dist/grasp-rat-remote-bot.js', 'dist/target-whitelist.json',
+      'extension/page-bootstrap.js'];
+    if (url.protocol !== 'https:' || url.port || url.username || url.password || !prefix
+      || !paths.some(path => url.pathname === prefix + path)
+      || String(payload.method || 'GET').toUpperCase() !== 'GET' || payload.body != null
+      || Object.keys(payload.headers || {}).length) throw new Error('page fetch is limited to public bot release files');
+  }
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const run = async () => {
     const type = String(message?.type || '');
     const payload = message?.payload || {};
+    authorizeBridgeRequest(type, payload, sender);
     if (type === 'contentReady') {
       const tabId = sender?.tab?.id || payload.tabId || 0;
       const url = sender?.tab?.url || payload.url || '';

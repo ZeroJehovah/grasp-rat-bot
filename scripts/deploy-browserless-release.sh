@@ -151,9 +151,18 @@ ARTIFACT_DIR="$BUILD_ROOT/release"
 mkdir -m 0755 -- "$ARTIFACT_DIR"
 
 ACTIVATION_CHANGED=0
+ACTIVATION_ATTEMPTED=0
+OLD_CURRENT_RELEASE=""
 ROLLBACK_ATTEMPTED=0
 cleanup() {
   local status=$?
+  if [ "$status" -ne 0 ] && [ "$ACTIVATION_ATTEMPTED" -eq 1 ]; then
+    local actual_current
+    actual_current="$(readlink -f "$RELEASE_ROOT/current" 2>/dev/null || true)"
+    if [ "$actual_current" != "$OLD_CURRENT_RELEASE" ]; then
+      ACTIVATION_CHANGED=1
+    fi
+  fi
   if [ "$status" -ne 0 ] && [ "$ACTIVATION_CHANGED" -eq 1 ] && [ "$AUTO_ROLLBACK" -eq 1 ] && [ "$ROLLBACK_ATTEMPTED" -eq 0 ]; then
     ROLLBACK_ATTEMPTED=1
     echo "Deployment failed after activation; attempting immutable rollback" >&2
@@ -224,6 +233,7 @@ done
 INSTALL_REPORT="$($APP_DIR/scripts/install-browserless-release.sh --release-dir "$ARTIFACT_DIR" --release-root "$RELEASE_ROOT")"
 printf '%s\n' "$INSTALL_REPORT"
 OLD_CURRENT_RELEASE="$(readlink -f "$RELEASE_ROOT/current" 2>/dev/null || true)"
+ACTIVATION_ATTEMPTED=1
 ACTIVATE_REPORT="$($APP_DIR/scripts/activate-browserless-release.sh --release-id "$RELEASE_ID" --release-root "$RELEASE_ROOT")"
 printf '%s\n' "$ACTIVATE_REPORT"
 NEW_CURRENT_RELEASE="$(readlink -f "$RELEASE_ROOT/current")"

@@ -111,14 +111,46 @@ atomic_link() {
   local temporary="$RELEASE_ROOT/.$name-$id-$$"
   if [ -e "$temporary" ] || [ -L "$temporary" ]; then
     echo "Temporary activation link already exists: $temporary" >&2
-    exit 1
+    return 1
   fi
-  "${SUDO[@]}" ln -s "releases/$id" "$temporary"
-  "${SUDO[@]}" mv -Tf -- "$temporary" "$link"
+  "${SUDO[@]}" ln -s "releases/$id" "$temporary" || return 1
+  if ! "${SUDO[@]}" mv -Tf -- "$temporary" "$link"; then
+    "${SUDO[@]}" rm -f -- "$temporary"
+    return 1
+  fi
 }
 
 CURRENT_ID="$(release_id_from_link "$CURRENT_LINK" || true)"
 PREVIOUS_ID="$(release_id_from_link "$PREVIOUS_LINK" || true)"
+for name in current previous; do
+  if [ -e "$RELEASE_ROOT/$name" ] || [ -L "$RELEASE_ROOT/$name" ]; then
+    if ! release_id_from_link "$RELEASE_ROOT/$name" >/dev/null; then
+      echo "Invalid existing release pointer: $name" >&2
+      exit 1
+    fi
+  fi
+done
+
+POINTER_UPDATE_STARTED=0
+restore_pointers_on_error() {
+  local status=$?
+  trap - EXIT
+  if [ "$status" -ne 0 ] && [ "$POINTER_UPDATE_STARTED" -eq 1 ]; then
+    echo "Activation failed; restoring original release pointers" >&2
+    if [ -n "$CURRENT_ID" ]; then
+      atomic_link current "$CURRENT_ID" || echo "Could not restore current" >&2
+    else
+      "${SUDO[@]}" rm -f -- "$CURRENT_LINK"
+    fi
+    if [ -n "$PREVIOUS_ID" ]; then
+      atomic_link previous "$PREVIOUS_ID" || echo "Could not restore previous" >&2
+    else
+      "${SUDO[@]}" rm -f -- "$PREVIOUS_LINK"
+    fi
+  fi
+  exit "$status"
+}
+trap restore_pointers_on_error EXIT
 
 if [ "$ROLLBACK" -eq 1 ]; then
   if [ -z "$CURRENT_ID" ] || [ -z "$PREVIOUS_ID" ]; then
@@ -131,6 +163,7 @@ if [ "$ROLLBACK" -eq 1 ]; then
   fi
   verify_installed "$CURRENT_ID"
   verify_installed "$PREVIOUS_ID"
+  POINTER_UPDATE_STARTED=1
   atomic_link current "$PREVIOUS_ID"
   if ! atomic_link previous "$CURRENT_ID"; then
     echo "Rollback could not update previous; restoring current=$CURRENT_ID" >&2
@@ -148,11 +181,13 @@ else
   fi
   if [ -n "$CURRENT_ID" ]; then
     verify_installed "$CURRENT_ID"
+    POINTER_UPDATE_STARTED=1
     atomic_link previous "$CURRENT_ID"
     NEW_PREVIOUS="$CURRENT_ID"
   else
     NEW_PREVIOUS="$PREVIOUS_ID"
   fi
+  POINTER_UPDATE_STARTED=1
   atomic_link current "$RELEASE_ID"
   ACTION=activate
   NEW_CURRENT="$RELEASE_ID"

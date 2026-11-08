@@ -5538,10 +5538,10 @@ async function runSelfTest() {
       got: (() => {
         const stats = createMainThreadTimingStats(50);
         const wallSpike = recordMainThreadTask(stats, 'wall-spike', 99, {}, {
-          workProfile: { cpuWorkMs: 48 }
+          workProfile: { cpuUsageSource: 'linux-main-thread-schedstat', cpuWorkMs: 48 }
         });
         const cpuViolation = recordMainThreadTask(stats, 'cpu-violation', 49, {}, {
-          workProfile: { cpuWorkMs: 50 }
+          workProfile: { cpuUsageSource: 'linux-main-thread-schedstat', cpuWorkMs: 50 }
         });
         return [
           wallSpike.cpuOverBudget,
@@ -6645,7 +6645,7 @@ async function runSelfTest() {
           result.login.sessionToken,
           result.summary.finalUrl.includes('[redacted]'),
           result.summary.refreshUrl.includes('[redacted]'),
-          result.summary.textSample.includes('[redacted]')
+          result.summary.textSample === ''
         ].join('|');
       })(),
       want: '42|secret-token|true|true|true'
@@ -10361,7 +10361,7 @@ async function runSelfTest() {
           messages: []
         }, { receivedAtMs: nowMs + 10 });
         const decision = buildBrowserlessDecision(store.getState(nowMs + 20), {}, {
-          nowMs,
+          nowMs: nowMs + 20,
           controlMode: 'profit-live',
           combatEnabled: true,
           dynamicProfitThresholdEnabled: true,
@@ -12030,7 +12030,7 @@ async function runSelfTest() {
       want: '9678|9678|21|104400|8400|4305||afk-finish-commitment|afk-finish-commitment|19677|'
     },
     {
-      name: 'browserless edge continuation releases immediately for missing active invulnerable and dead targets',
+      name: 'browserless missing target keeps bounded hold while visible ineligible targets release',
       got: (() => {
         const evaluateRelease = targetPatch => {
           const adapter = createBrowserlessDecisionAdapter({
@@ -12082,7 +12082,7 @@ async function runSelfTest() {
           evaluateRelease({ life: 'Dead', hp: 0 })
         ].join('|');
       })(),
-      want: '44|44|33|44'
+      want: '33|44|33|44'
     },
     {
       name: 'browserless edge continuation remains eligible without blocking a confirmed better target',
@@ -15948,7 +15948,7 @@ async function runSelfTest() {
           ]
         }, { receivedAtMs: nowMs + 10 });
         const decision = buildBrowserlessDecision(store.getState(nowMs + 20), {}, {
-          nowMs,
+          nowMs: nowMs + 20,
           controlMode: 'profit-live',
           combatEnabled: true,
           dynamicProfitThresholdEnabled: true,

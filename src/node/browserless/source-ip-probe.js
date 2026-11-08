@@ -261,7 +261,7 @@ function weightedLatencyMetrics(samples, nowMs, halfLifeMs, valueOf) {
     if (value === null) continue;
     const observedAtMs = Date.parse(sample.observedAt);
     const ageMs = Math.max(0, nowMs - observedAtMs);
-    const weight = Math.exp(-ageMs / halfLifeMs);
+    const weight = Math.exp(-Math.LN2 * ageMs / halfLifeMs);
     values.push({ value, weight });
     weightedValueTotal += value * weight;
     valueWeightTotal += weight;
@@ -293,7 +293,7 @@ function sourceIpProbeMetrics(samples, nowMs = Date.now(), options = {}) {
   for (const sample of ordered) {
     const observedAtMs = Date.parse(sample.observedAt);
     const ageMs = Math.max(0, currentMs - observedAtMs);
-    const weight = Math.exp(-ageMs / halfLifeMs);
+    const weight = Math.exp(-Math.LN2 * ageMs / halfLifeMs);
     totalWeight += weight;
     if (isProbeSuccessStatus(sample.status)) {
       successCount += 1;

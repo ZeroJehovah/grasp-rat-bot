@@ -9,9 +9,10 @@ chrome.runtime.sendMessage({
 }).catch(() => {});
 
 window.addEventListener('message', event => {
-  if (event.source !== window) return;
+  if (event.source !== window || event.origin !== location.origin) return;
   const message = event.data || {};
   if (message.channel !== REQUEST_CHANNEL || !message.id || !message.type) return;
+  if (!['storageGet', 'storageSet', 'fetchText', 'clashLeaveRescue'].includes(message.type)) return;
   chrome.runtime.sendMessage({
     type: String(message.type),
     payload: message.payload || {}
@@ -20,12 +21,12 @@ window.addEventListener('message', event => {
       channel: RESPONSE_CHANNEL,
       id: message.id,
       response
-    }, '*');
+    }, location.origin);
   }).catch(err => {
     window.postMessage({
       channel: RESPONSE_CHANNEL,
       id: message.id,
       response: { ok: false, error: err?.message || String(err) }
-    }, '*');
+    }, location.origin);
   });
 });

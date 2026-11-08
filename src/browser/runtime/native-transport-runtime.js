@@ -5,6 +5,7 @@ function createNativeTransportRuntime(runtime = {}) {
     bot,
     cfg,
     getNativeState = () => null,
+    getNativeEntityList = () => null,
     getNativeControl = () => null,
     wsReadyStateNumber = value => Number(value),
     wsConstant = (_name, fallback) => fallback,
@@ -687,7 +688,17 @@ function createNativeTransportRuntime(runtime = {}) {
   }
 
   function shootAt(self, target, force = false, options = {}) {
-    if (!target) return false;
+    const observedTarget = options.realtimeTarget || target;
+    if (!target || !observedTarget || !(observedTarget.native || observedTarget.realtime || observedTarget.render)) return false;
+    const visible = getNativeEntityList();
+    if (!Array.isArray(visible)) return false;
+    const targetId = observedTarget.user_id ?? observedTarget.userId ?? observedTarget.id;
+    const currentTarget = visible.find(entity => String(entity.user_id ?? entity.userId ?? entity.id) === String(targetId));
+    const currentSelf = visible.find(entity => Number(entity.user_id ?? entity.userId) === Number(getCurrentUserId()));
+    if (!currentSelf || !currentTarget || !Number.isFinite(Number(currentTarget.hp))
+      || Number(currentTarget.hp) <= 0 || currentTarget.invulnerable === true
+      || currentTarget.is_invulnerable === true) return false;
+    self = currentSelf;
     const t = now();
     const at = Date.now();
     const shootEveryMs = Math.max(0, Number(options.shootEveryMs ?? cfg.shootEveryMs) || 0);

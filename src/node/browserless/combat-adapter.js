@@ -849,6 +849,7 @@ function creditCombatHitLearning(stateful, targetId, hitCount, nowMs, currentTic
     });
   let remaining = Math.max(0, Math.round(Number(hitCount || 0)));
   let credited = 0;
+  let attributableHits = 0;
   const behavior = ensureOpponentBehaviorMap(stateful)[String(targetId)] || null;
   for (const shot of shots) {
     if (!remaining) break;
@@ -871,10 +872,16 @@ function creditCombatHitLearning(stateful, targetId, hitCount, nowMs, currentTic
       behavior.probeWeights[shot.hypothesis] = Math.min(1, Number(behavior.probeWeights[shot.hypothesis] || 0.5) * 0.75 + 0.25);
     }
     credited += 1;
+    // Learning can retain tentative HP associations. Only an acknowledged shot
+    // with known reachable geometry at its arrival grants own-damage authority.
+    if (shot.bulletId !== null && shot.bulletId !== undefined
+      && shot.aimDistance !== null && shot.trajectoryReachable
+      && shot.expectedArrivalTick !== null && shot.arrivalOffsetTicks <= 2
+      && Number(shot.at) <= nowMs) attributableHits += 1;
     remaining -= 1;
   }
   if (credited > 0) invalidateCombatLearningHitRateCache(learning);
-  return credited;
+  return { creditedHits: credited, attributableHits };
 }
 
 function recentAcceptedShotHitSummary(stateful, targetId, limit = 15) {
@@ -1342,6 +1349,8 @@ function captureCombatEngagementCarry(stateful, id, reason, at) {
     firstHp: numberOrNull(previous.firstHp),
     minHp: numberOrNull(previous.minHp),
     damageFromStart: damageProgress,
+    ownDamageFromStart: Math.max(0, Number(previous.ownDamageFromStart || 0)),
+    lastOwnDamageAt: Math.max(0, Number(previous.lastOwnDamageAt || 0)),
     lastDamageAt: Math.max(0, Number(previous.lastDamageAt || 0)),
     lastDamageAmount: Math.max(0, Number(previous.lastDamageAmount || 0)),
     acceptedShotsAtLastDamage: Math.max(0, Number(previous.acceptedShotsAtLastDamage || 0)),
@@ -4962,7 +4971,7 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
       .map(bullet => String(bullet?.ownerId ?? bullet?.owner_id ?? ''))
       .filter(Boolean)))
     : (same && Array.isArray(previous.lastThreatOwnerIds) ? previous.lastThreatOwnerIds.slice(0, 8) : []);
-  const creditedHits = damaged
+  const hitAttribution = damaged
     ? creditCombatHitLearning(
         stateful,
         id,
@@ -4970,7 +4979,13 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
         nowMs,
         options.currentTick
       )
-    : 0;
+    : { creditedHits: 0, attributableHits: 0 };
+  const creditedHits = hitAttribution.creditedHits;
+  const ownDamage = damaged ? Math.min(previousHp - hp, hitAttribution.attributableHits * 3) : 0;
+  const ownDamageFromStart = Math.max(0, Number(same
+    ? previous.ownDamageFromStart || 0 : engagementCarry?.ownDamageFromStart || 0)) + ownDamage;
+  const lastOwnDamageAt = ownDamage > 0 ? nowMs : Math.max(0, Number(same
+    ? previous.lastOwnDamageAt || 0 : engagementCarry?.lastOwnDamageAt || 0));
   const previousSamples = same && Array.isArray(previous.motionSamples)
     ? previous.motionSamples
     : (Array.isArray(engagementCarry?.motionSamples) ? engagementCarry.motionSamples : []);
@@ -5082,6 +5097,8 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     firstHp,
     minHp,
     damageFromStart,
+    ownDamageFromStart,
+    lastOwnDamageAt,
     displayHp: numberOrNull(target.hp),
     drop: targetDrop,
     dropKnown: targetDropKnown,
@@ -5296,6 +5313,8 @@ function rememberBrowserlessCombatEngagement(stateful, self, target, options = {
     acceptedShots,
     unackedShots: Math.max(0, actualShots - acceptedShots),
     confirmedHits: Math.min(acceptedShots, previousConfirmedHits + creditedHits),
+    ownTargetDamage: ownDamageFromStart,
+    lastOwnDamageAt,
     targetDamage: Number(previousMetrics.targetDamage || 0) + (damaged ? previousHp - hp : 0),
     targetHealing: Number(previousMetrics.targetHealing || 0) + (healed ? hp - previousHp : 0),
     incomingHits: Number(previousMetrics.incomingHits || 0) + (selfDamaged ? Math.max(1, Math.round((previousSelfHp - currentSelfHp) / 3)) : 0),
@@ -7221,7 +7240,8 @@ function buildBrowserlessCombatDryRun(state = {}, options = {}) {
       secondaryFocusActive: secondaryFocusOverride
     });
   if (!primarySelected && resolvedWouldShoot && secondaryPolicy && !secondaryPolicy.allowed
-    && !secondaryRangeGateExempt) {
+    && !(secondaryRangeGateExempt && !secondaryPolicy.invulnerable
+      && (secondaryPolicy.throttleExempt || secondaryPolicy.quotaAvailable))) {
     resolvedWouldShoot = false;
     resolvedFinalFireBlocker = `secondary:${secondaryPolicy.reason}`;
     resolvedFireAuthorizationClass = 'secondary-defensive-policy-blocked';

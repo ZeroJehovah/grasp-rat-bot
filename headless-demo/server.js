@@ -52,7 +52,7 @@ const LOGIN_POINT_HEALTHY_RADIUS = Math.max(0, Number(process.env.GRASP_RAT_DEMO
 const LOGIN_POINT_LOW_RADIUS = Math.max(0, Number(process.env.GRASP_RAT_DEMO_LOGIN_POINT_LOW_RADIUS || 30000));
 const frameObservers = new Set();
 
-if (!isLoopbackHost(HOST) && (!WEB_TOKEN || WEB_TOKEN === 'change-this-before-start')) {
+if (!isLoopbackHost(HOST) && (!WEB_TOKEN || ['change-this-before-start', '1234567890'].includes(WEB_TOKEN))) {
   console.error('Refusing to listen on a non-loopback host without a non-placeholder GRASP_RAT_DEMO_WEB_TOKEN.');
   process.exit(1);
 }

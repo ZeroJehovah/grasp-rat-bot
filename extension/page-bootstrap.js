@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.71';
+  const BOOTSTRAP_VERSION = '0.1.72';
   const BOOTSTRAP_OWNER = 'extension';
   const REPOSITORY_URL = 'https://github.com/ZeroJehovah/grasp-rat-bot';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';

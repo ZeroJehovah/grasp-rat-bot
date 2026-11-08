@@ -1,8 +1,8 @@
 {
-  "version": "bootstrap-0.4.620",
-  "builtAt": "2026-07-12T15:11:52.349Z",
+  "version": "bootstrap-0.4.621",
+  "builtAt": "2026-11-08T13:05:38.971Z",
   "scriptUrl": "https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/dist/grasp-rat-remote-bot.js",
-  "sha256": "1a8128e9b7ebc4355c2820878ea23bdf1d542f0ba36b52c5922e6ef65013efaa",
+  "sha256": "7278d4d7d19bb16cbc74cadbe56dec9e23ae5eb2bc24db134e93578cfee226d1",
   "statusEvery": 30000,
   "production": true,
   "bundler": {
@@ -11,8 +11,20 @@
     "platform": "browser",
     "target": "es2020",
     "entry": "src/browser/runtime-entry.js",
-    "mode": "production-runtime-entry",
-    "directSha256": "77bf201b79475733ff7c264257956eded66f001750a5cce036876da67d959ae9"
+    "mode": "frozen-audit-module-repair",
+    "baseRevision": "a8f24fee2080ea06d1928e7a4ee60ef3eebb3399",
+    "repairedModules": [
+      "src/shared/target-whitelist.js",
+      "src/browser/runtime/target-whitelist.js",
+      "src/browser/runtime/combat-log-queue-runtime.js",
+      "src/browser/runtime/exit-audit-runtime.js",
+      "src/browser/runtime/native-state-runtime.js",
+      "src/browser/runtime/native-transport-runtime.js",
+      "src/browser/runtime/combat-target-runtime.js",
+      "src/browser/runtime/pending-exit-runtime.js",
+      "src/browser/runtime/orchestration-tick-runtime.js",
+      "src/browser/runtime-entry.js"
+    ]
   },
   "config": {}
 }

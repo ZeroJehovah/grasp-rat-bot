@@ -795,10 +795,9 @@ function secondaryOwnDamageRetentionEvidence(
   const enabled = options.secondaryOwnDamageRetentionEnabled !== false;
   const damageProgress = Math.max(
     0,
-    Number(combatTargetState?.damageFromStart || 0),
-    Number(combatTargetState?.lastDamageAmount || 0)
+    Number(combatTargetState?.ownDamageFromStart || 0)
   );
-  const lastDamageAt = Number(combatTargetState?.lastDamageAt || 0);
+  const lastDamageAt = Number(combatTargetState?.lastOwnDamageAt || 0);
   const ageMs = lastDamageAt > 0 ? Math.max(0, Number(nowMs) - lastDamageAt) : null;
   const selfHp = numberOrNull(context.selfHp);
   const lowHpThreshold = Math.max(0, numberOrNull(

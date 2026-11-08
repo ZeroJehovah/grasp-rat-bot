@@ -690,20 +690,27 @@ function pickCoinRouteOpportunityCore(self, coins, activeThreats, options = {}) 
   const heldRouteChoice = options.heldRouteChoice || null;
   const heldAnchor = heldChoice ? candidates.find(coin => coinRouteKey(coin) === choiceId(heldChoice)) : null;
   if (heldAnchor) addAnchor(heldAnchor);
-  candidates.slice(0, Math.max(1, Number(options.anchorLimit || 22))).forEach(addAnchor);
-  candidates.slice().sort((a, b) => Number(a.distance || Infinity) - Number(b.distance || Infinity)).slice(0, 8).forEach(addAnchor);
-  candidates.slice().sort((a, b) => Number(b.amount || 0) - Number(a.amount || 0) || Number(a.distance || Infinity) - Number(b.distance || Infinity)).slice(0, 8).forEach(addAnchor);
-  candidates.slice().sort((a, b) => {
-    const aCount = Number(clusterCounts.get(a) || 0);
-    const bCount = Number(clusterCounts.get(b) || 0);
-    return bCount - aCount || Number(a.distance || Infinity) - Number(b.distance || Infinity);
-  }).slice(0, 8).forEach(addAnchor);
+  const anchorLimit = Math.max(1, Math.floor(Number(options.anchorLimit || 22)));
+  const tie = (a, b) => String(routeKey(a)).localeCompare(String(routeKey(b)));
+  const near = (a, b) => dist(self, a) - dist(self, b) || tie(a, b);
+  const queues = [
+    candidates.slice().sort(near),
+    candidates.slice().sort((a, b) => Number(b.amount || 0) - Number(a.amount || 0) || near(a, b)),
+    candidates.slice().sort((a, b) => Number(clusterCounts.get(b) || 0) - Number(clusterCounts.get(a) || 0) || near(a, b))
+  ];
+  // Reserve opportunities for each ranking before reaching the bounded budget.
+  for (let rank = 0; rank < candidates.length && anchors.length < anchorLimit; rank += 1) {
+    for (const queue of queues) {
+      if (anchors.length >= anchorLimit) break;
+      addAnchor(queue[rank]);
+    }
+  }
   let best = null;
   let bestEligible = null;
   let heldRoute = null;
   let heldRouteEligible = null;
   const viableRoutes = [];
-  for (const anchor of anchors.slice(0, Math.max(1, Number(options.anchorLimit || 22)))) {
+  for (const anchor of anchors.slice(0, anchorLimit)) {
     if (!legClear(self, anchor)) continue;
     const route = buildCoinRouteFromAnchorCore(self, anchor, candidates, activeThreats, routeOptions);
     if (!route) continue;

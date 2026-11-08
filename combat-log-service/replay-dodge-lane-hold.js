@@ -180,7 +180,7 @@ function evaluateFrames(frames, options) {
   let actualMinClearanceCm = Infinity;
   let actualMinTick = null;
   for (const frame of frames.slice(startIndex, hitIndex + 1)) {
-    const elapsedTicks = Number(frame.tick) - startTick;
+    const elapsedTicks = Number(frame.tick) - createdTick;
     const bulletPoint = {
       x: bulletStart.x + ux * bulletSpeed * elapsedTicks,
       y: bulletStart.y + uy * bulletSpeed * elapsedTicks
@@ -219,8 +219,8 @@ function evaluateFrames(frames, options) {
       y: initialSelf.y + initialVelocity.vy * beforeDelay + heldVelocity.vy * afterDelay
     };
     const bulletPoint = {
-      x: bulletStart.x + ux * bulletSpeed * elapsedTicks,
-      y: bulletStart.y + uy * bulletSpeed * elapsedTicks
+      x: bulletStart.x + ux * bulletSpeed * (startTick - createdTick + elapsedTicks),
+      y: bulletStart.y + uy * bulletSpeed * (startTick - createdTick + elapsedTicks)
     };
     const clearance = pointDistance(selfPoint, bulletPoint);
     if (clearance < heldMinClearanceCm) {

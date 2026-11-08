@@ -816,7 +816,7 @@ function createOrchestrationTickRuntime(runtime = {}) {
         bot.pursuit = null;
         sendActionVelocity(pendingCombatLeave);
         if (pendingCombatLeave.shoot && pendingCombatLeave.target) {
-          shootAt(self, pendingCombatLeave.aimTarget || pendingCombatLeave.target, Boolean(pendingCombatLeave.forceShoot), { shootEveryMs: pendingCombatLeave.shootEveryMs });
+          shootAt(self, pendingCombatLeave.aimTarget || pendingCombatLeave.target, Boolean(pendingCombatLeave.forceShoot), { shootEveryMs: pendingCombatLeave.shootEveryMs, realtimeTarget: pendingCombatLeave.target });
         }
         const leaveResult = await leaveForCombat(pendingCombatLeave, currentSummary);
         const leaveIssued = Boolean(leaveResult?.attempted && !leaveResult?.error);
@@ -862,7 +862,7 @@ function createOrchestrationTickRuntime(runtime = {}) {
 	      if (action.kind === 'leave' && action.combat) {
 	        sendActionVelocity(action);
 	        if (action.shoot && action.target) {
-	          shootAt(self, action.aimTarget || action.target, Boolean(action.forceShoot), { shootEveryMs: action.shootEveryMs });
+	          shootAt(self, action.aimTarget || action.target, Boolean(action.forceShoot), { shootEveryMs: action.shootEveryMs, realtimeTarget: action.target });
 	        }
         const leaveResult = await leaveForCombat(action, currentSummary);
         const leaveIssued = Boolean(leaveResult?.attempted && !leaveResult?.error);
@@ -1085,7 +1085,7 @@ function createOrchestrationTickRuntime(runtime = {}) {
       }
       if (action.kind === 'attack' && action.target) {
         if (action.shoot) {
-          shootAt(self, action.aimTarget || action.target, Boolean(action.forceShoot), { shootEveryMs: action.shootEveryMs });
+          shootAt(self, action.aimTarget || action.target, Boolean(action.forceShoot), { shootEveryMs: action.shootEveryMs, realtimeTarget: action.target });
           rememberAttack(self, action.target, action.kind, action);
         }
         setLastTarget('enemy', action.target.id);

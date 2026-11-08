@@ -84,8 +84,18 @@ function createExitAuditRuntime(runtime = {}) {
     return pendingExitAuditLogIds().length;
   }
 
+  function boundedRecoveryLogWait(key, pending) {
+    const state = bot.combatLogging || {};
+    if (!pending) { state[key] = 0; return false; }
+    const at = Date.now();
+    if (!state[key]) state[key] = at;
+    return at - state[key] < 3000;
+  }
+
   function exitAuditFlushPending() {
-    return unresolvedExitAuditLogCount() > 0;
+    const durable = new Set(readPersistedExitAuditLogs().map(entry => entry.exitAuditLogId));
+    const volatile = pendingExitAuditLogIds().some(id => !durable.has(id));
+    return boundedRecoveryLogWait('exitAuditRecoveryWaitAt', volatile);
   }
 
   function exitAuditFlushBlockDetail(reason) {
@@ -111,7 +121,7 @@ function createExitAuditRuntime(runtime = {}) {
   }
 
   function importantSessionEndFlushPending() {
-    return pendingImportantSessionEndLogEvents().length > 0;
+    return boundedRecoveryLogWait('importantRecoveryWaitAt', pendingImportantSessionEndLogEvents().length > 0);
   }
 
   function importantSessionEndFlushBlockDetail(reason) {

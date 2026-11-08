@@ -12,7 +12,7 @@
   var define_GRASP_RAT_RUNTIME_CONFIG_default;
   var init_define_GRASP_RAT_RUNTIME_CONFIG = __esm({
     "<define:__GRASP_RAT_RUNTIME_CONFIG__>"() {
-      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.620" };
+      define_GRASP_RAT_RUNTIME_CONFIG_default = { bundledRuntime: true, dryRun: false, once: false, statusEvery: 3e4, version: "bootstrap-0.4.621" };
     }
   });
 
@@ -722,6 +722,12 @@
       function normalizeTargetWhitelistName(value) {
         return String(value ?? "").replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g, "").trim();
       }
+      function normalizeTargetWhitelistUserId(value) {
+        const text = String(value ?? "").trim();
+        if (!/^\d+$/.test(text)) return "";
+        const number = Number(text);
+        return Number.isSafeInteger(number) && number > 0 ? String(number) : "";
+      }
       function parseTargetWhitelistNames(payload, maxNames = 100) {
         const raw = Array.isArray(payload) ? payload : Array.isArray(payload?.names) ? payload.names : Array.isArray(payload?.usernames) ? payload.usernames : [];
         const limit = Math.max(0, Math.round(Number(maxNames) || 0));
@@ -739,16 +745,50 @@
       function targetWhitelistNameSet(names = [], maxNames = 100) {
         return new Set(parseTargetWhitelistNames(names, maxNames));
       }
+      function parseTargetWhitelistUserIds(payload, maxUserIds = 100) {
+        const raw = Array.isArray(payload?.userIds) ? payload.userIds : Array.isArray(payload?.user_ids) ? payload.user_ids : Array.isArray(payload?.ids) ? payload.ids : [];
+        const limit = Math.max(0, Math.round(Number(maxUserIds) || 0));
+        const userIds = [];
+        const seen = /* @__PURE__ */ new Set();
+        for (const item of raw) {
+          const userId = normalizeTargetWhitelistUserId(item);
+          if (!userId || seen.has(userId)) continue;
+          seen.add(userId);
+          userIds.push(Number(userId));
+          if (limit && userIds.length >= limit) break;
+        }
+        return userIds;
+      }
+      function targetWhitelistUserIdSet(userIds = [], maxUserIds = 100) {
+        return new Set(parseTargetWhitelistUserIds({ userIds }, maxUserIds).map(String));
+      }
+      function targetWhitelistUserId(target) {
+        return normalizeTargetWhitelistUserId(
+          target?.userId ?? target?.user_id ?? target?.targetUserId ?? target?.target_user_id
+        );
+      }
       function targetIsWhitelisted(target, whitelist = null) {
-        if (!target) return false;
-        const name = normalizeTargetWhitelistName(target.name);
-        if (!name || !whitelist) return false;
+        if (!target || !whitelist) return false;
         if (typeof whitelist === "function") return Boolean(whitelist(target));
+        const name = normalizeTargetWhitelistName(target.name);
+        const userId = targetWhitelistUserId(target);
         if (whitelist instanceof Set) return whitelist.has(name);
         if (Array.isArray(whitelist)) return targetWhitelistNameSet(whitelist).has(name);
         if (whitelist && typeof whitelist === "object") {
-          if (whitelist.nameSet instanceof Set) return whitelist.nameSet.has(name);
-          if (Array.isArray(whitelist.names)) return targetWhitelistNameSet(whitelist.names).has(name);
+          if (userId) {
+            if (whitelist.userIdSet instanceof Set) {
+              if (whitelist.userIdSet.has(userId) || whitelist.userIdSet.has(Number(userId))) return true;
+            } else if (Array.isArray(whitelist.userIds) && targetWhitelistUserIdSet(whitelist.userIds).has(userId)) {
+              return true;
+            }
+          }
+          if (name) {
+            if (whitelist.nameSet instanceof Set) {
+              if (whitelist.nameSet.has(name)) return true;
+            } else if (Array.isArray(whitelist.names) && targetWhitelistNameSet(whitelist.names).has(name)) {
+              return true;
+            }
+          }
         }
         return false;
       }
@@ -769,9 +809,12 @@
       }
       module.exports = {
         normalizeTargetWhitelistName,
+        normalizeTargetWhitelistUserId,
         parseTargetWhitelistNames,
+        parseTargetWhitelistUserIds,
         targetIsWhitelisted,
         targetWhitelistNameSet,
+        targetWhitelistUserIdSet,
         deriveTargetWhitelistUrl
       };
     }
@@ -785,6 +828,8 @@
       var {
         normalizeTargetWhitelistName,
         parseTargetWhitelistNames,
+        parseTargetWhitelistUserIds,
+        targetIsWhitelisted,
         deriveTargetWhitelistUrl
       } = require_target_whitelist();
       function createTargetWhitelistRuntime(runtime = {}) {
@@ -802,15 +847,15 @@
         }
         function isWhitelistedTarget(e) {
           if (!e) return false;
-          const name = normalizeTargetWhitelistName(e.name);
-          return Boolean(name && bot?.targetWhitelist?.nameSet?.has(name));
+          return targetIsWhitelisted(e, currentState());
         }
         function summarizeTargetWhitelistStatus() {
           const state2 = currentState();
           return {
             url: String(state2?.url || ""),
             names: Array.isArray(state2?.names) ? state2.names.slice() : [],
-            count: Array.isArray(state2?.names) ? state2.names.length : 0,
+            userIds: Array.isArray(state2?.userIds) ? state2.userIds.slice() : [],
+            count: (state2?.names?.length || 0) + (state2?.userIds?.length || 0),
             loaded: Boolean(state2?.lastOkAt),
             fetching: Boolean(state2?.fetching),
             lastFetchAt: Number(state2?.lastFetchAt || 0) || 0,
@@ -845,9 +890,11 @@
           state2.lastFetchAt = t;
           try {
             const payload = await fetchJsonNoStore(targetWhitelistFetchUrl(url), cfg.targetWhitelistTimeoutMs);
-            const validPayload = Array.isArray(payload) || Array.isArray(payload?.names) || Array.isArray(payload?.usernames);
-            if (!validPayload) throw new Error("target whitelist JSON must be an array or contain names/usernames array");
+            const validPayload = Array.isArray(payload) || Array.isArray(payload?.names) || Array.isArray(payload?.usernames) || Array.isArray(payload?.userIds) || Array.isArray(payload?.user_ids) || Array.isArray(payload?.ids);
+            if (!validPayload) throw new Error("target whitelist JSON must be an array or contain names/usernames/userIds array");
             const names = parseTargetWhitelistNames(payload, cfg.targetWhitelistMaxNames);
+            state2.userIds = parseTargetWhitelistUserIds(payload, cfg.targetWhitelistMaxNames);
+            state2.userIdSet = new Set(state2.userIds.map(String));
             state2.names = names;
             state2.nameSet = new Set(names);
             state2.lastOkAt = now();
@@ -6179,14 +6226,26 @@
           state2.sending = true;
           const body = safeStringify(payload);
           let sentOk = false;
-          Promise.resolve().then(() => fetch(state2.endpoint, {
+          const controller = new AbortController();
+          let timeout;
+          const deadline = new Promise((_, reject) => {
+            timeout = setTimeout(() => {
+              controller.abort();
+              reject(new Error("combat log upload timed out"));
+            }, Math.max(250, Math.min(3e4, Number(cfg.combatLogTimeoutMs) || 5e3)));
+          });
+          Promise.race([deadline, Promise.resolve().then(() => fetch(state2.endpoint, {
             method: "POST",
+            signal: controller.signal,
             mode: "cors",
             cache: "no-store",
             keepalive: body.length < 6e4,
             headers: { "content-type": "application/json" },
             body
-          })).then((res) => {
+          })).then(async (res) => {
+            if (res?.body?.cancel) await res.body.cancel();
+            return res;
+          })]).then((res) => {
             if (!res || !res.ok) throw new Error("combat log POST failed: HTTP " + (res?.status || 0));
             sentOk = true;
             state2.sent += entries.length;
@@ -6216,6 +6275,7 @@
             }
             persistCombatLogPendingEntries();
           }).finally(() => {
+            clearTimeout(timeout);
             if (exitAuditIds.length && Array.isArray(state2.sendingExitAuditIds)) {
               state2.sendingExitAuditIds = state2.sendingExitAuditIds.filter((id) => !exitAuditIds.includes(id));
             }
@@ -7381,8 +7441,20 @@
         function unresolvedExitAuditLogCount() {
           return pendingExitAuditLogIds().length;
         }
+        function boundedRecoveryLogWait(key, pending) {
+          const state2 = bot.combatLogging || {};
+          if (!pending) {
+            state2[key] = 0;
+            return false;
+          }
+          const at = Date.now();
+          if (!state2[key]) state2[key] = at;
+          return at - state2[key] < 3e3;
+        }
         function exitAuditFlushPending() {
-          return unresolvedExitAuditLogCount() > 0;
+          const durable = new Set(readPersistedExitAuditLogs().map((entry) => entry.exitAuditLogId));
+          const volatile = pendingExitAuditLogIds().some((id) => !durable.has(id));
+          return boundedRecoveryLogWait("exitAuditRecoveryWaitAt", volatile);
         }
         function exitAuditFlushBlockDetail(reason) {
           const state2 = bot.combatLogging || {};
@@ -7404,7 +7476,7 @@
           return store.events.filter((event) => event?.importantLogId && event.importantType === "session-end" && !event.remoteSentAt);
         }
         function importantSessionEndFlushPending() {
-          return pendingImportantSessionEndLogEvents().length > 0;
+          return boundedRecoveryLogWait("importantRecoveryWaitAt", pendingImportantSessionEndLogEvents().length > 0);
         }
         function importantSessionEndFlushBlockDetail(reason) {
           restoreImportantLogsForRemote();
@@ -10745,7 +10817,7 @@
           };
           sendActionVelocity(action);
           if (cover.shoot && cover.target && self) {
-            shootAt(self, cover.aimTarget || cover.target, Boolean(cover.forceShoot), { shootEveryMs: cover.shootEveryMs });
+            shootAt(self, cover.aimTarget || cover.target, Boolean(cover.forceShoot), { shootEveryMs: cover.shootEveryMs, realtimeTarget: cover.target });
           }
           return true;
         }
@@ -15731,6 +15803,7 @@
           bot,
           cfg,
           getNativeState = () => null,
+          getNativeEntityList = () => null,
           getNativeControl = () => null,
           wsReadyStateNumber = (value) => Number(value),
           wsConstant = (_name, fallback) => fallback,
@@ -16376,7 +16449,15 @@
           recordNetworkQualityShot(self, target, { ...detail, at });
         }
         function shootAt(self, target, force = false, options = {}) {
-          if (!target) return false;
+          const observedTarget = options.realtimeTarget || target;
+          if (!target || !observedTarget || !(observedTarget.native || observedTarget.realtime || observedTarget.render)) return false;
+          const visible = getNativeEntityList();
+          if (!Array.isArray(visible)) return false;
+          const targetId = observedTarget.user_id ?? observedTarget.userId ?? observedTarget.id;
+          const currentTarget = visible.find((entity) => String(entity.user_id ?? entity.userId ?? entity.id) === String(targetId));
+          const currentSelf = visible.find((entity) => Number(entity.user_id ?? entity.userId) === Number(getCurrentUserId()));
+          if (!currentSelf || !currentTarget || !Number.isFinite(Number(currentTarget.hp)) || Number(currentTarget.hp) <= 0 || currentTarget.invulnerable === true || currentTarget.is_invulnerable === true) return false;
+          self = currentSelf;
           const t = now();
           const at = Date.now();
           const shootEveryMs = Math.max(0, Number(options.shootEveryMs ?? cfg.shootEveryMs) || 0);
@@ -17643,6 +17724,7 @@
           bot,
           cfg,
           getNativeState,
+          getNativeEntityList,
           getNativeControl,
           wsReadyStateNumber,
           wsConstant,
@@ -26701,7 +26783,7 @@
           return combatDodgeThreatRange();
         }
         function combatEngagedCandidate(self, raw) {
-          if (!raw || !entityFreshEnoughForOffense(raw) || !isAlive(raw) || isWhitelistedTarget(raw) || isInvulnerable(raw)) return null;
+          if (!raw || !(raw.native || raw.realtime || raw.render) || !entityFreshEnoughForOffense(raw) || !isAlive(raw) || isWhitelistedTarget(raw) || isInvulnerable(raw)) return null;
           return {
             ...raw,
             distance: dist(self, raw),
@@ -26725,7 +26807,7 @@
             return null;
           }
           const target = (combatTargets || []).find((item) => String(item.user_id ?? item.id ?? "") === String(engaged.id));
-          if (target && !isWhitelistedTarget(target) && !isInvulnerable(target)) {
+          if (target && (target.native || target.realtime || target.render) && !isWhitelistedTarget(target) && !isInvulnerable(target)) {
             if (String(engaged.intent || "") === "profit" && isAfkProfitTarget(target)) {
               clearCombatEngagement("afk-profit-target");
               return null;
@@ -31182,7 +31264,7 @@
               bot.pursuit = null;
               sendActionVelocity(pendingCombatLeave);
               if (pendingCombatLeave.shoot && pendingCombatLeave.target) {
-                shootAt(self, pendingCombatLeave.aimTarget || pendingCombatLeave.target, Boolean(pendingCombatLeave.forceShoot), { shootEveryMs: pendingCombatLeave.shootEveryMs });
+                shootAt(self, pendingCombatLeave.aimTarget || pendingCombatLeave.target, Boolean(pendingCombatLeave.forceShoot), { shootEveryMs: pendingCombatLeave.shootEveryMs, realtimeTarget: pendingCombatLeave.target });
               }
               const leaveResult = await leaveForCombat(pendingCombatLeave, currentSummary);
               const leaveIssued = Boolean(leaveResult?.attempted && !leaveResult?.error);
@@ -31227,7 +31309,7 @@
             if (action.kind === "leave" && action.combat) {
               sendActionVelocity(action);
               if (action.shoot && action.target) {
-                shootAt(self, action.aimTarget || action.target, Boolean(action.forceShoot), { shootEveryMs: action.shootEveryMs });
+                shootAt(self, action.aimTarget || action.target, Boolean(action.forceShoot), { shootEveryMs: action.shootEveryMs, realtimeTarget: action.target });
               }
               const leaveResult = await leaveForCombat(action, currentSummary);
               const leaveIssued = Boolean(leaveResult?.attempted && !leaveResult?.error);
@@ -31446,7 +31528,7 @@
             }
             if (action.kind === "attack" && action.target) {
               if (action.shoot) {
-                shootAt(self, action.aimTarget || action.target, Boolean(action.forceShoot), { shootEveryMs: action.shootEveryMs });
+                shootAt(self, action.aimTarget || action.target, Boolean(action.forceShoot), { shootEveryMs: action.shootEveryMs, realtimeTarget: action.target });
                 rememberAttack(self, action.target, action.kind, action);
               }
               setLastTarget("enemy", action.target.id);
@@ -32121,7 +32203,7 @@
           clearPostExitTargetState,
           readPauseReason,
           syncPausedFromPage,
-          getOwnEntity,
+          getOwnEntity: getBotOwnEntity,
           logStatus
         } = createEntryGlueRuntime({
           bot,
@@ -32719,7 +32801,7 @@
           unsafeExitReloginMinDelayMs: (...args) => unsafeExitReloginMinDelayMs(...args),
           getNativeControl: (...args) => getNativeControl(...args),
           getNativeState: (...args) => getNativeState(...args),
-          getOwnEntity: (...args) => getOwnEntity(...args),
+          getOwnEntity: (...args) => getBotOwnEntity(...args),
           getSelf: (...args) => getSelf(...args),
           summarizeSelf: (...args) => summarizeSelf(...args),
           summarizeControl: (...args) => summarizeControl(...args),
@@ -32998,7 +33080,8 @@
           getSessionToken: () => getSessionToken(),
           getOwnEntity: () => {
             try {
-              return typeof getOwnEntity === "function" ? getOwnEntity() : null;
+              const getPageOwnEntity = readPageGlobal("getOwnEntity", null, pageGlobal);
+              return typeof getPageOwnEntity === "function" ? getPageOwnEntity.call(pageGlobal) : null;
             } catch (_) {
               return null;
             }

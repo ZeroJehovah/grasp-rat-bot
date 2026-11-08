@@ -418,7 +418,7 @@ function createCombatTargetRuntime(runtime = {}) {
   }
 
   function combatEngagedCandidate(self, raw) {
-    if (!raw || !entityFreshEnoughForOffense(raw) || !isAlive(raw) || isWhitelistedTarget(raw) || isInvulnerable(raw)) return null;
+    if (!raw || !(raw.native || raw.realtime || raw.render) || !entityFreshEnoughForOffense(raw) || !isAlive(raw) || isWhitelistedTarget(raw) || isInvulnerable(raw)) return null;
     return {
       ...raw,
       distance: dist(self, raw),
@@ -443,7 +443,7 @@ function createCombatTargetRuntime(runtime = {}) {
       return null;
     }
     const target = (combatTargets || []).find(item => String(item.user_id ?? item.id ?? '') === String(engaged.id));
-    if (target && !isWhitelistedTarget(target) && !isInvulnerable(target)) {
+    if (target && (target.native || target.realtime || target.render) && !isWhitelistedTarget(target) && !isInvulnerable(target)) {
       if (String(engaged.intent || '') === 'profit' && isAfkProfitTarget(target)) {
         clearCombatEngagement('afk-profit-target');
         return null;

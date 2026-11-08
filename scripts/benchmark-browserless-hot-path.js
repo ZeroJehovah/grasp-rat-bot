@@ -159,7 +159,8 @@ function evaluateCpuGate(tasks, budgetMs) {
     const count = Math.max(0, Number(summary.count || 0));
     const cpuCount = Math.max(0, Number(summary.cpuCount || 0));
     if (!count) continue;
-    if (cpuCount !== count || !Number.isFinite(Number(summary.maxCpuMs))) {
+    if (cpuCount !== count || typeof summary.maxCpuMs !== 'number'
+      || !Number.isFinite(summary.maxCpuMs) || summary.maxCpuMs < 0) {
       missing.push({ name, count, cpuCount });
       continue;
     }

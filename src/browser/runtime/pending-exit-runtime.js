@@ -1021,7 +1021,7 @@ function createPendingExitRuntime(runtime = {}) {
     };
     sendActionVelocity(action);
     if (cover.shoot && cover.target && self) {
-      shootAt(self, cover.aimTarget || cover.target, Boolean(cover.forceShoot), { shootEveryMs: cover.shootEveryMs });
+      shootAt(self, cover.aimTarget || cover.target, Boolean(cover.forceShoot), { shootEveryMs: cover.shootEveryMs, realtimeTarget: cover.target });
     }
     return true;
   }

@@ -3,6 +3,8 @@
 const {
   normalizeTargetWhitelistName,
   parseTargetWhitelistNames,
+  parseTargetWhitelistUserIds,
+  targetIsWhitelisted,
   deriveTargetWhitelistUrl
 } = require('../../shared/target-whitelist');
 
@@ -28,8 +30,7 @@ function createTargetWhitelistRuntime(runtime = {}) {
 
   function isWhitelistedTarget(e) {
     if (!e) return false;
-    const name = normalizeTargetWhitelistName(e.name);
-    return Boolean(name && bot?.targetWhitelist?.nameSet?.has(name));
+    return targetIsWhitelisted(e, currentState());
   }
 
   function summarizeTargetWhitelistStatus() {
@@ -37,7 +38,8 @@ function createTargetWhitelistRuntime(runtime = {}) {
     return {
       url: String(state?.url || ''),
       names: Array.isArray(state?.names) ? state.names.slice() : [],
-      count: Array.isArray(state?.names) ? state.names.length : 0,
+      userIds: Array.isArray(state?.userIds) ? state.userIds.slice() : [],
+      count: (state?.names?.length || 0) + (state?.userIds?.length || 0),
       loaded: Boolean(state?.lastOkAt),
       fetching: Boolean(state?.fetching),
       lastFetchAt: Number(state?.lastFetchAt || 0) || 0,
@@ -76,9 +78,12 @@ function createTargetWhitelistRuntime(runtime = {}) {
       const payload = await fetchJsonNoStore(targetWhitelistFetchUrl(url), cfg.targetWhitelistTimeoutMs);
       const validPayload = Array.isArray(payload)
         || Array.isArray(payload?.names)
-        || Array.isArray(payload?.usernames);
-      if (!validPayload) throw new Error('target whitelist JSON must be an array or contain names/usernames array');
+        || Array.isArray(payload?.usernames)
+        || Array.isArray(payload?.userIds) || Array.isArray(payload?.user_ids) || Array.isArray(payload?.ids);
+      if (!validPayload) throw new Error('target whitelist JSON must be an array or contain names/usernames/userIds array');
       const names = parseTargetWhitelistNames(payload, cfg.targetWhitelistMaxNames);
+      state.userIds = parseTargetWhitelistUserIds(payload, cfg.targetWhitelistMaxNames);
+      state.userIdSet = new Set(state.userIds.map(String));
       state.names = names;
       state.nameSet = new Set(names);
       state.lastOkAt = now();

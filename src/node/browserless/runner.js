@@ -2850,15 +2850,6 @@ async function runBrowserlessRunner(config, deps = {}) {
           competitorKillConfirmedCount: (competitorKillResult?.confirmed || []).length
         });
       }
-      if ((competitorKillResult?.confirmed || []).length) {
-        easyKillEvidenceResult = {
-          ...(easyKillEvidenceResult || { ok: true }),
-          confirmed: [
-            ...(easyKillEvidenceResult?.confirmed || []),
-            ...competitorKillResult.confirmed
-          ]
-        };
-      }
       const confirmed = (easyKillEvidenceResult?.confirmed || []).map(item => ({
         ...item,
         source: detail.source || 'snapshot'
@@ -4776,7 +4767,10 @@ async function runBrowserlessRunner(config, deps = {}) {
             gameOrigin: config.gameOrigin,
             timeoutMs: config.httpTimeoutMs
           });
-          updateState({
+          // An explicit credential replacement overrides startup defaults and
+          // must survive finalization of an already running session.
+          config = { ...config, userId: result.login.userId, sessionToken: result.login.sessionToken };
+          const sessionPatch = {
             session: {
               userId: result.login.userId,
               sessionToken: result.login.sessionToken,
@@ -4792,7 +4786,10 @@ async function runBrowserlessRunner(config, deps = {}) {
                 reason: 'manual-session-updated'
               }
             }
-          }, { updatedAt: new Date(now()).toISOString() });
+          };
+          const updatedAt = new Date(now()).toISOString();
+          if (liveState) patchLiveState(sessionPatch, { updatedAt });
+          updateState(sessionPatch, { updatedAt });
           refreshFromPersistedState();
           logStore.append('runner', 'login-ok', {
             userId: result.login.userId,
@@ -11380,6 +11377,7 @@ async function runBrowserlessRunnerSelfTest() {
     const rewardFinishSpacing = require('./reward-finish-spacing-self-test').runRewardFinishSpacingSelfTest();
     const combatSearchRegression = require('./combat-search-regression-self-test').runCombatSearchRegressionSelfTest();
     const recoveryContact = require('./recovery-contact-self-test').runRecoveryContactSelfTest();
+    const auditRegression = await require('./audit-regression-self-test').runAuditRegressionSelfTest();
     const runnerLog = path.join(tmp, 'logs', '2026-07-08', 'runner.jsonl');
     const text = fs.readFileSync(runnerLog, 'utf8');
     return {
@@ -11509,6 +11507,7 @@ async function runBrowserlessRunnerSelfTest() {
         && rewardFinishSpacing.ok
         && combatSearchRegression.ok
         && recoveryContact.ok
+        && auditRegression.ok
         && snapshotAudit.ok
         && complexCombatMainThreadBudget.battleLogOk
         // Host scheduling/GC timing is diagnostic; functional runner blocks
@@ -11628,6 +11627,7 @@ async function runBrowserlessRunnerSelfTest() {
       rewardFinishSpacing,
       combatSearchRegression,
       recoveryContact,
+      auditRegression,
       snapshotAudit,
       complexCombatMainThreadBudget,
       logFile: runnerLog

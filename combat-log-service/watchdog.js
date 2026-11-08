@@ -439,15 +439,23 @@ function uniqueStrings(values, limit = 24) {
   return out;
 }
 
-function fetchWithTimeout(fetchImpl, url, options = {}, timeoutMs = 3000) {
-  if (typeof fetchImpl !== 'function') return Promise.reject(new Error('fetch is unavailable'));
-  const AbortControllerImpl = typeof AbortController !== 'undefined' ? AbortController : null;
-  if (!AbortControllerImpl) return fetchImpl(url, options);
-  const controller = new AbortControllerImpl();
-  const timer = setTimeout(() => controller.abort(), Math.max(250, Number(timeoutMs) || 3000));
-  return Promise.resolve()
-    .then(() => fetchImpl(url, { ...options, signal: controller.signal }))
-    .finally(() => clearTimeout(timer));
+async function fetchWithTimeout(fetchImpl, url, options = {}, timeoutMs = 3000) {
+  if (typeof fetchImpl !== 'function') throw new Error('fetch is unavailable');
+  const controller = new AbortController();
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(Object.assign(new Error('request timed out'), { name: 'AbortError' }));
+    }, Math.max(250, Number(timeoutMs) || 3000));
+  });
+  try {
+    return await Promise.race([deadline, (async () => {
+      const res = await fetchImpl(url, { ...options, signal: controller.signal });
+      const text = await responseText(res);
+      return { res, text };
+    })()]);
+  } finally { clearTimeout(timer); }
 }
 
 async function responseText(res) {
@@ -1132,14 +1140,13 @@ class WatchdogService {
   async sendDirectLeaveRequest(request, timeoutMs) {
     const startedAt = this.now();
     try {
-      const res = await fetchWithTimeout(this.fetch, request.url, {
+      const { res, text } = await fetchWithTimeout(this.fetch, request.url, {
         method: request.method,
         headers: request.headers,
         body: request.body,
         cache: 'no-store',
         redirect: 'follow'
       }, timeoutMs);
-      const text = await responseText(res);
       const status = Number(res?.status || 0) || 0;
       const json = safeJsonParse(text);
       const httpOk = status >= 200 && status < 300;
@@ -1179,13 +1186,12 @@ class WatchdogService {
       ...(this.config.clash.secret ? { Authorization: `Bearer ${this.config.clash.secret}` } : {}),
       ...(options.headers || {})
     };
-    const res = await fetchWithTimeout(this.fetch, `${base}${pathname}`, {
+    const { res, text } = await fetchWithTimeout(this.fetch, `${base}${pathname}`, {
       method: options.method || 'GET',
       headers,
       body: options.body,
       cache: 'no-store'
     }, this.config.clash.timeoutMs);
-    const text = await responseText(res);
     const status = Number(res?.status || 0) || 0;
     if (status < 200 || status >= 300) {
       throw new Error(`${options.method || 'GET'} ${pathname} failed: ${status}`);

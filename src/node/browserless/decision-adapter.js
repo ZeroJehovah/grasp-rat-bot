@@ -1973,10 +1973,10 @@ function observePersistentHighValueCoinCandidates({
     options.highValueCoinPersistenceMaxAgeMs
       ?? DEFAULT_HIGH_VALUE_COIN_PERSISTENCE.maxAgeMs
   ));
-  const snapshotMaxAgeMs = Math.max(1000, Number(
+  const snapshotMaxAgeMs = Math.min(90000, Math.max(1000, Number(
     options.highValueCoinSnapshotMaxAgeMs
       ?? maxAgeMs
-  ));
+  )));
   const snapshotObservedAtMs = snapshotCoinObservationTime(fallback, nowMs);
   const snapshotAgeMs = snapshotObservedAtMs === null
     ? null
@@ -4699,9 +4699,14 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
   const realtimeCoins = realtimeCoinsRaw.map(coin => (
     decoratePersistentCoinCandidate(coin, persistentCoinObservation)
   ));
-  const snapshotCoins = snapshotCoinsRaw.map(coin => (
+  const snapshotObservedAtMs = snapshotCoinObservationTime(fallback, nowMs);
+  const snapshotNavigationFresh = snapshotObservedAtMs !== null
+    && snapshotObservedAtMs <= nowMs
+    && nowMs - snapshotObservedAtMs <= 90000
+    && utc8DayKey(snapshotObservedAtMs) === utc8DayKey(nowMs);
+  const snapshotCoins = snapshotNavigationFresh ? snapshotCoinsRaw.map(coin => (
     decoratePersistentCoinCandidate(coin, persistentCoinObservation)
-  ));
+  )) : [];
   const snapshotVisibleCoinMaxDistanceRaw = Number(options.snapshotVisibleCoinMaxDistanceCm
     ?? options.snapshotCoinFallbackMaxDistanceCm
     ?? options.globalCoinMaxDistance
@@ -4718,7 +4723,8 @@ function buildBrowserlessStrategyInput(state, options = {}, stateful = {}) {
     coin.persistentCandidateEligible === true
       && persistentCoinObservation.snapshotUsable
   ));
-  const selfKilledPlayerDropFallbackEnabled = options.controlMode === 'profit-live';
+  const selfKilledPlayerDropFallbackEnabled = options.controlMode === 'profit-live'
+    && snapshotNavigationFresh && nowMs - snapshotObservedAtMs <= snapshotMaxAgeMs;
   const selfKilledPlayerDropCoins = selfKilledPlayerDropFallbackEnabled
     ? snapshotCoins.filter(coin => isSelfKilledPlayerDropCoin(coin, selfKillTargetTicks, options))
     : [];
@@ -5222,6 +5228,19 @@ function scoreEnemyOpportunity(target, options = {}) {
     ? options.isAfkProfitTarget
     : () => false;
   if (isAfkProfitTarget(target) && afkOpportunityBlockedByStaminaCooldown(target, options)) return null;
+  const effective = effectiveProfitReward(target, options);
+  const selection = options.invulnerableProfitSelectionEnabled === false
+    ? { selectionStaminaCost: effective.staminaCost }
+    : enemyOpportunitySelection(target, effective, options);
+  return scorePlayerProfitEconomics(target, effective.expectedReward, selection.selectionStaminaCost,
+    effective.rawDrop, options);
+}
+
+// Repricing a held candidate uses the same weight and raw-Drop multiplier as
+// visible candidates; the multiplier never changes the reward or cost.
+function scorePlayerProfitEconomics(target, reward, staminaCost, rawDrop, options = {}) {
+  const isAfkProfitTarget = typeof options.isAfkProfitTarget === 'function'
+    ? options.isAfkProfitTarget : () => false;
   const coinWeight = Number(options.coinOpportunityValue ?? BROWSER_RUNTIME_DEFAULTS.coinOpportunityValue ?? 1);
   const dropWeight = Number(options.dropOpportunityValue ?? BROWSER_RUNTIME_DEFAULTS.dropOpportunityValue ?? coinWeight);
   const weight = Number(options.enemyOpportunityValue ?? (
@@ -5229,16 +5248,12 @@ function scoreEnemyOpportunity(target, options = {}) {
       ? coinWeight
       : dropWeight
   ) ?? 1);
-  const effective = effectiveProfitReward(target, options);
-  const selection = options.invulnerableProfitSelectionEnabled === false
-    ? { selectionStaminaCost: effective.staminaCost }
-    : enemyOpportunitySelection(target, effective, options);
-  const economicScore = opportunityValueScoreCore(effective.expectedReward, selection.selectionStaminaCost, {
+  return opportunityValueScoreCore(reward, staminaCost, {
     distanceFloor: options.opportunityDistanceFloor ?? BROWSER_RUNTIME_DEFAULTS.opportunityDistanceFloor,
-    distanceScoreScale: options.distanceScoreScale || options.opportunityDistanceScoreScale || BROWSER_RUNTIME_DEFAULTS.opportunityDistanceScoreScale || 10000,
+    distanceScoreScale: options.distanceScoreScale || options.opportunityDistanceScoreScale
+      || BROWSER_RUNTIME_DEFAULTS.opportunityDistanceScoreScale || 10000,
     weight
-  });
-  return economicScore * playerProfitScoreMultiplierCore(effective.rawDrop);
+  }) * playerProfitScoreMultiplierCore(rawDrop);
 }
 
 function enemyOpportunitySelection(target, effectiveOrStaminaCost, options = {}) {
@@ -8874,14 +8889,8 @@ function buildProfitMissionHeldOpportunity(input = {}, mission = {}, thresholdCo
   if (escortContinuity
     && held.expectedReward !== null
     && held.staminaCost !== null) {
-    held.score = opportunityValueScoreCore(held.expectedReward, held.staminaCost, {
-      distanceFloor: options.opportunityDistanceFloor ?? BROWSER_RUNTIME_DEFAULTS.opportunityDistanceFloor,
-      distanceScoreScale: options.distanceScoreScale
-        || options.opportunityDistanceScoreScale
-        || BROWSER_RUNTIME_DEFAULTS.opportunityDistanceScoreScale
-        || 10000,
-      weight: options.enemyOpportunityValue ?? 1
-    });
+    held.score = scorePlayerProfitEconomics(target, held.expectedReward, held.staminaCost,
+      mission.effectiveProfitReward?.rawDrop ?? source.drop ?? mission.targetDrop ?? mission.reward, options);
   }
   held.priorityTier = Number(mission.priorityTier || held.priorityTier || 0);
   held.reason = escortContinuity ? 'profit-escort-mission-hold' : 'profit-mission-lock-hold';
@@ -9548,17 +9557,17 @@ function buildOpportunityDecision(input, stateful = {}, options = {}) {
     const affordable = heldStaminaCost !== null
       && opportunityStaminaAffordable(input.self, heldStaminaCost, options);
     const heldScore = heldReward !== null && heldStaminaCost !== null
-      ? opportunityValueScoreCore(heldReward, heldStaminaCost, {
-          distanceFloor: options.opportunityDistanceFloor ?? BROWSER_RUNTIME_DEFAULTS.opportunityDistanceFloor,
-          distanceScoreScale: options.distanceScoreScale
-            || options.opportunityDistanceScoreScale
-            || BROWSER_RUNTIME_DEFAULTS.opportunityDistanceScoreScale
-            || 10000,
-          weight: options.enemyOpportunityValue ?? 1
-        })
+      ? scorePlayerProfitEconomics(cachedTarget, heldReward, heldStaminaCost,
+          current.effectiveProfitReward?.rawDrop ?? currentSource?.drop ?? current.targetDrop ?? current.reward, options)
       : null;
+    const observedCurrent = (input.panelVisibleTargets || input.visibleTargets || [])
+      .find(target => String(target.userId ?? target.user_id ?? target.id) === String(current.id));
     let releaseReason = '';
-    if (!continuityHold && currentMissingHoldMs <= 0) releaseReason = 'missing-hold-disabled';
+    // A visible target rejected by current admission is not a missing target.
+    // Cached pricing must never revive a dead/protected/ineligible candidate.
+    if (observedCurrent && (!continuityHold || observedCurrent.alive === false
+      || observedCurrent.whitelisted)) releaseReason = 'held-visible-target-ineligible';
+    else if (!continuityHold && currentMissingHoldMs <= 0) releaseReason = 'missing-hold-disabled';
     else if (!continuityHold && ageMs > currentMissingHoldMs) releaseReason = 'missing-hold-expired';
     else if (!positionComplete) releaseReason = 'held-position-incomplete';
     else if (heldReward === null || heldReward <= 0 || current.heldRewardKnown !== true) releaseReason = 'held-reward-unknown';

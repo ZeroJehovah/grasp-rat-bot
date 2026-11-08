@@ -186,7 +186,16 @@ function createStatusServer(options = {}) {
     }
   };
   const server = http.createServer(async (req, res) => {
-    const parsed = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+    let parsed;
+    try {
+      // Host is untrusted, including before authentication. Route against a
+      // fixed origin and reject malformed input inside the request boundary.
+      if (req.headers.host) new URL(`http://${req.headers.host}`);
+      parsed = new URL(req.url || '/', 'http://localhost');
+    } catch (_) {
+      sendJson(res, 400, { ok: false, error: 'invalid request URL or Host' });
+      return;
+    }
     try {
       const config = statusServerConfig(options, server, webToken);
       if (req.method === 'GET' && parsed.pathname === '/') {

@@ -225,6 +225,7 @@ function createNativeStateRuntime(runtime = {}) {
     bot,
     cfg,
     getNativeState,
+    getNativeEntityList,
     getNativeControl,
     wsReadyStateNumber,
     wsConstant,

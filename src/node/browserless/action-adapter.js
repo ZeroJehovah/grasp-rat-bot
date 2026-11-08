@@ -4729,7 +4729,12 @@ function createBrowserlessActionAdapter(options = {}) {
         skipped: true,
         reason: shooting.commandSuppressed ? (shooting.reason || 'shoot-command-suppressed') : 'shoot-not-requested'
       };
-      if (shooting.wouldShoot && !shooting.commandSuppressed) {
+      const secondaryPolicy = shooting.secondaryPolicy;
+      const secondaryQuotaBlocked = fireTargetRole === 'secondary' && secondaryPolicy
+        && (secondaryPolicy.invulnerable || (!secondaryPolicy.throttleExempt
+          && !(Number(secondaryPolicy.ownShots) < Number(secondaryPolicy.opponentShots))));
+      if (secondaryQuotaBlocked) shoot.reason = 'secondary-five-second-shot-quota';
+      if (shooting.wouldShoot && !shooting.commandSuppressed && !secondaryQuotaBlocked) {
         executionProfitKillRace = actionProfitKillRace(
           stateSnapshot,
           self,

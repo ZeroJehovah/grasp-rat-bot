@@ -1,14 +1,21 @@
 {
   "manifest_version": 3,
   "name": "Grasp Rat Bot Bootstrap",
-  "version": "0.1.71",
+  "version": "0.1.72",
   "description": "Loads, hot-updates, and supervises the Grasp Rat bot from the shared signed manifest.",
   "permissions": [
     "storage",
     "tabs"
   ],
   "host_permissions": [
-    "<all_urls>"
+    "https://grasp-rat-game.h-e.top/*",
+    "https://connect.linux.do/*",
+    "https://raw.githubusercontent.com/*",
+    "https://cdn.jsdelivr.net/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*",
+    "https://127.0.0.1/*",
+    "https://localhost/*"
   ],
   "background": {
     "service_worker": "background.js"
