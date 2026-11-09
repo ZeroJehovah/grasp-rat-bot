@@ -1087,7 +1087,7 @@ function browserlessLoginPointReloginShortcutCounters(state = {}, nowMs = Date.n
   };
 }
 
-function browserlessLoginPointReloginShortcutContext(state = {}, config = {}, nowMs = Date.now()) {
+function browserlessLoginPointReloginShortcutContext(state = {}, config = {}, nowMs = Date.now(), deps = {}) {
   const safetyPoint = state?.loginPointSafety?.point || null;
   const safetyPointUsable = Number.isFinite(Number(safetyPoint?.x))
     && Number.isFinite(Number(safetyPoint?.y));
@@ -1100,7 +1100,11 @@ function browserlessLoginPointReloginShortcutContext(state = {}, config = {}, no
       checkedAtMs: parseIsoTimeMs(state?.loginPointSafety?.checkedAt) || null
     },
     snapshotEdgeEnabled: config.snapshotEdgeEnabled === true,
-    sourceIpProbeReusable: Boolean(sourceIpPreflightCanReuse(state))
+    // The normal login path selects from completed background probe history;
+    // it does not run a synchronous probe even when the lifecycle is not
+    // reusable. Keep the legacy reuse predicate for the synchronous fallback.
+    sourceIpProbeReusable: typeof deps.sourceIpProbe?.selectSourceIps === 'function'
+      || Boolean(sourceIpPreflightCanReuse(state))
   };
 }
 
@@ -5571,7 +5575,8 @@ async function runBrowserlessRunner(config, deps = {}) {
         loginPointReloginShortcutContext: browserlessLoginPointReloginShortcutContext(
           stateBeforeCanary,
           config,
-          now()
+          now(),
+          deps
         ),
         onSnapshotSafety: recordSnapshotSafetyProgress,
         getRecoveryLineageState,

@@ -6,6 +6,9 @@ const path = require('path');
 const { parseBrowserlessRunnerArgs } = require('./config');
 const { readBrowserlessStateFile, updateBrowserlessStateFile } = require('./state-file');
 const { evaluateLoginPointReloginShortcutCore } = require('../../strategy/login-point-relogin-shortcut');
+const { buildBrowserlessDecision, summarizeBrowserlessDecision } = require('./decision-adapter');
+const { serializableDecisionOptions } = require('./decision-worker');
+const { evaluateBrowserlessSafety } = require('./safety-controller');
 const { utc8DayKey } = require('./utc8-day');
 
 function fixtureConfig(root, name, once = true) {
@@ -43,6 +46,106 @@ async function runBrowserlessRunnerStateTransitionSelfTest() {
   const shortcuts = [];
   try {
     const atMs = Date.parse('2026-09-09T04:00:00.000Z');
+    // 2026-11-10 decisions.jsonl:1279: a 1839m approach could save 759m
+    // from the login point. The obsolete synchronous probe budget blocked it.
+    const incidentAtMs = Date.parse('2026-11-09T16:20:47.625Z');
+    const incidentLoginAtMs = Date.parse('2026-11-09T16:00:11.426Z');
+    const loginPoint = { x: 5999, y: 66268 };
+    const selectedIps = ['10.0.0.61', '10.0.0.62', '10.0.0.63'];
+    const shortcutPaths = [];
+    for (const mode of ['cached', 'synchronous', 'selector-unavailable']) {
+      const config = fixtureConfig(root, `shortcut-${mode}`);
+      updateBrowserlessStateFile(config.stateFile, {
+        stats: { today: { day: utc8DayKey(incidentAtMs), sessionCount: 1 } },
+        runner: { lastLoginAt: new Date(incidentLoginAtMs).toISOString() },
+        loginPointSafety: { point: { ...loginPoint, hp: 100 } }
+      });
+      let requestCount = 0;
+      let selectionCount = 0;
+      let context = null;
+      const cachedSelector = {
+        selectSourceIps: () => {
+          selectionCount++;
+          return {
+            ok: true, cached: true, reason: 'source-ip-probe-selected',
+            availableIps: selectedIps,
+            sourceIpPreflight: {
+              phase: 'ready', queuePhase: 'cached-history', reuseWithoutRetest: false,
+              completedAt: new Date(incidentAtMs).toISOString(),
+              availableIps: selectedIps, availableCount: 3, requiredCount: 3
+            }
+          };
+        }
+      };
+      await runBrowserlessRunner(config, {
+        ...fixtureDeps(() => incidentAtMs),
+        disableSourceIpPreflight: false,
+        monotonicNow: () => 0,
+        discoverSourceIps: () => selectedIps,
+        sourceIpProbe: mode === 'cached' ? cachedSelector : mode === 'selector-unavailable' ? {} : null,
+        sourceIpPreflightRequest: async () => { requestCount++; return { status: 200 }; },
+        runReadOnlyOnce: async (_config, options) => {
+          context = options.loginPointReloginShortcutContext;
+          return { ok: true, runId: `shortcut-${mode}`, completedAt: new Date(incidentAtMs).toISOString() };
+        }
+      });
+      const self = {
+        entity_id: 1, user_id: 7, name: 'self', x: 79135, y: -42032, hp: 100, max_hp: 100,
+        stamina_5s_remaining_milli: 10000, stamina_5s_limit_milli: 10000
+      };
+      const state = {
+        userId: 7,
+        realtime: { tick: 24842, frameAgeMs: 0, self, entities: [self], bullets: [], coinDrops: [] },
+        fallback: { tick: 24837, frameAgeMs: 251, entities: [], coinDrops: [], messages: [] }
+      };
+      const options = {
+        nowMs: incidentAtMs, controlMode: 'profit-live', combatEnabled: false,
+        singleCoinBaitEnabled: false,
+        loginPointReloginShortcutContext: {
+          ...context, sessionId: `shortcut-${mode}`, entryLoginPoint: loginPoint,
+          entryLoginAtMs: incidentLoginAtMs
+        },
+        remoteProfitBatch: {
+          generation: 1, source: 'gap-http', observedAtMs: incidentAtMs - 758,
+          expiresAtMs: incidentAtMs + 89000,
+          candidates: [{
+            userId: 99, name: 'stationary-profit', x: -92936, y: 22908,
+            hp: 100, drop: 341, active: false, classification: 'high-drop-afk',
+            expectedReward: 341, staminaCost: 215617, baseScore: 10, adjustedScore: 10
+          }],
+          realtimeSupersededIds: [], missSuppressedIds: []
+        }
+      };
+      const decision = buildBrowserlessDecision(state, {}, options);
+      const workerDecision = buildBrowserlessDecision(state, {}, serializableDecisionOptions(options));
+      const summary = summarizeBrowserlessDecision(decision);
+      const shortcut = summary.loginPointReloginShortcut;
+      const cached = mode === 'cached';
+      checks[`${mode}-shortcut-context`] = context?.sourceIpProbeReusable === cached;
+      checks[`${mode}-shortcut-no-extra-requests`] = selectionCount === (cached ? 1 : 0)
+        && requestCount === (cached ? 0 : 3);
+      checks[`${mode}-shortcut-action`] = decision.action.kind === (cached ? 'leave' : 'seek-remote-player');
+      checks[`${mode}-shortcut-logged-budget`] = shortcut?.blockReason === (cached ? 'ok' : 'net-gain-too-small')
+        && shortcut.distanceCurrentCm === 183917 && shortcut.distanceLoginCm === 108020
+        && shortcut.overheadBreakdown.sourceIpProbeMs === (cached ? 0 : 50000)
+        && shortcut.netGainMs === (cached ? 67893 : 17893);
+      checks[`${mode}-shortcut-worker-context`] = JSON.stringify(workerDecision.loginPointReloginShortcut)
+        === JSON.stringify(decision.loginPointReloginShortcut);
+      if (cached) {
+        const safety = evaluateBrowserlessSafety(state, { decision, nowMs: incidentAtMs });
+        checks['cached-shortcut-executed-leave'] = safety?.reason === 'login-point-relogin-shortcut-leave'
+          && safety.shouldLeave === true;
+        const cooling = buildBrowserlessDecision(state, {}, {
+          ...options,
+          loginPointReloginShortcutContext: {
+            ...options.loginPointReloginShortcutContext, entryLoginAtMs: incidentAtMs - 59000
+          }
+        });
+        checks['cached-shortcut-preserves-login-interval'] = cooling.action.kind === 'seek-remote-player'
+          && summarizeBrowserlessDecision(cooling).loginPointReloginShortcut?.blockReason === 'login-cooldown';
+      }
+      shortcutPaths.push({ mode, requestCount, selectionCount, shortcut });
+    }
     for (const shape of [
       { name: 'fresh-absent', fresh: true, present: false, pending: false },
       { name: 'pending-absent', fresh: true, present: false, pending: true },
@@ -191,7 +294,7 @@ async function runBrowserlessRunnerStateTransitionSelfTest() {
         && restartedContext.lastTriggeredAt === (shape.midnight ? 0 : triggerAtMs);
       shortcuts.push({ name: shape.name, persisted, contexts, restartedContext, blockReason: evaluation.blockReason });
     }
-    return { ok: Object.values(checks).every(Boolean), checks, snapshots, shortcuts };
+    return { ok: Object.values(checks).every(Boolean), checks, snapshots, shortcuts, shortcutPaths };
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

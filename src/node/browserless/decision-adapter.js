@@ -16655,6 +16655,7 @@ function summarizeBrowserlessDecision(decision) {
     dropRace: decision.dropRace || null,
     dropRaceEvents: Array.isArray(decision.dropRaceEvents) ? decision.dropRaceEvents : [],
     finalSelection: decision.finalSelection || null,
+    loginPointReloginShortcut: decision.loginPointReloginShortcut || null,
     whitelistSafety: decision.whitelistSafety || null,
     // 交火中不站桩的抑制结果必须落日志: 否则从日志无法区分“没有实现”和
     // “实现了但当帧没触发”。
