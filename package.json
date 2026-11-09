@@ -6,12 +6,9 @@
     "build:browserless-release": "node scripts/build-browserless-release.js",
     "verify:browserless-release": "node scripts/verify-browserless-release.js",
     "deploy:browserless-release": "scripts/deploy-browserless-release.sh",
-    "build:runtime-helper-entry": "node scripts/build-runtime-helper-entry.js",
-    "test:runtime-helper-entry": "node scripts/build-runtime-helper-entry.js --self-test",
-    "test:watchdog-runtime": "node scripts/watchdog-heartbeat-runtime-self-test.js",
-    "build:remote-bundled": "node scripts/build-remote-bot-bundled.js",
-    "test:remote-bundled": "node scripts/build-remote-bot-bundled.js --self-test",
-    "test:browserless-migration": "node scripts/browserless-test-migration-audit.js"
+    "test:browserless-migration": "node scripts/browserless-test-migration-audit.js",
+    "test:shared": "node src/node/run-self-test.js",
+    "test:headless-demo": "node scripts/headless-demo-self-test.js"
   },
   "devDependencies": {
     "esbuild": "0.25.11"

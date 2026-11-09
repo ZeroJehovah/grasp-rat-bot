@@ -11,7 +11,7 @@ const {
   sessionFromAnyState
 } = require('../src/node/browserless/state-file');
 const { DEFAULTS: BROWSERLESS_CONFIG_DEFAULTS } = require('../src/node/browserless/config');
-const { verifyRelease } = require('./verify-browserless-release');
+const { verifyRelease, releaseWhitelistFile } = require('./verify-browserless-release');
 const { runtimeNodePath, verifyNodeRuntime } = require('./browserless-node-runtime');
 
 const DEFAULT_SERVICE_NAME = 'grasp-rat-browserless-runner';
@@ -331,11 +331,12 @@ function auditDeployment(options = {}, deps = {}) {
   const dataDir = path.resolve(String(options.dataDir || env.GRASP_RAT_BROWSERLESS_DATA_DIR || DEFAULT_DATA_DIR));
   const logDir = path.resolve(String(options.logDir || env.GRASP_RAT_BROWSERLESS_LOG_DIR || DEFAULT_LOG_DIR));
   addCheck(checks, 'release-env-revision', releaseEnv.GRASP_RAT_BROWSERLESS_REVISION === manifest.runtimeRevision, `release.env=${releaseEnv.GRASP_RAT_BROWSERLESS_REVISION || 'missing'}, manifest=${manifest.runtimeRevision || 'missing'}`);
-  addCheck(checks, 'release-env-whitelist-file', releaseEnv.GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_FILE === 'dist/target-whitelist.json', `value=${releaseEnv.GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_FILE || 'missing'}`);
+  const whitelistFile = releaseWhitelistFile(manifest);
+  addCheck(checks, 'release-env-whitelist-file', releaseEnv.GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_FILE === whitelistFile, `value=${releaseEnv.GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_FILE || 'missing'}`);
   addCheck(
     checks,
     'release-env-whitelist-url',
-    Boolean(manifest.sourceRevision) && releaseEnv.GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_URL === `https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/${manifest.sourceRevision}/dist/target-whitelist.json`,
+    Boolean(manifest.sourceRevision) && releaseEnv.GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_URL === `https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/${manifest.sourceRevision}/${whitelistFile}`,
     `value=${releaseEnv.GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_URL || 'missing'}`
   );
 

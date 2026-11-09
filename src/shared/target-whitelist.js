@@ -98,22 +98,6 @@ function targetIsWhitelisted(target, whitelist = null) {
   return false;
 }
 
-function deriveTargetWhitelistUrl(sourceUrl, configuredUrl = '') {
-  const explicit = String(configuredUrl || '').trim();
-  if (explicit) return explicit;
-  const source = String(sourceUrl || '').trim();
-  if (!source) return '';
-  try {
-    const url = new URL(source);
-    url.pathname = url.pathname.replace(/[^/]*$/, 'target-whitelist.json');
-    url.search = '';
-    url.hash = '';
-    return url.toString();
-  } catch (_) {
-    return source.replace(/[^/?#]*([?#].*)?$/, 'target-whitelist.json');
-  }
-}
-
 module.exports = {
   normalizeTargetWhitelistName,
   normalizeTargetWhitelistUserId,
@@ -121,6 +105,5 @@ module.exports = {
   parseTargetWhitelistUserIds,
   targetIsWhitelisted,
   targetWhitelistNameSet,
-  targetWhitelistUserIdSet,
-  deriveTargetWhitelistUrl
+  targetWhitelistUserIdSet
 };

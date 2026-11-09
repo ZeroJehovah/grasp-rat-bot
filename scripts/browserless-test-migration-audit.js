@@ -10,6 +10,12 @@ const ROOT = path.resolve(__dirname, '..');
 const LEGACY_BASELINE = '03c5c8f^';
 const LEGACY_EXPECTED_CASES = 349;
 const RENAMED_CASES = new Map([
+  ['healthy high-value visible coin beats active combat state',
+    'healthy high-value visible coin beats active ballistic-close combat state'],
+  ['higher roi 200m coin beats 150m coin inside visible pool',
+    'higher roi farther coin beats nearer coin inside visible pool'],
+  ['held similar roi target prevents target jitter',
+    'held similar roi target prevents target jitter without route overlap'],
   [
     'new out-of-range afk target can be chased before stamina drop observed',
     'new out-of-range full-stamina afk target can be chased immediately'
@@ -22,6 +28,45 @@ const RENAMED_CASES = new Map([
     'same first coin route keeps overlay metadata near non-avoidance active',
     'same first weaker coin route stays preview-only near non-avoidance active'
   ]
+]);
+
+// Explicitly retired with the browser runtime on 2026-11-09. Other baseline
+// cases must still be retained or mapped to a named maintained replacement.
+const RETIRED_BROWSER_CASES = new Set([
+  "target whitelist URL defaults next to remote script",
+  "native transport stall recovery resets current websocket once",
+  "browser preserved state keeps last login timestamp across hot update",
+  "snapshot no-self exit confirmation requires fresh absent self",
+  "snapshot no-self local session reset clears token and keeps login id input",
+  "tmpGame local session cleanup preserves tutorial marker",
+  "help modal runtime clicks visible tutorial ok button only",
+  "visible login control does not hide stale no-self game session",
+  "login-required no-self auth block clears stale session without fresh snapshot",
+  "snapshot no-self recovery requests reload after local reset",
+  "leave 403 no-self recovery clears stale local session",
+  "snapshot no-self recovery marker suppresses repeat leave state",
+  "snapshot no-self in-memory recovery marker suppresses repeat leave state",
+  "snapshot no-self recovery marker clicks login control once and records login pending",
+  "snapshot no-self recovery marker waits after recorded login start",
+  "no-self auto login prefers visible login control over page global",
+  "login control without start evidence does not enter bot-login-started grace",
+  "known same-day long stamina exhaustion blocks auto login",
+  "login control finder prefers hidden native join over inline proxy",
+  "manual force login prefers native login control over raw global",
+  "login point safety streak resets on new page load",
+  "forced stale-session auto login prefers visible login control over page global",
+  "bot-login-started relogin gate cooldown keeps configured total",
+  "no-self leave 403 recovery does not create pending exit retry",
+  "post-login zoom shrinks one way until native view radius reaches 502m",
+  "post-login zoom applies native setViewRadius directly",
+  "post-login zoom no-token session key is stable across no-self generations",
+  "pending exit confirmation requests page reload",
+  "pending no-self exit confirmation clears stale local session before blocked reload",
+  "pending no-self exit accepts fresh missing snapshot despite stale native session",
+  "external left user recovery clears stale self entity",
+  "external left user recovery is idempotent while reload is audit-blocked",
+  "external left user recovery ignores live current self",
+  "exit audit reload block logs are throttled"
 ]);
 
 const LEGACY_PLATFORM_PATTERN = /browser preserved state|help modal|login control|page global|post-login zoom|tmpGame|hot update|native transport stall recovery|local session reset|snapshot no-self|session mismatch takeover|reload confirmation|requests page reload|external left user|exit audit reload|target whitelist URL defaults next to remote script/i;
@@ -70,6 +115,7 @@ function coverageArea(name) {
 }
 
 function disposition(entry) {
+  if (RETIRED_BROWSER_CASES.has(entry.name)) return 'browser-platform-retired';
   if (LEGACY_PLATFORM_PATTERN.test(entry.name)) return 'browser-platform-replaced';
   if (/\bchoose\s*\(/.test(entry.body) || /\bbot\./.test(entry.body)) return 'merged-browserless-behavior';
   return 'shared-retained';
@@ -96,7 +142,9 @@ function main() {
     const replacement = RENAMED_CASES.get(item.name);
     return replacement && currentNames.has(replacement);
   });
+  const retired = baseline.filter(item => RETIRED_BROWSER_CASES.has(item.name));
   const missing = baseline.filter(item => !currentNames.has(item.name)
+    && !RETIRED_BROWSER_CASES.has(item.name)
     && !(RENAMED_CASES.get(item.name) && currentNames.has(RENAMED_CASES.get(item.name))));
   const baselineNames = new Set(baseline.map(item => item.name));
   const replacementNames = new Set(RENAMED_CASES.values());
@@ -111,7 +159,7 @@ function main() {
   }));
   const dispositionCounts = countBy(classifiedBaseline, item => item.disposition);
   const legacyAreaCounts = countBy(
-    classifiedBaseline.filter(item => item.disposition !== 'browser-platform-replaced'),
+    classifiedBaseline.filter(item => !['browser-platform-replaced', 'browser-platform-retired'].includes(item.disposition)),
     item => item.area
   );
   const browserlessAreaCounts = countBy(explicitBrowserless, item => coverageArea(item.name));
@@ -128,6 +176,7 @@ function main() {
       expectedCases: LEGACY_EXPECTED_CASES,
       retainedByName: retained.length,
       renamedOrMerged: renamed.length,
+      retiredBrowserPlatform: retired.length,
       missing: missing.map(item => item.name)
     },
     current: {

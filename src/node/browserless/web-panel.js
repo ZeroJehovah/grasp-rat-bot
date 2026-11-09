@@ -3,7 +3,7 @@
 const { panelTargetRolesCore, postKillPresentationCore } = require('./panel-presentation');
 
 // Bump only when this browserless web page or its frontend assets change.
-const BROWSERLESS_WEB_PANEL_VERSION = '2026.11.07.1';
+const BROWSERLESS_WEB_PANEL_VERSION = '2026.11.09.1';
 const BROWSERLESS_WEB_PANEL_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23060b16'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%2338bdf8' stroke-width='4' stroke-opacity='.55'/%3E%3Cpath d='M32 9v46M9 32h46' stroke='%2394a3b8' stroke-width='3' stroke-opacity='.45'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%2334d399'/%3E%3Ccircle cx='46' cy='20' r='4' fill='%2338bdf8'/%3E%3Ccircle cx='19' cy='43' r='4' fill='%23fb7185'/%3E%3Cpath d='M32 32l14-12' stroke='%2338bdf8' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E";
 
 function mapMarkerKeyCore(kind, primary, fallback = '') {
@@ -659,6 +659,8 @@ function renderBrowserlessWebPanel() {
     .map-fullscreen-toggle{position:absolute;top:8px;right:8px;z-index:3;width:32px;height:32px;min-height:32px;padding:0;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;background:rgba(8,12,18,.78);color:var(--text);font-size:20px;line-height:1;box-shadow:0 2px 8px rgba(0,0,0,.28)}
     .map-fullscreen-toggle:hover{background:rgba(32,37,42,.96)}
     .map-fullscreen-toggle:focus-visible{outline:1px solid var(--blue);outline-offset:2px}
+    .map-fullscreen-toggle svg{display:block;width:18px;height:18px;pointer-events:none}
+    .map-fullscreen-toggle[aria-pressed="false"] .map-collapse-icon,.map-fullscreen-toggle[aria-pressed="true"] .map-expand-icon{display:none}
     body.map-page-fullscreen{overflow:hidden}
     body.map-page-fullscreen #mapPanel{position:fixed;inset:0;z-index:100;display:flex;flex-direction:column;width:100vw;height:100vh;height:100dvh;max-width:none;max-height:none;margin:0;padding:clamp(10px,2vw,24px);border:0;border-radius:0;background:var(--bg);overflow:hidden}
     body.map-page-fullscreen #mapPanel>.panel-body,body.map-page-fullscreen #mapPanel.panel-collapsed>.panel-body{display:flex;flex:1;min-height:0;max-height:none;align-items:center;justify-content:center;overflow:hidden;opacity:1;pointer-events:auto;margin-top:0}
@@ -894,7 +896,36 @@ function renderBrowserlessWebPanel() {
           <div class="panel-body">
             <div id="mapStage" class="map-stage">
               <canvas id="targetMap" class="map-canvas" width="420" height="420" aria-label="附近目标地图"></canvas>
-              <button id="mapFullscreenToggle" class="map-fullscreen-toggle" type="button" aria-label="地图面板全屏" aria-pressed="false" title="地图面板全屏">⛶</button>
+              <!--
+                Feather v4.29.2: maximize-2 / minimize-2 (size and accessibility attributes adapted).
+                https://github.com/feathericons/feather/tree/v4.29.2/icons
+                The MIT License (MIT)
+                Copyright (c) 2013-2023 Cole Bemis
+
+                Permission is hereby granted, free of charge, to any person obtaining a copy
+                of this software and associated documentation files (the "Software"), to deal
+                in the Software without restriction, including without limitation the rights
+                to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+                copies of the Software, and to permit persons to whom the Software is
+                furnished to do so, subject to the following conditions:
+
+                The above copyright notice and this permission notice shall be included in all
+                copies or substantial portions of the Software.
+
+                THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+                IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+                FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+                AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+                LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+                OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+                SOFTWARE.
+              -->
+              <button id="mapFullscreenToggle" class="map-fullscreen-toggle" type="button" aria-label="地图网页全屏" aria-pressed="false" title="地图网页全屏">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                  <g class="map-expand-icon"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></g>
+                  <g class="map-collapse-icon"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></g>
+                </svg>
+              </button>
               <div id="mapTooltip" class="map-tooltip" role="tooltip"></div>
             </div>
           </div>
@@ -3270,7 +3301,6 @@ function renderBrowserlessWebPanel() {
       if (!button) return;
       const active = document.body.classList.contains('map-page-fullscreen');
       button.hidden = false;
-      button.textContent = active ? '⤢' : '⛶';
       button.setAttribute('aria-label', active ? '退出地图网页全屏' : '地图网页全屏');
       button.setAttribute('aria-pressed', String(active));
       button.title = active ? '退出地图网页全屏' : '地图网页全屏';

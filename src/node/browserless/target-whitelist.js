@@ -16,8 +16,8 @@ const {
 } = require('./session-client');
 const { REQUEST_CLASSES } = require('./request-rate-policy');
 
-const DEFAULT_TARGET_WHITELIST_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/dist/target-whitelist.json';
-const DEFAULT_LOCAL_TARGET_WHITELIST_FILE = path.resolve(__dirname, '../../..', 'dist', 'target-whitelist.json');
+const DEFAULT_TARGET_WHITELIST_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/config/target-whitelist.json';
+const DEFAULT_LOCAL_TARGET_WHITELIST_FILE = path.resolve(__dirname, '../../..', 'config', 'target-whitelist.json');
 
 function readJsonFile(file) {
   const resolved = path.resolve(String(file || ''));

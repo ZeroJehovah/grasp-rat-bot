@@ -87,6 +87,14 @@ function requireRootOwned(stat, label) {
   if (stat.uid !== 0 || stat.gid !== 0) fail(`release entry is not root-owned: ${label}`);
 }
 
+// Existing immutable browserless releases keep their original data path so
+// activation and rollback can verify them without rebuilding the artifact.
+function releaseWhitelistFile(manifest) {
+  return manifest.files?.['config/target-whitelist.json']
+    ? 'config/target-whitelist.json'
+    : 'dist/target-whitelist.json';
+}
+
 function verifyRelease(rootArg, options = {}) {
   const root = path.resolve(String(rootArg || '.'));
   const rootStat = fs.lstatSync(root);
@@ -145,7 +153,7 @@ function verifyRelease(rootArg, options = {}) {
     'leave-supervisor-worker.js',
     'remote-profit-worker-thread.js',
     'web-panel.js',
-    'dist/target-whitelist.json',
+    releaseWhitelistFile(manifest),
     'release.env',
     'verify-release.cjs'
   ];
@@ -237,5 +245,6 @@ module.exports = {
   canonicalValue,
   digestPayload,
   parseArgs,
+  releaseWhitelistFile,
   verifyRelease
 };

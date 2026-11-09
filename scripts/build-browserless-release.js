@@ -284,7 +284,7 @@ async function buildRelease(options) {
     for (const name of preservedModules) {
       copyFile(path.join(sourceDir, 'src', 'node', 'browserless', name), path.join(outputDir, name));
     }
-    copyFile(path.join(sourceDir, 'dist', 'target-whitelist.json'), path.join(outputDir, 'dist', 'target-whitelist.json'));
+    copyFile(path.join(sourceDir, 'config', 'target-whitelist.json'), path.join(outputDir, 'config', 'target-whitelist.json'));
     const nativeRoot = path.join(repositoryNodeModules, 'better-sqlite3');
     copyFile(path.join(nativeRoot, 'LICENSE'), path.join(outputDir, 'node_modules', 'better-sqlite3', 'LICENSE'));
     copyFile(path.join(nativeRoot, 'package.json'), path.join(outputDir, 'node_modules', 'better-sqlite3', 'package.json'));
@@ -300,8 +300,8 @@ async function buildRelease(options) {
     writeText(path.join(outputDir, 'package.json'), JSON.stringify({ private: true, type: 'commonjs' }, null, 2) + '\n');
     writeText(path.join(outputDir, 'release.env'), [
       `GRASP_RAT_BROWSERLESS_REVISION=${sourceRevision.slice(0, 12)}`,
-      'GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_FILE=dist/target-whitelist.json',
-      `GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_URL=https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/${sourceRevision}/dist/target-whitelist.json`,
+      'GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_FILE=config/target-whitelist.json',
+      `GRASP_RAT_BROWSERLESS_TARGET_WHITELIST_URL=https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/${sourceRevision}/config/target-whitelist.json`,
       ''
     ].join('\n'));
     copyFile(path.join(sourceDir, 'scripts', 'verify-browserless-release.js'), path.join(outputDir, 'verify-release.cjs'), 0o555);
