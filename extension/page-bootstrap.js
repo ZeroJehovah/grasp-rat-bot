@@ -3,7 +3,7 @@
 
   const GAME_ORIGIN = 'https://grasp-rat-game.h-e.top';
   const AUTH_ORIGIN = 'https://connect.linux.do';
-  const BOOTSTRAP_VERSION = '0.1.73';
+  const BOOTSTRAP_VERSION = '0.1.72';
   const BOOTSTRAP_OWNER = 'extension';
   const REPOSITORY_URL = 'https://github.com/ZeroJehovah/grasp-rat-bot';
   const LOADER_UPDATE_URL = 'https://raw.githubusercontent.com/ZeroJehovah/grasp-rat-bot/main/extension/page-bootstrap.js';
@@ -3034,36 +3034,9 @@
       appendParent.appendChild(grid);
       return grid;
     };
-    // Zoom-in/zoom-out geometry comes from Lucide (ISC, https://lucide.dev/icons/zoom-in);
-    // these two icons retain their Feather origin (MIT, Copyright (c) 2013-present Cole Bemis).
-    // License: https://github.com/lucide-icons/lucide/blob/main/LICENSE
-    const createPanelZoomIcon = (direction, color) => {
-      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      svg.setAttribute('aria-hidden', 'true');
-      svg.setAttribute('viewBox', '0 0 24 24');
-      svg.setAttribute('width', '14');
-      svg.setAttribute('height', '14');
-      svg.setAttribute('fill', 'none');
-      svg.setAttribute('stroke', color);
-      svg.setAttribute('stroke-width', '2');
-      svg.setAttribute('stroke-linecap', 'round');
-      svg.setAttribute('stroke-linejoin', 'round');
-      svg.setAttribute('focusable', 'false');
-      svg.style.cssText = 'display:block;flex:0 0 auto;pointer-events:none';
-      const appendShape = (tagName, attributes) => {
-        const shape = document.createElementNS('http://www.w3.org/2000/svg', tagName);
-        for (const [name, value] of Object.entries(attributes)) shape.setAttribute(name, String(value));
-        svg.appendChild(shape);
-      };
-      appendShape('circle', { cx: 11, cy: 11, r: 8 });
-      appendShape('line', { x1: 21, y1: 21, x2: 16.65, y2: 16.65 });
-      if (direction === 'in') appendShape('line', { x1: 11, y1: 8, x2: 11, y2: 14 });
-      appendShape('line', { x1: 8, y1: 11, x2: 14, y2: 11 });
-      return svg;
-    };
-    const createPanelZoomButton = (radiusCm, color, label, direction) => {
+    const createPanelZoomButton = (radiusCm, color, label) => {
       const radiusM = Math.round(Number(radiusCm || 0) / 100);
-      const title = label || ((direction === 'out' ? '缩小' : '放大') + '到 ' + radiusM + 'm 视野');
+      const title = label || ('缩放到 ' + radiusM + 'm 视野');
       const button = document.createElement('button');
       button.type = 'button';
       button.title = title;
@@ -3083,7 +3056,17 @@
         'box-shadow:inset 0 1px 0 rgba(255,255,255,.04)',
         'cursor:pointer'
       ].join(';');
-      button.appendChild(createPanelZoomIcon(direction, color));
+      const icon = document.createElement('span');
+      icon.setAttribute('aria-hidden', 'true');
+      icon.style.cssText = [
+        'display:block',
+        'width:12px',
+        'height:12px',
+        'box-sizing:border-box',
+        'border:1.6px dashed ' + color,
+        'border-radius:50%'
+      ].join(';');
+      button.appendChild(icon);
       button.addEventListener('click', event => {
         event.preventDefault();
         event.stopPropagation();
@@ -3101,8 +3084,8 @@
       line.appendChild(time);
       const controls = document.createElement('span');
       controls.style.cssText = 'display:inline-flex;align-items:center;gap:5px;flex:0 0 auto';
-      controls.appendChild(createPanelZoomButton(PANEL_ZOOM_NEAR_RADIUS_CM, '#f87171', '放大到 151m 视野', 'in'));
-      controls.appendChild(createPanelZoomButton(PANEL_ZOOM_FAR_RADIUS_CM, '#60a5fa', '缩小到 502m 视野', 'out'));
+      controls.appendChild(createPanelZoomButton(PANEL_ZOOM_NEAR_RADIUS_CM, '#f87171', '缩放到 151m 视野'));
+      controls.appendChild(createPanelZoomButton(PANEL_ZOOM_FAR_RADIUS_CM, '#60a5fa', '缩放到 502m 视野'));
       controls.appendChild(createChaseToggleButton(status));
       line.appendChild(controls);
       appendParent.appendChild(line);

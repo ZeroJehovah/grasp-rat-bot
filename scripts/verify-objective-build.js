@@ -1411,16 +1411,9 @@ async function main() {
       assert(source.includes('PANEL_ZOOM_NEAR_RADIUS_CM = 15100'), `${label} missing 151m panel zoom radius`);
       assert(source.includes('PANEL_ZOOM_FAR_RADIUS_CM = 50200'), `${label} missing 502m panel zoom radius`);
       assert(source.includes('function setPanelViewRadius'), `${label} missing panel view-radius setter`);
-      assert(source.includes("createPanelZoomIcon(direction, color)"), `${label} missing Lucide SVG zoom control icon`);
-      assert(source.includes("svg.setAttribute('viewBox', '0 0 24 24')"), `${label} zoom icons do not use the Lucide SVG view box`);
-      assert(source.includes("appendShape('circle', { cx: 11, cy: 11, r: 8 })"), `${label} zoom SVG icon lens is missing`);
-      assert(source.includes("if (direction === 'in') appendShape('line', { x1: 11, y1: 8, x2: 11, y2: 14 })"), `${label} zoom-in SVG icon is missing its vertical plus stroke`);
-      assert(source.includes('createPanelZoomButton(PANEL_ZOOM_NEAR_RADIUS_CM'), `${label} missing red 151m panel zoom-in button`);
-      assert(source.includes('createPanelZoomButton(PANEL_ZOOM_FAR_RADIUS_CM'), `${label} missing blue 502m panel zoom-out button`);
-      assert(source.includes("PANEL_ZOOM_NEAR_RADIUS_CM, '#f87171', '放大到 151m 视野', 'in'"), `${label} 151m button is not the SVG zoom-in control`);
-      assert(source.includes("PANEL_ZOOM_FAR_RADIUS_CM, '#60a5fa', '缩小到 502m 视野', 'out'"), `${label} 502m button is not the SVG zoom-out control`);
-      assert(!source.includes('border:1.6px dashed '), `${label} panel zoom buttons still use dashed-circle CSS icons`);
-      assert(source.includes('Zoom-in/zoom-out geometry comes from Lucide'), `${label} missing open-source SVG attribution`);
+      assert(source.includes('createPanelZoomButton(PANEL_ZOOM_NEAR_RADIUS_CM'), `${label} missing red 151m panel zoom button`);
+      assert(source.includes('createPanelZoomButton(PANEL_ZOOM_FAR_RADIUS_CM'), `${label} missing blue 502m panel zoom button`);
+      assert(source.includes('border:1.6px dashed '), `${label} panel zoom buttons are not dashed-circle icons`);
     }
   });
 
