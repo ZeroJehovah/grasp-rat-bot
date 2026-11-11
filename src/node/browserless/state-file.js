@@ -1673,7 +1673,16 @@ function compactBrowserlessStats(normalized, game, action, options = {}, lastKno
   const activeDelta = todayActiveDelta(stats, nowMs);
   const summedTodayStaminaSpentMs = Math.max(0, Math.round(Number(stats.today.staminaSpentMs || 0) + activeDelta.staminaSpentMs));
   const actualTodayStaminaSpentMs = actualBrowserlessDailyStaminaSpentMs(stats);
-  const todayCoinsGained = Math.max(0, Math.round(Number(stats.today.coinsGained || 0) + activeDelta.coinsGained));
+  const estimatedTodayCoinsGained = Math.max(0, Math.round(Number(stats.today.coinsGained || 0) + activeDelta.coinsGained));
+  const highDrop = normalized?.highDropPlayers || {};
+  const highDropTodayCoins = String(highDrop.day || '') === String(stats.today.day || '')
+    ? compactNumber(highDrop.selfBalanceIncomeCoins)
+    : null;
+  const todayCoinsGained = highDropTodayCoins ?? estimatedTodayCoinsGained;
+  const highDropSession = highDrop.selfSessionBalance || null;
+  const highDropSessionCoins = highDropSession?.sessionId === session.sessionId
+    ? compactNumber(highDropSession.coinsGained)
+    : null;
   // Do not project a completed wait deadline while a new snapshot safety check is in flight.
   const snapshotSafetyCheckInFlight = browserlessSnapshotSafetyCheckInFlight(action);
   const rawNextRunAt = snapshotSafetyCheckInFlight
@@ -1738,7 +1747,7 @@ function compactBrowserlessStats(normalized, game, action, options = {}, lastKno
       lastSeenAt: session.lastSeenAt || '',
       durationMs: enteredMs ? Math.max(0, Math.round(durationEndMs - enteredMs)) : 0,
       staminaSpentMs: compactNumber(session.staminaSpentMs),
-      coinsGained: pickedCoinsFromStatsValue(session.coinsGained),
+      coinsGained: pickedCoinsFromStatsValue(highDropSessionCoins ?? session.coinsGained),
       kills: compactNumber(session.kills)
     },
     offline: {
@@ -3174,6 +3183,8 @@ function compactHighDropPlayers(value) {
       globalSource: compactString(value.globalSource, 32),
       selfInitialExternalBalanceSnapshot: compactNumber(value.selfInitialExternalBalanceSnapshot),
       selfExternalBalanceSnapshot: compactNumber(value.selfExternalBalanceSnapshot),
+      selfBalanceIncomeCoins: compactNumber(value.selfBalanceIncomeCoins),
+      selfSessionBalance: compactHighDropSessionBalance(value.selfSessionBalance),
       p: value.p.slice(0, 160).map(row => Array.isArray(row) ? row.slice(0, 8) : row)
     };
   }
@@ -3201,7 +3212,21 @@ function compactHighDropPlayers(value) {
     globalSource: compactString(value.lastGlobalSnapshotSource, 32),
     selfInitialExternalBalanceSnapshot: compactNumber(value.selfInitialExternalBalanceSnapshot),
     selfExternalBalanceSnapshot: compactNumber(value.selfExternalBalanceSnapshot),
+    selfBalanceIncomeCoins: compactNumber(value.selfBalanceIncomeCoins),
+    selfSessionBalance: compactHighDropSessionBalance(value.selfSessionBalance),
     p: rows
+  };
+}
+
+function compactHighDropSessionBalance(value) {
+  if (!value || typeof value !== 'object') return null;
+  const sessionId = compactString(value.sessionId, 96);
+  if (!sessionId) return null;
+  return {
+    sessionId,
+    day: compactString(value.day, 10),
+    coinsGained: compactNumber(value.coinsGained),
+    active: Boolean(value.active)
   };
 }
 

@@ -7,11 +7,12 @@ const {
   timestampOrNull
 } = require('./player-name-observation');
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DEFAULT_RECORD_THRESHOLD = 50;
 const DEFAULT_SNAPSHOT_GAP_MS = 30 * 1000;
 const MAX_BALANCE_SNAPSHOTS = 400;
+const EXTERNAL_BALANCE_RAW_PER_COIN = 500000;
 
 function cloneJson(value) {
   if (value === null || value === undefined) return value;
@@ -91,9 +92,21 @@ function emptyStore(day = '') {
     selfExternalBalanceSnapshot: null,
     selfExternalBalanceSnapshotAt: '',
     selfExternalBalanceSnapshotTick: null,
+    selfPreviousExternalBalanceSnapshot: null,
+    selfPreviousExternalBalanceSnapshotAt: '',
+    selfBalanceIncomeRaw: null,
+    selfSessionBalance: null,
     balanceSnapshots: {},
     players: {}
   };
+}
+
+function sessionBalanceGain(session) {
+  const completedRaw = Math.max(0, Number(session?.completedBalanceRaw || 0) || 0);
+  const earnedRaw = Math.max(0, Number(session?.earnedBalanceRaw || 0) || 0);
+  const pendingRaw = Math.max(0, Number(session?.pendingBalanceRaw || 0) || 0);
+  if (!session) return null;
+  return Math.max(0, Math.round((completedRaw + earnedRaw + pendingRaw) / EXTERNAL_BALANCE_RAW_PER_COIN));
 }
 
 function pruneBalanceSnapshots(snapshots, limit = MAX_BALANCE_SNAPSHOTS) {
@@ -105,11 +118,8 @@ function pruneBalanceSnapshots(snapshots, limit = MAX_BALANCE_SNAPSHOTS) {
   return output;
 }
 
-// UTC+8 day rollover resets balance baseline: 今日收益 is (latest - initial), and the
-// new day's initial baseline is set to null so the first post-midnight snapshot becomes
-// the baseline. This aligns the balance-based gain with the Drop-based coin accounting,
-// which also uses the first post-midnight Drop as its baseline. Cross-midnight tail
-// (last sample before 00:00 to first sample after 00:00) is excluded from both metrics.
+// UTC+8 day rollover resets the self balance baseline so the first positive snapshot
+// starts the new day's account. Cross-midnight balance changes stay outside the new day.
 function carryForwardStore(previous, day) {
   const output = emptyStore(day);
   if (!previous || typeof previous !== 'object') return output;
@@ -134,6 +144,23 @@ function carryForwardStore(previous, day) {
     };
   }
   output.balanceSnapshots = pruneBalanceSnapshots(output.balanceSnapshots);
+  const previousSession = previous.selfSessionBalance && typeof previous.selfSessionBalance === 'object'
+    ? previous.selfSessionBalance
+    : null;
+  if (previousSession?.sessionId) {
+    // Keep completed earnings while restarting the observation segment for the new day.
+    output.selfSessionBalance = {
+      sessionId: String(previousSession.sessionId),
+      day,
+      completedBalanceRaw: Math.max(0, Number(previousSession.completedBalanceRaw || 0) || 0)
+        + Math.max(0, Number(previousSession.earnedBalanceRaw || 0) || 0)
+        + Math.max(0, Number(previousSession.pendingBalanceRaw || 0) || 0),
+      earnedBalanceRaw: 0,
+      lastExternalBalanceSnapshot: null,
+      pendingBalanceRaw: 0,
+      active: Boolean(previousSession.active)
+    };
+  }
   return output;
 }
 
@@ -157,6 +184,24 @@ function normalizeStore(value, expectedDay) {
   output.selfExternalBalanceSnapshot = snapshottedBalanceOrNull(value.selfExternalBalanceSnapshot);
   output.selfExternalBalanceSnapshotAt = String(value.selfExternalBalanceSnapshotAt || '');
   output.selfExternalBalanceSnapshotTick = numberOrNull(value.selfExternalBalanceSnapshotTick);
+  output.selfPreviousExternalBalanceSnapshot = snapshottedBalanceOrNull(value.selfPreviousExternalBalanceSnapshot);
+  output.selfPreviousExternalBalanceSnapshotAt = String(value.selfPreviousExternalBalanceSnapshotAt || '');
+  const storedBalanceIncomeRaw = numberOrNull(value.selfBalanceIncomeRaw);
+  output.selfBalanceIncomeRaw = storedBalanceIncomeRaw === null
+    ? null
+    : Math.max(0, storedBalanceIncomeRaw);
+  const storedSessionBalance = value.selfSessionBalance;
+  if (storedSessionBalance && typeof storedSessionBalance === 'object' && storedSessionBalance.sessionId) {
+    output.selfSessionBalance = {
+      sessionId: String(storedSessionBalance.sessionId),
+      day: expectedDay,
+      completedBalanceRaw: Math.max(0, Number(storedSessionBalance.completedBalanceRaw || 0) || 0),
+      earnedBalanceRaw: Math.max(0, Number(storedSessionBalance.earnedBalanceRaw || 0) || 0),
+      lastExternalBalanceSnapshot: snapshottedBalanceOrNull(storedSessionBalance.lastExternalBalanceSnapshot),
+      pendingBalanceRaw: Math.max(0, Number(storedSessionBalance.pendingBalanceRaw || 0) || 0),
+      active: Boolean(storedSessionBalance.active)
+    };
+  }
   for (const [key, snapshot] of Object.entries(value.balanceSnapshots || {})) {
     if (!snapshot || typeof snapshot !== 'object') continue;
     const initial = snapshottedBalanceOrNull(snapshot.initial ?? snapshot.initialValue ?? snapshot.value);
@@ -368,14 +413,39 @@ function createHighDropPlayerTracker(options = {}) {
         if (freshness.accepted) {
           const changed = store.selfExternalBalanceSnapshot !== externalBalanceSnapshot;
           const initialMissing = store.selfInitialExternalBalanceSnapshot === null;
+          const previousBalance = store.selfExternalBalanceSnapshot;
           store.selfInitialExternalBalanceSnapshot = store.selfInitialExternalBalanceSnapshot
             ?? externalBalanceSnapshot;
           store.selfInitialExternalBalanceSnapshotAt = store.selfInitialExternalBalanceSnapshotAt || at;
           store.selfInitialExternalBalanceSnapshotTick = store.selfInitialExternalBalanceSnapshotTick
             ?? snapshotTick;
+          store.selfPreviousExternalBalanceSnapshot = store.selfExternalBalanceSnapshot;
+          store.selfPreviousExternalBalanceSnapshotAt = store.selfExternalBalanceSnapshotAt;
           store.selfExternalBalanceSnapshot = externalBalanceSnapshot;
           store.selfExternalBalanceSnapshotAt = at;
           store.selfExternalBalanceSnapshotTick = snapshotTick;
+          if (store.selfBalanceIncomeRaw === null) {
+            const priorNetRaw = previousBalance !== null
+              && store.selfInitialExternalBalanceSnapshot !== null
+              && previousBalance >= store.selfInitialExternalBalanceSnapshot
+              ? previousBalance - store.selfInitialExternalBalanceSnapshot
+              : 0;
+            store.selfBalanceIncomeRaw = priorNetRaw;
+          }
+          if (previousBalance !== null && externalBalanceSnapshot > previousBalance) {
+            store.selfBalanceIncomeRaw += externalBalanceSnapshot - previousBalance;
+          }
+          const sessionBalance = store.selfSessionBalance;
+          if (sessionBalance?.active && sessionBalance.day === store.day) {
+            const lastBalance = sessionBalance.lastExternalBalanceSnapshot;
+            if (lastBalance === null) {
+              sessionBalance.earnedBalanceRaw += Math.max(0, Number(sessionBalance.pendingBalanceRaw || 0) || 0);
+              sessionBalance.pendingBalanceRaw = 0;
+            } else if (externalBalanceSnapshot > lastBalance) {
+              sessionBalance.earnedBalanceRaw += externalBalanceSnapshot - lastBalance;
+            }
+            sessionBalance.lastExternalBalanceSnapshot = externalBalanceSnapshot;
+          }
           if (changed || initialMissing || freshness.advanced) updated += 1;
         }
       }
@@ -548,10 +618,87 @@ function createHighDropPlayerTracker(options = {}) {
       lastGlobalSnapshotSource: store.lastGlobalSnapshotSource,
       selfExternalBalanceSnapshot: store.selfExternalBalanceSnapshot,
       selfInitialExternalBalanceSnapshot: store.selfInitialExternalBalanceSnapshot,
+      selfBalanceIncomeCoins: store.selfBalanceIncomeRaw === null
+        ? null
+        : Math.max(0, Math.round(store.selfBalanceIncomeRaw / EXTERNAL_BALANCE_RAW_PER_COIN)),
+      selfSessionBalance: store.selfSessionBalance
+        ? {
+            sessionId: store.selfSessionBalance.sessionId,
+            day: store.selfSessionBalance.day,
+            coinsGained: sessionBalanceGain(store.selfSessionBalance),
+            active: Boolean(store.selfSessionBalance.active)
+          }
+        : null,
       threshold,
       file,
       players
     };
+  }
+
+  function setActiveSession(value) {
+    ensureToday(Number(value?.atMs ?? now()));
+    const sessionId = String(value?.sessionId || '');
+    const current = store.selfSessionBalance;
+    if (!sessionId) {
+      if (current) current.active = false;
+      return false;
+    }
+    const fallbackCoins = Math.max(0, Math.round(Number(value?.coinsGained || 0) || 0));
+    const requestedActive = value?.active !== false;
+    if (!requestedActive && current?.sessionId !== sessionId) return false;
+    if (current?.sessionId === sessionId) {
+      current.active = requestedActive;
+      if (current.lastExternalBalanceSnapshot === null) {
+        const accountedRaw = Math.max(0, Number(current.completedBalanceRaw || 0) || 0)
+          + Math.max(0, Number(current.earnedBalanceRaw || 0) || 0);
+        const fallbackRaw = Math.max(0, fallbackCoins * EXTERNAL_BALANCE_RAW_PER_COIN - accountedRaw);
+        current.pendingBalanceRaw = Math.max(Number(current.pendingBalanceRaw || 0), fallbackRaw);
+      }
+      return false;
+    }
+    const currentBalance = store.selfExternalBalanceSnapshot;
+    const previousBalance = store.selfPreviousExternalBalanceSnapshot;
+    const currentAtMs = timestampOrNull(store.selfExternalBalanceSnapshotAt);
+    const previousAtMs = timestampOrNull(store.selfPreviousExternalBalanceSnapshotAt);
+    const enteredAtMs = timestampOrNull(value?.enteredAt);
+    const hasEntryBoundary = previousBalance !== null
+      && currentBalance !== null
+      && previousAtMs !== null
+      && currentAtMs !== null
+      && enteredAtMs !== null
+      && previousAtMs <= enteredAtMs
+      && currentAtMs > enteredAtMs;
+    const observedSessionGainRaw = hasEntryBoundary && currentBalance > previousBalance
+      ? currentBalance - previousBalance
+      : null;
+    const fallbackRaw = fallbackCoins * EXTERNAL_BALANCE_RAW_PER_COIN;
+    store.selfSessionBalance = {
+      sessionId,
+      day: store.day,
+      completedBalanceRaw: 0,
+      earnedBalanceRaw: currentBalance === null ? 0 : (observedSessionGainRaw ?? fallbackRaw),
+      lastExternalBalanceSnapshot: currentBalance,
+      pendingBalanceRaw: currentBalance === null ? fallbackRaw : 0,
+      active: requestedActive
+    };
+    return true;
+  }
+
+  function seedDailyBalanceIncome(value = {}) {
+    ensureToday(Number(value.atMs ?? now()));
+    if (store.selfBalanceIncomeRaw !== null || (value.day && String(value.day) !== store.day)) return false;
+    const current = store.selfExternalBalanceSnapshot;
+    const initial = store.selfInitialExternalBalanceSnapshot;
+    const observedNetRaw = current !== null && initial !== null && current >= initial
+      ? current - initial
+      : null;
+    const fallbackRaw = Math.max(0, Math.round(Number(value.coinsGained || 0) || 0))
+      * EXTERNAL_BALANCE_RAW_PER_COIN;
+    const dropLossObserved = Math.max(0, Number(value.dropResetCount || 0) || 0) > 0;
+    store.selfBalanceIncomeRaw = dropLossObserved
+      ? Math.max(fallbackRaw, observedNetRaw ?? 0)
+      : (observedNetRaw ?? fallbackRaw);
+    return true;
   }
 
   function rankedPlayerForDeath(userId, occurredAtMs, atMs = now()) {
@@ -568,6 +715,8 @@ function createHighDropPlayerTracker(options = {}) {
     file,
     observeSnapshot,
     rankedPlayerForDeath,
+    seedDailyBalanceIncome,
+    setActiveSession,
     status
   };
 }

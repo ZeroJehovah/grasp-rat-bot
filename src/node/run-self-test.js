@@ -36187,6 +36187,246 @@ async function runSelfTest() {
       want: '||||111500000000|111500000000|111500000000|111948845331|898'
     },
     {
+      name: 'browserless session and daily totals sum positive balance changes across death loss',
+      got: () => withTempDirForTest(async dir => {
+        const file = path.join(dir, 'high-drop-coin-accounting.json');
+        let at = Date.UTC(2026, 6, 20, 1, 0, 0);
+        const tracker = createHighDropPlayerTracker({ file, now: () => at });
+        const snapshot = (tick, drop, balance, observedAtMs) => tracker.observeSnapshot({
+          tick,
+          entities: [{
+            user_id: 7,
+            name: 'self',
+            drop,
+            external_balance_snapshot: balance
+          }]
+        }, { source: 'gap-http', selfUserId: 7, observedAtMs });
+        snapshot(1, 100, 10000000, at);
+        const enteredAt = at + 1000;
+        const sessionId = '7:2026-07-20T01:00:01.000Z';
+        tracker.setActiveSession({
+          sessionId,
+          enteredAt: new Date(enteredAt).toISOString(),
+          active: true,
+          coinsGained: 0,
+          atMs: enteredAt
+        });
+        at += 60000;
+        snapshot(2, 105, 11000000, at);
+        const beforeDeath = tracker.status(at);
+        at += 60000;
+        snapshot(3, 5, 10500000, at);
+        const afterDeath = tracker.status(at);
+        const restarted = createHighDropPlayerTracker({ file, now: () => at }).status(at);
+        at += 30000;
+        snapshot(4, 10, 11500000, at);
+        const afterRecovery = tracker.status(at);
+        const secondSessionId = '7:2026-07-20T01:02:01.000Z';
+        tracker.setActiveSession({
+          sessionId: secondSessionId,
+          enteredAt: new Date(at + 1000).toISOString(),
+          active: true,
+          coinsGained: 0,
+          atMs: at + 1000
+        });
+        at += 60000;
+        snapshot(5, 7, 12000000, at);
+        const nextSession = tracker.status(at);
+        const compact = buildCompactBrowserlessStatus({
+          session: { userId: 7 },
+          stats: {
+            currentSession: {
+              online: true,
+              sessionId,
+              enteredAt: new Date(enteredAt).toISOString(),
+              coinsGained: 99
+            },
+            today: {
+              day: '2026-07-20',
+              coinsGained: 99,
+              initialDrop: 100,
+              maxDrop: 105,
+              latestDrop: 5
+            }
+          },
+          highDropPlayers: afterDeath
+        }, { nowMs: at });
+        return [
+          beforeDeath.selfBalanceIncomeCoins,
+          beforeDeath.selfSessionBalance.coinsGained,
+          afterDeath.selfExternalBalanceSnapshot,
+          afterDeath.selfBalanceIncomeCoins,
+          afterDeath.selfSessionBalance.coinsGained,
+          restarted.selfBalanceIncomeCoins,
+          restarted.selfSessionBalance.coinsGained,
+          afterRecovery.selfBalanceIncomeCoins,
+          afterRecovery.selfSessionBalance.coinsGained,
+          nextSession.selfBalanceIncomeCoins,
+          nextSession.selfSessionBalance.sessionId,
+          nextSession.selfSessionBalance.coinsGained,
+          compact.stats.today.coinsGained,
+          compact.stats.currentSession.coinsGained,
+          compact.stats.today.latestDrop,
+          highDropBalanceDeltaValueCore([
+            'self', 100, 105, 5, 7, true,
+            afterDeath.selfExternalBalanceSnapshot,
+            afterDeath.selfInitialExternalBalanceSnapshot
+          ])
+        ].join('|');
+      }),
+      want: '2|2|10500000|2|2|2|2|4|4|5|7:2026-07-20T01:02:01.000Z|1|2|2|5|1'
+    },
+    {
+      name: 'browserless balance-calibrated session totals carry completed gain across UTC+8 rollover',
+      got: () => withTempDirForTest(async dir => {
+        const file = path.join(dir, 'high-drop-session-rollover.json');
+        let at = Date.UTC(2026, 6, 20, 15, 58, 0);
+        const tracker = createHighDropPlayerTracker({ file, now: () => at });
+        const sessionId = '7:2026-07-20T15:58:01.000Z';
+        const snapshot = (tick, drop, balance, observedAtMs) => tracker.observeSnapshot({
+          tick,
+          entities: [{ user_id: 7, name: 'self', drop, external_balance_snapshot: balance }]
+        }, { source: 'gap-http', selfUserId: 7, observedAtMs });
+        snapshot(100, 100, 10000000, at);
+        tracker.setActiveSession({
+          sessionId,
+          enteredAt: new Date(at + 1000).toISOString(),
+          active: true,
+          coinsGained: 0,
+          atMs: at + 1000
+        });
+        at = Date.UTC(2026, 6, 20, 15, 59, 0);
+        snapshot(200, 105, 11000000, at);
+        at = Date.UTC(2026, 6, 20, 16, 0, 1);
+        const nextDay = tracker.status(at);
+        tracker.setActiveSession({
+          sessionId,
+          enteredAt: new Date(Date.UTC(2026, 6, 20, 15, 58, 1)).toISOString(),
+          active: true,
+          coinsGained: 2,
+          atMs: at
+        });
+        snapshot(1, 10, 20000000, at + 1000);
+        const nextDayBaseline = tracker.status(at + 1000);
+        snapshot(2, 15, 20500000, at + 60000);
+        const nextDayGain = tracker.status(at + 60000);
+        return [
+          nextDay.day,
+          nextDay.selfSessionBalance.coinsGained,
+          nextDay.selfBalanceIncomeCoins,
+          nextDayBaseline.selfBalanceIncomeCoins,
+          nextDayBaseline.selfSessionBalance.coinsGained,
+          nextDayGain.selfBalanceIncomeCoins,
+          nextDayGain.selfSessionBalance.coinsGained
+        ].join('|');
+      }),
+      want: '2026-07-21|2||0|2|1|3'
+    },
+    {
+      name: 'browserless balance accounting migrates existing gains when current balance is below baseline',
+      got: () => withTempDirForTest(async dir => {
+        const file = path.join(dir, 'high-drop-balance-migration.json');
+        const at = Date.UTC(2026, 6, 20, 1, 2, 0);
+        fs.writeFileSync(file, JSON.stringify({
+          schemaVersion: 4,
+          day: '2026-07-20',
+          selfInitialExternalBalanceSnapshot: 10000000,
+          selfInitialExternalBalanceSnapshotAt: '2026-07-20T01:00:00.000Z',
+          selfInitialExternalBalanceSnapshotTick: 0,
+          selfExternalBalanceSnapshot: 9000000,
+          selfExternalBalanceSnapshotAt: '2026-07-20T01:01:00.000Z',
+          selfExternalBalanceSnapshotTick: 1,
+          players: {},
+          balanceSnapshots: {}
+        }));
+        const tracker = createHighDropPlayerTracker({ file, now: () => at });
+        tracker.seedDailyBalanceIncome({ coinsGained: 7, day: '2026-07-20', atMs: at });
+        tracker.observeSnapshot({
+          tick: 2,
+          entities: [{ user_id: 7, name: 'self', drop: 80, external_balance_snapshot: 9500000 }]
+        }, { source: 'gap-http', selfUserId: 7, observedAtMs: at });
+        const status = tracker.status(at);
+        return [
+          status.selfInitialExternalBalanceSnapshot,
+          status.selfExternalBalanceSnapshot,
+          status.selfBalanceIncomeCoins,
+          Math.round(highDropBalanceDeltaValueCore([
+            'self', 100, 100, 80, 7, true,
+            status.selfExternalBalanceSnapshot,
+            status.selfInitialExternalBalanceSnapshot
+          ]))
+        ].join('|');
+      }),
+      want: '10000000|9500000|8|-1'
+    },
+    {
+      name: 'browserless balance accounting migration preserves earnings after a Drop reset',
+      got: () => withTempDirForTest(async dir => {
+        const file = path.join(dir, 'high-drop-balance-drop-reset-migration.json');
+        const at = Date.UTC(2026, 6, 20, 1, 2, 0);
+        fs.writeFileSync(file, JSON.stringify({
+          schemaVersion: 4,
+          day: '2026-07-20',
+          selfInitialExternalBalanceSnapshot: 10000000,
+          selfInitialExternalBalanceSnapshotAt: '2026-07-20T01:00:00.000Z',
+          selfInitialExternalBalanceSnapshotTick: 0,
+          selfExternalBalanceSnapshot: 12000000,
+          selfExternalBalanceSnapshotAt: '2026-07-20T01:01:00.000Z',
+          selfExternalBalanceSnapshotTick: 1,
+          players: {},
+          balanceSnapshots: {}
+        }));
+        const tracker = createHighDropPlayerTracker({ file, now: () => at });
+        tracker.seedDailyBalanceIncome({
+          coinsGained: 7,
+          dropResetCount: 1,
+          day: '2026-07-20',
+          atMs: at
+        });
+        tracker.observeSnapshot({
+          tick: 2,
+          entities: [{ user_id: 7, name: 'self', drop: 8, external_balance_snapshot: 12500000 }]
+        }, { source: 'gap-http', selfUserId: 7, observedAtMs: at });
+        return tracker.status(at).selfBalanceIncomeCoins;
+      }),
+      want: 8
+    },
+    {
+      name: 'browserless session baseline uses the balance change spanning session entry',
+      got: () => withTempDirForTest(async dir => {
+        const file = path.join(dir, 'high-drop-session-entry-boundary.json');
+        let at = Date.UTC(2026, 6, 20, 1, 0, 0);
+        const tracker = createHighDropPlayerTracker({ file, now: () => at });
+        const snapshot = (tick, balance, observedAtMs) => tracker.observeSnapshot({
+          tick,
+          entities: [{ user_id: 7, name: 'self', drop: 100, external_balance_snapshot: balance }]
+        }, { source: 'gap-http', selfUserId: 7, observedAtMs });
+        snapshot(1, 10000000, at);
+        const enteredAt = at + 10000;
+        at += 30000;
+        snapshot(2, 11000000, at);
+        const sessionId = '7:2026-07-20T01:00:10.000Z';
+        tracker.setActiveSession({
+          sessionId,
+          enteredAt: new Date(enteredAt).toISOString(),
+          active: true,
+          coinsGained: 0,
+          atMs: enteredAt
+        });
+        const entry = tracker.status(at);
+        at += 30000;
+        snapshot(3, 11500000, at);
+        const updated = tracker.status(at);
+        return [
+          entry.selfBalanceIncomeCoins,
+          entry.selfSessionBalance.coinsGained,
+          updated.selfBalanceIncomeCoins,
+          updated.selfSessionBalance.coinsGained
+        ].join('|');
+      }),
+      want: '2|2|3|3'
+    },
+    {
       name: 'browserless snapshot gap poller waits three minutes after any observed snapshot',
       got: () => (async () => {
         let t = 10000;

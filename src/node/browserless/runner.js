@@ -2412,6 +2412,7 @@ async function runBrowserlessRunner(config, deps = {}) {
     now,
     backgroundIo
   });
+  let highDropBalanceSessionId = '';
   const snapshotAuditObserver = deps.snapshotAuditObserver || createSnapshotAuditObserver({
     now,
     selfUserId: config.userId
@@ -2912,6 +2913,21 @@ async function runBrowserlessRunner(config, deps = {}) {
       );
     }
     try {
+      const accountingState = liveState || persisted || null;
+      const statsSession = accountingState?.stats?.currentSession || null;
+      highDropPlayerTracker.setActiveSession?.(statsSession?.sessionId ? {
+        sessionId: statsSession.sessionId,
+        enteredAt: statsSession.enteredAt,
+        coinsGained: statsSession.coinsGained,
+        active: Boolean(statsSession.online),
+        atMs: observedAtMs
+      } : null);
+      highDropPlayerTracker.seedDailyBalanceIncome?.({
+        coinsGained: accountingState?.stats?.today?.coinsGained,
+        dropResetCount: accountingState?.stats?.today?.dropResetCount,
+        day: accountingState?.stats?.today?.day,
+        atMs: observedAtMs
+      });
       const result = highDropPlayerTracker.observeSnapshot(payload, {
         ...detail,
         observedAtMs,
@@ -5544,6 +5560,23 @@ async function runBrowserlessRunner(config, deps = {}) {
           nowMs: now(),
           assumeNormalized: true
         });
+        const statsSession = stats.currentSession || null;
+        if (statsSession?.sessionId && statsSession.sessionId !== highDropBalanceSessionId) {
+          highDropPlayerTracker.setActiveSession?.({
+            sessionId: statsSession.sessionId,
+            enteredAt: statsSession.enteredAt,
+            coinsGained: statsSession.coinsGained,
+            active: Boolean(statsSession.online),
+            atMs: now()
+          });
+          highDropPlayerTracker.seedDailyBalanceIncome?.({
+            coinsGained: stats.today?.coinsGained,
+            dropResetCount: stats.today?.dropResetCount,
+            day: stats.today?.day,
+            atMs: now()
+          });
+          highDropBalanceSessionId = statsSession.sessionId;
+        }
         patchLiveState({
           ...decisionPatch,
           current: {
