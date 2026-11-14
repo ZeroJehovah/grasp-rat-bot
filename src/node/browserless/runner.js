@@ -2933,12 +2933,28 @@ async function runBrowserlessRunner(config, deps = {}) {
         observedAtMs,
         selfUserId: config.userId
       });
-      if (result.updated > 0) {
+      const balanceOrdering = result.balanceOrdering || null;
+      const meaningfulBalanceOutcome = balanceOrdering
+        && (balanceOrdering.snapshot?.reset
+          || balanceOrdering.self?.outcome === 'conflict'
+          || balanceOrdering.self?.outcome === 'reset'
+          || balanceOrdering.self?.outcome === 'source-upgrade');
+      if (result.updated > 0 || meaningfulBalanceOutcome) {
         logStore.append('runner', 'high-drop-player-observation', {
           source: detail.source || 'snapshot',
           observed: result.observed,
           updated: result.updated,
-          playerCount: result.playerCount
+          playerCount: result.playerCount,
+          ...(balanceOrdering
+            ? {
+                balanceSnapshotOutcome: balanceOrdering.snapshot?.outcome,
+                balanceSnapshotReason: balanceOrdering.snapshot?.reason,
+                balanceTick: balanceOrdering.snapshot?.tick,
+                balanceTickEpoch: balanceOrdering.tickEpoch,
+                selfBalanceOutcome: balanceOrdering.self?.outcome || 'not-observed',
+                selfBalanceReason: balanceOrdering.self?.reason || ''
+              }
+            : {})
         });
       }
       return {

@@ -7,7 +7,7 @@ const {
   timestampOrNull
 } = require('./player-name-observation');
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DEFAULT_RECORD_THRESHOLD = 50;
 const DEFAULT_SNAPSHOT_GAP_MS = 30 * 1000;
@@ -27,6 +27,171 @@ function numberOrNull(value) {
   if (value === null || value === undefined || value === '') return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
+}
+
+function realtimeBalanceSource(value) {
+  return String(value || '').trim().toLowerCase() === 'ws';
+}
+
+// Balance snapshots use game ticks as their primary order. Local observation time is
+// still a monotonic guard because a genuinely later arrival cannot predate the last
+// accepted observation. Unlike player names, however, a later arrival never makes a
+// lower HTTP tick fresh: periodic HTTP snapshots are commonly returned from a cache
+// that trails realtime WS state by up to roughly 30 seconds.
+function balanceSnapshotOrdering(previous, observation) {
+  const observedTick = numberOrNull(observation?.tick);
+  const observedAtMs = timestampOrNull(observation?.observedAtMs);
+  const observedSource = String(observation?.source || 'snapshot');
+  const previousTick = numberOrNull(previous?.tick);
+  const previousAtMs = timestampOrNull(previous?.atMs);
+  const previousSource = String(previous?.source || '');
+  const epoch = Math.max(1, Number(previous?.epoch || 1) || 1);
+  const resetCeiling = numberOrNull(previous?.resetCeiling);
+  const rejected = reason => ({
+    accepted: false,
+    advanced: false,
+    sourceUpgrade: false,
+    reset: false,
+    outcome: 'stale',
+    reason,
+    tick: observedTick,
+    source: observedSource,
+    epoch,
+    previousTick,
+    resetCeiling
+  });
+  if (observedAtMs === null) return rejected('missing-observation-time');
+  if (previousAtMs !== null && observedAtMs < previousAtMs) {
+    return rejected('observation-time-regressed');
+  }
+  if (observedTick === null) {
+    if (previousTick !== null) return rejected('missing-tick');
+    return {
+      accepted: true,
+      advanced: false,
+      sourceUpgrade: false,
+      reset: false,
+      outcome: 'untracked',
+      reason: 'missing-tick',
+      tick: null,
+      source: observedSource,
+      epoch,
+      previousTick,
+      resetCeiling
+    };
+  }
+  if (previousTick === null) {
+    return {
+      accepted: true,
+      advanced: true,
+      sourceUpgrade: false,
+      reset: false,
+      outcome: 'accepted',
+      reason: 'initial-tick',
+      tick: observedTick,
+      source: observedSource,
+      epoch,
+      previousTick,
+      resetCeiling
+    };
+  }
+  if (observedTick > previousTick) {
+    if (!realtimeBalanceSource(observedSource)
+      && resetCeiling !== null
+      && observedTick <= resetCeiling) {
+      return rejected('prior-epoch-http-tick');
+    }
+    return {
+      accepted: true,
+      advanced: true,
+      sourceUpgrade: false,
+      reset: false,
+      outcome: 'accepted',
+      reason: 'tick-advanced',
+      tick: observedTick,
+      source: observedSource,
+      epoch,
+      previousTick,
+      resetCeiling
+    };
+  }
+  if (observedTick === previousTick) {
+    const sourceUpgrade = realtimeBalanceSource(observedSource) && !realtimeBalanceSource(previousSource);
+    return {
+      accepted: true,
+      advanced: false,
+      sourceUpgrade,
+      reset: false,
+      outcome: 'duplicate',
+      reason: sourceUpgrade ? 'same-tick-realtime-upgrade' : 'same-tick',
+      tick: observedTick,
+      source: observedSource,
+      epoch,
+      previousTick,
+      resetCeiling
+    };
+  }
+  if (realtimeBalanceSource(observedSource)) {
+    return {
+      accepted: true,
+      advanced: true,
+      sourceUpgrade: false,
+      reset: true,
+      outcome: 'reset',
+      reason: 'realtime-tick-reset',
+      tick: observedTick,
+      source: observedSource,
+      epoch: epoch + 1,
+      previousTick,
+      resetCeiling: Math.max(Number(resetCeiling || 0) || 0, previousTick)
+    };
+  }
+  return rejected(
+    resetCeiling !== null && observedTick <= resetCeiling
+      ? 'prior-epoch-http-tick'
+      : 'older-http-tick'
+  );
+}
+
+function balanceRecordOrdering(record, order, balance) {
+  if (!order?.accepted) {
+    return { accepted: false, changed: false, outcome: 'stale', reason: order?.reason || 'snapshot-stale' };
+  }
+  const previousTick = numberOrNull(record?.tick);
+  const previousBalance = numberOrNull(record?.latest);
+  const previousSource = String(record?.source || '');
+  if (!record || previousBalance === null) {
+    return { accepted: true, changed: true, outcome: 'accepted', reason: 'new-record' };
+  }
+  if (previousTick !== null && order.tick === null && !order.reset) {
+    return { accepted: false, changed: false, outcome: 'stale', reason: 'missing-tick' };
+  }
+  if (!order.reset && previousTick !== null && order.tick !== null) {
+    if (order.tick < previousTick) {
+      return { accepted: false, changed: false, outcome: 'stale', reason: 'record-tick-ahead' };
+    }
+    if (order.tick === previousTick) {
+      if (previousBalance === balance) {
+        const sourceUpgrade = realtimeBalanceSource(order.source) && !realtimeBalanceSource(previousSource);
+        return {
+          accepted: sourceUpgrade,
+          changed: false,
+          outcome: sourceUpgrade ? 'source-upgrade' : 'duplicate',
+          reason: sourceUpgrade ? 'same-tick-realtime-upgrade' : 'same-tick-duplicate'
+        };
+      }
+      if (realtimeBalanceSource(order.source) && !realtimeBalanceSource(previousSource)) {
+        return { accepted: true, changed: true, outcome: 'source-upgrade', reason: 'same-tick-realtime-upgrade' };
+      }
+      return { accepted: false, changed: false, outcome: 'conflict', reason: 'same-tick-balance-conflict' };
+    }
+  }
+  return {
+    accepted: true,
+    changed: previousBalance !== balance,
+    outcome: order.reset ? 'reset' : 'accepted',
+    reason: order.reset ? order.reason : 'tick-advanced'
+  };
 }
 
 function entityDrop(entity) {
@@ -92,9 +257,29 @@ function emptyStore(day = '') {
     selfExternalBalanceSnapshot: null,
     selfExternalBalanceSnapshotAt: '',
     selfExternalBalanceSnapshotTick: null,
+    selfExternalBalanceSnapshotSource: '',
     selfPreviousExternalBalanceSnapshot: null,
     selfPreviousExternalBalanceSnapshotAt: '',
+    selfPreviousExternalBalanceSnapshotTick: null,
+    selfPreviousExternalBalanceSnapshotSource: '',
     selfBalanceIncomeRaw: null,
+    selfBalanceLastOutcome: '',
+    selfBalanceLastOutcomeReason: '',
+    selfBalanceStaleObservationCount: 0,
+    selfBalanceDuplicateObservationCount: 0,
+    selfBalanceConflictObservationCount: 0,
+    balanceSnapshotTick: null,
+    balanceSnapshotTickSource: '',
+    balanceSnapshotTickAt: '',
+    balanceSnapshotLastSeenAt: '',
+    balanceSnapshotTickEpoch: 1,
+    balanceSnapshotTickResetCeiling: null,
+    balanceSnapshotTickResetCount: 0,
+    balanceSnapshotStaleCount: 0,
+    balanceSnapshotDuplicateCount: 0,
+    balanceSnapshotConflictCount: 0,
+    balanceAccountingMigration: null,
+    lastBalanceSnapshotOrdering: null,
     selfSessionBalance: null,
     balanceSnapshots: {},
     players: {}
@@ -134,13 +319,15 @@ function carryForwardStore(previous, day) {
     const normalizedKey = String(key || '').startsWith('user:') ? String(key) : `user:${key}`;
     const at = String(snapshot.at || snapshot.latestAt || snapshot.initialAt || '');
     const tick = numberOrNull(snapshot.tick ?? snapshot.latestTick ?? snapshot.initialTick);
+    const source = String(snapshot.source || snapshot.latestSource || snapshot.initialSource || '');
     output.balanceSnapshots[normalizedKey] = {
       initial: latest,
       initialAt: at,
       initialTick: tick,
       latest,
       at,
-      tick
+      tick,
+      source
     };
   }
   output.balanceSnapshots = pruneBalanceSnapshots(output.balanceSnapshots);
@@ -167,6 +354,7 @@ function carryForwardStore(previous, day) {
 function normalizeStore(value, expectedDay) {
   if (!value || typeof value !== 'object') return emptyStore(expectedDay);
   if (value.day !== expectedDay) return carryForwardStore(value, expectedDay);
+  const storedSchemaVersion = numberOrNull(value.schemaVersion);
   const output = emptyStore(expectedDay);
   output.updatedAt = String(value.updatedAt || '');
   output.lastSnapshotAt = String(value.lastSnapshotAt || '');
@@ -184,12 +372,68 @@ function normalizeStore(value, expectedDay) {
   output.selfExternalBalanceSnapshot = snapshottedBalanceOrNull(value.selfExternalBalanceSnapshot);
   output.selfExternalBalanceSnapshotAt = String(value.selfExternalBalanceSnapshotAt || '');
   output.selfExternalBalanceSnapshotTick = numberOrNull(value.selfExternalBalanceSnapshotTick);
+  output.selfExternalBalanceSnapshotSource = String(value.selfExternalBalanceSnapshotSource || '');
   output.selfPreviousExternalBalanceSnapshot = snapshottedBalanceOrNull(value.selfPreviousExternalBalanceSnapshot);
   output.selfPreviousExternalBalanceSnapshotAt = String(value.selfPreviousExternalBalanceSnapshotAt || '');
+  output.selfPreviousExternalBalanceSnapshotTick = numberOrNull(value.selfPreviousExternalBalanceSnapshotTick);
+  output.selfPreviousExternalBalanceSnapshotSource = String(value.selfPreviousExternalBalanceSnapshotSource || '');
   const storedBalanceIncomeRaw = numberOrNull(value.selfBalanceIncomeRaw);
+  const balanceNetRaw = output.selfExternalBalanceSnapshot !== null
+    && output.selfInitialExternalBalanceSnapshot !== null
+    && output.selfExternalBalanceSnapshot >= output.selfInitialExternalBalanceSnapshot
+    ? output.selfExternalBalanceSnapshot - output.selfInitialExternalBalanceSnapshot
+    : 0;
+  const balanceSchemaMigrated = storedSchemaVersion !== null
+    && storedSchemaVersion > 0
+    && storedSchemaVersion < SCHEMA_VERSION
+    && storedBalanceIncomeRaw !== null;
+  output.balanceAccountingMigration = value.balanceAccountingMigration
+    && typeof value.balanceAccountingMigration === 'object'
+    ? cloneJson(value.balanceAccountingMigration)
+    : null;
   output.selfBalanceIncomeRaw = storedBalanceIncomeRaw === null
     ? null
-    : Math.max(0, storedBalanceIncomeRaw);
+    : (balanceSchemaMigrated ? balanceNetRaw : Math.max(0, storedBalanceIncomeRaw));
+  if (balanceSchemaMigrated) {
+    // Schema versions through 5 accumulated positive changes after accepting snapshots
+    // by arrival time. Late HTTP caches could therefore insert an older balance and
+    // make the following realtime increase count twice. The old per-change sequence is
+    // not persisted, so the only reconstructible daily total is the bounded net gain.
+    output.balanceAccountingMigration = {
+      fromSchemaVersion: storedSchemaVersion,
+      toSchemaVersion: SCHEMA_VERSION,
+      previousIncomeRaw: Math.max(0, storedBalanceIncomeRaw),
+      calibratedIncomeRaw: balanceNetRaw,
+      reason: 'tick-ordered-balance-accounting'
+    };
+  }
+  output.selfBalanceLastOutcome = String(value.selfBalanceLastOutcome || '');
+  output.selfBalanceLastOutcomeReason = String(value.selfBalanceLastOutcomeReason || '');
+  output.selfBalanceStaleObservationCount = Math.max(0, Number(value.selfBalanceStaleObservationCount || 0) || 0);
+  output.selfBalanceDuplicateObservationCount = Math.max(0, Number(value.selfBalanceDuplicateObservationCount || 0) || 0);
+  output.selfBalanceConflictObservationCount = Math.max(0, Number(value.selfBalanceConflictObservationCount || 0) || 0);
+  output.balanceSnapshotTick = numberOrNull(
+    value.balanceSnapshotTick ?? output.selfExternalBalanceSnapshotTick
+  );
+  output.balanceSnapshotTickSource = String(
+    value.balanceSnapshotTickSource || output.selfExternalBalanceSnapshotSource || ''
+  );
+  output.balanceSnapshotTickAt = String(
+    value.balanceSnapshotTickAt || output.selfExternalBalanceSnapshotAt || ''
+  );
+  output.balanceSnapshotLastSeenAt = String(
+    value.balanceSnapshotLastSeenAt || value.balanceSnapshotTickAt || output.selfExternalBalanceSnapshotAt || ''
+  );
+  output.balanceSnapshotTickEpoch = Math.max(1, Number(value.balanceSnapshotTickEpoch || 1) || 1);
+  output.balanceSnapshotTickResetCeiling = numberOrNull(value.balanceSnapshotTickResetCeiling);
+  output.balanceSnapshotTickResetCount = Math.max(0, Number(value.balanceSnapshotTickResetCount || 0) || 0);
+  output.balanceSnapshotStaleCount = Math.max(0, Number(value.balanceSnapshotStaleCount || 0) || 0);
+  output.balanceSnapshotDuplicateCount = Math.max(0, Number(value.balanceSnapshotDuplicateCount || 0) || 0);
+  output.balanceSnapshotConflictCount = Math.max(0, Number(value.balanceSnapshotConflictCount || 0) || 0);
+  output.lastBalanceSnapshotOrdering = value.lastBalanceSnapshotOrdering
+    && typeof value.lastBalanceSnapshotOrdering === 'object'
+    ? cloneJson(value.lastBalanceSnapshotOrdering)
+    : null;
   const storedSessionBalance = value.selfSessionBalance;
   if (storedSessionBalance && typeof storedSessionBalance === 'object' && storedSessionBalance.sessionId) {
     output.selfSessionBalance = {
@@ -214,7 +458,8 @@ function normalizeStore(value, expectedDay) {
       initialTick: numberOrNull(snapshot.initialTick ?? snapshot.tick),
       latest: latest ?? initial,
       at: String(snapshot.at || snapshot.latestAt || snapshot.initialAt || ''),
-      tick: numberOrNull(snapshot.tick ?? snapshot.latestTick ?? snapshot.initialTick)
+      tick: numberOrNull(snapshot.tick ?? snapshot.latestTick ?? snapshot.initialTick),
+      source: String(snapshot.source || snapshot.latestSource || snapshot.initialSource || '')
     };
   }
   output.balanceSnapshots = pruneBalanceSnapshots(output.balanceSnapshots);
@@ -256,6 +501,7 @@ function normalizeStore(value, expectedDay) {
       externalBalanceSnapshot,
       externalBalanceSnapshotAt: String(player.externalBalanceSnapshotAt || ''),
       externalBalanceSnapshotTick: numberOrNull(player.externalBalanceSnapshotTick),
+      externalBalanceSnapshotSource: String(player.externalBalanceSnapshotSource || ''),
       firstObservedAt: String(player.firstObservedAt || ''),
       lastObservedAt: String(player.lastObservedAt || ''),
       lastObservedTick: numberOrNull(player.lastObservedTick),
@@ -272,7 +518,8 @@ function normalizeStore(value, expectedDay) {
         initialTick: candidate.initialExternalBalanceSnapshotTick ?? candidate.externalBalanceSnapshotTick,
         latest: candidate.externalBalanceSnapshot ?? initial,
         at: candidate.externalBalanceSnapshotAt || candidate.initialExternalBalanceSnapshotAt,
-        tick: candidate.externalBalanceSnapshotTick ?? candidate.initialExternalBalanceSnapshotTick
+        tick: candidate.externalBalanceSnapshotTick ?? candidate.initialExternalBalanceSnapshotTick,
+        source: candidate.externalBalanceSnapshotSource
       };
     }
     const existing = output.players[normalizedKey] || null;
@@ -327,6 +574,9 @@ function normalizeStore(value, expectedDay) {
       externalBalanceSnapshotTick: latest.externalBalanceSnapshotTick
         ?? existing.externalBalanceSnapshotTick
         ?? candidate.externalBalanceSnapshotTick,
+      externalBalanceSnapshotSource: latest.externalBalanceSnapshotSource
+        || existing.externalBalanceSnapshotSource
+        || candidate.externalBalanceSnapshotSource,
       firstObservedAt: first.firstObservedAt,
       lastObservedAt: latest.lastObservedAt,
       lastObservedTick: latest.lastObservedTick,
@@ -387,6 +637,42 @@ function createHighDropPlayerTracker(options = {}) {
     const selfUserId = numberOrNull(detail.selfUserId);
     const source = String(detail.source || 'snapshot');
     const globalSnapshot = detail.global === true || (detail.global !== false && source !== 'ws');
+    const previousBalanceTickAt = store.balanceSnapshotLastSeenAt || store.balanceSnapshotTickAt;
+    const balanceOrdering = balanceSnapshotOrdering({
+      tick: store.balanceSnapshotTick,
+      source: store.balanceSnapshotTickSource,
+      atMs: previousBalanceTickAt,
+      epoch: store.balanceSnapshotTickEpoch,
+      resetCeiling: store.balanceSnapshotTickResetCeiling
+    }, {
+      tick: snapshotTick,
+      source,
+      observedAtMs: atMs
+    });
+    store.balanceSnapshotLastSeenAt = at;
+    let balanceDiagnosticsChanged = false;
+    if (balanceOrdering.accepted) {
+      if (balanceOrdering.advanced || balanceOrdering.sourceUpgrade || store.balanceSnapshotTick === null) {
+        store.balanceSnapshotTick = balanceOrdering.tick;
+        store.balanceSnapshotTickSource = balanceOrdering.source;
+        store.balanceSnapshotTickAt = at;
+      }
+      store.balanceSnapshotTickEpoch = balanceOrdering.epoch;
+      store.balanceSnapshotTickResetCeiling = balanceOrdering.resetCeiling;
+      if (balanceOrdering.reset) {
+        store.balanceSnapshotTickResetCount += 1;
+        balanceDiagnosticsChanged = true;
+      }
+      if (balanceOrdering.outcome === 'duplicate') store.balanceSnapshotDuplicateCount += 1;
+    } else {
+      store.balanceSnapshotStaleCount += 1;
+      balanceDiagnosticsChanged = true;
+    }
+    store.lastBalanceSnapshotOrdering = {
+      ...balanceOrdering,
+      at,
+      previousAt: previousBalanceTickAt || ''
+    };
     const presentUserIds = new Set();
     for (const entity of payload.entities) {
       const identity = entityIdentity(entity);
@@ -397,21 +683,21 @@ function createHighDropPlayerTracker(options = {}) {
     let observed = 0;
     let updated = 0;
     let observationAdvanced = 0;
+    let selfBalanceOrdering = null;
     for (const entity of payload.entities) {
       if (!entity || typeof entity !== 'object') continue;
       const identity = entityIdentity(entity);
       const externalBalanceSnapshot = entityExternalBalanceSnapshot(entity);
       const existing = identity ? store.players[identity.key] || null : null;
+      let playerBalanceOrdering = null;
       if (identity && selfUserId !== null && identity.userId === selfUserId && externalBalanceSnapshot !== null) {
-        const selfObservedAtMs = timestampOrNull(store.selfExternalBalanceSnapshotAt);
-        const freshness = nameObservationFreshness({
-          observedAtMs: atMs,
-          observedTick: snapshotTick,
-          previousObservedAtMs: selfObservedAtMs,
-          previousObservedTick: store.selfExternalBalanceSnapshotTick
-        });
-        if (freshness.accepted) {
-          const changed = store.selfExternalBalanceSnapshot !== externalBalanceSnapshot;
+        selfBalanceOrdering = balanceRecordOrdering({
+          latest: store.selfExternalBalanceSnapshot,
+          tick: store.selfExternalBalanceSnapshotTick,
+          source: store.selfExternalBalanceSnapshotSource
+        }, balanceOrdering, externalBalanceSnapshot);
+        if (selfBalanceOrdering.accepted) {
+          const changed = selfBalanceOrdering.changed;
           const initialMissing = store.selfInitialExternalBalanceSnapshot === null;
           const previousBalance = store.selfExternalBalanceSnapshot;
           store.selfInitialExternalBalanceSnapshot = store.selfInitialExternalBalanceSnapshot
@@ -421,9 +707,12 @@ function createHighDropPlayerTracker(options = {}) {
             ?? snapshotTick;
           store.selfPreviousExternalBalanceSnapshot = store.selfExternalBalanceSnapshot;
           store.selfPreviousExternalBalanceSnapshotAt = store.selfExternalBalanceSnapshotAt;
+          store.selfPreviousExternalBalanceSnapshotTick = store.selfExternalBalanceSnapshotTick;
+          store.selfPreviousExternalBalanceSnapshotSource = store.selfExternalBalanceSnapshotSource;
           store.selfExternalBalanceSnapshot = externalBalanceSnapshot;
           store.selfExternalBalanceSnapshotAt = at;
           store.selfExternalBalanceSnapshotTick = snapshotTick;
+          store.selfExternalBalanceSnapshotSource = source;
           if (store.selfBalanceIncomeRaw === null) {
             const priorNetRaw = previousBalance !== null
               && store.selfInitialExternalBalanceSnapshot !== null
@@ -436,7 +725,7 @@ function createHighDropPlayerTracker(options = {}) {
             store.selfBalanceIncomeRaw += externalBalanceSnapshot - previousBalance;
           }
           const sessionBalance = store.selfSessionBalance;
-          if (sessionBalance?.active && sessionBalance.day === store.day) {
+          if (changed && sessionBalance?.active && sessionBalance.day === store.day) {
             const lastBalance = sessionBalance.lastExternalBalanceSnapshot;
             if (lastBalance === null) {
               sessionBalance.earnedBalanceRaw += Math.max(0, Number(sessionBalance.pendingBalanceRaw || 0) || 0);
@@ -446,8 +735,21 @@ function createHighDropPlayerTracker(options = {}) {
             }
             sessionBalance.lastExternalBalanceSnapshot = externalBalanceSnapshot;
           }
-          if (changed || initialMissing || freshness.advanced) updated += 1;
+          if (changed || initialMissing || balanceOrdering.advanced
+            || balanceOrdering.reset || balanceOrdering.sourceUpgrade) updated += 1;
+        } else {
+          if (selfBalanceOrdering.outcome === 'conflict') {
+            store.selfBalanceConflictObservationCount += 1;
+            store.balanceSnapshotConflictCount += 1;
+          } else if (selfBalanceOrdering.outcome === 'duplicate') {
+            store.selfBalanceDuplicateObservationCount += 1;
+          } else {
+            store.selfBalanceStaleObservationCount += 1;
+          }
+          balanceDiagnosticsChanged = true;
         }
+        store.selfBalanceLastOutcome = selfBalanceOrdering.outcome;
+        store.selfBalanceLastOutcomeReason = selfBalanceOrdering.reason;
       }
       if (identity && (selfUserId === null || identity.userId !== selfUserId)
         && externalBalanceSnapshot !== null) {
@@ -459,29 +761,27 @@ function createHighDropPlayerTracker(options = {}) {
                 initialTick: existing.initialExternalBalanceSnapshotTick ?? existing.externalBalanceSnapshotTick,
                 latest: existing.externalBalanceSnapshot,
                 at: existing.externalBalanceSnapshotAt || existing.lastObservedAt,
-                tick: existing.externalBalanceSnapshotTick ?? existing.lastObservedTick
+                tick: existing.externalBalanceSnapshotTick ?? existing.lastObservedTick,
+                source: existing.externalBalanceSnapshotSource || ''
               }
             : null);
-        const balanceFreshness = nameObservationFreshness({
-          observedAtMs: atMs,
-          observedTick: snapshotTick,
-          previousObservedAtMs: timestampOrNull(previousBalance?.at),
-          previousObservedTick: previousBalance?.tick
-        });
-        if (balanceFreshness.accepted) {
+        playerBalanceOrdering = balanceRecordOrdering(previousBalance, balanceOrdering, externalBalanceSnapshot);
+        if (playerBalanceOrdering.accepted) {
           const balanceRecord = previousBalance || {
             initial: externalBalanceSnapshot,
             initialAt: at,
-            initialTick: snapshotTick
+            initialTick: snapshotTick,
+            source
           };
-          const changed = balanceRecord.latest !== externalBalanceSnapshot;
+          const changed = playerBalanceOrdering.changed;
           store.balanceSnapshots[identity.key] = {
             initial: balanceRecord.initial ?? externalBalanceSnapshot,
             initialAt: balanceRecord.initialAt || at,
             initialTick: balanceRecord.initialTick ?? snapshotTick,
             latest: externalBalanceSnapshot,
             at,
-            tick: snapshotTick
+            tick: snapshotTick,
+            source
           };
           if (existing) {
             store.players[identity.key] = {
@@ -491,10 +791,15 @@ function createHighDropPlayerTracker(options = {}) {
               initialExternalBalanceSnapshotTick: balanceRecord.initialTick ?? snapshotTick,
               externalBalanceSnapshot,
               externalBalanceSnapshotAt: at,
-              externalBalanceSnapshotTick: snapshotTick
+              externalBalanceSnapshotTick: snapshotTick,
+              externalBalanceSnapshotSource: source
             };
           }
-          if (changed || !previousBalance || balanceFreshness.advanced) updated += 1;
+          if (changed || !previousBalance || balanceOrdering.advanced
+            || balanceOrdering.reset || balanceOrdering.sourceUpgrade) updated += 1;
+        } else if (playerBalanceOrdering.outcome === 'conflict') {
+          store.balanceSnapshotConflictCount += 1;
+          balanceDiagnosticsChanged = true;
         }
       }
       const drop = entityDrop(entity);
@@ -507,6 +812,7 @@ function createHighDropPlayerTracker(options = {}) {
       const name = entityName(entity, trackedPlayer?.name || fallbackName);
       if (!trackedPlayer) {
         const balanceRecord = store.balanceSnapshots[identity.key] || null;
+        const acceptedBalanceSnapshot = playerBalanceOrdering?.accepted ? externalBalanceSnapshot : null;
         store.players[identity.key] = {
           key: identity.key,
           userId: identity.userId,
@@ -515,12 +821,13 @@ function createHighDropPlayerTracker(options = {}) {
           initialDrop: drop,
           maxDrop: drop,
           latestDrop: drop,
-          initialExternalBalanceSnapshot: balanceRecord?.initial ?? externalBalanceSnapshot,
-          initialExternalBalanceSnapshotAt: balanceRecord?.initialAt || (externalBalanceSnapshot === null ? '' : at),
-          initialExternalBalanceSnapshotTick: balanceRecord?.initialTick ?? (externalBalanceSnapshot === null ? null : snapshotTick),
-          externalBalanceSnapshot: balanceRecord?.latest ?? externalBalanceSnapshot,
-          externalBalanceSnapshotAt: balanceRecord?.at || (externalBalanceSnapshot === null ? '' : at),
-          externalBalanceSnapshotTick: balanceRecord?.tick ?? (externalBalanceSnapshot === null ? null : snapshotTick),
+          initialExternalBalanceSnapshot: balanceRecord?.initial ?? acceptedBalanceSnapshot,
+          initialExternalBalanceSnapshotAt: balanceRecord?.initialAt || (acceptedBalanceSnapshot === null ? '' : at),
+          initialExternalBalanceSnapshotTick: balanceRecord?.initialTick ?? (acceptedBalanceSnapshot === null ? null : snapshotTick),
+          externalBalanceSnapshot: balanceRecord?.latest ?? acceptedBalanceSnapshot,
+          externalBalanceSnapshotAt: balanceRecord?.at || (acceptedBalanceSnapshot === null ? '' : at),
+          externalBalanceSnapshotTick: balanceRecord?.tick ?? (acceptedBalanceSnapshot === null ? null : snapshotTick),
+          externalBalanceSnapshotSource: balanceRecord?.source || (acceptedBalanceSnapshot === null ? '' : source),
           firstObservedAt: at,
           lastObservedAt: at,
           lastObservedTick: snapshotTick,
@@ -548,8 +855,6 @@ function createHighDropPlayerTracker(options = {}) {
           || trackedPlayer.name !== name
           || trackedPlayer.entityId !== identity.entityId
           || trackedPlayer.latestDrop !== drop
-          || (externalBalanceSnapshot !== null
-            && trackedPlayer.externalBalanceSnapshot !== externalBalanceSnapshot)
           || trackedPlayer.online !== true;
         if (displayChanged || freshness.advanced) {
           store.players[identity.key] = {
@@ -558,14 +863,10 @@ function createHighDropPlayerTracker(options = {}) {
             entityId: identity.entityId,
             name,
             latestDrop: drop,
-            ...(externalBalanceSnapshot !== null ? { externalBalanceSnapshot } : {}),
             lastObservedAt: at,
             lastObservedTick: snapshotTick,
             online: true,
             onlineObservedAt: at,
-            ...(externalBalanceSnapshot !== null
-              ? { externalBalanceSnapshotAt: at, externalBalanceSnapshotTick: snapshotTick }
-              : {}),
             ...(globalSnapshot ? { onlineCheckedAt: at } : {})
           };
           if (displayChanged) updated += 1;
@@ -589,6 +890,7 @@ function createHighDropPlayerTracker(options = {}) {
     }
     const shouldPersist = updated > 0
       || observationAdvanced > 0
+      || balanceDiagnosticsChanged
       || globalSnapshot
       || !lastWriteAtMs
       || atMs - lastWriteAtMs >= DEFAULT_SNAPSHOT_GAP_MS;
@@ -599,7 +901,19 @@ function createHighDropPlayerTracker(options = {}) {
       writeStore(file, store, backgroundIo);
       lastWriteAtMs = atMs;
     }
-    return { ok: true, observed, updated, playerCount: Object.keys(store.players).length };
+    return {
+      ok: true,
+      observed,
+      updated,
+      playerCount: Object.keys(store.players).length,
+      balanceOrdering: {
+        snapshot: cloneJson(balanceOrdering),
+        self: selfBalanceOrdering ? cloneJson(selfBalanceOrdering) : null,
+        tickEpoch: store.balanceSnapshotTickEpoch,
+        acceptedTick: store.balanceSnapshotTick,
+        acceptedSource: store.balanceSnapshotTickSource
+      }
+    };
   }
 
   function status(atMs = now()) {
@@ -617,10 +931,30 @@ function createHighDropPlayerTracker(options = {}) {
       lastGlobalSnapshotAt: store.lastGlobalSnapshotAt,
       lastGlobalSnapshotSource: store.lastGlobalSnapshotSource,
       selfExternalBalanceSnapshot: store.selfExternalBalanceSnapshot,
+      selfExternalBalanceSnapshotTick: store.selfExternalBalanceSnapshotTick,
+      selfExternalBalanceSnapshotSource: store.selfExternalBalanceSnapshotSource,
       selfInitialExternalBalanceSnapshot: store.selfInitialExternalBalanceSnapshot,
+      selfInitialExternalBalanceSnapshotTick: store.selfInitialExternalBalanceSnapshotTick,
+      selfPreviousExternalBalanceSnapshotTick: store.selfPreviousExternalBalanceSnapshotTick,
       selfBalanceIncomeCoins: store.selfBalanceIncomeRaw === null
         ? null
         : Math.max(0, Math.round(store.selfBalanceIncomeRaw / EXTERNAL_BALANCE_RAW_PER_COIN)),
+      selfBalanceLastOutcome: store.selfBalanceLastOutcome,
+      selfBalanceLastOutcomeReason: store.selfBalanceLastOutcomeReason,
+      selfBalanceStaleObservationCount: store.selfBalanceStaleObservationCount,
+      selfBalanceDuplicateObservationCount: store.selfBalanceDuplicateObservationCount,
+      selfBalanceConflictObservationCount: store.selfBalanceConflictObservationCount,
+      balanceSnapshotTick: store.balanceSnapshotTick,
+      balanceSnapshotTickSource: store.balanceSnapshotTickSource,
+      balanceSnapshotLastSeenAt: store.balanceSnapshotLastSeenAt,
+      balanceSnapshotTickEpoch: store.balanceSnapshotTickEpoch,
+      balanceSnapshotTickResetCeiling: store.balanceSnapshotTickResetCeiling,
+      balanceSnapshotTickResetCount: store.balanceSnapshotTickResetCount,
+      balanceSnapshotStaleCount: store.balanceSnapshotStaleCount,
+      balanceSnapshotDuplicateCount: store.balanceSnapshotDuplicateCount,
+      balanceSnapshotConflictCount: store.balanceSnapshotConflictCount,
+      balanceAccountingMigration: cloneJson(store.balanceAccountingMigration),
+      lastBalanceSnapshotOrdering: cloneJson(store.lastBalanceSnapshotOrdering),
       selfSessionBalance: store.selfSessionBalance
         ? {
             sessionId: store.selfSessionBalance.sessionId,

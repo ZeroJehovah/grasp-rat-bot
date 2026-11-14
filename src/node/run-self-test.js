@@ -36139,7 +36139,7 @@ async function runSelfTest() {
           balanceBaselineLabel
         ].join('|');
       }),
-      want: '2026-07-14|3|alice-after-tick-reset|8|520|800|800|2000000|4000000|bob|500|500|450|1000000|1300000|carol-low|50|50|40|1500000|1400000|true|true|false|900000|900000|false|false|50|ws|gap-http|2026-07-15|0|||4000000|4500000|900|2026-07-15|||500000|1000000|+1'
+      want: '2026-07-14|3|alice-after-tick-reset|8|520|800|800|2000000|2500000|bob|500|500|450|1000000|1300000|carol-low|50|50|40|1500000|1400000|true|true|false|900000|900000|false|false|50|ws|gap-http|2026-07-15|0|||2500000|4500000|900|2026-07-15|||500000|1000000|+1'
     },
     {
       name: 'browserless high drop tracker ignores the midnight transient zero balance as the day baseline',
@@ -36390,6 +36390,159 @@ async function runSelfTest() {
         return tracker.status(at).selfBalanceIncomeCoins;
       }),
       want: 8
+    },
+    {
+      name: 'browserless self balance accounting rejects late lower-tick HTTP and duplicate observations',
+      got: () => withTempDirForTest(async dir => {
+        const file = path.join(dir, 'high-drop-tick-order.json');
+        let at = Date.UTC(2026, 10, 14, 1, 0, 0);
+        const tracker = createHighDropPlayerTracker({ file, now: () => at });
+        const incomes = [];
+        const snapshot = (tick, balance, source) => {
+          const result = tracker.observeSnapshot({
+            tick,
+            entities: [{ user_id: 7, name: 'self', drop: 100, external_balance_snapshot: balance }]
+          }, { source, selfUserId: 7, observedAtMs: at });
+          incomes.push(tracker.status(at).selfBalanceIncomeCoins);
+          at += 1000;
+          return result.balanceOrdering.self;
+        };
+        snapshot(100, 100000000, 'ws');
+        snapshot(200, 101000000, 'ws');
+        const staleHttp = snapshot(150, 100500000, 'gap-http');
+        snapshot(220, 101000000, 'ws');
+        const duplicateHttp = snapshot(220, 101000000, 'gap-http');
+        const conflictingHttp = snapshot(220, 102000000, 'gap-http');
+        snapshot(320, 102000000, 'ws');
+        const status = tracker.status(at);
+        return [
+          incomes.join(','),
+          staleHttp.reason,
+          duplicateHttp.reason,
+          conflictingHttp.reason,
+          status.selfExternalBalanceSnapshot,
+          status.selfExternalBalanceSnapshotTick,
+          status.balanceSnapshotTickEpoch,
+          status.selfBalanceStaleObservationCount,
+          status.selfBalanceDuplicateObservationCount,
+          status.selfBalanceConflictObservationCount
+        ].join('|');
+      }),
+      want: '0,2,2,2,2,2,4|older-http-tick|same-tick-duplicate|same-tick-balance-conflict|102000000|320|1|1|1|1'
+    },
+    {
+      name: 'browserless self balance accounting starts a new epoch only for realtime tick reset',
+      got: () => withTempDirForTest(async dir => {
+        const file = path.join(dir, 'high-drop-tick-reset.json');
+        let at = Date.UTC(2026, 10, 14, 1, 0, 0);
+        const tracker = createHighDropPlayerTracker({ file, now: () => at });
+        const snapshot = (tick, balance, source = 'ws') => {
+          const result = tracker.observeSnapshot({
+            tick,
+            entities: [{ user_id: 7, name: 'self', drop: 100, external_balance_snapshot: balance }]
+          }, { source, selfUserId: 7, observedAtMs: at });
+          at += 1000;
+          return result.balanceOrdering.snapshot;
+        };
+        snapshot(1000, 100000000);
+        const reset = snapshot(5, 100500000);
+        const priorEpochHttp = snapshot(900, 200000000, 'gap-http');
+        snapshot(6, 101000000);
+        snapshot(7, 99000000);
+        snapshot(9, 100000000);
+        const status = tracker.status(at);
+        return [
+          reset.outcome,
+          reset.reason,
+          reset.epoch,
+          priorEpochHttp.reason,
+          status.selfBalanceIncomeCoins,
+          status.selfExternalBalanceSnapshot,
+          status.selfExternalBalanceSnapshotTick,
+          status.balanceSnapshotTickEpoch,
+          status.balanceSnapshotTickResetCount,
+          status.balanceSnapshotStaleCount
+        ].join('|');
+      }),
+      want: 'reset|realtime-tick-reset|2|prior-epoch-http-tick|4|100000000|9|2|1|1'
+    },
+    {
+      name: 'browserless same-tick realtime balance upgrades source without double counting',
+      got: () => withTempDirForTest(async dir => {
+        const file = path.join(dir, 'high-drop-same-tick-source.json');
+        let at = Date.UTC(2026, 10, 14, 1, 0, 0);
+        const tracker = createHighDropPlayerTracker({ file, now: () => at });
+        const snapshot = (tick, balance, source) => {
+          const result = tracker.observeSnapshot({
+            tick,
+            entities: [{ user_id: 7, name: 'self', drop: 100, external_balance_snapshot: balance }]
+          }, { source, selfUserId: 7, observedAtMs: at });
+          at += 1000;
+          return result.balanceOrdering.self;
+        };
+        snapshot(100, 100000000, 'gap-http');
+        const sourceUpgrade = snapshot(100, 100500000, 'ws');
+        const duplicate = snapshot(100, 100500000, 'ws');
+        const conflict = snapshot(100, 101000000, 'gap-http');
+        snapshot(101, 101000000, 'ws');
+        const status = tracker.status(at);
+        return [
+          sourceUpgrade.outcome,
+          sourceUpgrade.reason,
+          duplicate.outcome,
+          conflict.outcome,
+          status.selfBalanceIncomeCoins,
+          status.selfExternalBalanceSnapshot,
+          status.selfExternalBalanceSnapshotSource,
+          status.selfBalanceDuplicateObservationCount,
+          status.selfBalanceConflictObservationCount
+        ].join('|');
+      }),
+      want: 'source-upgrade|same-tick-realtime-upgrade|duplicate|conflict|2|101000000|ws|1|1'
+    },
+    {
+      name: 'browserless schema 6 calibrates polluted gross income once and preserves ordered gains',
+      got: () => withTempDirForTest(async dir => {
+        const file = path.join(dir, 'high-drop-schema6-tick-accounting.json');
+        let at = Date.UTC(2026, 10, 14, 1, 0, 0);
+        fs.writeFileSync(file, JSON.stringify({
+          schemaVersion: 5,
+          day: '2026-11-14',
+          selfInitialExternalBalanceSnapshot: 100000000,
+          selfInitialExternalBalanceSnapshotAt: '2026-11-14T00:00:00.000Z',
+          selfInitialExternalBalanceSnapshotTick: 10,
+          selfExternalBalanceSnapshot: 104000000,
+          selfExternalBalanceSnapshotAt: '2026-11-14T00:10:00.000Z',
+          selfExternalBalanceSnapshotTick: 20,
+          selfBalanceIncomeRaw: 10000000,
+          players: {},
+          balanceSnapshots: {}
+        }));
+        const tracker = createHighDropPlayerTracker({ file, now: () => at });
+        const migrated = tracker.status(at);
+        const snapshot = (tick, balance) => {
+          tracker.observeSnapshot({
+            tick,
+            entities: [{ user_id: 7, name: 'self', drop: 100, external_balance_snapshot: balance }]
+          }, { source: 'ws', selfUserId: 7, observedAtMs: at });
+          at += 1000;
+        };
+        snapshot(101, 105000000);
+        snapshot(102, 104000000);
+        snapshot(103, 104500000);
+        const beforeReload = tracker.status(at).selfBalanceIncomeCoins;
+        const reloaded = createHighDropPlayerTracker({ file, now: () => at }).status(at);
+        return [
+          migrated.selfBalanceIncomeCoins,
+          migrated.balanceAccountingMigration?.previousIncomeRaw,
+          migrated.balanceAccountingMigration?.calibratedIncomeRaw,
+          beforeReload,
+          reloaded.selfBalanceIncomeCoins,
+          reloaded.selfInitialExternalBalanceSnapshot,
+          reloaded.balanceAccountingMigration?.reason
+        ].join('|');
+      }),
+      want: '8|10000000|4000000|11|11|100000000|tick-ordered-balance-accounting'
     },
     {
       name: 'browserless session baseline uses the balance change spanning session entry',

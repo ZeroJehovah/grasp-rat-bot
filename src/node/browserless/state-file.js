@@ -3183,7 +3183,33 @@ function compactHighDropPlayers(value) {
       globalSource: compactString(value.globalSource, 32),
       selfInitialExternalBalanceSnapshot: compactNumber(value.selfInitialExternalBalanceSnapshot),
       selfExternalBalanceSnapshot: compactNumber(value.selfExternalBalanceSnapshot),
+      selfInitialExternalBalanceSnapshotTick: compactNumber(value.selfInitialExternalBalanceSnapshotTick),
+      selfExternalBalanceSnapshotTick: compactNumber(value.selfExternalBalanceSnapshotTick),
+      selfPreviousExternalBalanceSnapshotTick: compactNumber(value.selfPreviousExternalBalanceSnapshotTick),
       selfBalanceIncomeCoins: compactNumber(value.selfBalanceIncomeCoins),
+      selfBalanceLastOutcome: compactString(value.selfBalanceLastOutcome, 32),
+      selfBalanceLastOutcomeReason: compactString(value.selfBalanceLastOutcomeReason, 64),
+      selfBalanceStaleObservationCount: compactNumber(value.selfBalanceStaleObservationCount),
+      selfBalanceDuplicateObservationCount: compactNumber(value.selfBalanceDuplicateObservationCount),
+      selfBalanceConflictObservationCount: compactNumber(value.selfBalanceConflictObservationCount),
+      balanceSnapshotTick: compactNumber(value.balanceSnapshotTick),
+      balanceSnapshotTickSource: compactString(value.balanceSnapshotTickSource, 32),
+      balanceSnapshotLastSeenAt: value.balanceSnapshotLastSeenAt || '',
+      balanceSnapshotTickEpoch: compactNumber(value.balanceSnapshotTickEpoch),
+      balanceSnapshotTickResetCeiling: compactNumber(value.balanceSnapshotTickResetCeiling),
+      balanceSnapshotTickResetCount: compactNumber(value.balanceSnapshotTickResetCount),
+      balanceSnapshotStaleCount: compactNumber(value.balanceSnapshotStaleCount),
+      balanceSnapshotDuplicateCount: compactNumber(value.balanceSnapshotDuplicateCount),
+      balanceSnapshotConflictCount: compactNumber(value.balanceSnapshotConflictCount),
+      balanceAccountingMigration: value.balanceAccountingMigration
+        ? {
+            fromSchemaVersion: compactNumber(value.balanceAccountingMigration.fromSchemaVersion),
+            toSchemaVersion: compactNumber(value.balanceAccountingMigration.toSchemaVersion),
+            previousIncomeRaw: compactNumber(value.balanceAccountingMigration.previousIncomeRaw),
+            calibratedIncomeRaw: compactNumber(value.balanceAccountingMigration.calibratedIncomeRaw),
+            reason: compactString(value.balanceAccountingMigration.reason, 64)
+          }
+        : null,
       selfSessionBalance: compactHighDropSessionBalance(value.selfSessionBalance),
       p: value.p.slice(0, 160).map(row => Array.isArray(row) ? row.slice(0, 8) : row)
     };
@@ -3212,7 +3238,33 @@ function compactHighDropPlayers(value) {
     globalSource: compactString(value.lastGlobalSnapshotSource, 32),
     selfInitialExternalBalanceSnapshot: compactNumber(value.selfInitialExternalBalanceSnapshot),
     selfExternalBalanceSnapshot: compactNumber(value.selfExternalBalanceSnapshot),
+    selfInitialExternalBalanceSnapshotTick: compactNumber(value.selfInitialExternalBalanceSnapshotTick),
+    selfExternalBalanceSnapshotTick: compactNumber(value.selfExternalBalanceSnapshotTick),
+    selfPreviousExternalBalanceSnapshotTick: compactNumber(value.selfPreviousExternalBalanceSnapshotTick),
     selfBalanceIncomeCoins: compactNumber(value.selfBalanceIncomeCoins),
+    selfBalanceLastOutcome: compactString(value.selfBalanceLastOutcome, 32),
+    selfBalanceLastOutcomeReason: compactString(value.selfBalanceLastOutcomeReason, 64),
+    selfBalanceStaleObservationCount: compactNumber(value.selfBalanceStaleObservationCount),
+    selfBalanceDuplicateObservationCount: compactNumber(value.selfBalanceDuplicateObservationCount),
+    selfBalanceConflictObservationCount: compactNumber(value.selfBalanceConflictObservationCount),
+    balanceSnapshotTick: compactNumber(value.balanceSnapshotTick),
+    balanceSnapshotTickSource: compactString(value.balanceSnapshotTickSource, 32),
+    balanceSnapshotLastSeenAt: value.balanceSnapshotLastSeenAt || '',
+    balanceSnapshotTickEpoch: compactNumber(value.balanceSnapshotTickEpoch),
+    balanceSnapshotTickResetCeiling: compactNumber(value.balanceSnapshotTickResetCeiling),
+    balanceSnapshotTickResetCount: compactNumber(value.balanceSnapshotTickResetCount),
+    balanceSnapshotStaleCount: compactNumber(value.balanceSnapshotStaleCount),
+    balanceSnapshotDuplicateCount: compactNumber(value.balanceSnapshotDuplicateCount),
+    balanceSnapshotConflictCount: compactNumber(value.balanceSnapshotConflictCount),
+    balanceAccountingMigration: value.balanceAccountingMigration
+      ? {
+          fromSchemaVersion: compactNumber(value.balanceAccountingMigration.fromSchemaVersion),
+          toSchemaVersion: compactNumber(value.balanceAccountingMigration.toSchemaVersion),
+          previousIncomeRaw: compactNumber(value.balanceAccountingMigration.previousIncomeRaw),
+          calibratedIncomeRaw: compactNumber(value.balanceAccountingMigration.calibratedIncomeRaw),
+          reason: compactString(value.balanceAccountingMigration.reason, 64)
+        }
+      : null,
     selfSessionBalance: compactHighDropSessionBalance(value.selfSessionBalance),
     p: rows
   };
