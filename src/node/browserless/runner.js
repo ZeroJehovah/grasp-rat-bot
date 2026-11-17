@@ -2951,6 +2951,7 @@ async function runBrowserlessRunner(config, deps = {}) {
                 balanceSnapshotReason: balanceOrdering.snapshot?.reason,
                 balanceTick: balanceOrdering.snapshot?.tick,
                 balanceTickEpoch: balanceOrdering.tickEpoch,
+                playerBalanceObservations: balanceOrdering.players || null,
                 selfBalanceOutcome: balanceOrdering.self?.outcome || 'not-observed',
                 selfBalanceReason: balanceOrdering.self?.reason || ''
               }

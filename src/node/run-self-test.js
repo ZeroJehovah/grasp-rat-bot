@@ -36142,6 +36142,227 @@ async function runSelfTest() {
       want: '2026-07-14|3|alice-after-tick-reset|8|520|800|800|2000000|2500000|bob|500|500|450|1000000|1300000|carol-low|50|50|40|1500000|1400000|true|true|false|900000|900000|false|false|50|ws|gap-http|2026-07-15|0|||2500000|4500000|900|2026-07-15|||500000|1000000|+1'
     },
     {
+      name: 'browserless high drop balances refresh off-screen peers behind the local WS tick',
+      got: () => withTempDirForTest(async dir => {
+        let at = Date.UTC(2026, 10, 17, 1, 0, 0);
+        const tracker = createHighDropPlayerTracker({
+          file: path.join(dir, 'remote-balances.json'), now: () => at
+        });
+        const observe = (tick, source, entities) => {
+          const result = tracker.observeSnapshot({ tick, entities }, {
+            source, selfUserId: 7, observedAtMs: at
+          });
+          at += 1000;
+          return result.balanceOrdering;
+        };
+        observe(100, 'ws', [{ user_id: 7, external_balance_snapshot: 100000000 }]);
+        const first = observe(90, 'gap-http', [
+          { user_id: 7, external_balance_snapshot: 99000000 },
+          { user_id: 8, name: 'remote-peer', drop: 49, external_balance_snapshot: 70000000 }
+        ]);
+        observe(200, 'ws', [{ user_id: 7, external_balance_snapshot: 101000000 }]);
+        const fresh = observe(180, 'gap-http', [
+          { user_id: 7, external_balance_snapshot: 100500000 },
+          { user_id: 8, name: 'remote-peer', drop: 600, external_balance_snapshot: 71000000 },
+          { user_id: 9, name: 'unknown-balance', drop: 700 }
+        ]);
+        const stale = observe(170, 'gap-http', [
+          { user_id: 8, name: 'remote-peer', drop: 610, external_balance_snapshot: 69000000 }
+        ]);
+        const status = tracker.status(at);
+        const peer = status.players.find(player => player.userId === 8);
+        const unknown = status.players.find(player => player.userId === 9);
+        return [
+          first.snapshot.reason, first.players.accepted,
+          fresh.snapshot.reason, fresh.players.accepted, stale.players.stale,
+          status.selfBalanceIncomeCoins, status.selfExternalBalanceSnapshot,
+          peer.initialExternalBalanceSnapshot, peer.externalBalanceSnapshot,
+          peer.externalBalanceSnapshotTick, peer.externalBalanceSnapshotEpoch,
+          unknown.externalBalanceSnapshot === null
+        ].join('|');
+      }),
+      want: 'older-http-tick|1|older-http-tick|1|1|2|101000000|70000000|71000000|180|1|true'
+    },
+    {
+      name: 'browserless high drop peer balances reject duplicates conflicts and older own ticks',
+      got: () => withTempDirForTest(async dir => {
+        let at = Date.UTC(2026, 10, 17, 1, 0, 0);
+        const tracker = createHighDropPlayerTracker({
+          file: path.join(dir, 'peer-order.json'), now: () => at
+        });
+        const observe = (tick, source, entities) => {
+          const result = tracker.observeSnapshot({ tick, entities }, {
+            source, selfUserId: 7, observedAtMs: at
+          });
+          at += 1000;
+          return result.balanceOrdering.players;
+        };
+        const peer = balance => [{ user_id: 8, drop: 600, external_balance_snapshot: balance }];
+        observe(200, 'ws', [{ user_id: 7, external_balance_snapshot: 100000000 }]);
+        observe(150, 'gap-http', peer(70000000));
+        const duplicate = observe(150, 'gap-http', peer(70000000));
+        const conflict = observe(150, 'gap-http', peer(71000000));
+        observe(210, 'gap-http', peer(71000000));
+        const upgrade = observe(210, 'ws', peer(71500000));
+        const stale = observe(209, 'gap-http', peer(71250000));
+        const current = tracker.status(at).players[0];
+        return [
+          duplicate.duplicate, conflict.conflict, upgrade.accepted, stale.stale,
+          current.initialExternalBalanceSnapshot, current.externalBalanceSnapshot,
+          current.externalBalanceSnapshotTick, current.externalBalanceSnapshotSource
+        ].join('|');
+      }),
+      want: '1|1|1|1|70000000|71500000|210|ws'
+    },
+    {
+      name: 'browserless high drop peers survive a missed realtime epoch reset and restart',
+      got: () => withTempDirForTest(async dir => {
+        let at = Date.UTC(2026, 10, 17, 1, 0, 0);
+        const file = path.join(dir, 'peer-epoch.json');
+        let tracker = createHighDropPlayerTracker({ file, now: () => at });
+        const observe = (tick, source, entities) => {
+          const result = tracker.observeSnapshot({ tick, entities }, {
+            source, selfUserId: 7, observedAtMs: at
+          });
+          at += 1000;
+          return result.balanceOrdering;
+        };
+        observe(1000, 'ws', [
+          { user_id: 7, external_balance_snapshot: 100000000 },
+          { user_id: 8, drop: 600, external_balance_snapshot: 70000000 }
+        ]);
+        observe(5, 'ws', [{ user_id: 7, external_balance_snapshot: 100000000 }]);
+        const stale = observe(900, 'gap-http', [
+          { user_id: 8, drop: 600, external_balance_snapshot: 200000000 }
+        ]);
+        tracker = createHighDropPlayerTracker({ file, now: () => at });
+        observe(6, 'ws', [{ user_id: 7, external_balance_snapshot: 100000000 }]);
+        const returned = observe(6, 'gap-http', [
+          { user_id: 8, drop: 601, external_balance_snapshot: 71000000 }
+        ]);
+        const status = createHighDropPlayerTracker({ file, now: () => at }).status(at);
+        const current = status.players[0];
+        return [
+          stale.snapshot.reason, stale.players.stale, returned.players.reset,
+          status.balanceSnapshotTickEpoch, status.balanceSnapshotTickResetCount,
+          current.initialExternalBalanceSnapshot, current.externalBalanceSnapshot,
+          current.externalBalanceSnapshotTick, current.externalBalanceSnapshotEpoch
+        ].join('|');
+      }),
+      want: 'prior-epoch-http-tick|1|1|2|1|70000000|71000000|6|2'
+    },
+    {
+      name: 'browserless high drop peers clear yesterday tick ordering during rollover and startup',
+      got: () => withTempDirForTest(async dir => {
+        let at = Date.UTC(2026, 10, 16, 15, 59, 50);
+        const file = path.join(dir, 'peer-rollover.json');
+        const previousFile = path.join(dir, 'previous-day.json');
+        const tracker = createHighDropPlayerTracker({ file, now: () => at });
+        tracker.observeSnapshot({
+          tick: 1700000,
+          entities: [
+            { user_id: 7, external_balance_snapshot: 100000000 },
+            { user_id: 8, drop: 600, external_balance_snapshot: 70000000 }
+          ]
+        }, { source: 'ws', selfUserId: 7, observedAtMs: at });
+        fs.copyFileSync(file, previousFile);
+        at = Date.UTC(2026, 10, 16, 16, 0, 11);
+        const refreshed = instance => {
+          instance.observeSnapshot({
+            tick: 218, entities: [{ user_id: 7, external_balance_snapshot: 100000000 }]
+          }, { source: 'ws', selfUserId: 7, observedAtMs: at });
+          instance.observeSnapshot({
+            tick: 41, entities: [{ user_id: 8, drop: 601, external_balance_snapshot: 71000000 }]
+          }, { source: 'gap-http', selfUserId: 7, observedAtMs: at + 100 });
+          const peer = instance.status(at + 100).players[0];
+          return [
+            peer.initialExternalBalanceSnapshot, peer.externalBalanceSnapshot,
+            peer.externalBalanceSnapshotTick, peer.externalBalanceSnapshotEpoch
+          ].join(':');
+        };
+        const live = refreshed(tracker);
+        const restarted = refreshed(createHighDropPlayerTracker({ file: previousFile, now: () => at }));
+        return [live, restarted].join('|');
+      }),
+      want: '70000000:71000000:41:1|70000000:71000000:41:1'
+    },
+    {
+      name: 'browserless high drop tracker repairs schema 6 carried player records without recalibrating self',
+      got: () => withTempDirForTest(async dir => {
+        const at = Date.UTC(2026, 10, 17, 1, 0, 0);
+        const file = path.join(dir, 'schema6-carried-peer.json');
+        fs.writeFileSync(file, JSON.stringify({
+          schemaVersion: 6, day: '2026-11-17',
+          selfInitialExternalBalanceSnapshot: 100000000,
+          selfExternalBalanceSnapshot: 101000000,
+          selfExternalBalanceSnapshotAt: new Date(at - 1000).toISOString(),
+          selfExternalBalanceSnapshotTick: 100,
+          selfExternalBalanceSnapshotSource: 'ws',
+          selfBalanceIncomeRaw: 4500000,
+          balanceSnapshotTick: 100, balanceSnapshotTickSource: 'ws',
+          balanceSnapshotTickAt: new Date(at - 1000).toISOString(),
+          balanceSnapshotTickEpoch: 1,
+          balanceSnapshots: {},
+          players: {
+            'user:8': {
+              userId: 8, name: 'carried-peer', initialDrop: 600, maxDrop: 650, latestDrop: 650,
+              initialExternalBalanceSnapshot: 70000000,
+              externalBalanceSnapshot: 70000000,
+              externalBalanceSnapshotAt: '2026-11-16T15:59:50.000Z',
+              externalBalanceSnapshotTick: 1700000,
+              externalBalanceSnapshotSource: 'ws'
+            }
+          }
+        }));
+        const tracker = createHighDropPlayerTracker({ file, now: () => at });
+        const result = tracker.observeSnapshot({
+          tick: 90, entities: [{ user_id: 8, drop: 700, external_balance_snapshot: 71000000 }]
+        }, { source: 'gap-http', selfUserId: 7, observedAtMs: at });
+        const status = tracker.status(at);
+        const peer = status.players[0];
+        return [
+          result.balanceOrdering.players.reset,
+          peer.initialExternalBalanceSnapshot, peer.externalBalanceSnapshot,
+          peer.externalBalanceSnapshotTick, status.selfBalanceIncomeCoins,
+          status.balanceAccountingMigration === null
+        ].join('|');
+      }),
+      want: '1|70000000|71000000|90|9|true'
+    },
+    {
+      name: 'browserless high drop ordering keeps its time guard after consecutive regressed observations',
+      got: () => withTempDirForTest(async dir => {
+        const at = Date.UTC(2026, 10, 17, 1, 0, 0);
+        const tracker = createHighDropPlayerTracker({
+          file: path.join(dir, 'balance-time-guard.json'), now: () => at + 4000
+        });
+        const observe = (tick, time, balance) => tracker.observeSnapshot({
+          tick, entities: [{ user_id: 7, external_balance_snapshot: balance }]
+        }, { source: 'ws', selfUserId: 7, observedAtMs: at + time });
+        observe(100, 0, 100000000);
+        observe(200, 3000, 101000000);
+        const first = observe(250, 2000, 102000000);
+        const second = observe(300, 2500, 103000000);
+        const status = tracker.status(at + 4000);
+        return [
+          first.balanceOrdering.self.reason, second.balanceOrdering.self.reason,
+          status.selfBalanceIncomeCoins, status.selfExternalBalanceSnapshotTick,
+          status.balanceSnapshotLastSeenAt === new Date(at + 3000).toISOString()
+        ].join('|');
+      }),
+      want: 'observation-time-regressed|observation-time-regressed|2|200|true'
+    },
+    {
+      name: 'browserless high drop balance formatter preserves missing values through the actual cell chain',
+      got: () => [
+        undefined, null, '', NaN, 'invalid',
+        highDropBalanceValueCore(['missing', 600, 600, 600, 8, false, null, null]),
+        highDropBalanceValueCore(['present', 600, 600, 600, 9, true, 1000000, 500000]),
+        0
+      ].map(formatHighDropBalanceCore).join('|'),
+      want: '--|--|--|--|--|--|2.000|0.000'
+    },
+    {
       name: 'browserless high drop tracker ignores the midnight transient zero balance as the day baseline',
       got: () => withTempDirForTest(async dir => {
         const file = path.join(dir, 'high-drop-players.json');

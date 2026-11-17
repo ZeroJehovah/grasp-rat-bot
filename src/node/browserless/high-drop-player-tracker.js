@@ -153,22 +153,43 @@ function balanceSnapshotOrdering(previous, observation) {
   );
 }
 
-function balanceRecordOrdering(record, order, balance) {
-  if (!order?.accepted) {
+function balanceRecordOrdering(record, order, balance, detail = {}) {
+  // A local WS watermark is the epoch clock, not every player's balance clock.
+  // An HTTP tick behind it may still be newer than an off-screen player's own
+  // last balance. Keep all other snapshot rejections, including prior epochs.
+  if (!order || (!order.accepted && order.reason !== 'older-http-tick')) {
     return { accepted: false, changed: false, outcome: 'stale', reason: order?.reason || 'snapshot-stale' };
   }
+  const observedAtMs = timestampOrNull(detail.observedAtMs);
+  const previousAtMs = timestampOrNull(record?.at);
+  if (observedAtMs !== null && previousAtMs !== null && observedAtMs < previousAtMs) {
+    return { accepted: false, changed: false, outcome: 'stale', reason: 'observation-time-regressed' };
+  }
+  const previousEpoch = numberOrNull(record?.epoch);
+  if (previousEpoch !== null && previousEpoch > order.epoch) {
+    return { accepted: false, changed: false, outcome: 'stale', reason: 'record-epoch-ahead' };
+  }
+  const previousDay = previousAtMs === null ? '' : dayKey(previousAtMs);
+  const dayChanged = Boolean(detail.day && previousDay && previousDay !== detail.day);
+  const epochChanged = previousEpoch !== null && previousEpoch < order.epoch;
+  const reset = Boolean(order.reset || dayChanged || epochChanged);
   const previousTick = numberOrNull(record?.tick);
   const previousBalance = numberOrNull(record?.latest);
   const previousSource = String(record?.source || '');
   if (!record || previousBalance === null) {
     return { accepted: true, changed: true, outcome: 'accepted', reason: 'new-record' };
   }
-  if (previousTick !== null && order.tick === null && !order.reset) {
+  if (previousTick !== null && order.tick === null && !reset) {
     return { accepted: false, changed: false, outcome: 'stale', reason: 'missing-tick' };
   }
-  if (!order.reset && previousTick !== null && order.tick !== null) {
+  if (!reset && previousTick !== null && order.tick !== null) {
     if (order.tick < previousTick) {
-      return { accepted: false, changed: false, outcome: 'stale', reason: 'record-tick-ahead' };
+      return {
+        accepted: false,
+        changed: false,
+        outcome: 'stale',
+        reason: order.reason === 'older-http-tick' ? 'older-http-tick' : 'record-tick-ahead'
+      };
     }
     if (order.tick === previousTick) {
       if (previousBalance === balance) {
@@ -189,8 +210,9 @@ function balanceRecordOrdering(record, order, balance) {
   return {
     accepted: true,
     changed: previousBalance !== balance,
-    outcome: order.reset ? 'reset' : 'accepted',
-    reason: order.reset ? order.reason : 'tick-advanced'
+    outcome: reset ? 'reset' : 'accepted',
+    reason: dayChanged ? 'record-day-reset'
+      : (epochChanged ? 'record-epoch-reset' : (order.reset ? order.reason : 'tick-advanced'))
   };
 }
 
@@ -257,6 +279,7 @@ function emptyStore(day = '') {
     selfExternalBalanceSnapshot: null,
     selfExternalBalanceSnapshotAt: '',
     selfExternalBalanceSnapshotTick: null,
+    selfExternalBalanceSnapshotEpoch: null,
     selfExternalBalanceSnapshotSource: '',
     selfPreviousExternalBalanceSnapshot: null,
     selfPreviousExternalBalanceSnapshotAt: '',
@@ -326,7 +349,8 @@ function carryForwardStore(previous, day) {
       initialTick: tick,
       latest,
       at,
-      tick,
+      tick: null,
+      epoch: null,
       source
     };
   }
@@ -425,6 +449,8 @@ function normalizeStore(value, expectedDay) {
     value.balanceSnapshotLastSeenAt || value.balanceSnapshotTickAt || output.selfExternalBalanceSnapshotAt || ''
   );
   output.balanceSnapshotTickEpoch = Math.max(1, Number(value.balanceSnapshotTickEpoch || 1) || 1);
+  output.selfExternalBalanceSnapshotEpoch = numberOrNull(value.selfExternalBalanceSnapshotEpoch)
+    ?? output.balanceSnapshotTickEpoch;
   output.balanceSnapshotTickResetCeiling = numberOrNull(value.balanceSnapshotTickResetCeiling);
   output.balanceSnapshotTickResetCount = Math.max(0, Number(value.balanceSnapshotTickResetCount || 0) || 0);
   output.balanceSnapshotStaleCount = Math.max(0, Number(value.balanceSnapshotStaleCount || 0) || 0);
@@ -459,6 +485,7 @@ function normalizeStore(value, expectedDay) {
       latest: latest ?? initial,
       at: String(snapshot.at || snapshot.latestAt || snapshot.initialAt || ''),
       tick: numberOrNull(snapshot.tick ?? snapshot.latestTick ?? snapshot.initialTick),
+      epoch: numberOrNull(snapshot.epoch) ?? output.balanceSnapshotTickEpoch,
       source: String(snapshot.source || snapshot.latestSource || snapshot.initialSource || '')
     };
   }
@@ -501,6 +528,8 @@ function normalizeStore(value, expectedDay) {
       externalBalanceSnapshot,
       externalBalanceSnapshotAt: String(player.externalBalanceSnapshotAt || ''),
       externalBalanceSnapshotTick: numberOrNull(player.externalBalanceSnapshotTick),
+      externalBalanceSnapshotEpoch: numberOrNull(player.externalBalanceSnapshotEpoch)
+        ?? output.balanceSnapshotTickEpoch,
       externalBalanceSnapshotSource: String(player.externalBalanceSnapshotSource || ''),
       firstObservedAt: String(player.firstObservedAt || ''),
       lastObservedAt: String(player.lastObservedAt || ''),
@@ -519,6 +548,7 @@ function normalizeStore(value, expectedDay) {
         latest: candidate.externalBalanceSnapshot ?? initial,
         at: candidate.externalBalanceSnapshotAt || candidate.initialExternalBalanceSnapshotAt,
         tick: candidate.externalBalanceSnapshotTick ?? candidate.initialExternalBalanceSnapshotTick,
+        epoch: candidate.externalBalanceSnapshotEpoch,
         source: candidate.externalBalanceSnapshotSource
       };
     }
@@ -574,6 +604,9 @@ function normalizeStore(value, expectedDay) {
       externalBalanceSnapshotTick: latest.externalBalanceSnapshotTick
         ?? existing.externalBalanceSnapshotTick
         ?? candidate.externalBalanceSnapshotTick,
+      externalBalanceSnapshotEpoch: latest.externalBalanceSnapshotEpoch
+        ?? existing.externalBalanceSnapshotEpoch
+        ?? candidate.externalBalanceSnapshotEpoch,
       externalBalanceSnapshotSource: latest.externalBalanceSnapshotSource
         || existing.externalBalanceSnapshotSource
         || candidate.externalBalanceSnapshotSource,
@@ -649,7 +682,7 @@ function createHighDropPlayerTracker(options = {}) {
       source,
       observedAtMs: atMs
     });
-    store.balanceSnapshotLastSeenAt = at;
+    if (atMs >= (timestampOrNull(previousBalanceTickAt) ?? 0)) store.balanceSnapshotLastSeenAt = at;
     let balanceDiagnosticsChanged = false;
     if (balanceOrdering.accepted) {
       if (balanceOrdering.advanced || balanceOrdering.sourceUpgrade || store.balanceSnapshotTick === null) {
@@ -684,6 +717,7 @@ function createHighDropPlayerTracker(options = {}) {
     let updated = 0;
     let observationAdvanced = 0;
     let selfBalanceOrdering = null;
+    const playerBalanceCounts = { observed: 0, accepted: 0, stale: 0, duplicate: 0, conflict: 0, reset: 0 };
     for (const entity of payload.entities) {
       if (!entity || typeof entity !== 'object') continue;
       const identity = entityIdentity(entity);
@@ -694,8 +728,10 @@ function createHighDropPlayerTracker(options = {}) {
         selfBalanceOrdering = balanceRecordOrdering({
           latest: store.selfExternalBalanceSnapshot,
           tick: store.selfExternalBalanceSnapshotTick,
+          at: store.selfExternalBalanceSnapshotAt,
+          epoch: store.selfExternalBalanceSnapshotEpoch,
           source: store.selfExternalBalanceSnapshotSource
-        }, balanceOrdering, externalBalanceSnapshot);
+        }, balanceOrdering, externalBalanceSnapshot, { observedAtMs: atMs, day: store.day });
         if (selfBalanceOrdering.accepted) {
           const changed = selfBalanceOrdering.changed;
           const initialMissing = store.selfInitialExternalBalanceSnapshot === null;
@@ -712,6 +748,7 @@ function createHighDropPlayerTracker(options = {}) {
           store.selfExternalBalanceSnapshot = externalBalanceSnapshot;
           store.selfExternalBalanceSnapshotAt = at;
           store.selfExternalBalanceSnapshotTick = snapshotTick;
+          store.selfExternalBalanceSnapshotEpoch = balanceOrdering.epoch;
           store.selfExternalBalanceSnapshotSource = source;
           if (store.selfBalanceIncomeRaw === null) {
             const priorNetRaw = previousBalance !== null
@@ -762,10 +799,18 @@ function createHighDropPlayerTracker(options = {}) {
                 latest: existing.externalBalanceSnapshot,
                 at: existing.externalBalanceSnapshotAt || existing.lastObservedAt,
                 tick: existing.externalBalanceSnapshotTick ?? existing.lastObservedTick,
+                epoch: existing.externalBalanceSnapshotEpoch,
                 source: existing.externalBalanceSnapshotSource || ''
               }
             : null);
-        playerBalanceOrdering = balanceRecordOrdering(previousBalance, balanceOrdering, externalBalanceSnapshot);
+        playerBalanceOrdering = balanceRecordOrdering(
+          previousBalance, balanceOrdering, externalBalanceSnapshot, { observedAtMs: atMs, day: store.day }
+        );
+        playerBalanceCounts.observed += 1;
+        if (playerBalanceOrdering.accepted) playerBalanceCounts.accepted += 1;
+        if (Object.hasOwn(playerBalanceCounts, playerBalanceOrdering.outcome)) {
+          if (playerBalanceOrdering.outcome !== 'accepted') playerBalanceCounts[playerBalanceOrdering.outcome] += 1;
+        }
         if (playerBalanceOrdering.accepted) {
           const balanceRecord = previousBalance || {
             initial: externalBalanceSnapshot,
@@ -781,6 +826,7 @@ function createHighDropPlayerTracker(options = {}) {
             latest: externalBalanceSnapshot,
             at,
             tick: snapshotTick,
+            epoch: balanceOrdering.epoch,
             source
           };
           if (existing) {
@@ -792,11 +838,13 @@ function createHighDropPlayerTracker(options = {}) {
               externalBalanceSnapshot,
               externalBalanceSnapshotAt: at,
               externalBalanceSnapshotTick: snapshotTick,
+              externalBalanceSnapshotEpoch: balanceOrdering.epoch,
               externalBalanceSnapshotSource: source
             };
           }
-          if (changed || !previousBalance || balanceOrdering.advanced
-            || balanceOrdering.reset || balanceOrdering.sourceUpgrade) updated += 1;
+          if (changed || !previousBalance || snapshotTick !== previousBalance.tick
+            || playerBalanceOrdering.outcome === 'reset'
+            || playerBalanceOrdering.outcome === 'source-upgrade') updated += 1;
         } else if (playerBalanceOrdering.outcome === 'conflict') {
           store.balanceSnapshotConflictCount += 1;
           balanceDiagnosticsChanged = true;
@@ -827,6 +875,8 @@ function createHighDropPlayerTracker(options = {}) {
           externalBalanceSnapshot: balanceRecord?.latest ?? acceptedBalanceSnapshot,
           externalBalanceSnapshotAt: balanceRecord?.at || (acceptedBalanceSnapshot === null ? '' : at),
           externalBalanceSnapshotTick: balanceRecord?.tick ?? (acceptedBalanceSnapshot === null ? null : snapshotTick),
+          externalBalanceSnapshotEpoch: balanceRecord?.epoch
+            ?? (acceptedBalanceSnapshot === null ? null : balanceOrdering.epoch),
           externalBalanceSnapshotSource: balanceRecord?.source || (acceptedBalanceSnapshot === null ? '' : source),
           firstObservedAt: at,
           lastObservedAt: at,
@@ -909,6 +959,7 @@ function createHighDropPlayerTracker(options = {}) {
       balanceOrdering: {
         snapshot: cloneJson(balanceOrdering),
         self: selfBalanceOrdering ? cloneJson(selfBalanceOrdering) : null,
+        players: playerBalanceCounts,
         tickEpoch: store.balanceSnapshotTickEpoch,
         acceptedTick: store.balanceSnapshotTick,
         acceptedSource: store.balanceSnapshotTickSource
@@ -932,6 +983,7 @@ function createHighDropPlayerTracker(options = {}) {
       lastGlobalSnapshotSource: store.lastGlobalSnapshotSource,
       selfExternalBalanceSnapshot: store.selfExternalBalanceSnapshot,
       selfExternalBalanceSnapshotTick: store.selfExternalBalanceSnapshotTick,
+      selfExternalBalanceSnapshotEpoch: store.selfExternalBalanceSnapshotEpoch,
       selfExternalBalanceSnapshotSource: store.selfExternalBalanceSnapshotSource,
       selfInitialExternalBalanceSnapshot: store.selfInitialExternalBalanceSnapshot,
       selfInitialExternalBalanceSnapshotTick: store.selfInitialExternalBalanceSnapshotTick,
